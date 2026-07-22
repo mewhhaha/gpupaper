@@ -7,7 +7,14 @@ import {
 
 if (import.meta.main) await main(Deno.args);
 
-async function main(arguments_: readonly string[]): Promise<void> {
+export type CliInvocation = {
+  readonly command: "compile" | "run" | "experiments";
+  readonly file: string;
+  readonly output: string | undefined;
+  readonly gpuMode: GpuMode;
+};
+
+export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
   const [command, file, ...rest] = arguments_;
   if (
     command === undefined || file === undefined ||
@@ -17,16 +24,45 @@ async function main(arguments_: readonly string[]): Promise<void> {
       "usage: cli.ts <compile|run|experiments> <file.hs> [output.wasm] [--cpu|--require-gpu]",
     );
   }
-  const gpuMode: GpuMode = rest.includes("--cpu")
-    ? "off"
-    : rest.includes("--require-gpu")
-    ? "required"
-    : "auto";
+  const unknownOption = rest.find((argument) =>
+    argument.startsWith("--") &&
+    argument !== "--cpu" && argument !== "--require-gpu"
+  );
+  if (unknownOption !== undefined) {
+    throw new Error(`unknown option ${unknownOption}`);
+  }
+  if (rest.includes("--cpu") && rest.includes("--require-gpu")) {
+    throw new Error("--cpu and --require-gpu cannot be used together");
+  }
+  const positional = rest.filter((argument) => !argument.startsWith("--"));
+  const maximumPositionals = command === "compile" ? 1 : 0;
+  if (positional.length > maximumPositionals) {
+    throw new Error(
+      `${command} received unexpected argument ${
+        positional[maximumPositionals]
+      }`,
+    );
+  }
+  return {
+    command: command as CliInvocation["command"],
+    file,
+    output: positional[0],
+    gpuMode: rest.includes("--cpu")
+      ? "off"
+      : rest.includes("--require-gpu")
+      ? "required"
+      : "auto",
+  };
+}
+
+async function main(arguments_: readonly string[]): Promise<void> {
+  const { command, file, output: outputArgument, gpuMode } = parseCommandLine(
+    arguments_,
+  );
   const source = await Deno.readTextFile(file);
   const artifact = await compileModuleSource(file, source, { gpuMode });
 
   if (command === "compile") {
-    const outputArgument = rest.find((argument) => !argument.startsWith("--"));
     const output = outputArgument ?? file.replace(/\.hs$/, "") + ".wasm";
     await Deno.writeFile(output, artifact.wasm);
     console.log(`wrote ${artifact.wasm.length} bytes to ${output}`);

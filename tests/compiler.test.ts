@@ -3,6 +3,7 @@ import {
   evaluateBytecodeOnCpu,
   evaluateBytecodeOnGpu,
 } from "../src/comptime.ts";
+import { parseCommandLine } from "../src/cli.ts";
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
   solveTypeEqualitiesOnGpu,
@@ -16,6 +17,13 @@ import { formatScheme, inferModule } from "../src/types.ts";
 import { encodeSigned, encodeUnsigned } from "../src/wasm.ts";
 
 const testSpan = { file: "test.hs", start: 0, end: 1 };
+
+Deno.test("CLI rejects contradictory GPU execution policies", () => {
+  assertThrows(
+    () => parseCommandLine(["run", "test.hs", "--cpu", "--require-gpu"]),
+    /--cpu and --require-gpu cannot be used together/,
+  );
+});
 
 Deno.test("rank-1 inference generalizes identity across integer and boolean uses", () => {
   const module = parseModule(
