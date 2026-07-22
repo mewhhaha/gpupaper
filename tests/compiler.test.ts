@@ -322,6 +322,17 @@ Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {
   );
 });
 
+Deno.test("comptime rejects fuel that cannot be represented by WGSL", async () => {
+  assertThrows(
+    () => evaluateBytecodeOnCpu([], -1),
+    /comptime fuel must be an integer from 1 through 4294967295; received -1/,
+  );
+  await assertRejects(
+    () => evaluateBytecodeOnGpu([], 1.5),
+    /comptime fuel must be an integer from 1 through 4294967295; received 1\.5/,
+  );
+});
+
 Deno.test("Wasm macro expansion keeps generated identity parameters hygienic", async () => {
   const module = parseModule(
     "test.hs",

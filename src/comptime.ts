@@ -152,6 +152,11 @@ export function evaluateBytecodeOnCpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
 ): ComptimeBatchResult {
+  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > 0xffff_ffff) {
+    throw new RangeError(
+      `comptime fuel must be an integer from 1 through 4294967295; received ${fuel}`,
+    );
+  }
   const values: ComptimeValue[] = programs.map((program): ComptimeValue => {
     const stack: number[] = [];
     for (let pc = 0; pc < program.opcodes.length && pc < fuel; pc += 1) {
@@ -215,6 +220,11 @@ export async function evaluateBytecodeOnGpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
 ): Promise<ComptimeBatchResult> {
+  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > 0xffff_ffff) {
+    throw new RangeError(
+      `comptime fuel must be an integer from 1 through 4294967295; received ${fuel}`,
+    );
+  }
   if (programs.length === 0) {
     return { status: "completed", values: [], backend: "gpu" };
   }
