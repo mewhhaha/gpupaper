@@ -104,10 +104,11 @@ clock, or process import.
   it. Boxing a wider payload traps instead of truncating it; this is an
   experiment, not the final FCG heap ABI.
 - `comptime` accepts closed scalar expressions. Its WGSL evaluator has a 64-word
-  stack and explicit fuel.
+  stack and explicit fuel capped at one million instructions.
 - The interaction-calculus backend is a pinned CPU reference experiment. It
   implements the four relevant higher-order interactions plus scalar rules; it
-  is not HVM2/HVM4 and makes no claim to reproduce their performance.
+  is capped at one million interactions, is not HVM2/HVM4, and makes no claim to
+  reproduce their performance.
 - The WebGPU type solver caps the flat graph at 512 terms so its quadratic
   reachability matrix remains an honest proof-of-concept cost.
 - Parsing is line-oriented. Multi-line layout, imports, modules, and the
