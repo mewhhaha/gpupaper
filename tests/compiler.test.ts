@@ -146,6 +146,15 @@ Deno.test("instances must define the method declared by their class", () => {
   );
 });
 
+Deno.test("admitted class method primitives lower to executable Wasm", async () => {
+  const artifact = await compileModuleSource(
+    "test.hs",
+    `class Eq a where eq :: a -> a -> Bool\ninstance Eq Int where eq = primEqInt\nmain = eq 42 42\n`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 1);
+});
+
 Deno.test("datatype fields cannot introduce hidden type variables", () => {
   assertThrows(
     () =>

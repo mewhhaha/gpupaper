@@ -38,6 +38,7 @@ type FunctionShape = {
   readonly declaration: ValueDeclaration;
 };
 type ConstructorShape = { readonly tag: number; readonly fieldCount: number };
+type PrimitiveShape = { readonly operation: "integerEquality" };
 
 export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
   const builder = new WasmModuleBuilder();
@@ -58,6 +59,7 @@ export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
     });
   }
   const constructorShapes = collectConstructorShapes(inferred.module);
+  const primitiveShapes = collectPrimitiveShapes(inferred.module);
   const loweredFunctions: FcgFunction[] = [];
 
   for (const declaration of valueDeclarations) {
@@ -66,6 +68,7 @@ export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
       declaration,
       functionShapes,
       constructorShapes,
+      primitiveShapes,
     );
     const compiled = compiler.compile();
     const functionIndex = builder.addFunction(
@@ -112,6 +115,7 @@ class FunctionCompiler {
   readonly #declaration: ValueDeclaration;
   readonly #functionShapes: ReadonlyMap<string, FunctionShape>;
   readonly #constructors: ReadonlyMap<string, ConstructorShape>;
+  readonly #primitives: ReadonlyMap<string, PrimitiveShape>;
   readonly #locals = new Map<string, number>();
   readonly #operations: FcgOperation[] = [];
   #nextLocal: number;
@@ -120,10 +124,12 @@ class FunctionCompiler {
     declaration: ValueDeclaration,
     functionShapes: ReadonlyMap<string, FunctionShape>,
     constructors: ReadonlyMap<string, ConstructorShape>,
+    primitives: ReadonlyMap<string, PrimitiveShape>,
   ) {
     this.#declaration = declaration;
     this.#functionShapes = functionShapes;
     this.#constructors = constructors;
+    this.#primitives = primitives;
     declaration.parameters.forEach((parameter, index) =>
       this.#locals.set(parameter.text, index)
     );
@@ -222,6 +228,19 @@ class FunctionCompiler {
             application.arguments,
             expression.span,
           );
+        }
+        const primitive = this.#primitives.get(application.callee.name.text);
+        if (primitive?.operation === "integerEquality") {
+          if (application.arguments.length !== 2) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: ${application.callee.name.text} expects 2 arguments; received ${application.arguments.length}`,
+            );
+          }
+          const [left, right] = application.arguments.map((argument) =>
+            this.#compileExpression(argument)
+          );
+          this.#record("i32.==", [], expression.span);
+          return [...left, ...right, ...wasmInstruction.i32Equal];
         }
         const shape = this.#functionShapes.get(application.callee.name.text);
         if (shape === undefined) {
@@ -414,6 +433,27 @@ class FunctionCompiler {
   ): void {
     this.#operations.push({ opcode, operands, sourceStart: span.start });
   }
+}
+
+function collectPrimitiveShapes(
+  module: Module,
+): ReadonlyMap<string, PrimitiveShape> {
+  const methodByClass = new Map(
+    module.declarations.flatMap((declaration) =>
+      declaration.kind === "class"
+        ? [[declaration.name.text, declaration.methodName.text] as const]
+        : []
+    ),
+  );
+  const primitives = new Map<string, PrimitiveShape>();
+  for (const declaration of module.declarations) {
+    if (declaration.kind !== "instance") continue;
+    const methodName = methodByClass.get(declaration.className.text);
+    if (methodName !== undefined) {
+      primitives.set(methodName, { operation: declaration.primitive });
+    }
+  }
+  return primitives;
 }
 
 function collectConstructorShapes(
