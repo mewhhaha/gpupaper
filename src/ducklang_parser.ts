@@ -645,6 +645,41 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
+    const definitionTokens: TokenCursor[] = [];
+    collectAllTokens(definition, definitionTokens);
+    const arraySeparator = definitionTokens.find((token) => token.text === ";");
+    if (arraySeparator !== undefined) {
+      const elementType = findRule(definition, "type_reference");
+      const lengthToken = definitionTokens.find((token) =>
+        token.kind === "number"
+      );
+      const length = lengthToken === undefined
+        ? Number.NaN
+        : Number.parseInt(lengthToken.text, 10);
+      if (
+        elementType === undefined || !Number.isSafeInteger(length) || length < 0
+      ) {
+        throw unsupported(file, definition, "fixed array type");
+      }
+      const type = lowerTypeReference(file, elementType);
+      return {
+        kind: "structType",
+        name: identifierName(
+          file,
+          requiredField(statement, "name"),
+          "fixed array type name",
+        ).text,
+        parameters: tokenFields(statement, "parameter").map((token) =>
+          token.text
+        ),
+        fields: Array.from({ length }, (_, index) => ({
+          name: `$${index}`,
+          type,
+          span: sourceSpan(file, definition),
+        })),
+        span: sourceSpan(file, statement),
+      };
+    }
     const typeSum = findRule(definition, "type_sum");
     if (typeSum === undefined) {
       return {
@@ -2221,6 +2256,9 @@ function arrowParameters(
   file: string,
   cursor: SyntaxCursor,
 ): readonly DucklangParameter[] {
+  if (cursor.type === "rule" && cursor.name === "const_parameter_list") {
+    return constParameterNames(file, cursor);
+  }
   const tokens: TokenCursor[] = [];
   collectAllTokens(cursor, tokens);
   const parameterTokens = tokens.filter((token) =>
@@ -2249,17 +2287,19 @@ function arrowParameters(
     const plain = group.length === 1 && name?.kind === "identifier";
     const linear = group.length === 2 && name?.text === "!" &&
       separator?.kind === "identifier";
+    const compileTime = group.length === 2 && name?.text === "const" &&
+      separator?.kind === "identifier";
     const annotated = group.length >= 3 && name?.kind === "identifier" &&
       separator?.text === ":" && annotation?.kind === "identifier" &&
       group.slice(3).every((token) => token.kind === "identifier");
-    if (!plain && !linear && !annotated) {
+    if (!plain && !linear && !compileTime && !annotated) {
       throw unsupported(
         file,
         group[0] ?? cursor,
         "patterned parameter or unsupported type annotation",
       );
     }
-    const parameterName = linear ? separator : name;
+    const parameterName = linear || compileTime ? separator : name;
     return {
       text: parameterName.text,
       ...(linear ? { linear: true } : {}),

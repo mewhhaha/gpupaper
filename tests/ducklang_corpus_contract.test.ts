@@ -33,6 +33,8 @@ const supportedSuccessPaths = new Set([
   "examples/compile_time/09_type_pattern_check.duck",
   "examples/compile_time/10_extensions_and_protocols.duck",
   "examples/compile_time/11_indexed_calculator.duck",
+  "examples/compile_time/12_type_specialization.duck",
+  "examples/compile_time/13_derived_nested_equality.duck",
   "examples/compile_time/14_rank_n_identity.duck",
   "examples/compile_time/15_open_imports.duck",
   "examples/compile_time/16_attributes_and_import_meta.duck",
