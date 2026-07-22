@@ -874,9 +874,12 @@ class DucklangInference {
   }
 }
 
-function declaredDucklangType(name: "I32" | "I64" | "Bool"): Type {
+function declaredDucklangType(
+  name: "I32" | "I64" | "Bool" | "Text",
+): Type {
   if (name === "I32") return i32Type;
   if (name === "I64") return i64Type;
+  if (name === "Text") return textType;
   return booleanType;
 }
 

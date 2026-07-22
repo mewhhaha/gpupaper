@@ -41,6 +41,18 @@ length(&message) * 7
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang specializes borrowed static text parameters", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { length } = import "duck:prelude/runtime" ()
+let measure = (message: Text) => length(&message)
+measure("interaction") + 31
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang specializes scalar results from scratch regions", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

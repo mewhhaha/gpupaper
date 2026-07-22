@@ -620,7 +620,7 @@ function constParameterNames(
   let searchStart = 1;
   return parameters.map((parameter) => {
     const match = parameter.trim().match(
-      /^(?:const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*(I32|I64|Bool))?$/,
+      /^(?:const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*(I32|I64|Bool|Text))?$/,
     );
     if (match === null) {
       throw unsupported(file, list, "const parameter list");
@@ -635,7 +635,7 @@ function constParameterNames(
     return {
       text: match[1],
       ...(match[2] === undefined ? {} : {
-        declaredType: match[2] as "I32" | "I64" | "Bool",
+        declaredType: match[2] as "I32" | "I64" | "Bool" | "Text",
       }),
       span: {
         file,
@@ -671,7 +671,7 @@ function arrowParameters(
     const plain = group.length === 1 && name?.kind === "identifier";
     const annotated = group.length === 3 && name?.kind === "identifier" &&
       separator?.text === ":" && annotation?.kind === "identifier" &&
-      ["I32", "I64", "Bool"].includes(annotation.text);
+      ["I32", "I64", "Bool", "Text"].includes(annotation.text);
     if (!plain && !annotated) {
       throw unsupported(
         file,
@@ -682,7 +682,7 @@ function arrowParameters(
     return {
       text: name.text,
       ...(annotation === undefined ? {} : {
-        declaredType: annotation.text as "I32" | "I64" | "Bool",
+        declaredType: annotation.text as "I32" | "I64" | "Bool" | "Text",
       }),
       span: sourceSpan(file, name),
     };

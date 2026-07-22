@@ -87,7 +87,15 @@ function rewriteExpression(
       isCalledParameter(factory.body, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "function",
   );
-  if (!returnsFunction && !specializesFunctionParameter) {
+  const specializesTextParameter = factory.parameters.some(
+    (parameter, index) =>
+      referencesSymbol(factory.body, parameter.id) &&
+      staticValue(rewritten.arguments[index], values).kind === "string",
+  );
+  if (
+    !returnsFunction && !specializesFunctionParameter &&
+    !specializesTextParameter
+  ) {
     return collapseEmptyBlock(rewritten);
   }
   const substitutions = new Map(
@@ -97,6 +105,22 @@ function rewriteExpression(
     ]),
   );
   return rewriteExpression(substitute(factory.body, substitutions), values);
+}
+
+function referencesSymbol(
+  expression: TypedDucklangExpression,
+  symbolId: number,
+): boolean {
+  if (
+    expression.kind === "reference" && expression.symbol.id === symbolId
+  ) {
+    return true;
+  }
+  let found = false;
+  visitChildren(expression, (child) => {
+    if (!found && referencesSymbol(child, symbolId)) found = true;
+  });
+  return found;
 }
 
 function rewriteBlock(

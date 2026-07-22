@@ -10,7 +10,7 @@ export type DucklangSymbol = {
   readonly id: number;
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
-  readonly declaredType?: "I32" | "I64" | "Bool";
+  readonly declaredType?: "I32" | "I64" | "Bool" | "Text";
   readonly span: SourceSpan;
 };
 

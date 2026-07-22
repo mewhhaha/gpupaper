@@ -2,7 +2,7 @@ import type { SourceSpan } from "./syntax.ts";
 
 export type DucklangName = {
   readonly text: string;
-  readonly declaredType?: "I32" | "I64" | "Bool";
+  readonly declaredType?: "I32" | "I64" | "Bool" | "Text";
   readonly span: SourceSpan;
 };
 
