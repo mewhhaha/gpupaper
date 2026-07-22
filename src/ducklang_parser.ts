@@ -434,7 +434,48 @@ function lowerModuleStatement(
   if (statement.name === "for_statement") {
     const end = statement.field("end");
     if (!isCursor(end)) {
-      throw unsupported(file, statement, "collection loop");
+      const first = requiredField(statement, "first");
+      const second = statement.field("second");
+      const firstUnion = findRule(first, "union_pattern");
+      const secondUnion = isCursor(second)
+        ? findRule(second, "union_pattern")
+        : undefined;
+      if (isCursor(second) && firstUnion !== undefined) {
+        throw unsupported(file, first, "collection index pattern");
+      }
+      const firstName = firstUnion === undefined
+        ? identifierName(file, first, "collection loop pattern")
+        : identifierName(
+          file,
+          requiredField(firstUnion, "value"),
+          "collection loop payload",
+        );
+      const secondName = !isCursor(second)
+        ? undefined
+        : secondUnion === undefined
+        ? identifierName(file, second, "collection loop pattern")
+        : identifierName(
+          file,
+          requiredField(secondUnion, "value"),
+          "collection loop payload",
+        );
+      const unionPattern = secondUnion ?? firstUnion;
+      return {
+        kind: "forCollection",
+        index: secondName === undefined ? undefined : firstName,
+        value: secondName ?? firstName,
+        caseName: unionPattern === undefined ? undefined : tokenText(
+          file,
+          requiredField(unionPattern, "case"),
+          "collection loop union case",
+        ),
+        collection: lowerExpression(
+          file,
+          requiredField(statement, "start_or_collection"),
+        ),
+        body: lowerExpression(file, requiredField(statement, "body")),
+        span: sourceSpan(file, statement),
+      };
     }
     const start = statement.field("start_or_collection") ??
       statement.field("start");

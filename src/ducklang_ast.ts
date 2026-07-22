@@ -277,6 +277,15 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "forCollection";
+    readonly index: DucklangName | undefined;
+    readonly value: DucklangName;
+    readonly caseName: string | undefined;
+    readonly collection: DucklangExpression;
+    readonly body: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "break";
     readonly value: DucklangExpression | undefined;
     readonly span: SourceSpan;

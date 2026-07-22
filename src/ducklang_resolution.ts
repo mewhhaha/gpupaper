@@ -558,8 +558,8 @@ class DucklangResolver {
         continue;
       }
       if (
-        statement.kind === "forRange" || statement.kind === "break" ||
-        statement.kind === "continue"
+        statement.kind === "forRange" || statement.kind === "forCollection" ||
+        statement.kind === "break" || statement.kind === "continue"
       ) {
         throw new TypeError(
           `${this.#file}:${statement.span.start}: dynamic Ducklang ${statement.kind} requires loop IR lowering`,

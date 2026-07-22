@@ -40,6 +40,116 @@ function expandStatements(
       }
       return { statements: expanded, control: statement.kind, values };
     }
+    if (inLoop && statement.kind === "unionBinding") {
+      const value = substituteExpression(statement.value, values);
+      if (value.kind === "unionCase") {
+        if (value.caseName === statement.caseName) {
+          values.set(statement.name.text, value.value);
+          continue;
+        }
+        if (statement.alternative.kind !== "block") {
+          throw new Error(
+            `${statement.span.file}:${statement.span.start}: Ducklang refutable binding alternative is not a block`,
+          );
+        }
+        const alternative = expandStatements(
+          statement.alternative.statements,
+          values,
+          true,
+        );
+        expanded.push(...alternative.statements);
+        values = new Map(alternative.values);
+        if (alternative.control !== "next") {
+          return {
+            statements: expanded,
+            control: alternative.control,
+            values,
+          };
+        }
+        continue;
+      }
+    }
+    if (statement.kind === "forCollection") {
+      const collection = evaluateStaticValue(
+        substituteExpression(statement.collection, values),
+      );
+      const elements = staticCollectionElements(collection);
+      if (elements === undefined) {
+        expanded.push(substituteStatement(statement, values, false));
+        if (statement.body.kind === "block") {
+          for (const bodyStatement of statement.body.statements) {
+            if (bodyStatement.kind === "assignment") {
+              values.delete(bodyStatement.name.text);
+            }
+          }
+        }
+        continue;
+      }
+      if (statement.body.kind !== "block") {
+        throw new Error(
+          `${statement.span.file}:${statement.span.start}: Ducklang collection body is not a block`,
+        );
+      }
+      const loopNames = statement.index === undefined
+        ? [statement.value]
+        : [statement.index, statement.value];
+      const bodyNames = statement.body.statements.flatMap((bodyStatement) => {
+        if (
+          bodyStatement.kind === "binding" ||
+          bodyStatement.kind === "unionBinding"
+        ) {
+          return [bodyStatement.name];
+        }
+        if (bodyStatement.kind === "recursiveGroup") {
+          return bodyStatement.bindings.map((binding) => binding.name);
+        }
+        if (bodyStatement.kind === "productBinding") {
+          return bodyStatement.names.flatMap((name) =>
+            name === undefined ? [] : [name]
+          );
+        }
+        return [];
+      });
+      const scopedNames = [...loopNames, ...bodyNames];
+      const shadowedValues = new Map(
+        scopedNames.map((name) => [name.text, values.get(name.text)]),
+      );
+      for (const [index, element] of elements.entries()) {
+        let iterationValue = element;
+        if (statement.caseName !== undefined) {
+          if (
+            element.kind !== "unionCase" ||
+            element.caseName !== statement.caseName
+          ) {
+            continue;
+          }
+          iterationValue = element.value;
+        }
+        const iterationValues = new Map(values);
+        iterationValues.set(statement.value.text, iterationValue);
+        if (statement.index !== undefined) {
+          iterationValues.set(statement.index.text, {
+            kind: "integer",
+            value: index,
+            span: statement.index.span,
+          });
+        }
+        const iteration = expandStatements(
+          statement.body.statements,
+          iterationValues,
+          true,
+        );
+        expanded.push(...iteration.statements);
+        values = new Map(iteration.values);
+        for (const name of scopedNames) {
+          const shadowed = shadowedValues.get(name.text);
+          if (shadowed === undefined) values.delete(name.text);
+          else values.set(name.text, shadowed);
+        }
+        if (iteration.control === "break") break;
+      }
+      continue;
+    }
     if (statement.kind === "forRange") {
       const start = evaluateStaticInteger(
         substituteExpression(statement.start, values),
@@ -240,6 +350,26 @@ function substituteStatement(
           : substituteExpression(statement.step, values, replaceReferences),
         body: substituteExpression(statement.body, values, replaceReferences),
       };
+    case "forCollection": {
+      const bodyValues = new Map(values);
+      bodyValues.delete(statement.value.text);
+      if (statement.index !== undefined) {
+        bodyValues.delete(statement.index.text);
+      }
+      return {
+        ...statement,
+        collection: substituteExpression(
+          statement.collection,
+          values,
+          replaceReferences,
+        ),
+        body: substituteExpression(
+          statement.body,
+          bodyValues,
+          replaceReferences,
+        ),
+      };
+    }
     case "break":
       return {
         ...statement,
@@ -583,7 +713,37 @@ function evaluateStaticValue(
   if (boolean !== undefined) {
     return { kind: "boolean", value: boolean, span: expression.span };
   }
+  if (expression.kind === "string" || expression.kind === "unit") {
+    return expression;
+  }
+  if (expression.kind === "product") {
+    const values: DucklangExpression[] = [];
+    for (const value of expression.values) {
+      const evaluated = evaluateStaticValue(value);
+      if (evaluated === undefined) return undefined;
+      values.push(evaluated);
+    }
+    return { ...expression, values };
+  }
+  if (expression.kind === "unionCase") {
+    const value = evaluateStaticValue(expression.value);
+    return value === undefined ? undefined : { ...expression, value };
+  }
   return undefined;
+}
+
+function staticCollectionElements(
+  collection: DucklangExpression | undefined,
+): readonly DucklangExpression[] | undefined {
+  if (collection?.kind === "product" && collection.productKind === "array") {
+    return collection.values;
+  }
+  if (collection?.kind !== "string") return undefined;
+  return [...new TextEncoder().encode(collection.value)].map((value) => ({
+    kind: "integer",
+    value,
+    span: collection.span,
+  }));
 }
 
 function evaluateStaticBoolean(

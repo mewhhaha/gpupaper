@@ -225,6 +225,12 @@ function lowerStatementExpressions(
           : lowerExpression(statement.step),
         body: lowerExpression(statement.body),
       };
+    case "forCollection":
+      return {
+        ...statement,
+        collection: lowerExpression(statement.collection),
+        body: lowerExpression(statement.body),
+      };
     case "break":
       return {
         ...statement,
