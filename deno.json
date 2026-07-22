@@ -4,7 +4,7 @@
     "strict": true
   },
   "tasks": {
-    "check": "deno check --unstable-webgpu src/cli.ts tests/*.test.ts",
+    "check": "deno fmt --check deno.json README.md src tests examples && deno lint src tests && deno check --unstable-webgpu src/cli.ts tests/*.test.ts",
     "test": "deno test --unstable-webgpu --allow-read tests",
     "compile": "deno run --unstable-webgpu --allow-read --allow-write src/cli.ts compile",
     "run": "deno run --unstable-webgpu --allow-read src/cli.ts run",
