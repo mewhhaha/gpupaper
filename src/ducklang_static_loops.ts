@@ -51,7 +51,14 @@ function expandStatements(
         ? 1
         : evaluateStaticInteger(substituteExpression(statement.step, values));
       if (start === undefined || end === undefined || step === undefined) {
-        expanded.push(substituteStatement(statement, values));
+        expanded.push(substituteStatement(statement, values, false));
+        if (statement.body.kind === "block") {
+          for (const bodyStatement of statement.body.statements) {
+            if (bodyStatement.kind === "assignment") {
+              values.delete(bodyStatement.name.text);
+            }
+          }
+        }
         continue;
       }
       if (step === 0) {

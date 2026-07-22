@@ -45,6 +45,7 @@ const supportedSuccessPaths = new Set([
   "examples/functions/12_let_else_return.duck",
   "examples/loops/01_range_sum.duck",
   "examples/loops/02_stepped_range.duck",
+  "examples/loops/03_dynamic_range_bound.duck",
   "examples/loops/04_break.duck",
   "examples/loops/05_continue.duck",
   "examples/loops/06_nested_ranges.duck",

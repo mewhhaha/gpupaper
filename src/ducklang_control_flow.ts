@@ -5,7 +5,7 @@ import type {
   DucklangStatement,
 } from "./ducklang_ast.ts";
 
-export function lowerDucklangConditionalAssignments(
+export function lowerDucklangControlFlow(
   module: DucklangModule,
 ): DucklangModule {
   return { ...module, statements: lowerStatements(module.statements) };
@@ -14,24 +14,182 @@ export function lowerDucklangConditionalAssignments(
 function lowerStatements(
   statements: readonly DucklangStatement[],
 ): readonly DucklangStatement[] {
-  return statements.map((statement) => {
+  return statements.flatMap((statement): readonly DucklangStatement[] => {
     const lowered = lowerStatementExpressions(statement);
+    if (lowered.kind === "forRange") {
+      const range = lowerDynamicRange(lowered);
+      return range ?? [lowered];
+    }
     if (lowered.kind !== "expression" || lowered.expression.kind !== "if") {
-      return lowered;
+      return [lowered];
     }
     const assignments = collectBranchAssignments(lowered.expression);
-    if (assignments.size !== 1) return lowered;
+    if (assignments.size !== 1) return [lowered];
     const [name] = assignments.values();
     const value = lowerAssignmentCondition(lowered.expression, name);
-    if (value === undefined) return lowered;
-    return {
+    if (value === undefined) return [lowered];
+    return [{
       kind: "assignment",
       operator: "=",
       name,
       value,
       span: lowered.span,
-    };
+    }];
   });
+}
+
+function lowerDynamicRange(
+  statement: Extract<DucklangStatement, { readonly kind: "forRange" }>,
+): readonly DucklangStatement[] | undefined {
+  if (statement.iterator === undefined || statement.body.kind !== "block") {
+    return undefined;
+  }
+  if (statement.body.statements.length !== 1) return undefined;
+  const update = statement.body.statements[0];
+  if (update.kind !== "assignment") return undefined;
+  if (statement.iterator.text === update.name.text) return undefined;
+  const step = statement.step ?? {
+    kind: "integer" as const,
+    value: 1,
+    span: statement.span,
+  };
+  const staticStep = step.kind === "integer"
+    ? step.value
+    : step.kind === "unary" && step.operator === "-" &&
+        step.operand.kind === "integer"
+    ? -step.operand.value
+    : undefined;
+  if (staticStep === undefined || staticStep === 0) return undefined;
+  const functionName: DucklangName = {
+    text: `$range_loop_${statement.span.start}`,
+    span: statement.span,
+  };
+  const endParameter: DucklangName = {
+    text: `$range_end_${statement.span.start}`,
+    span: statement.end.span,
+  };
+  const stepParameter: DucklangName = {
+    text: `$range_step_${statement.span.start}`,
+    span: step.span,
+  };
+  let comparisonOperator: "<" | ">";
+  if (statement.inclusive) {
+    comparisonOperator = staticStep > 0 ? ">" : "<";
+  } else {
+    comparisonOperator = staticStep > 0 ? "<" : ">";
+  }
+  const boundaryComparison: DucklangExpression = {
+    kind: "binary",
+    operator: comparisonOperator,
+    left: {
+      kind: "reference",
+      name: statement.iterator,
+      span: statement.iterator.span,
+    },
+    right: {
+      kind: "reference",
+      name: endParameter,
+      span: endParameter.span,
+    },
+    span: statement.span,
+  };
+  const condition: DucklangExpression = statement.inclusive
+    ? {
+      kind: "unary",
+      operator: "!",
+      operand: boundaryComparison,
+      span: statement.span,
+    }
+    : boundaryComparison;
+  const nextIndex: DucklangExpression = {
+    kind: "binary",
+    operator: "+",
+    left: {
+      kind: "reference",
+      name: statement.iterator,
+      span: statement.iterator.span,
+    },
+    right: {
+      kind: "reference",
+      name: stepParameter,
+      span: stepParameter.span,
+    },
+    span: statement.span,
+  };
+  const loopFunction: DucklangStatement = {
+    kind: "binding",
+    declarationKind: "let",
+    recursive: true,
+    name: functionName,
+    value: {
+      kind: "function",
+      recursive: true,
+      parameters: [
+        statement.iterator,
+        update.name,
+        endParameter,
+        stepParameter,
+      ],
+      body: {
+        kind: "if",
+        condition,
+        consequence: {
+          kind: "recursiveCall",
+          arguments: [
+            nextIndex,
+            update.value,
+            {
+              kind: "reference",
+              name: endParameter,
+              span: endParameter.span,
+            },
+            {
+              kind: "reference",
+              name: stepParameter,
+              span: stepParameter.span,
+            },
+          ],
+          span: statement.span,
+        },
+        alternative: {
+          kind: "reference",
+          name: update.name,
+          span: update.name.span,
+        },
+        span: statement.span,
+      },
+      span: statement.span,
+    },
+    span: statement.span,
+  };
+  return [
+    loopFunction,
+    {
+      kind: "assignment",
+      operator: update.operator,
+      name: update.name,
+      value: {
+        kind: "call",
+        callee: {
+          kind: "reference",
+          name: functionName,
+          span: functionName.span,
+        },
+        arguments: [
+          statement.start,
+          {
+            kind: "reference",
+            name: update.name,
+            span: update.name.span,
+          },
+          statement.end,
+          step,
+        ],
+        span: statement.span,
+      },
+      span: statement.span,
+    },
+  ];
 }
 
 function lowerStatementExpressions(
