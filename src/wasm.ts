@@ -23,6 +23,11 @@ export class WasmModuleBuilder {
     fieldName: string,
     typeIndex: number,
   ): number {
+    if (this.#functions.length !== 0) {
+      throw new Error(
+        `function import ${moduleName}.${fieldName} must be declared before defined functions`,
+      );
+    }
     const index = this.#imports.length;
     this.#imports.push([
       ...encodeName(moduleName),

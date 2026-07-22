@@ -484,6 +484,16 @@ Deno.test("Wasm function vectors count entries across LEB128 boundaries", () => 
   );
 });
 
+Deno.test("Wasm imports cannot invalidate allocated function indices", () => {
+  const builder = new WasmModuleBuilder();
+  const typeIndex = builder.addFunctionType([], [wasmType.i32]);
+  builder.addFunction(typeIndex, [], wasmInstruction.i32Constant(0));
+  assertThrows(
+    () => builder.addFunctionImport("compiler", "late", typeIndex),
+    /function import compiler\.late must be declared before defined functions/,
+  );
+});
+
 function assertEquals(actual: unknown, expected: unknown): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
