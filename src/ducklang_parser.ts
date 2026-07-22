@@ -219,7 +219,6 @@ function lowerExpression(
       "as_expression",
       "condition_expression",
       "condition_is_expression",
-      "condition_call_expression",
       "condition_parenthesized_expression",
       "_condition_primary",
       "_primary_expression",
@@ -371,6 +370,29 @@ function lowerExpression(
           expression.span,
           sourceSpan(file, argument),
         ),
+      };
+    }
+    return expression;
+  }
+
+  if (cursor.name === "condition_call_expression") {
+    const [callee, ...suffixes] = cursor.children().filter((child) =>
+      child.type === "rule"
+    );
+    if (callee === undefined) {
+      throw unsupported(file, cursor, "condition call callee");
+    }
+    let expression = lowerExpression(file, callee);
+    for (const suffix of suffixes) {
+      const argument = suffix.field("argument");
+      if (!isCursor(argument)) {
+        throw unsupported(file, suffix, "condition field or index postfix");
+      }
+      expression = {
+        kind: "call",
+        callee: expression,
+        arguments: lowerCallArguments(file, argument),
+        span: spanFrom(expression.span, sourceSpan(file, suffix)),
       };
     }
     return expression;

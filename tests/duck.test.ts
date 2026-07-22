@@ -72,6 +72,17 @@ Deno.test("Ducklang else-if chains return 42", async () => {
   await assertDuckFixture("10_else_if.duck", 42);
 });
 
+Deno.test("Ducklang calls functions in conditions", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let positive = value => value > 0
+if positive(1) { 42 } else { 0 }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang functions capture the module symbol visible at declaration", async () => {
   await assertDuckFixture("closure_capture.duck", 43);
 });
