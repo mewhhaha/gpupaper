@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "lib": ["deno.window", "dom", "dom.iterable", "esnext"],
+    "strict": true
+  },
+  "tasks": {
+    "check": "deno check --unstable-webgpu src/cli.ts tests/*.test.ts",
+    "test": "deno test --unstable-webgpu --allow-read tests",
+    "compile": "deno run --unstable-webgpu --allow-read --allow-write src/cli.ts compile",
+    "run": "deno run --unstable-webgpu --allow-read src/cli.ts run",
+    "experiments": "deno run --unstable-webgpu --allow-read src/cli.ts experiments examples/all.hs"
+  }
+}

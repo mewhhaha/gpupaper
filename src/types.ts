@@ -1,0 +1,730 @@
+import type {
+  CaseAlternative,
+  ClassDeclaration,
+  DataDeclaration,
+  Expression,
+  InstanceDeclaration,
+  Module,
+  Pattern,
+  SourceSpan,
+  TypeSignature,
+  TypeSyntax,
+  ValueDeclaration,
+} from "./syntax.ts";
+import { type ResolutionResult, resolveModuleNames } from "./resolution.ts";
+
+export type Type =
+  | { readonly kind: "variable"; readonly id: number }
+  | {
+    readonly kind: "constructor";
+    readonly name: string;
+    readonly arguments: readonly Type[];
+  }
+  | {
+    readonly kind: "function";
+    readonly parameter: Type;
+    readonly result: Type;
+  };
+
+export type Predicate = {
+  readonly className: string;
+  readonly type: Type;
+  readonly span: SourceSpan;
+};
+
+export type TypeScheme = {
+  readonly quantified: readonly number[];
+  readonly predicates: readonly Predicate[];
+  readonly type: Type;
+};
+
+export type EqualityConstraint = {
+  readonly left: Type;
+  readonly right: Type;
+  readonly span: SourceSpan;
+};
+
+export type TypedDeclaration = {
+  readonly declaration: ValueDeclaration;
+  readonly scheme: TypeScheme;
+  readonly predicates: readonly Predicate[];
+};
+
+export type InferredModule = {
+  readonly module: Module;
+  readonly declarations: readonly TypedDeclaration[];
+  readonly equalities: readonly EqualityConstraint[];
+  readonly resolution: ResolutionResult;
+  readonly instances: readonly InstanceDeclaration[];
+};
+
+type InferredExpression = {
+  readonly type: Type;
+  readonly predicates: readonly Predicate[];
+};
+type TypeEnvironment = ReadonlyMap<string, TypeScheme>;
+
+const integerType: Type = { kind: "constructor", name: "Int", arguments: [] };
+const booleanType: Type = { kind: "constructor", name: "Bool", arguments: [] };
+
+export function inferModule(module: Module): InferredModule {
+  const resolution = resolveModuleNames(module);
+  const classes = module.declarations.filter((
+    declaration,
+  ): declaration is ClassDeclaration => declaration.kind === "class");
+  const instances = module.declarations.filter((
+    declaration,
+  ): declaration is InstanceDeclaration => declaration.kind === "instance");
+  const state = new InferenceState(instances);
+  let environment = state.initialEnvironment(module, classes);
+  const typedByName = new Map<string, TypedDeclaration>();
+
+  for (const stratum of resolution.strata) {
+    const placeholders = new Map<string, Type>();
+    const recursiveEnvironment = new Map(environment);
+    for (const declaration of stratum) {
+      const placeholder = state.freshVariable();
+      placeholders.set(declaration.name.text, placeholder);
+      recursiveEnvironment.set(declaration.name.text, {
+        quantified: [],
+        predicates: [],
+        type: placeholder,
+      });
+    }
+
+    const inferredByName = new Map<string, InferredExpression>();
+    for (const declaration of stratum) {
+      const inferred = state.inferValueDeclaration(
+        declaration,
+        recursiveEnvironment,
+      );
+      state.unify(
+        placeholders.get(declaration.name.text)!,
+        inferred.type,
+        declaration.span,
+      );
+      if (declaration.signature !== undefined) {
+        state.checkSignature(
+          declaration.signature,
+          inferred,
+          declaration.name.text,
+        );
+      }
+      inferredByName.set(declaration.name.text, inferred);
+    }
+
+    const extendedEnvironment = new Map(environment);
+    for (const declaration of stratum) {
+      const inferred = inferredByName.get(declaration.name.text)!;
+      const resolvedType = state.apply(
+        placeholders.get(declaration.name.text)!,
+      );
+      const resolvedPredicates = inferred.predicates.map((predicate) => ({
+        ...predicate,
+        type: state.apply(predicate.type),
+      }));
+      const unsolvedPredicates = state.retainUnsolvedPredicates(
+        resolvedPredicates,
+        declaration.signature !== undefined,
+      );
+      const scheme = state.generalize(
+        environment,
+        resolvedType,
+        unsolvedPredicates,
+      );
+      const typed = { declaration, scheme, predicates: unsolvedPredicates };
+      typedByName.set(declaration.name.text, typed);
+      extendedEnvironment.set(declaration.name.text, scheme);
+    }
+    environment = extendedEnvironment;
+  }
+
+  return {
+    module,
+    declarations: module.declarations
+      .filter((declaration): declaration is ValueDeclaration =>
+        declaration.kind === "value"
+      )
+      .map((declaration) => typedByName.get(declaration.name.text)!),
+    equalities: state.equalities,
+    resolution,
+    instances,
+  };
+}
+
+class InferenceState {
+  readonly equalities: EqualityConstraint[] = [];
+  readonly #substitution = new Map<number, Type>();
+  readonly #instances: readonly InstanceDeclaration[];
+  #nextVariable = 0;
+
+  constructor(instances: readonly InstanceDeclaration[]) {
+    this.#instances = instances;
+  }
+
+  freshVariable(): Type {
+    const variable: Type = { kind: "variable", id: this.#nextVariable };
+    this.#nextVariable += 1;
+    return variable;
+  }
+
+  initialEnvironment(
+    module: Module,
+    classes: readonly ClassDeclaration[],
+  ): TypeEnvironment {
+    const environment = new Map<string, TypeScheme>();
+    for (const declaration of module.declarations) {
+      if (declaration.kind !== "datatype") continue;
+      for (
+        const [constructorIndex, constructor] of declaration.constructors
+          .entries()
+      ) {
+        const variables = new Map(
+          declaration.parameters.map((
+            parameter,
+          ) => [parameter, this.freshVariable()]),
+        );
+        const result: Type = {
+          kind: "constructor",
+          name: declaration.name.text,
+          arguments: declaration.parameters.map((parameter) =>
+            variables.get(parameter)!
+          ),
+        };
+        const constructorType = constructor.fields.reduceRight<Type>(
+          (rest, field) => ({
+            kind: "function",
+            parameter: this.typeFromSyntax(field, variables),
+            result: rest,
+          }),
+          result,
+        );
+        environment.set(constructor.name.text, {
+          quantified: [...variables.values()].map((type) =>
+            (type as { kind: "variable"; id: number }).id
+          ),
+          predicates: [],
+          type: constructorType,
+        });
+        environment.set(`$tag:${constructor.name.text}`, {
+          quantified: [],
+          predicates: [],
+          type: {
+            kind: "constructor",
+            name: String(constructorIndex),
+            arguments: [],
+          },
+        });
+      }
+    }
+    for (const classDeclaration of classes) {
+      const variables = new Map<string, Type>();
+      variables.set(classDeclaration.parameter, this.freshVariable());
+      const methodType = this.typeFromSyntax(
+        classDeclaration.methodType.type,
+        variables,
+      );
+      const classType = variables.get(classDeclaration.parameter)!;
+      environment.set(classDeclaration.methodName.text, {
+        quantified: [classType.kind === "variable" ? classType.id : -1],
+        predicates: [{
+          className: classDeclaration.name.text,
+          type: classType,
+          span: classDeclaration.span,
+        }],
+        type: methodType,
+      });
+    }
+    return environment;
+  }
+
+  inferValueDeclaration(
+    declaration: ValueDeclaration,
+    environment: TypeEnvironment,
+  ): InferredExpression {
+    let expression = declaration.expression;
+    for (const parameter of declaration.parameters.toReversed()) {
+      expression = {
+        kind: "lambda",
+        parameter,
+        body: expression,
+        span: declaration.span,
+      };
+    }
+    return this.inferExpression(expression, environment);
+  }
+
+  inferExpression(
+    expression: Expression,
+    environment: TypeEnvironment,
+  ): InferredExpression {
+    switch (expression.kind) {
+      case "integer":
+        return { type: integerType, predicates: [] };
+      case "boolean":
+        return { type: booleanType, predicates: [] };
+      case "variable": {
+        const scheme = environment.get(expression.name.text);
+        if (scheme === undefined) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: unbound name ${expression.name.text}`,
+          );
+        }
+        return this.instantiate(scheme);
+      }
+      case "lambda": {
+        const parameterType = this.freshVariable();
+        const lambdaEnvironment = new Map(environment);
+        lambdaEnvironment.set(expression.parameter.text, {
+          quantified: [],
+          predicates: [],
+          type: parameterType,
+        });
+        const body = this.inferExpression(expression.body, lambdaEnvironment);
+        return {
+          type: {
+            kind: "function",
+            parameter: this.apply(parameterType),
+            result: body.type,
+          },
+          predicates: body.predicates,
+        };
+      }
+      case "apply": {
+        const callee = this.inferExpression(expression.callee, environment);
+        const argument = this.inferExpression(expression.argument, environment);
+        const result = this.freshVariable();
+        this.unify(callee.type, {
+          kind: "function",
+          parameter: argument.type,
+          result,
+        }, expression.span);
+        return {
+          type: this.apply(result),
+          predicates: [...callee.predicates, ...argument.predicates],
+        };
+      }
+      case "let": {
+        const value = this.inferExpression(expression.value, environment);
+        const scheme = this.generalize(
+          environment,
+          this.apply(value.type),
+          value.predicates,
+        );
+        const bodyEnvironment = new Map(environment);
+        bodyEnvironment.set(expression.name.text, scheme);
+        return this.inferExpression(expression.body, bodyEnvironment);
+      }
+      case "if": {
+        const condition = this.inferExpression(
+          expression.condition,
+          environment,
+        );
+        const thenBranch = this.inferExpression(
+          expression.thenBranch,
+          environment,
+        );
+        const elseBranch = this.inferExpression(
+          expression.elseBranch,
+          environment,
+        );
+        this.unify(condition.type, booleanType, expression.condition.span);
+        this.unify(thenBranch.type, elseBranch.type, expression.span);
+        return {
+          type: this.apply(thenBranch.type),
+          predicates: [
+            ...condition.predicates,
+            ...thenBranch.predicates,
+            ...elseBranch.predicates,
+          ],
+        };
+      }
+      case "binary": {
+        const left = this.inferExpression(expression.left, environment);
+        const right = this.inferExpression(expression.right, environment);
+        this.unify(left.type, right.type, expression.span);
+        if (expression.operator === "==") {
+          return {
+            type: booleanType,
+            predicates: [...left.predicates, ...right.predicates, {
+              className: "Eq",
+              type: this.apply(left.type),
+              span: expression.span,
+            }],
+          };
+        }
+        this.unify(left.type, integerType, expression.span);
+        return {
+          type: integerType,
+          predicates: [...left.predicates, ...right.predicates],
+        };
+      }
+      case "comptime":
+        return this.inferExpression(expression.expression, environment);
+      case "case":
+        return this.inferCase(
+          expression.scrutinee,
+          expression.alternatives,
+          environment,
+          expression.span,
+        );
+    }
+  }
+
+  inferCase(
+    scrutineeExpression: Expression,
+    alternatives: readonly CaseAlternative[],
+    environment: TypeEnvironment,
+    span: SourceSpan,
+  ): InferredExpression {
+    const scrutinee = this.inferExpression(scrutineeExpression, environment);
+    const result = this.freshVariable();
+    const predicates: Predicate[] = [...scrutinee.predicates];
+    for (const alternative of alternatives) {
+      const pattern = this.inferPattern(alternative.pattern, environment);
+      this.unify(scrutinee.type, pattern.type, alternative.span);
+      const alternativeEnvironment = new Map(environment);
+      for (const [name, type] of pattern.bindings) {
+        alternativeEnvironment.set(name, {
+          quantified: [],
+          predicates: [],
+          type,
+        });
+      }
+      const branch = this.inferExpression(
+        alternative.expression,
+        alternativeEnvironment,
+      );
+      this.unify(result, branch.type, alternative.span);
+      predicates.push(...pattern.predicates, ...branch.predicates);
+    }
+    return { type: this.apply(result), predicates };
+  }
+
+  inferPattern(
+    pattern: Pattern,
+    environment: TypeEnvironment,
+  ): {
+    readonly type: Type;
+    readonly bindings: ReadonlyMap<string, Type>;
+    readonly predicates: readonly Predicate[];
+  } {
+    if (pattern.kind === "integer") {
+      return { type: integerType, bindings: new Map(), predicates: [] };
+    }
+    if (pattern.kind === "wildcard") {
+      return {
+        type: this.freshVariable(),
+        bindings: new Map(),
+        predicates: [],
+      };
+    }
+    const scheme = environment.get(pattern.name.text);
+    if (scheme === undefined) {
+      throw new TypeError(
+        `${pattern.span.file}:${pattern.span.start}: unknown constructor ${pattern.name.text}`,
+      );
+    }
+    const instantiated = this.instantiate(scheme);
+    let constructorType = instantiated.type;
+    const bindings = new Map<string, Type>();
+    for (const field of pattern.fields) {
+      const fieldType = this.freshVariable();
+      const remaining = this.freshVariable();
+      this.unify(constructorType, {
+        kind: "function",
+        parameter: fieldType,
+        result: remaining,
+      }, field.span);
+      bindings.set(field.text, this.apply(fieldType));
+      constructorType = this.apply(remaining);
+    }
+    if (this.apply(constructorType).kind === "function") {
+      throw new TypeError(
+        `${pattern.span.file}:${pattern.span.start}: constructor ${pattern.name.text} expects more fields`,
+      );
+    }
+    return {
+      type: this.apply(constructorType),
+      bindings,
+      predicates: instantiated.predicates,
+    };
+  }
+
+  checkSignature(
+    signature: TypeSignature,
+    inferred: InferredExpression,
+    declarationName: string,
+  ): void {
+    const variables = new Map<string, Type>();
+    const expected = this.typeFromSyntax(signature.type, variables);
+    try {
+      this.unify(inferred.type, expected, signature.span);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new TypeError(
+          `${signature.span.file}:${signature.span.start}: signature for ${declarationName} does not match: ${error.message}`,
+        );
+      }
+      throw error;
+    }
+    for (const [name, variable] of variables) {
+      if (variable.kind !== "variable") continue;
+      const resolved = this.apply(variable);
+      if (resolved.kind !== "variable" || resolved.id !== variable.id) {
+        throw new TypeError(
+          `${signature.span.file}:${signature.span.start}: signature for ${declarationName} claims polymorphic ${name}, but its definition requires ${
+            formatType(resolved)
+          }`,
+        );
+      }
+    }
+    const declaredClasses = new Set(
+      signature.predicates.map((predicate) => predicate.className),
+    );
+    for (const predicate of inferred.predicates) {
+      const resolved = { ...predicate, type: this.apply(predicate.type) };
+      if (
+        !this.predicateHasInstance(resolved) &&
+        !declaredClasses.has(resolved.className)
+      ) {
+        throw new TypeError(
+          `${predicate.span.file}:${predicate.span.start}: signature for ${declarationName} is missing ${
+            formatPredicate(resolved)
+          }`,
+        );
+      }
+    }
+  }
+
+  typeFromSyntax(syntax: TypeSyntax, variables: Map<string, Type>): Type {
+    if (syntax.kind === "name") {
+      if (syntax.name[0] === syntax.name[0].toLowerCase()) {
+        const existing = variables.get(syntax.name);
+        if (existing !== undefined) return existing;
+        const variable = this.freshVariable();
+        variables.set(syntax.name, variable);
+        return variable;
+      }
+      return { kind: "constructor", name: syntax.name, arguments: [] };
+    }
+    if (syntax.kind === "function") {
+      return {
+        kind: "function",
+        parameter: this.typeFromSyntax(syntax.parameter, variables),
+        result: this.typeFromSyntax(syntax.result, variables),
+      };
+    }
+    const constructor = this.typeFromSyntax(syntax.constructor, variables);
+    const argument = this.typeFromSyntax(syntax.argument, variables);
+    if (constructor.kind !== "constructor") {
+      throw new TypeError(
+        `${syntax.span.file}:${syntax.span.start}: type variable cannot be applied in this subset`,
+      );
+    }
+    return { ...constructor, arguments: [...constructor.arguments, argument] };
+  }
+
+  instantiate(scheme: TypeScheme): InferredExpression {
+    const replacements = new Map<number, Type>(
+      scheme.quantified.map((id) => [id, this.freshVariable()]),
+    );
+    return {
+      type: replaceTypeVariables(scheme.type, replacements),
+      predicates: scheme.predicates.map((predicate) => ({
+        ...predicate,
+        type: replaceTypeVariables(predicate.type, replacements),
+      })),
+    };
+  }
+
+  generalize(
+    environment: TypeEnvironment,
+    type: Type,
+    predicates: readonly Predicate[],
+  ): TypeScheme {
+    const environmentVariables = new Set<number>();
+    for (const scheme of environment.values()) {
+      const quantified = new Set(scheme.quantified);
+      for (const id of freeTypeVariables(scheme.type)) {
+        if (!quantified.has(id)) environmentVariables.add(id);
+      }
+    }
+    const quantified = [...freeTypeVariables(type)].filter((id) =>
+      !environmentVariables.has(id)
+    ).sort((left, right) => left - right);
+    return { quantified, predicates, type };
+  }
+
+  retainUnsolvedPredicates(
+    predicates: readonly Predicate[],
+    signaturePresent: boolean,
+  ): readonly Predicate[] {
+    const unique = new Map<string, Predicate>();
+    for (const predicate of predicates) {
+      const resolved = { ...predicate, type: this.apply(predicate.type) };
+      if (this.predicateHasInstance(resolved)) continue;
+      if (resolved.type.kind !== "variable" && !signaturePresent) {
+        throw new TypeError(
+          `${resolved.span.file}:${resolved.span.start}: no instance for ${
+            formatPredicate(resolved)
+          }`,
+        );
+      }
+      unique.set(formatPredicate(resolved), resolved);
+    }
+    return [...unique.values()];
+  }
+
+  predicateHasInstance(predicate: Predicate): boolean {
+    const resolved = this.apply(predicate.type);
+    if (resolved.kind !== "constructor") return false;
+    return this.#instances.some((instance) =>
+      instance.className.text === predicate.className &&
+      instance.type.kind === "name" && instance.type.name === resolved.name
+    );
+  }
+
+  unify(leftInput: Type, rightInput: Type, span: SourceSpan): void {
+    this.equalities.push({ left: leftInput, right: rightInput, span });
+    const left = this.apply(leftInput);
+    const right = this.apply(rightInput);
+    if (
+      left.kind === "variable" && right.kind === "variable" &&
+      left.id === right.id
+    ) return;
+    if (left.kind === "variable") {
+      this.bind(left.id, right, span);
+      return;
+    }
+    if (right.kind === "variable") {
+      this.bind(right.id, left, span);
+      return;
+    }
+    if (left.kind === "function" && right.kind === "function") {
+      this.unify(left.parameter, right.parameter, span);
+      this.unify(left.result, right.result, span);
+      return;
+    }
+    if (
+      left.kind === "constructor" && right.kind === "constructor" &&
+      left.name === right.name &&
+      left.arguments.length === right.arguments.length
+    ) {
+      for (let index = 0; index < left.arguments.length; index += 1) {
+        this.unify(left.arguments[index], right.arguments[index], span);
+      }
+      return;
+    }
+    throw new TypeError(
+      `${span.file}:${span.start}: cannot unify ${formatType(left)} with ${
+        formatType(right)
+      }`,
+    );
+  }
+
+  bind(variable: number, type: Type, span: SourceSpan): void {
+    if (freeTypeVariables(type).has(variable)) {
+      throw new TypeError(
+        `${span.file}:${span.start}: infinite type t${variable} = ${
+          formatType(type)
+        }`,
+      );
+    }
+    this.#substitution.set(variable, type);
+  }
+
+  apply(type: Type): Type {
+    if (type.kind === "variable") {
+      const replacement = this.#substitution.get(type.id);
+      if (replacement === undefined) return type;
+      const resolved = this.apply(replacement);
+      this.#substitution.set(type.id, resolved);
+      return resolved;
+    }
+    if (type.kind === "function") {
+      return {
+        kind: "function",
+        parameter: this.apply(type.parameter),
+        result: this.apply(type.result),
+      };
+    }
+    return {
+      kind: "constructor",
+      name: type.name,
+      arguments: type.arguments.map((argument) => this.apply(argument)),
+    };
+  }
+}
+
+export function formatType(type: Type): string {
+  if (type.kind === "variable") return variableName(type.id);
+  if (type.kind === "function") {
+    const parameter = type.parameter.kind === "function"
+      ? `(${formatType(type.parameter)})`
+      : formatType(type.parameter);
+    return `${parameter} -> ${formatType(type.result)}`;
+  }
+  if (type.arguments.length === 0) return type.name;
+  return `${type.name} ${
+    type.arguments.map((argument) =>
+      argument.kind === "function"
+        ? `(${formatType(argument)})`
+        : formatType(argument)
+    ).join(" ")
+  }`;
+}
+
+export function formatScheme(scheme: TypeScheme): string {
+  const predicates = scheme.predicates.length === 0
+    ? ""
+    : `${scheme.predicates.map(formatPredicate).join(", ")} => `;
+  return `${predicates}${formatType(scheme.type)}`;
+}
+
+function formatPredicate(predicate: Predicate): string {
+  return `${predicate.className} ${formatType(predicate.type)}`;
+}
+
+function variableName(id: number): string {
+  const letter = String.fromCharCode(97 + id % 26);
+  const suffix = id < 26 ? "" : String(Math.floor(id / 26));
+  return letter + suffix;
+}
+
+function freeTypeVariables(type: Type): Set<number> {
+  if (type.kind === "variable") return new Set([type.id]);
+  const variables = new Set<number>();
+  if (type.kind === "function") {
+    for (const id of freeTypeVariables(type.parameter)) variables.add(id);
+    for (const id of freeTypeVariables(type.result)) variables.add(id);
+    return variables;
+  }
+  for (const argument of type.arguments) {
+    for (const id of freeTypeVariables(argument)) {
+      variables.add(id);
+    }
+  }
+  return variables;
+}
+
+function replaceTypeVariables(
+  type: Type,
+  replacements: ReadonlyMap<number, Type>,
+): Type {
+  if (type.kind === "variable") return replacements.get(type.id) ?? type;
+  if (type.kind === "function") {
+    return {
+      kind: "function",
+      parameter: replaceTypeVariables(type.parameter, replacements),
+      result: replaceTypeVariables(type.result, replacements),
+    };
+  }
+  return {
+    kind: "constructor",
+    name: type.name,
+    arguments: type.arguments.map((argument) =>
+      replaceTypeVariables(argument, replacements)
+    ),
+  };
+}
