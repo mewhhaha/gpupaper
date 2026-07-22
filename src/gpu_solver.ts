@@ -232,7 +232,7 @@ export async function unionPairsOnGpu(
 
 async function requestDevice(): Promise<DeviceRequest> {
   if (devicePromise !== undefined) return await devicePromise;
-  devicePromise = (async () => {
+  const pendingRequest: Promise<DeviceRequest> = (async () => {
     if (navigator.gpu === undefined) {
       return {
         status: "unavailable",
@@ -257,7 +257,16 @@ async function requestDevice(): Promise<DeviceRequest> {
       };
     }
   })();
-  return await devicePromise;
+  devicePromise = pendingRequest;
+  const result = await pendingRequest;
+  if (result.status === "unavailable") {
+    if (devicePromise === pendingRequest) devicePromise = undefined;
+    return result;
+  }
+  void result.device.lost.then(() => {
+    if (devicePromise === pendingRequest) devicePromise = undefined;
+  });
+  return result;
 }
 
 function flattenEqualities(
