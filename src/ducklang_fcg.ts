@@ -1,17 +1,20 @@
 import type { FcgFunction, FcgOperation, WasmArtifact } from "./fcg.ts";
 import type { SourceSpan } from "./syntax.ts";
-import type {
-  DucklangBinaryOperator,
-  TypedDucklangBinding,
-  TypedDucklangExpression,
-  TypedDucklangModule,
+import type { Type } from "./types.ts";
+import {
+  type DucklangBinaryOperator,
+  formatDucklangType,
+  type TypedDucklangBinding,
+  type TypedDucklangExpression,
+  type TypedDucklangModule,
 } from "./ducklang_types.ts";
 import { wasmInstruction, WasmModuleBuilder, wasmType } from "./wasm.ts";
 
 type DucklangFcgInstruction =
   | {
     readonly kind: "constant";
-    readonly value: number;
+    readonly value: number | bigint;
+    readonly valueType: "i32" | "i64";
     readonly span: SourceSpan;
   }
   | {
@@ -33,10 +36,12 @@ type DucklangFcgInstruction =
   | {
     readonly kind: "binary";
     readonly operator: DucklangBinaryOperator;
+    readonly valueType: "i32" | "i64";
     readonly span: SourceSpan;
   }
   | {
     readonly kind: "if";
+    readonly resultType: "i32" | "i64";
     readonly consequence: readonly DucklangFcgInstruction[];
     readonly alternative: readonly DucklangFcgInstruction[];
     readonly span: SourceSpan;
@@ -53,6 +58,8 @@ type FunctionShape = {
   readonly index: number;
   readonly name: string;
   readonly parameterCount: number;
+  readonly parameterTypes: readonly number[];
+  readonly resultType: number;
   readonly binding: TypedDucklangBinding | undefined;
 };
 
@@ -67,10 +74,30 @@ export function lowerDucklangToFcgAndWasm(
     const parameterCount = binding.value.kind === "function"
       ? binding.value.parameters.length
       : 0;
+    const parameterTypes = binding.value.kind === "function"
+      ? binding.value.parameters.map((parameter) => {
+        const type = module.symbolTypes.get(parameter.id);
+        if (type === undefined) {
+          throw new Error(
+            `${module.file}:${parameter.span.start}: missing type for Ducklang parameter ${parameter.text}#${parameter.id}`,
+          );
+        }
+        return wasmValueType(module.file, parameter.span, type);
+      })
+      : [];
+    const resultType = wasmValueType(
+      module.file,
+      binding.span,
+      binding.value.kind === "function"
+        ? binding.value.body.type
+        : binding.type,
+    );
     const shape = {
       index: orderedShapes.length,
       name: `${binding.symbol.text}__duck${binding.symbol.id}`,
       parameterCount,
+      parameterTypes,
+      resultType,
       binding,
     } satisfies FunctionShape;
     shapes.set(binding.symbol.id, shape);
@@ -80,14 +107,20 @@ export function lowerDucklangToFcgAndWasm(
     index: orderedShapes.length,
     name: "main",
     parameterCount: 0,
+    parameterTypes: [],
+    resultType: wasmValueType(
+      module.file,
+      module.result.span,
+      module.resultType,
+    ),
     binding: undefined,
   } satisfies FunctionShape;
   orderedShapes.push(mainShape);
 
   const typeIndices = orderedShapes.map((shape) =>
     builder.addFunctionType(
-      new Array(shape.parameterCount).fill(wasmType.i32),
-      [wasmType.i32],
+      shape.parameterTypes,
+      [shape.resultType],
     )
   );
   const loweredFunctions: DucklangFcgFunction[] = [];
@@ -101,7 +134,7 @@ export function lowerDucklangToFcgAndWasm(
     const compiled = compiler.compile(body);
     const functionIndex = builder.addFunction(
       typeIndices[shape.index],
-      new Array(compiled.localCount).fill(wasmType.i32),
+      compiled.localTypes,
       emitInstructions(compiled.instructions),
     );
     if (functionIndex !== shape.index) {
@@ -137,6 +170,7 @@ class DucklangFcgCompiler {
   readonly #file: string;
   readonly #shapes: ReadonlyMap<number, FunctionShape>;
   readonly #locals = new Map<number, number>();
+  readonly #localTypes: number[] = [];
   #nextLocal: number;
 
   constructor(
@@ -155,12 +189,14 @@ class DucklangFcgCompiler {
   compile(expression: TypedDucklangExpression): {
     readonly instructions: readonly DucklangFcgInstruction[];
     readonly localCount: number;
+    readonly localTypes: readonly number[];
   } {
     const parameterCount = this.#nextLocal;
     const instructions = this.#compileExpression(expression);
     return {
       instructions,
       localCount: this.#nextLocal - parameterCount,
+      localTypes: this.#localTypes,
     };
   }
 
@@ -172,12 +208,21 @@ class DucklangFcgCompiler {
         return [{
           kind: "constant",
           value: expression.value,
+          valueType: "i32",
+          span: expression.span,
+        }];
+      case "integer64":
+        return [{
+          kind: "constant",
+          value: expression.value,
+          valueType: "i64",
           span: expression.span,
         }];
       case "boolean":
         return [{
           kind: "constant",
           value: expression.value ? 1 : 0,
+          valueType: "i32",
           span: expression.span,
         }];
       case "reference": {
@@ -243,6 +288,7 @@ class DucklangFcgCompiler {
           {
             kind: "binary",
             operator: expression.operator,
+            valueType: isI64(expression.left.type) ? "i64" : "i32",
             span: expression.span,
           },
         ];
@@ -251,6 +297,7 @@ class DucklangFcgCompiler {
           ...this.#compileExpression(expression.condition),
           {
             kind: "if",
+            resultType: isI64(expression.type) ? "i64" : "i32",
             consequence: this.#compileExpression(expression.consequence),
             alternative: this.#compileExpression(expression.alternative),
             span: expression.span,
@@ -268,6 +315,9 @@ class DucklangFcgCompiler {
           instructions.push(...this.#compileExpression(binding.value));
           const local = this.#nextLocal;
           this.#nextLocal += 1;
+          this.#localTypes.push(
+            wasmValueType(this.#file, binding.span, binding.type),
+          );
           this.#locals.set(binding.symbol.id, local);
           instructions.push({ kind: "localSet", local, span: binding.span });
         }
@@ -292,7 +342,9 @@ function emitInstructions(
   return instructions.flatMap((instruction): readonly number[] => {
     switch (instruction.kind) {
       case "constant":
-        return wasmInstruction.i32Constant(instruction.value);
+        return instruction.valueType === "i64"
+          ? wasmInstruction.i64Constant(instruction.value as bigint)
+          : wasmInstruction.i32Constant(instruction.value as number);
       case "localGet":
         return wasmInstruction.localGet(instruction.local);
       case "localSet":
@@ -300,6 +352,19 @@ function emitInstructions(
       case "call":
         return wasmInstruction.call(instruction.functionIndex);
       case "binary":
+        if (instruction.valueType === "i64") {
+          return {
+            "+": wasmInstruction.i64Add,
+            "-": wasmInstruction.i64Subtract,
+            "*": wasmInstruction.i64Multiply,
+            "/": wasmInstruction.i64DivideSigned,
+            "%": wasmInstruction.i64RemainderSigned,
+            "==": wasmInstruction.i64Equal,
+            "<": wasmInstruction.i64LessThanSigned,
+            ">": wasmInstruction.i64GreaterThanSigned,
+            "&&": wasmInstruction.i32And,
+          }[instruction.operator];
+        }
         return {
           "+": wasmInstruction.i32Add,
           "-": wasmInstruction.i32Subtract,
@@ -313,7 +378,9 @@ function emitInstructions(
         }[instruction.operator];
       case "if":
         return [
-          ...wasmInstruction.ifI32,
+          ...(instruction.resultType === "i64"
+            ? wasmInstruction.ifI64
+            : wasmInstruction.ifI32),
           ...emitInstructions(instruction.consequence),
           ...wasmInstruction.else,
           ...emitInstructions(instruction.alternative),
@@ -340,8 +407,12 @@ function publicOperations(
     switch (instruction.kind) {
       case "constant":
         return [{
-          opcode: "const",
-          operands: [instruction.value],
+          opcode: instruction.valueType === "i64" ? "i64.const" : "const",
+          operands: [
+            typeof instruction.value === "bigint"
+              ? instruction.value.toString()
+              : instruction.value,
+          ],
           sourceStart,
         }];
       case "localGet":
@@ -364,7 +435,7 @@ function publicOperations(
         }];
       case "binary":
         return [{
-          opcode: `i32.${instruction.operator}`,
+          opcode: `${instruction.valueType}.${instruction.operator}`,
           operands: [],
           sourceStart,
         }];
@@ -376,4 +447,21 @@ function publicOperations(
         ];
     }
   });
+}
+
+function wasmValueType(file: string, span: SourceSpan, type: Type): number {
+  if (type.kind === "constructor" && type.arguments.length === 0) {
+    if (type.name === "i64") return wasmType.i64;
+    if (type.name === "i32" || type.name === "bool") return wasmType.i32;
+  }
+  throw new TypeError(
+    `${file}:${span.start}: Ducklang Wasm backend cannot represent ${
+      formatDucklangType(type)
+    }`,
+  );
+}
+
+function isI64(type: Type): boolean {
+  return type.kind === "constructor" && type.name === "i64" &&
+    type.arguments.length === 0;
 }

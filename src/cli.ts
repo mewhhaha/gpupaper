@@ -144,7 +144,7 @@ function printTypes(artifact: CompilationArtifact): void {
 
 function experimentReport(
   artifact: CompilationArtifact,
-  mainResult: number,
+  mainResult: number | bigint,
 ): Record<string, unknown> {
   return {
     experimentA_cpuOracle: {
@@ -180,7 +180,9 @@ function experimentReport(
       })),
       constructorTags: Object.fromEntries(artifact.fcg.constructorTags),
       wasmBytes: artifact.wasm.length,
-      mainResult,
+      mainResult: typeof mainResult === "bigint"
+        ? mainResult.toString()
+        : mainResult,
     },
     timingsMilliseconds: artifact.timings,
   };

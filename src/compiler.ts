@@ -258,7 +258,7 @@ async function compileDucklangModuleSource(
   };
 }
 
-export async function runMain(wasm: Uint8Array): Promise<number> {
+export async function runMain(wasm: Uint8Array): Promise<number | bigint> {
   const module = await WebAssembly.compile(
     new Uint8Array(wasm).buffer as ArrayBuffer,
   );
@@ -268,8 +268,8 @@ export async function runMain(wasm: Uint8Array): Promise<number> {
     throw new Error("emitted module has no main export");
   }
   const result = main();
-  if (typeof result !== "number") {
-    throw new Error(`main returned ${typeof result}; expected i32`);
+  if (typeof result !== "number" && typeof result !== "bigint") {
+    throw new Error(`main returned ${typeof result}; expected i32 or i64`);
   }
   return result;
 }

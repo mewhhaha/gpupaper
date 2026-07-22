@@ -15,6 +15,12 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "integer64";
+    readonly value: bigint;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "boolean";
     readonly value: boolean;
     readonly type: Type;
@@ -106,6 +112,7 @@ type InferredExpression = {
 };
 
 const i32Type: Type = { kind: "constructor", name: "i32", arguments: [] };
+const i64Type: Type = { kind: "constructor", name: "i64", arguments: [] };
 const booleanType: Type = {
   kind: "constructor",
   name: "bool",
@@ -150,6 +157,7 @@ class DucklangInference {
   readonly #equalities: EqualityConstraint[] = [];
   readonly #substitutions = new Map<number, Type>();
   readonly #symbolTypes = new Map<number, Type>();
+  readonly #numericVariables = new Set<number>();
   #nextVariable = 0;
 
   constructor(file: string) {
@@ -200,6 +208,8 @@ class DucklangInference {
     switch (expression.kind) {
       case "integer":
         return { expression: { ...expression, type: i32Type }, type: i32Type };
+      case "integer64":
+        return { expression: { ...expression, type: i64Type }, type: i64Type };
       case "boolean":
         return {
           expression: { ...expression, type: booleanType },
@@ -217,7 +227,9 @@ class DucklangInference {
       case "function": {
         const functionEnvironment = new Map(environment);
         const parameterTypes = expression.parameters.map((parameter) => {
-          const type = this.#freshVariable();
+          const type = parameter.declaredType === undefined
+            ? this.#freshVariable()
+            : declaredDucklangType(parameter.declaredType);
           functionEnvironment.set(parameter.id, type);
           this.#symbolTypes.set(parameter.id, type);
           return type;
@@ -267,12 +279,28 @@ class DucklangInference {
         const operator = expression.operator as DucklangBinaryOperator;
         const left = this.inferExpression(expression.left, environment);
         const right = this.inferExpression(expression.right, environment);
-        const operandType = operator === "&&" ? booleanType : i32Type;
-        this.#unify(left.type, operandType, expression.left.span);
-        this.#unify(right.type, operandType, expression.right.span);
+        if (operator === "&&") {
+          this.#unify(left.type, booleanType, expression.left.span);
+          this.#unify(right.type, booleanType, expression.right.span);
+        } else {
+          this.#unify(left.type, right.type, expression.span);
+          const operandType = this.#apply(left.type);
+          const equalityOnBooleans = operator === "==" &&
+            operandType.kind === "constructor" &&
+            operandType.name === "bool" && operandType.arguments.length === 0;
+          if (operandType.kind === "variable") {
+            this.#numericVariables.add(operandType.id);
+          } else if (!isIntegerType(operandType) && !equalityOnBooleans) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang operator ${operator} requires equal-width integers; received ${
+                formatDucklangType(operandType)
+              }`,
+            );
+          }
+        }
         const type = ["==", "<", ">", "&&"].includes(operator)
           ? booleanType
-          : i32Type;
+          : this.#apply(left.type);
         return {
           expression: {
             ...expression,
@@ -287,23 +315,41 @@ class DucklangInference {
       case "unary": {
         const operand = this.inferExpression(expression.operand, environment);
         if (expression.operator === "-") {
-          this.#unify(operand.type, i32Type, expression.span);
-          const zero: TypedDucklangExpression = {
-            kind: "integer",
-            value: 0,
-            type: i32Type,
-            span: expression.span,
-          };
+          let operandType = this.#apply(operand.type);
+          if (operandType.kind === "variable") {
+            this.#unify(operandType, i32Type, expression.span);
+            operandType = i32Type;
+          }
+          if (!isIntegerType(operandType)) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang unary - requires an integer; received ${
+                formatDucklangType(operandType)
+              }`,
+            );
+          }
+          const zero: TypedDucklangExpression = operandType.name === "i64"
+            ? {
+              kind: "integer64",
+              value: 0n,
+              type: i64Type,
+              span: expression.span,
+            }
+            : {
+              kind: "integer",
+              value: 0,
+              type: i32Type,
+              span: expression.span,
+            };
           return {
             expression: {
               kind: "binary",
               operator: "-",
               left: zero,
               right: operand.expression,
-              type: i32Type,
+              type: operandType,
               span: expression.span,
             },
-            type: i32Type,
+            type: operandType,
           };
         }
         if (expression.operator === "!") {
@@ -406,6 +452,11 @@ class DucklangInference {
     bindings: readonly TypedDucklangBinding[],
     result: InferredExpression,
   ): TypedDucklangModule {
+    for (const variable of this.#numericVariables) {
+      if (this.#apply({ kind: "variable", id: variable }).kind === "variable") {
+        this.#substitutions.set(variable, i32Type);
+      }
+    }
     const normalizedBindings = bindings.map((binding) => ({
       ...binding,
       value: this.#normalizeExpression(binding.value),
@@ -430,6 +481,7 @@ class DucklangInference {
     const type = this.#apply(expression.type);
     switch (expression.kind) {
       case "integer":
+      case "integer64":
       case "boolean":
       case "reference":
         return { ...expression, type };
@@ -563,4 +615,18 @@ class DucklangInference {
       this.#occurs(variable, argument)
     );
   }
+}
+
+function declaredDucklangType(name: "I32" | "I64" | "Bool"): Type {
+  if (name === "I32") return i32Type;
+  if (name === "I64") return i64Type;
+  return booleanType;
+}
+
+function isIntegerType(
+  type: Type,
+): type is Extract<Type, { readonly kind: "constructor" }> {
+  return type.kind === "constructor" &&
+    (type.name === "i32" || type.name === "i64") &&
+    type.arguments.length === 0;
 }

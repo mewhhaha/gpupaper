@@ -10,6 +10,7 @@ export type DucklangSymbol = {
   readonly id: number;
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
+  readonly declaredType?: "I32" | "I64" | "Bool";
   readonly span: SourceSpan;
 };
 
@@ -17,6 +18,11 @@ export type ResolvedDucklangExpression =
   | {
     readonly kind: "integer";
     readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "integer64";
+    readonly value: bigint;
     readonly span: SourceSpan;
   }
   | {
@@ -197,6 +203,7 @@ class DucklangResolver {
   ): ResolvedDucklangExpression {
     switch (expression.kind) {
       case "integer":
+      case "integer64":
       case "boolean":
         return expression;
       case "reference": {
@@ -294,6 +301,9 @@ class DucklangResolver {
       id: this.#symbols.length,
       text: name.text,
       scope,
+      ...(name.declaredType === undefined
+        ? {}
+        : { declaredType: name.declaredType }),
       span: name.span,
     } satisfies DucklangSymbol;
     this.#symbols.push(symbol);

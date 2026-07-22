@@ -2,6 +2,7 @@ import type { SourceSpan } from "./syntax.ts";
 
 export type DucklangName = {
   readonly text: string;
+  readonly declaredType?: "I32" | "I64" | "Bool";
   readonly span: SourceSpan;
 };
 
@@ -11,6 +12,11 @@ export type DucklangExpression =
   | {
     readonly kind: "integer";
     readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "integer64";
+    readonly value: bigint;
     readonly span: SourceSpan;
   }
   | {

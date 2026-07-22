@@ -113,6 +113,7 @@ export class WasmModuleBuilder {
 
 export const wasmType = {
   i32: 0x7f,
+  i64: 0x7e,
 } as const;
 
 export const wasmInstruction = {
@@ -128,6 +129,9 @@ export const wasmInstruction = {
   i32Constant(value: number): number[] {
     return [0x41, ...encodeSigned(value)];
   },
+  i64Constant(value: bigint): number[] {
+    return [0x42, ...encodeSigned64(value)];
+  },
   i32Add: [0x6a],
   i32Subtract: [0x6b],
   i32Multiply: [0x6c],
@@ -139,7 +143,16 @@ export const wasmInstruction = {
   i32And: [0x71],
   i32ShiftLeft: [0x74],
   i32ShiftRightSigned: [0x75],
+  i64Add: [0x7c],
+  i64Subtract: [0x7d],
+  i64Multiply: [0x7e],
+  i64DivideSigned: [0x7f],
+  i64RemainderSigned: [0x81],
+  i64Equal: [0x51],
+  i64LessThanSigned: [0x53],
+  i64GreaterThanSigned: [0x55],
   ifI32: [0x04, 0x7f],
+  ifI64: [0x04, 0x7e],
   ifVoid: [0x04, 0x40],
   else: [0x05],
   end: [0x0b],
@@ -177,6 +190,23 @@ export function encodeSigned(value: number): number[] {
     const signSet = (byte & 0x40) !== 0;
     const finished = (remaining === 0 && !signSet) ||
       (remaining === -1 && signSet);
+    bytes.push(finished ? byte : byte | 0x80);
+    if (finished) return bytes;
+  }
+}
+
+export function encodeSigned64(value: bigint): number[] {
+  if (value < -0x8000_0000_0000_0000n || value > 0x7fff_ffff_ffff_ffffn) {
+    throw new RangeError(`signed LEB128 value must fit i64; received ${value}`);
+  }
+  const bytes: number[] = [];
+  let remaining = value;
+  while (true) {
+    const byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    const signSet = (byte & 0x40) !== 0;
+    const finished = (remaining === 0n && !signSet) ||
+      (remaining === -1n && signSet);
     bytes.push(finished ? byte : byte | 0x80);
     if (finished) return bytes;
   }

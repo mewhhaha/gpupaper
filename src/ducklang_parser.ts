@@ -371,6 +371,15 @@ function lowerTokenExpression(
 ): DucklangExpression {
   const span = sourceSpan(file, cursor);
   if (cursor.kind === "number") {
+    if (/^[0-9]+i64$/.test(cursor.text)) {
+      const value = BigInt(cursor.text.slice(0, -3));
+      if (value > 9_223_372_036_854_775_807n) {
+        throw new SyntaxError(
+          `${file}:${cursor.span.start}: integer literal ${cursor.text} is outside signed i64`,
+        );
+      }
+      return { kind: "integer64", value, span };
+    }
     if (!/^[0-9]+(?:i32)?$/.test(cursor.text)) {
       throw unsupported(file, cursor, `numeric literal ${cursor.text}`);
     }
@@ -430,25 +439,41 @@ function arrowParameters(
 ): readonly DucklangParameter[] {
   const tokens: TokenCursor[] = [];
   collectAllTokens(cursor, tokens);
-  const unsupportedToken = tokens.find((token) =>
-    token.kind !== "identifier" &&
-    !["(", ")", ","].includes(token.text)
+  const parameterTokens = tokens.filter((token) =>
+    token.text !== "(" && token.text !== ")"
   );
-  if (unsupportedToken !== undefined) {
-    throw unsupported(
-      file,
-      unsupportedToken,
-      "annotated or patterned parameter",
-    );
+  const groups: TokenCursor[][] = [[]];
+  for (const token of parameterTokens) {
+    if (token.text === ",") {
+      groups.push([]);
+      continue;
+    }
+    groups.at(-1)!.push(token);
   }
-  const identifiers = tokens.filter((token) => token.kind === "identifier");
-  if (identifiers.length === 0) {
+  if (groups.length === 1 && groups[0].length === 0) {
     throw unsupported(file, cursor, "zero-parameter function");
   }
-  return identifiers.map((identifier) => ({
-    text: identifier.text,
-    span: sourceSpan(file, identifier),
-  }));
+  return groups.map((group) => {
+    const [name, separator, annotation] = group;
+    const plain = group.length === 1 && name?.kind === "identifier";
+    const annotated = group.length === 3 && name?.kind === "identifier" &&
+      separator?.text === ":" && annotation?.kind === "identifier" &&
+      ["I32", "I64", "Bool"].includes(annotation.text);
+    if (!plain && !annotated) {
+      throw unsupported(
+        file,
+        group[0] ?? cursor,
+        "patterned parameter or unsupported type annotation",
+      );
+    }
+    return {
+      text: name.text,
+      ...(annotation === undefined ? {} : {
+        declaredType: annotation.text as "I32" | "I64" | "Bool",
+      }),
+      span: sourceSpan(file, name),
+    };
+  });
 }
 
 function identifierName(

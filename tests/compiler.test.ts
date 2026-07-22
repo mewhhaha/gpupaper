@@ -16,6 +16,7 @@ import type { EqualityConstraint, Type } from "../src/types.ts";
 import { formatScheme, inferModule } from "../src/types.ts";
 import {
   encodeSigned,
+  encodeSigned64,
   encodeUnsigned,
   wasmInstruction,
   WasmModuleBuilder,
@@ -554,6 +555,17 @@ Deno.test("LEB128 encoders cover signed and unsigned boundaries", () => {
   assertEquals(encodeSigned(-1), [127]);
   assertEquals(encodeSigned(63), [63]);
   assertEquals(encodeSigned(64), [192, 0]);
+});
+
+Deno.test("signed LEB128 encodes the full i64 boundary", () => {
+  assertEquals(encodeSigned64(0n), [0]);
+  assertEquals(encodeSigned64(-1n), [127]);
+  assertEquals(encodeSigned64(0x7fff_ffff_ffff_ffffn).length, 10);
+  assertEquals(encodeSigned64(-0x8000_0000_0000_0000n).length, 10);
+  assertThrows(
+    () => encodeSigned64(0x8000_0000_0000_0000n),
+    /signed LEB128 value must fit i64/,
+  );
 });
 
 Deno.test("Wasm function vectors count entries across LEB128 boundaries", () => {

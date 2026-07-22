@@ -71,6 +71,7 @@ function collectComptimeExpressions(
   }
   switch (expression.kind) {
     case "integer":
+    case "integer64":
     case "boolean":
     case "reference":
       return;
@@ -108,6 +109,10 @@ function scalarExpression(
     case "integer":
     case "boolean":
       return expression;
+    case "integer64":
+      throw new TypeError(
+        `${expression.span.file}:${expression.span.start}: Ducklang scalar comptime does not yet support i64`,
+      );
     case "binary":
       return {
         ...expression,
@@ -166,6 +171,7 @@ function replaceComptimeExpressions(
   }
   switch (expression.kind) {
     case "integer":
+    case "integer64":
     case "boolean":
     case "reference":
       return expression;

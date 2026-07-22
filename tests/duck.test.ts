@@ -46,6 +46,23 @@ Deno.test("Ducklang scalar operators agree across comptime and Wasm", async () =
   }
 });
 
+Deno.test("Ducklang rejects arithmetic between different integer widths", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource("test.duck", "40i64 + 2i32\n", { gpuMode: "off" }),
+    /cannot unify Ducklang i64 with i32|cannot unify Ducklang i32 with i64/,
+  );
+});
+
+Deno.test("Ducklang preserves the largest signed i64 literal through Wasm", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    "9223372036854775807i64\n",
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 9_223_372_036_854_775_807n);
+});
+
 Deno.test("unsupported Ducklang operators fail during typed IR elaboration", async () => {
   await assertRejects(
     () => compileModuleSource("test.duck", "40 || 2\n", { gpuMode: "off" }),
@@ -142,8 +159,10 @@ async function compileDuckFixture(filename: string) {
 }
 
 function assertEquals(actual: unknown, expected: unknown): void {
-  const actualJson = JSON.stringify(actual);
-  const expectedJson = JSON.stringify(expected);
+  const bigintReplacer = (_key: string, value: unknown) =>
+    typeof value === "bigint" ? `${value}n` : value;
+  const actualJson = JSON.stringify(actual, bigintReplacer);
+  const expectedJson = JSON.stringify(expected, bigintReplacer);
   if (actualJson !== expectedJson) {
     throw new Error(`expected ${expectedJson}, received ${actualJson}`);
   }
