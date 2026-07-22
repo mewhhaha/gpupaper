@@ -42,9 +42,10 @@ export async function parseDucklangModule(
         `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
       );
     }
-    const statements = result.cursor.children().map((cursor) =>
-      lowerModuleStatement(file, cursor)
-    );
+    const statements = result.cursor.children().flatMap((cursor) => {
+      const statement = lowerModuleStatement(file, cursor);
+      return statement === undefined ? [] : [statement];
+    });
     return {
       file,
       statements,
@@ -58,7 +59,7 @@ export async function parseDucklangModule(
 function lowerModuleStatement(
   file: string,
   cursor: SyntaxCursor,
-): DucklangStatement {
+): DucklangStatement | undefined {
   const statement = descendSingleRule(
     cursor,
     new Set([
@@ -99,7 +100,9 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
-    const productPattern = findRule(bindingPattern, "binding_product_pattern");
+    const tuplePattern = findRule(bindingPattern, "binding_product_pattern");
+    const arrayPattern = findRule(bindingPattern, "array_pattern");
+    const productPattern = tuplePattern ?? arrayPattern;
     if (productPattern !== undefined) {
       const tokens: TokenCursor[] = [];
       collectAllTokens(productPattern, tokens);
@@ -115,6 +118,7 @@ function lowerModuleStatement(
         declarationKind: tokenField(statement, "kind")?.text === "const"
           ? "const"
           : "let",
+        productKind: arrayPattern === undefined ? "tuple" : "array",
         names,
         value,
         span: sourceSpan(file, statement),
@@ -122,6 +126,13 @@ function lowerModuleStatement(
     }
     const imported = lowerImportStatement(file, statement, value);
     if (imported !== undefined) return imported;
+    const singlePattern = descendSingleRule(
+      bindingPattern,
+      new Set(["_binding_pattern", "_single_binding_pattern"]),
+    );
+    if (singlePattern.type === "rule" && singlePattern.name === "wildcard") {
+      return undefined;
+    }
     const name = identifierName(
       file,
       requiredField(statement, "name"),
@@ -681,11 +692,11 @@ function lowerExpression(
   }
 
   if (cursor.name === "block") {
-    const statements = cursor.children().flatMap((child) =>
-      child.type === "rule" && child.name === "_statement"
-        ? [lowerModuleStatement(file, child)]
-        : []
-    );
+    const statements = cursor.children().flatMap((child) => {
+      if (child.type !== "rule" || child.name !== "_statement") return [];
+      const statement = lowerModuleStatement(file, child);
+      return statement === undefined ? [] : [statement];
+    });
     return {
       kind: "block",
       statements,
@@ -914,10 +925,16 @@ function arrowParameters(
     groups.at(-1)!.push(token);
   }
   if (groups.length === 1 && groups[0].length === 0) {
-    throw unsupported(file, cursor, "zero-parameter function");
+    return [];
   }
   return groups.map((group) => {
     const [name, separator, annotation] = group;
+    if (group.length === 1 && name?.text === "_") {
+      return {
+        text: `discarded_parameter_${name.span.start}`,
+        span: sourceSpan(file, name),
+      };
+    }
     const plain = group.length === 1 && name?.kind === "identifier";
     const annotated = group.length === 3 && name?.kind === "identifier" &&
       separator?.text === ":" && annotation?.kind === "identifier";

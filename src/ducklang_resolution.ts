@@ -375,16 +375,31 @@ class DucklangResolver {
             previous: undefined,
             recursive: false,
             stage,
-            value: {
-              kind: "project",
-              product: {
-                kind: "reference",
-                symbol: productSymbol,
-                span: statement.span,
+            value: statement.productKind === "tuple"
+              ? {
+                kind: "project",
+                product: {
+                  kind: "reference",
+                  symbol: productSymbol,
+                  span: statement.span,
+                },
+                index: elementIndex,
+                span: name.span,
+              }
+              : {
+                kind: "index",
+                collection: {
+                  kind: "reference",
+                  symbol: productSymbol,
+                  span: statement.span,
+                },
+                index: {
+                  kind: "integer",
+                  value: elementIndex,
+                  span: name.span,
+                },
+                span: name.span,
               },
-              index: elementIndex,
-              span: name.span,
-            },
             span: name.span,
           } satisfies ResolvedDucklangBinding;
           bindings.push(binding);

@@ -164,27 +164,28 @@ function rewriteExpression(
   const factory = values.get(rewritten.callee.symbol.id);
   if (
     factory?.kind !== "function" || factory.recursive ||
-    factory.parameters.length !== rewritten.arguments.length ||
-    containsReturn(factory.body)
+    factory.parameters.length !== rewritten.arguments.length
   ) {
     return collapseEmptyBlock(rewritten);
   }
+  const factoryBody = inlineableFunctionBody(factory.body);
+  if (factoryBody === undefined) return collapseEmptyBlock(rewritten);
   const returnsFunction = rewritten.type.kind === "function";
   const returnsAggregate = rewritten.type.kind === "constructor" &&
     (rewritten.type.name === "tuple" || rewritten.type.name === "array");
   const specializesFunctionParameter = factory.parameters.some(
     (parameter, index) =>
-      isCalledParameter(factory.body, parameter.id) &&
+      isCalledParameter(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "function",
   );
   const specializesTextParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factory.body, parameter.id) &&
+      referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "string",
   );
   const specializesUnionParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factory.body, parameter.id) &&
+      referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "unionCase",
   );
   if (
@@ -199,7 +200,15 @@ function rewriteExpression(
       rewritten.arguments[index],
     ]),
   );
-  return rewriteExpression(substitute(factory.body, substitutions), values);
+  return rewriteExpression(substitute(factoryBody, substitutions), values);
+}
+
+function inlineableFunctionBody(
+  body: TypedDucklangExpression,
+): TypedDucklangExpression | undefined {
+  const collapsed = collapseEmptyBlock(body);
+  if (collapsed.kind === "return") return collapsed.expression;
+  return containsReturn(collapsed) ? undefined : collapsed;
 }
 
 function containsReturn(expression: TypedDucklangExpression): boolean {

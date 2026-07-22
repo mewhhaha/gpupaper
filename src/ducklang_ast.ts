@@ -190,6 +190,7 @@ export type DucklangStatement =
   | {
     readonly kind: "productBinding";
     readonly declarationKind: "let" | "const";
+    readonly productKind: "tuple" | "array";
     readonly names: readonly (DucklangName | undefined)[];
     readonly value: DucklangExpression;
     readonly span: SourceSpan;
