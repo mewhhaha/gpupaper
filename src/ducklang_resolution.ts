@@ -61,6 +61,11 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "return";
+    readonly expression: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "if";
     readonly condition: ResolvedDucklangExpression;
     readonly consequence: ResolvedDucklangExpression;
@@ -69,7 +74,7 @@ export type ResolvedDucklangExpression =
   }
   | {
     readonly kind: "block";
-    readonly bindings: readonly ResolvedDucklangBinding[];
+    readonly steps: readonly ResolvedDucklangBlockStep[];
     readonly result: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
@@ -88,6 +93,13 @@ export type ResolvedDucklangBinding = {
   readonly span: SourceSpan;
 };
 
+export type ResolvedDucklangBlockStep =
+  | { readonly kind: "binding"; readonly binding: ResolvedDucklangBinding }
+  | {
+    readonly kind: "expression";
+    readonly expression: ResolvedDucklangExpression;
+  };
+
 export type ResolvedDucklangModule = {
   readonly file: string;
   readonly bindings: readonly ResolvedDucklangBinding[];
@@ -97,6 +109,7 @@ export type ResolvedDucklangModule = {
 
 type ResolvedStatements = {
   readonly bindings: readonly ResolvedDucklangBinding[];
+  readonly steps: readonly ResolvedDucklangBlockStep[];
   readonly result: ResolvedDucklangExpression;
   readonly environment: ReadonlyMap<string, DucklangSymbol>;
 };
@@ -139,16 +152,43 @@ class DucklangResolver {
   ): ResolvedStatements {
     const environment = new Map(initialEnvironment);
     const bindings: ResolvedDucklangBinding[] = [];
+    const steps: ResolvedDucklangBlockStep[] = [];
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
       if (statement.kind === "expression") {
-        if (index !== statements.length - 1) {
+        const expression = this.#resolveExpression(
+          statement.expression,
+          environment,
+        );
+        if (index === statements.length - 1) result = expression;
+        else if (scope === "local") {
+          steps.push({ kind: "expression", expression });
+        } else {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: only the final Ducklang statement may produce the block result`,
+            `${this.#file}:${statement.span.start}: module-level Ducklang expressions require ordered module initialization`,
           );
         }
-        result = this.#resolveExpression(statement.expression, environment);
+        continue;
+      }
+
+      if (statement.kind === "return") {
+        const expression: ResolvedDucklangExpression = {
+          kind: "return",
+          expression: this.#resolveExpression(
+            statement.expression,
+            environment,
+          ),
+          span: statement.span,
+        };
+        if (index === statements.length - 1) result = expression;
+        else if (scope === "local") {
+          steps.push({ kind: "expression", expression });
+        } else {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: module-level Ducklang return must be the final statement`,
+          );
+        }
         continue;
       }
 
@@ -157,7 +197,7 @@ class DucklangResolver {
         if (statement.recursive) environment.set(symbol.text, symbol);
         const value = this.#resolveExpression(statement.value, environment);
         environment.set(symbol.text, symbol);
-        bindings.push({
+        const binding = {
           symbol,
           previous: undefined,
           recursive: statement.recursive,
@@ -166,7 +206,9 @@ class DucklangResolver {
             : "runtime",
           value,
           span: statement.span,
-        });
+        } satisfies ResolvedDucklangBinding;
+        bindings.push(binding);
+        steps.push({ kind: "binding", binding });
         continue;
       }
 
@@ -179,14 +221,16 @@ class DucklangResolver {
       const value = this.#resolveExpression(statement.value, environment);
       const symbol = this.#declare(statement.name, scope);
       environment.set(symbol.text, symbol);
-      bindings.push({
+      const binding = {
         symbol,
         previous: statement.operator === "=" ? previous : undefined,
         recursive: false,
         stage: "runtime",
         value,
         span: statement.span,
-      });
+      } satisfies ResolvedDucklangBinding;
+      bindings.push(binding);
+      steps.push({ kind: "binding", binding });
     }
 
     if (result === undefined) {
@@ -194,7 +238,7 @@ class DucklangResolver {
         `${this.#file}:${span.start}: Ducklang block has no result expression`,
       );
     }
-    return { bindings, result, environment };
+    return { bindings, steps, result, environment };
   }
 
   #resolveExpression(
@@ -277,7 +321,7 @@ class DucklangResolver {
         );
         return {
           kind: "block",
-          bindings: resolved.bindings,
+          steps: resolved.steps,
           result: resolved.result,
           span: expression.span,
         };

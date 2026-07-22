@@ -124,6 +124,13 @@ function lowerModuleStatement(
       span: sourceSpan(file, statement),
     };
   }
+  if (statement.name === "return_statement") {
+    return {
+      kind: "return",
+      expression: lowerExpression(file, requiredField(statement, "value")),
+      span: sourceSpan(file, statement),
+    };
+  }
   throw unsupported(file, statement, statement.name);
 }
 

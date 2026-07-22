@@ -55,6 +55,12 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "return";
+    readonly expression: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "if";
     readonly condition: TypedDucklangExpression;
     readonly consequence: TypedDucklangExpression;
@@ -64,7 +70,7 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "block";
-    readonly bindings: readonly TypedDucklangBinding[];
+    readonly steps: readonly TypedDucklangBlockStep[];
     readonly result: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
@@ -96,6 +102,13 @@ export type TypedDucklangBinding = {
   readonly type: Type;
   readonly span: SourceSpan;
 };
+
+export type TypedDucklangBlockStep =
+  | { readonly kind: "binding"; readonly binding: TypedDucklangBinding }
+  | {
+    readonly kind: "expression";
+    readonly expression: TypedDucklangExpression;
+  };
 
 export type TypedDucklangModule = {
   readonly file: string;
@@ -235,6 +248,7 @@ class DucklangInference {
           return type;
         });
         const body = this.inferExpression(expression.body, functionEnvironment);
+        this.#unifyReturnTypes(body.expression, body.type);
         const type = parameterTypes.toReversed().reduce<Type>(
           (result, parameter) => ({ kind: "function", parameter, result }),
           body.type,
@@ -376,12 +390,21 @@ class DucklangInference {
           `${this.#file}:${expression.span.start}: Ducklang unary operator ${expression.operator} has no typed IR operation`,
         );
       }
+      case "return": {
+        const returned = this.inferExpression(
+          expression.expression,
+          environment,
+        );
+        return {
+          expression: {
+            ...expression,
+            expression: returned.expression,
+            type: returned.type,
+          },
+          type: returned.type,
+        };
+      }
       case "if": {
-        if (expression.alternative === undefined) {
-          throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang if without else requires a Unit representation`,
-          );
-        }
         const condition = this.inferExpression(
           expression.condition,
           environment,
@@ -390,15 +413,56 @@ class DucklangInference {
           expression.consequence,
           environment,
         );
-        const alternative = this.inferExpression(
-          expression.alternative,
-          environment,
-        );
-        this.#unify(condition.type, booleanType, expression.condition.span);
+        const consequenceType = this.#apply(consequence.type);
+        const alternative = expression.alternative === undefined
+          ? consequenceType.kind === "constructor" &&
+              consequenceType.name === "i64"
+            ? {
+              expression: {
+                kind: "integer64" as const,
+                value: 0n,
+                type: i64Type,
+                span: expression.span,
+              },
+              type: i64Type,
+            }
+            : consequenceType.kind === "constructor" &&
+                consequenceType.name === "bool"
+            ? {
+              expression: {
+                kind: "boolean" as const,
+                value: false,
+                type: booleanType,
+                span: expression.span,
+              },
+              type: booleanType,
+            }
+            : {
+              expression: {
+                kind: "integer" as const,
+                value: 0,
+                type: i32Type,
+                span: expression.span,
+              },
+              type: i32Type,
+            }
+          : this.inferExpression(expression.alternative, environment);
+        const conditionType = this.#apply(condition.type);
+        const scalarCondition = conditionType.kind === "variable" ||
+          (conditionType.kind === "constructor" &&
+            conditionType.arguments.length === 0 &&
+            (conditionType.name === "bool" || conditionType.name === "i32"));
+        if (!scalarCondition) {
+          throw new TypeError(
+            `${this.#file}:${expression.condition.span.start}: Ducklang condition requires bool or i32; received ${
+              formatDucklangType(conditionType)
+            }`,
+          );
+        }
         this.#unify(
           consequence.type,
           alternative.type,
-          expression.alternative.span,
+          expression.alternative?.span ?? expression.span,
         );
         return {
           expression: {
@@ -413,10 +477,24 @@ class DucklangInference {
       }
       case "block": {
         const blockEnvironment = new Map(environment);
-        const bindings = this.inferBindings(
-          expression.bindings,
-          blockEnvironment,
-        );
+        const steps: TypedDucklangBlockStep[] = [];
+        for (const step of expression.steps) {
+          if (step.kind === "expression") {
+            steps.push({
+              kind: "expression",
+              expression: this.inferExpression(
+                step.expression,
+                blockEnvironment,
+              ).expression,
+            });
+            continue;
+          }
+          const [binding] = this.inferBindings(
+            [step.binding],
+            blockEnvironment,
+          );
+          steps.push({ kind: "binding", binding });
+        }
         const result = this.inferExpression(
           expression.result,
           blockEnvironment,
@@ -424,7 +502,7 @@ class DucklangInference {
         return {
           expression: {
             ...expression,
-            bindings,
+            steps,
             result: result.expression,
             type: result.type,
           },
@@ -507,6 +585,12 @@ class DucklangInference {
           right: this.#normalizeExpression(expression.right),
           type,
         };
+      case "return":
+        return {
+          ...expression,
+          expression: this.#normalizeExpression(expression.expression),
+          type,
+        };
       case "if":
         return {
           ...expression,
@@ -518,11 +602,21 @@ class DucklangInference {
       case "block":
         return {
           ...expression,
-          bindings: expression.bindings.map((binding) => ({
-            ...binding,
-            value: this.#normalizeExpression(binding.value),
-            type: this.#apply(binding.type),
-          })),
+          steps: expression.steps.map((step): TypedDucklangBlockStep =>
+            step.kind === "expression"
+              ? {
+                kind: "expression",
+                expression: this.#normalizeExpression(step.expression),
+              }
+              : {
+                kind: "binding",
+                binding: {
+                  ...step.binding,
+                  value: this.#normalizeExpression(step.binding.value),
+                  type: this.#apply(step.binding.type),
+                },
+              }
+          ),
           result: this.#normalizeExpression(expression.result),
           type,
         };
@@ -539,6 +633,47 @@ class DucklangInference {
     const type: Type = { kind: "variable", id: this.#nextVariable };
     this.#nextVariable += 1;
     return type;
+  }
+
+  #unifyReturnTypes(expression: TypedDucklangExpression, result: Type): void {
+    switch (expression.kind) {
+      case "return":
+        this.#unify(expression.type, result, expression.span);
+        return;
+      case "function":
+      case "integer":
+      case "integer64":
+      case "boolean":
+      case "reference":
+        return;
+      case "call":
+        this.#unifyReturnTypes(expression.callee, result);
+        for (const argument of expression.arguments) {
+          this.#unifyReturnTypes(argument, result);
+        }
+        return;
+      case "binary":
+        this.#unifyReturnTypes(expression.left, result);
+        this.#unifyReturnTypes(expression.right, result);
+        return;
+      case "if":
+        this.#unifyReturnTypes(expression.condition, result);
+        this.#unifyReturnTypes(expression.consequence, result);
+        this.#unifyReturnTypes(expression.alternative, result);
+        return;
+      case "block":
+        for (const step of expression.steps) {
+          this.#unifyReturnTypes(
+            step.kind === "binding" ? step.binding.value : step.expression,
+            result,
+          );
+        }
+        this.#unifyReturnTypes(expression.result, result);
+        return;
+      case "comptime":
+        this.#unifyReturnTypes(expression.expression, result);
+        return;
+    }
   }
 
   #unify(leftInput: Type, rightInput: Type, span: SourceSpan): void {

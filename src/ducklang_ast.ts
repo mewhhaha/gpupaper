@@ -89,6 +89,11 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "return";
+    readonly expression: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "expression";
     readonly expression: DucklangExpression;
     readonly span: SourceSpan;

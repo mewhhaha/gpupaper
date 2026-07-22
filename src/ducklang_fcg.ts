@@ -34,6 +34,14 @@ type DucklangFcgInstruction =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "return";
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "drop";
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: DucklangBinaryOperator;
     readonly valueType: "i32" | "i64";
@@ -292,6 +300,11 @@ class DucklangFcgCompiler {
             span: expression.span,
           },
         ];
+      case "return":
+        return [
+          ...this.#compileExpression(expression.expression),
+          { kind: "return", span: expression.span },
+        ];
       case "if":
         return [
           ...this.#compileExpression(expression.condition),
@@ -306,7 +319,13 @@ class DucklangFcgCompiler {
       case "block": {
         const previousLocals = new Map(this.#locals);
         const instructions: DucklangFcgInstruction[] = [];
-        for (const binding of expression.bindings) {
+        for (const step of expression.steps) {
+          if (step.kind === "expression") {
+            instructions.push(...this.#compileExpression(step.expression));
+            instructions.push({ kind: "drop", span: step.expression.span });
+            continue;
+          }
+          const binding = step.binding;
           if (binding.value.kind === "function") {
             throw new TypeError(
               `${this.#file}:${binding.span.start}: local Ducklang function ${binding.symbol.text} requires closure conversion`,
@@ -351,6 +370,10 @@ function emitInstructions(
         return wasmInstruction.localSet(instruction.local);
       case "call":
         return wasmInstruction.call(instruction.functionIndex);
+      case "return":
+        return wasmInstruction.return;
+      case "drop":
+        return wasmInstruction.drop;
       case "binary":
         if (instruction.valueType === "i64") {
           return {
@@ -433,6 +456,10 @@ function publicOperations(
           operands: [instruction.functionName],
           sourceStart,
         }];
+      case "return":
+        return [{ opcode: "return", operands: [], sourceStart }];
+      case "drop":
+        return [{ opcode: "drop", operands: [], sourceStart }];
       case "binary":
         return [{
           opcode: `${instruction.valueType}.${instruction.operator}`,

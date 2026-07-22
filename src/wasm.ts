@@ -126,6 +126,8 @@ export const wasmInstruction = {
   call(index: number): number[] {
     return [0x10, ...encodeUnsigned(index)];
   },
+  return: [0x0f],
+  drop: [0x1a],
   i32Constant(value: number): number[] {
     return [0x41, ...encodeSigned(value)];
   },

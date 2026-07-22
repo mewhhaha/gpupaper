@@ -8,6 +8,41 @@ Deno.test("Ducklang multi-argument functions and local blocks return 42", async 
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });
 
+Deno.test("Ducklang return exits its function while false conditions fall through", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let choose = value => {
+  if value {
+    return 42
+  }
+  0
+}
+choose(0)
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 0);
+});
+
+Deno.test("Ducklang return values must match the function fallthrough type", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.duck",
+        `let broken = flag => {
+  if flag {
+    return 1i64
+  }
+  0
+}
+broken(1)
+`,
+        { gpuMode: "off" },
+      ),
+    /cannot unify Ducklang i64 with i32|cannot unify Ducklang i32 with i64/,
+  );
+});
+
 Deno.test("Ducklang else-if chains return 42", async () => {
   await assertDuckFixture("10_else_if.duck", 42);
 });

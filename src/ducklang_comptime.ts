@@ -7,7 +7,6 @@ import {
   type ScalarComptimeExpression,
 } from "./comptime.ts";
 import type {
-  TypedDucklangBinding,
   TypedDucklangExpression,
   TypedDucklangModule,
 } from "./ducklang_types.ts";
@@ -88,14 +87,20 @@ function collectComptimeExpressions(
       collectComptimeExpressions(expression.left, expressions);
       collectComptimeExpressions(expression.right, expressions);
       return;
+    case "return":
+      collectComptimeExpressions(expression.expression, expressions);
+      return;
     case "if":
       collectComptimeExpressions(expression.condition, expressions);
       collectComptimeExpressions(expression.consequence, expressions);
       collectComptimeExpressions(expression.alternative, expressions);
       return;
     case "block":
-      for (const binding of expression.bindings) {
-        collectComptimeExpressions(binding.value, expressions);
+      for (const step of expression.steps) {
+        collectComptimeExpressions(
+          step.kind === "binding" ? step.binding.value : step.expression,
+          expressions,
+        );
       }
       collectComptimeExpressions(expression.result, expressions);
       return;
@@ -130,11 +135,11 @@ function scalarExpression(
     case "comptime":
       return scalarExpression(expression.expression);
     case "block":
-      if (expression.bindings.length === 0) {
+      if (expression.steps.length === 0) {
         return scalarExpression(expression.result);
       }
       throw new TypeError(
-        `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar block; found ${expression.bindings.length} bindings`,
+        `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar block; found ${expression.steps.length} steps`,
       );
     default:
       throw new TypeError(
@@ -210,6 +215,15 @@ function replaceComptimeExpressions(
           nextValueIndex,
         ),
       };
+    case "return":
+      return {
+        ...expression,
+        expression: replaceComptimeExpressions(
+          expression.expression,
+          values,
+          nextValueIndex,
+        ),
+      };
     case "if":
       return {
         ...expression,
@@ -232,14 +246,28 @@ function replaceComptimeExpressions(
     case "block":
       return {
         ...expression,
-        bindings: expression.bindings.map((binding): TypedDucklangBinding => ({
-          ...binding,
-          value: replaceComptimeExpressions(
-            binding.value,
-            values,
-            nextValueIndex,
-          ),
-        })),
+        steps: expression.steps.map((step) =>
+          step.kind === "expression"
+            ? {
+              kind: "expression" as const,
+              expression: replaceComptimeExpressions(
+                step.expression,
+                values,
+                nextValueIndex,
+              ),
+            }
+            : {
+              kind: "binding" as const,
+              binding: {
+                ...step.binding,
+                value: replaceComptimeExpressions(
+                  step.binding.value,
+                  values,
+                  nextValueIndex,
+                ),
+              },
+            }
+        ),
         result: replaceComptimeExpressions(
           expression.result,
           values,
