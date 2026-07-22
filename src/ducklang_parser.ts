@@ -325,7 +325,10 @@ function lowerModuleStatement(
     }
     return undefined;
   }
-  if (statement.name === "declare_effect_statement") {
+  if (
+    statement.name === "declare_effect_statement" ||
+    statement.name === "effect_statement"
+  ) {
     const operationBlock = findRule(statement, "effect_operation_block");
     if (operationBlock === undefined) {
       throw unsupported(file, statement, "effect operation block");
@@ -374,18 +377,23 @@ function lowerModuleStatement(
           value.callee.name.text === "do" && value.arguments.length === 1
       ? value.arguments[0]
       : undefined;
+    const effectValue = option === undefined
+      ? lowerHostCall(file, requiredField(statement, "value"))
+      : { kind: "optionDo" as const, option, span: value.span };
+    const bindingName = requiredField(statement, "name");
+    if (findRule(bindingName, "wildcard") !== undefined) {
+      return {
+        kind: "expression",
+        expression: effectValue,
+        span: sourceSpan(file, statement),
+      };
+    }
     return {
       kind: "binding",
       declarationKind: "let",
       recursive: false,
-      name: identifierName(
-        file,
-        requiredField(statement, "name"),
-        "effect result binding",
-      ),
-      value: option === undefined
-        ? lowerHostCall(file, requiredField(statement, "value"))
-        : { kind: "optionDo", option, span: value.span },
+      name: identifierName(file, bindingName, "effect result binding"),
+      value: effectValue,
       span: sourceSpan(file, statement),
     };
   }
@@ -1101,13 +1109,21 @@ function lowerExpression(
   }
 
   if (cursor.name === "try_with_expression") {
-    if (isCursor(cursor.field("handler"))) {
-      throw unsupported(file, cursor, "try-with handler");
-    }
+    const handler = cursor.field("handler");
+    const body = lowerExpression(file, requiredField(cursor, "body"));
     return {
-      kind: "unionCase",
-      caseName: "Some",
-      value: lowerExpression(file, requiredField(cursor, "body")),
+      kind: "call",
+      callee: {
+        kind: "reference",
+        name: { text: "$duck_try", span: sourceSpan(file, cursor) },
+        span: sourceSpan(file, cursor),
+      },
+      arguments: [
+        body,
+        isCursor(handler)
+          ? lowerExpression(file, handler)
+          : { kind: "unit", span: sourceSpan(file, cursor) },
+      ],
       span: sourceSpan(file, cursor),
     };
   }
@@ -1265,6 +1281,19 @@ function lowerExpression(
           expression.span,
           sourceSpan(file, argument),
         ),
+      };
+    }
+    if (
+      expression.kind === "call" && expression.callee.kind === "reference" &&
+      /^[A-Z]/.test(expression.callee.name.text) &&
+      expression.arguments.length === 1 &&
+      expression.arguments[0].kind === "record" &&
+      expression.arguments[0].fields.some((field) => field.name === "return")
+    ) {
+      return {
+        ...expression.arguments[0],
+        nominalType: `$effect_handler_${expression.callee.name.text}`,
+        span: expression.span,
       };
     }
     if (
@@ -2047,7 +2076,7 @@ function lowerRecordFields(
 ): readonly DucklangRecordField[] {
   return fieldBlock.children().flatMap((child) => {
     if (child.type !== "rule") return [];
-    if (child.name !== "shape_field") {
+    if (child.name !== "shape_field" && child.name !== "field_definition") {
       throw unsupported(file, child, "record field");
     }
     return [{
@@ -2200,6 +2229,12 @@ function lowerParameters(
     return constParameterNames(file, input);
   }
   if (input.name === "parameter") {
+    if (findRule(input, "wildcard") !== undefined) {
+      return [{
+        text: `discarded_parameter_${input.span.start}`,
+        span: sourceSpan(file, input),
+      }];
+    }
     return [identifierName(file, requiredField(input, "name"), "parameter")];
   }
   throw unsupported(file, input, input.name);

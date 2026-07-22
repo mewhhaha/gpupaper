@@ -7,6 +7,7 @@ import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
 import { lowerDucklangControlFlow } from "./ducklang_control_flow.ts";
 import { elaborateDucklangDerivations } from "./ducklang_derivations.ts";
 import { elaborateDucklangExtensions } from "./ducklang_extensions.ts";
+import { elaborateDucklangHandlers } from "./ducklang_handlers.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
 import {
@@ -198,10 +199,12 @@ async function compileDucklangModuleSource(
     expandStaticDucklangLoops(
       elaborateDucklangExtensions(
         elaborateDucklangDerivations(
-          await resolveDucklangLocalImports(
-            await parseDucklangModule(
-              file,
-              await expandDucklangIncludes(file, source),
+          elaborateDucklangHandlers(
+            await resolveDucklangLocalImports(
+              await parseDucklangModule(
+                file,
+                await expandDucklangIncludes(file, source),
+              ),
             ),
           ),
         ),
