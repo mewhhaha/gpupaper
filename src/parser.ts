@@ -64,6 +64,15 @@ class Parser {
   }
 
   #parseDeclaration(): Declaration | undefined {
+    if (
+      this.#pendingSignature !== undefined &&
+      this.#peek().text !== this.#pendingSignature.name
+    ) {
+      this.#fail(
+        this.#peek(),
+        `signature for ${this.#pendingSignature.name} must be followed by its value declaration`,
+      );
+    }
     if (this.#peek().text === "data") return this.#parseDataDeclaration();
     if (this.#peek().text === "class") return this.#parseClassDeclaration();
     if (this.#peek().text === "instance") {
@@ -72,7 +81,15 @@ class Parser {
     if (this.#peek().text === "macro") return this.#parseMacroDeclaration();
 
     const nameToken = this.#expectName("expected a declaration name");
-    if (this.#match("!")) return this.#parseMacroInvocation(nameToken);
+    if (this.#match("!")) {
+      if (this.#pendingSignature !== undefined) {
+        this.#fail(
+          nameToken,
+          `signature for ${this.#pendingSignature.name} must be followed by its value declaration`,
+        );
+      }
+      return this.#parseMacroInvocation(nameToken);
+    }
     if (this.#match("::")) {
       if (this.#pendingSignature !== undefined) {
         this.#fail(

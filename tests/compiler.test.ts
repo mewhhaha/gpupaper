@@ -118,6 +118,17 @@ Deno.test("malformed class constraints preserve their local parse error", () => 
   );
 });
 
+Deno.test("type signatures cannot cross unrelated declarations", () => {
+  assertThrows(
+    () =>
+      parseModule(
+        "test.hs",
+        `value :: Int\ndata Unit = Unit\nvalue = 1\nmain = value\n`,
+      ),
+    /signature for value must be followed by its value declaration/,
+  );
+});
+
 Deno.test("a polymorphic signature cannot conceal a monomorphic definition", () => {
   assertThrows(
     () =>
