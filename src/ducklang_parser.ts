@@ -6,6 +6,7 @@ import type {
 } from "@mewhhaha/baba/runtime/generated-wasm";
 import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 import type {
+  DucklangEffectRow,
   DucklangExpression,
   DucklangExtensionDeclaration,
   DucklangFixityDeclaration,
@@ -388,7 +389,8 @@ function lowerModuleStatement(
     };
   }
   if (statement.name === "effect_binding_statement") {
-    const value = lowerExpression(file, requiredField(statement, "value"));
+    const valueCursor = requiredField(statement, "value");
+    const value = lowerExpression(file, valueCursor);
     const option = value.kind === "unary" && value.operator === "do"
       ? value.operand
       : value.kind === "call" && value.callee.kind === "reference" &&
@@ -396,7 +398,7 @@ function lowerModuleStatement(
       ? value.arguments[0]
       : undefined;
     const effectValue = option === undefined
-      ? lowerHostCall(file, requiredField(statement, "value"))
+      ? lowerEffectBindingValue(file, valueCursor, value)
       : { kind: "optionDo" as const, option, span: value.span };
     const bindingName = requiredField(statement, "name");
     if (findRule(bindingName, "wildcard") !== undefined) {
@@ -490,6 +492,9 @@ function lowerModuleStatement(
     }
     const declaredTypeName = isCursor(declaredType)
       ? simpleTypeName(declaredType)
+      : undefined;
+    const declaredEffectRow = isCursor(declaredType)
+      ? lowerDeclaredEffectRow(file, declaredType)
       : undefined;
     if (declaredTypeName !== undefined) {
       value = applyNominalProductType(value, declaredTypeName);
@@ -621,6 +626,7 @@ function lowerModuleStatement(
       ...(declaredTypeName === undefined
         ? {}
         : { declaredType: declaredTypeName }),
+      ...(declaredEffectRow === undefined ? {} : { declaredEffectRow }),
       ...(tokenField(statement, "linear") !== undefined
         ? { linear: true }
         : {}),
@@ -916,9 +922,10 @@ function lowerModuleStatement(
   throw unsupported(file, statement, statement.name);
 }
 
-function lowerHostCall(
+function lowerEffectBindingValue(
   file: string,
   input: SyntaxCursor,
+  value: DucklangExpression,
 ): DucklangExpression {
   const application = findRule(input, "application_expression");
   const postfix = application === undefined
@@ -929,6 +936,7 @@ function lowerHostCall(
   }
   const names: TokenCursor[] = [];
   collectTokens(postfix, names, "identifier");
+  if (names.length === 1) return value;
   if (names.length !== 2) {
     throw unsupported(file, postfix, "effect operation reference");
   }
@@ -942,6 +950,107 @@ function lowerHostCall(
     arguments: arguments_,
     span: sourceSpan(file, application),
   };
+}
+
+function lowerDeclaredEffectRow(
+  file: string,
+  input: SyntaxCursor,
+): DucklangEffectRow | null | undefined {
+  const functionType = findRule(input, "function_type");
+  if (
+    functionType === undefined ||
+    !functionType.children().some((child) =>
+      child.type === "token" && child.text === "->"
+    )
+  ) {
+    return undefined;
+  }
+  const latent = functionType.children().find((child): child is RuleCursor =>
+    child.type === "rule" && child.name === "latent_effect_row"
+  );
+  if (latent === undefined) return null;
+  return lowerEffectRow(file, requiredField(latent, "row"));
+}
+
+function lowerEffectRow(
+  file: string,
+  input: SyntaxCursor,
+): DucklangEffectRow {
+  const row = descendSingleRule(
+    input,
+    new Set(["effect_row", "_effect_row_expression"]),
+  );
+  if (row.type !== "rule") {
+    throw unsupported(file, row, "effect row");
+  }
+  if (row.name === "parenthesized_effect_expression") {
+    return lowerEffectRow(file, requiredField(row, "value"));
+  }
+  if (row.name === "effect_family_reference") {
+    return {
+      kind: "family",
+      effectName: tokenText(
+        file,
+        requiredField(row, "effect"),
+        "effect row family",
+      ),
+      span: sourceSpan(file, row),
+    };
+  }
+  if (row.name === "effect_operation_reference") {
+    return {
+      kind: "operation",
+      effectName: tokenText(
+        file,
+        requiredField(row, "effect"),
+        "effect row operation family",
+      ),
+      operationName: tokenText(
+        file,
+        requiredField(row, "operation"),
+        "effect row operation",
+      ),
+      span: sourceSpan(file, row),
+    };
+  }
+  if (row.name === "effect_row_variable") {
+    return {
+      kind: "variable",
+      name: tokenText(
+        file,
+        requiredField(row, "name"),
+        "effect row variable",
+      ),
+      span: sourceSpan(file, row),
+    };
+  }
+  const operators = row.children().filter((child): child is TokenCursor =>
+    child.type === "token" && [":|", ":&", ":-"].includes(child.text)
+  );
+  const operands = row.children().filter((child): child is RuleCursor =>
+    child.type === "rule"
+  );
+  if (operators.length === 0 && operands.length === 1) {
+    return lowerEffectRow(file, operands[0]);
+  }
+  if (operators.length + 1 !== operands.length) {
+    throw unsupported(file, row, "effect row expression");
+  }
+  let result = lowerEffectRow(file, operands[0]);
+  for (const [index, operator] of operators.entries()) {
+    const right = lowerEffectRow(file, operands[index + 1]);
+    result = {
+      kind: operator.text === ":|"
+        ? "union"
+        : operator.text === ":&"
+        ? "intersection"
+        : "difference",
+      left: result,
+      right,
+      span: spanFrom(result.span, right.span),
+    };
+  }
+  return result;
 }
 
 function lowerTypeReference(

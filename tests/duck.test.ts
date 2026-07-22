@@ -165,6 +165,60 @@ return { .result = result }
   );
 });
 
+Deno.test("Ducklang infers and checks latent effect rows", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `module (!init: Init) where
+declare effect Input { read: () => I32 }
+declare Init { input: Input }
+let read_value: () -> <Input.read> I32 = () => {
+  value <- Input.read()
+  value
+}
+result <- read_value()
+return { .result = result }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm, { input: { read: 42 } }), 42);
+  const readValue = artifact.inferred.bindings.find((binding) =>
+    binding.symbol.text === "read_value"
+  );
+  assertEquals(
+    readValue?.latentEffects.map((effect) =>
+      `${effect.effectName}.${effect.operationName}`
+    ),
+    ["Input.read"],
+  );
+  assertEquals(
+    artifact.inferred.requiredEffects.map((effect) =>
+      `${effect.effectName}.${effect.operationName}`
+    ),
+    ["Input.read"],
+  );
+});
+
+Deno.test("Ducklang rejects operations outside a declared pure effect row", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.duck",
+        `module (!init: Init) where
+declare effect Input { read: () => I32 }
+declare Init { input: Input }
+let read_value: () -> I32 = () => {
+  value <- Input.read()
+  value
+}
+result <- read_value()
+return { .result = result }
+`,
+        { gpuMode: "off" },
+      ),
+    /function read_value exceeds its declared effect row with Input\.read/,
+  );
+});
+
 Deno.test("Ducklang functions capture the module symbol visible at declaration", async () => {
   await assertDuckFixture("closure_capture.duck", 43);
 });

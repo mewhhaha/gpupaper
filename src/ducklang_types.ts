@@ -1,5 +1,10 @@
 import type { SourceSpan } from "./syntax.ts";
 import type { DucklangTypeReference } from "./ducklang_ast.ts";
+import type {
+  DucklangEffectOperation,
+  DucklangEffectReference,
+} from "./ducklang_ast.ts";
+import { analyzeDucklangEffects } from "./ducklang_effects.ts";
 import type { EqualityConstraint, Type } from "./types.ts";
 import type {
   DucklangSymbol,
@@ -226,6 +231,7 @@ export type TypedDucklangBinding = {
   readonly stage: "compileTime" | "runtime";
   readonly value: TypedDucklangExpression;
   readonly type: Type;
+  readonly latentEffects: readonly DucklangEffectReference[];
   readonly span: SourceSpan;
 };
 
@@ -243,6 +249,11 @@ export type TypedDucklangModule = {
   readonly resultType: Type;
   readonly equalities: readonly EqualityConstraint[];
   readonly symbolTypes: ReadonlyMap<number, Type>;
+  readonly effectDeclarations: ReadonlyMap<
+    string,
+    readonly DucklangEffectOperation[]
+  >;
+  readonly requiredEffects: readonly DucklangEffectReference[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly structTypes: readonly ResolvedDucklangStructType[];
@@ -282,16 +293,19 @@ const binaryOperators = new Set([
 export function inferDucklangModule(
   module: ResolvedDucklangModule,
 ): TypedDucklangModule {
+  const effectAnalysis = analyzeDucklangEffects(module);
   const inference = new DucklangInference(
     module.file,
     module.unionTypes,
     module.typeAliases,
     module.structTypes,
+    module.effects,
+    effectAnalysis.bindingEffects,
   );
   const environment = new Map<number, Type>();
   const bindings = inference.inferBindings(module.bindings, environment);
   const result = inference.inferExpression(module.result, environment);
-  return inference.finish(bindings, result);
+  return inference.finish(bindings, result, effectAnalysis.moduleEffects);
 }
 
 export function formatDucklangType(type: Type): string {
@@ -315,6 +329,14 @@ class DucklangInference {
   readonly #unionTypes: readonly ResolvedDucklangUnionType[];
   readonly #typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly #structTypes: readonly ResolvedDucklangStructType[];
+  readonly #effectDeclarations: ReadonlyMap<
+    string,
+    readonly DucklangEffectOperation[]
+  >;
+  readonly #bindingEffects: ReadonlyMap<
+    number,
+    readonly DucklangEffectReference[]
+  >;
   #nextVariable = 0;
 
   constructor(
@@ -322,11 +344,21 @@ class DucklangInference {
     unionTypes: readonly ResolvedDucklangUnionType[],
     typeAliases: readonly ResolvedDucklangTypeAlias[],
     structTypes: readonly ResolvedDucklangStructType[],
+    effectDeclarations: ReadonlyMap<
+      string,
+      readonly DucklangEffectOperation[]
+    >,
+    bindingEffects: ReadonlyMap<
+      number,
+      readonly DucklangEffectReference[]
+    >,
   ) {
     this.#file = file;
     this.#unionTypes = unionTypes;
     this.#typeAliases = typeAliases;
     this.#structTypes = structTypes;
+    this.#effectDeclarations = effectDeclarations;
+    this.#bindingEffects = bindingEffects;
     for (const declaration of unionTypes) {
       const caseNames = new Set<string>();
       for (const unionCase of declaration.cases) {
@@ -418,6 +450,7 @@ class DucklangInference {
         ...binding,
         value: inferred.expression,
         type: bindingType,
+        latentEffects: this.#bindingEffects.get(binding.symbol.id) ?? [],
       });
     }
     return typed;
@@ -1741,6 +1774,7 @@ class DucklangInference {
   finish(
     bindings: readonly TypedDucklangBinding[],
     result: InferredExpression,
+    requiredEffects: readonly DucklangEffectReference[],
   ): TypedDucklangModule {
     for (const variable of this.#numericVariables) {
       if (this.#apply({ kind: "variable", id: variable }).kind === "variable") {
@@ -1762,6 +1796,8 @@ class DucklangInference {
       symbolTypes: new Map(
         [...this.#symbolTypes].map(([id, type]) => [id, this.#apply(type)]),
       ),
+      effectDeclarations: this.#effectDeclarations,
+      requiredEffects,
       unionTypes: this.#unionTypes,
       typeAliases: this.#typeAliases,
       structTypes: this.#structTypes,

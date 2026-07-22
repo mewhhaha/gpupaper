@@ -1,5 +1,6 @@
 import type {
   DucklangEffectOperation,
+  DucklangEffectRow,
   DucklangExpression,
   DucklangModule,
   DucklangName,
@@ -15,6 +16,7 @@ export type DucklangSymbol = {
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
   readonly declaredType?: string;
+  readonly declaredEffectRow?: DucklangEffectRow | null;
   readonly identityPolymorphic?: boolean;
   readonly linear?: boolean;
   readonly span: SourceSpan;
@@ -1258,6 +1260,9 @@ class DucklangResolver {
       ...(name.declaredType === undefined
         ? {}
         : { declaredType: name.declaredType }),
+      ...(name.declaredEffectRow === undefined
+        ? {}
+        : { declaredEffectRow: name.declaredEffectRow }),
       ...(name.identityPolymorphic === undefined
         ? {}
         : { identityPolymorphic: name.identityPolymorphic }),

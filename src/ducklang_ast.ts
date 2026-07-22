@@ -3,11 +3,42 @@ import type { SourceSpan } from "./syntax.ts";
 export type DucklangName = {
   readonly text: string;
   readonly declaredType?: string;
+  readonly declaredEffectRow?: DucklangEffectRow | null;
   readonly sourceTest?: boolean;
   readonly identityPolymorphic?: boolean;
   readonly variadic?: boolean;
   readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
+  readonly span: SourceSpan;
+};
+
+export type DucklangEffectRow =
+  | {
+    readonly kind: "family";
+    readonly effectName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "operation";
+    readonly effectName: string;
+    readonly operationName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "variable";
+    readonly name: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "union" | "intersection" | "difference";
+    readonly left: DucklangEffectRow;
+    readonly right: DucklangEffectRow;
+    readonly span: SourceSpan;
+  };
+
+export type DucklangEffectReference = {
+  readonly effectName: string;
+  readonly operationName: string;
   readonly span: SourceSpan;
 };
 
