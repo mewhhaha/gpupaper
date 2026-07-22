@@ -73,6 +73,8 @@ function collectComptimeExpressions(
     case "integer":
     case "integer64":
     case "boolean":
+    case "string":
+    case "intrinsic":
     case "reference":
       return;
     case "function":
@@ -182,6 +184,8 @@ function replaceComptimeExpressions(
     case "integer":
     case "integer64":
     case "boolean":
+    case "string":
+    case "intrinsic":
     case "reference":
       return expression;
     case "function":

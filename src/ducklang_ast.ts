@@ -8,6 +8,12 @@ export type DucklangName = {
 
 export type DucklangParameter = DucklangName;
 
+export type DucklangImportSelection = {
+  readonly exportName: string;
+  readonly localName: DucklangName | undefined;
+  readonly span: SourceSpan;
+};
+
 export type DucklangExpression =
   | {
     readonly kind: "integer";
@@ -22,6 +28,16 @@ export type DucklangExpression =
   | {
     readonly kind: "boolean";
     readonly value: boolean;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "string";
+    readonly value: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "moduleImport";
+    readonly path: string;
     readonly span: SourceSpan;
   }
   | {
@@ -79,6 +95,14 @@ export type DucklangExpression =
   };
 
 export type DucklangStatement =
+  | {
+    readonly kind: "import";
+    readonly path: string;
+    readonly selections: readonly DucklangImportSelection[];
+    readonly namespace: DucklangName | undefined;
+    readonly open: boolean;
+    readonly span: SourceSpan;
+  }
   | {
     readonly kind: "binding";
     readonly declarationKind: "let" | "const";

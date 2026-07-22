@@ -7,6 +7,7 @@ import type {
 import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 import type {
   DucklangExpression,
+  DucklangImportSelection,
   DucklangModule,
   DucklangName,
   DucklangParameter,
@@ -70,6 +71,9 @@ function lowerModuleStatement(
     throw unsupported(file, statement, "module statement");
   }
   if (statement.name === "binding_statement") {
+    const value = lowerExpression(file, requiredField(statement, "value"));
+    const imported = lowerImportStatement(file, statement, value);
+    if (imported !== undefined) return imported;
     const name = identifierName(
       file,
       requiredField(statement, "name"),
@@ -81,7 +85,7 @@ function lowerModuleStatement(
       declarationKind: kind?.text === "const" ? "const" : "let",
       recursive: tokenField(statement, "recursive") !== undefined,
       name,
-      value: lowerExpression(file, requiredField(statement, "value")),
+      value,
       span: sourceSpan(file, statement),
     };
   }
@@ -132,6 +136,75 @@ function lowerModuleStatement(
     };
   }
   throw unsupported(file, statement, statement.name);
+}
+
+function lowerImportStatement(
+  file: string,
+  statement: RuleCursor,
+  value: DucklangExpression,
+): DucklangStatement | undefined {
+  const imported = value.kind === "moduleImport"
+    ? value
+    : value.kind === "call" && value.callee.kind === "moduleImport" &&
+        value.arguments.length === 0
+    ? value.callee
+    : undefined;
+  if (imported === undefined) return undefined;
+  const pattern = requiredField(statement, "name");
+  const namedShape = findRule(pattern, "named_shape_pattern");
+  const wildcard = findRule(pattern, "wildcard");
+  const namespace = namedShape === undefined && wildcard === undefined
+    ? identifierName(file, pattern, "import namespace")
+    : undefined;
+  return {
+    kind: "import",
+    path: imported.path,
+    selections: namedShape === undefined
+      ? []
+      : lowerImportSelections(file, namedShape),
+    namespace,
+    open: tokenField(statement, "open") !== undefined,
+    span: sourceSpan(file, statement),
+  };
+}
+
+function lowerImportSelections(
+  file: string,
+  pattern: RuleCursor,
+): readonly DucklangImportSelection[] {
+  return pattern.children().flatMap(
+    (child): readonly DucklangImportSelection[] => {
+      if (child.type !== "rule") return [];
+      if (child.name === "shorthand_shape_pattern_field") {
+        const name = requiredField(child, "name");
+        const localName = identifierName(file, name, "import selection");
+        return [{
+          exportName: localName.text,
+          localName,
+          span: sourceSpan(file, child),
+        }];
+      }
+      if (child.name !== "named_shape_pattern_field") return [];
+      const exportName = identifierName(
+        file,
+        requiredField(child, "name"),
+        "import export",
+      ).text;
+      const selectedPattern = child.field("pattern");
+      if (!isCursor(selectedPattern) || findRule(selectedPattern, "wildcard")) {
+        return [{
+          exportName,
+          localName: undefined,
+          span: sourceSpan(file, child),
+        }];
+      }
+      return [{
+        exportName,
+        localName: identifierName(file, selectedPattern, "import alias"),
+        span: sourceSpan(file, child),
+      }];
+    },
+  );
 }
 
 function lowerExpression(
@@ -400,6 +473,18 @@ function lowerExpression(
     return lowerExpression(file, onlyRuleChild(cursor));
   }
 
+  if (cursor.name === "import_expression") {
+    const path = tokenField(cursor, "path");
+    if (path === undefined) {
+      throw new Error("Ducklang import expression has no path token");
+    }
+    return {
+      kind: "moduleImport",
+      path: decodeStringLiteral(file, path),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   throw unsupported(file, cursor, cursor.name);
 }
 
@@ -432,6 +517,9 @@ function lowerTokenExpression(
   if (cursor.text === "true" || cursor.text === "false") {
     return { kind: "boolean", value: cursor.text === "true", span };
   }
+  if (cursor.kind === "string") {
+    return { kind: "string", value: decodeStringLiteral(file, cursor), span };
+  }
   if (cursor.kind === "identifier" || cursor.text === "loop") {
     const name = { text: cursor.text, span };
     return { kind: "reference", name, span };
@@ -445,7 +533,11 @@ function lowerCallArguments(
 ): readonly DucklangExpression[] {
   const cursor = descendSingleRule(
     input,
-    new Set(["parenthesized_or_product"]),
+    new Set([
+      "parenthesized_or_product",
+      "postfix_expression",
+      "_primary_expression",
+    ]),
   );
   if (cursor.type === "rule" && cursor.name === "positional_product") {
     return cursor.children().flatMap((child) =>
@@ -548,6 +640,27 @@ function collectAllTokens(
     return;
   }
   for (const child of cursor.children()) collectAllTokens(child, tokens);
+}
+
+function findRule(cursor: SyntaxCursor, name: string): RuleCursor | undefined {
+  if (cursor.type === "token") return undefined;
+  if (cursor.name === name) return cursor;
+  for (const child of cursor.children()) {
+    const found = findRule(child, name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function decodeStringLiteral(file: string, token: TokenCursor): string {
+  try {
+    return JSON.parse(token.text) as string;
+  } catch (cause) {
+    throw new SyntaxError(
+      `${file}:${token.span.start}: invalid Ducklang string literal ${token.text}`,
+      { cause },
+    );
+  }
 }
 
 function descendSingleRule(

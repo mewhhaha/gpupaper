@@ -48,6 +48,8 @@ function rewriteExpression(
     expression,
     (child) => rewriteExpression(child, values),
   );
+  const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
+  if (foldedIntrinsic !== undefined) return foldedIntrinsic;
   if (
     rewritten.kind !== "call" || rewritten.type.kind !== "function" ||
     rewritten.callee.kind !== "reference"
@@ -68,6 +70,45 @@ function rewriteExpression(
     ]),
   );
   return rewriteExpression(substitute(factory.body, substitutions), values);
+}
+
+function foldStaticIntrinsic(
+  expression: TypedDucklangExpression,
+  values: ReadonlyMap<number, TypedDucklangExpression>,
+): TypedDucklangExpression | undefined {
+  if (expression.kind !== "call" || expression.arguments.length !== 1) {
+    return undefined;
+  }
+  const callee = staticValue(expression.callee, values);
+  const argument = staticValue(expression.arguments[0], values);
+  if (
+    callee.kind !== "intrinsic" ||
+    callee.modulePath !== "duck:prelude/runtime" ||
+    callee.exportName !== "length" || argument.kind !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "integer",
+    value: new TextEncoder().encode(argument.value).length,
+    type: expression.type,
+    span: expression.span,
+  };
+}
+
+function staticValue(
+  expression: TypedDucklangExpression,
+  values: ReadonlyMap<number, TypedDucklangExpression>,
+): TypedDucklangExpression {
+  const visited = new Set<number>();
+  let value = expression;
+  while (value.kind === "reference" && !visited.has(value.symbol.id)) {
+    visited.add(value.symbol.id);
+    const resolved = values.get(value.symbol.id);
+    if (resolved === undefined) break;
+    value = resolved;
+  }
+  return value;
 }
 
 function substitute(
@@ -100,6 +141,8 @@ function rewriteChildren(
     case "integer":
     case "integer64":
     case "boolean":
+    case "string":
+    case "intrinsic":
     case "reference":
       return expression;
     case "function":

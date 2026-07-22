@@ -233,6 +233,14 @@ class DucklangFcgCompiler {
           valueType: "i32",
           span: expression.span,
         }];
+      case "string":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang text reached FCG without data-layout lowering`,
+        );
+      case "intrinsic":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang intrinsic ${expression.modulePath}.${expression.exportName} reached FCG without intrinsic lowering`,
+        );
       case "reference": {
         const local = this.#locals.get(expression.symbol.id);
         if (local !== undefined) {

@@ -31,6 +31,17 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "string";
+    readonly value: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "intrinsic";
+    readonly modulePath: string;
+    readonly exportName: string;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
     readonly span: SourceSpan;
@@ -158,6 +169,34 @@ class DucklangResolver {
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
+      if (statement.kind === "import") {
+        if (statement.namespace !== undefined || statement.open) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang local and open imports require module graph resolution`,
+          );
+        }
+        for (const selection of statement.selections) {
+          if (selection.localName === undefined) continue;
+          const symbol = this.#declare(selection.localName, scope);
+          environment.set(symbol.text, symbol);
+          const binding = {
+            symbol,
+            previous: undefined,
+            recursive: false,
+            stage: "compileTime",
+            value: {
+              kind: "intrinsic",
+              modulePath: statement.path,
+              exportName: selection.exportName,
+              span: selection.span,
+            },
+            span: selection.span,
+          } satisfies ResolvedDucklangBinding;
+          bindings.push(binding);
+          steps.push({ kind: "binding", binding });
+        }
+        continue;
+      }
       if (statement.kind === "expression") {
         const expression = this.#resolveExpression(
           statement.expression,
@@ -264,7 +303,12 @@ class DucklangResolver {
       case "integer":
       case "integer64":
       case "boolean":
+      case "string":
         return expression;
+      case "moduleImport":
+        throw new SyntaxError(
+          `${this.#file}:${expression.span.start}: Ducklang import expression must initialize a module binding`,
+        );
       case "reference": {
         const symbol = environment.get(expression.name.text);
         if (symbol === undefined) {

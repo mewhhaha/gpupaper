@@ -4,6 +4,18 @@ Deno.test("Ducklang arithmetic and assignment shadowing returns 42", async () =>
   await assertDuckFixture("01_arithmetic_and_shadowing.duck", 42);
 });
 
+Deno.test("Ducklang runtime imports specialize static UTF-8 byte lengths", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { .length = size } = import "duck:prelude/runtime" ()
+size("Aλ") + 39
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(artifact.inferred.bindings, []);
+});
+
 Deno.test("Ducklang multi-argument functions and local blocks return 42", async () => {
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });

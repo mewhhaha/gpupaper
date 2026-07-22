@@ -27,6 +27,19 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "string";
+    readonly value: string;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "intrinsic";
+    readonly modulePath: string;
+    readonly exportName: string;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
     readonly type: Type;
@@ -132,6 +145,7 @@ const booleanType: Type = {
   name: "bool",
   arguments: [],
 };
+const textType: Type = { kind: "constructor", name: "text", arguments: [] };
 const binaryOperators = new Set([
   "+",
   "-",
@@ -229,6 +243,27 @@ class DucklangInference {
           expression: { ...expression, type: booleanType },
           type: booleanType,
         };
+      case "string":
+        return {
+          expression: { ...expression, type: textType },
+          type: textType,
+        };
+      case "intrinsic": {
+        if (
+          expression.modulePath !== "duck:prelude/runtime" ||
+          expression.exportName !== "length"
+        ) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
+          );
+        }
+        const type: Type = {
+          kind: "function",
+          parameter: textType,
+          result: i32Type,
+        };
+        return { expression: { ...expression, type }, type };
+      }
       case "reference": {
         const type = environment.get(expression.symbol.id);
         if (type === undefined) {
@@ -562,6 +597,8 @@ class DucklangInference {
       case "integer":
       case "integer64":
       case "boolean":
+      case "string":
+      case "intrinsic":
       case "reference":
         return { ...expression, type };
       case "function":
