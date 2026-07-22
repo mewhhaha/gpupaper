@@ -8,9 +8,17 @@ work through WebGPU, and emits a validated WebAssembly module whose `main`
 export returns an `i32`.
 
 The Ducklang frontend uses a Baba-generated Wasm parser for the complete
-vendored examples corpus. Its executable scalar slice follows an independent
-Ducklang pipeline: Baba cursor, source AST, symbol resolution, typed IR,
-GPU-assisted equality checking, compile-time evaluation, FCG, and Wasm.
+vendored examples corpus. Its independent pipeline is: Baba cursor, source AST,
+module/name resolution, typed and effect IR, GPU-assisted equality checking,
+compile-time evaluation, FCG, and Wasm. The enforced contract runs all 92
+success programs, 12 intended compile failures, 4 traps, 1 source-test module,
+and all 9 dependency modules through their declared consumers.
+
+Host effects and dynamic `Text` use a browser-compatible managed ABI. Wasm
+passes deterministic `i32` handles while JavaScript owns the string table and
+validates the artifact's exact effect, capability, and export schemas. See
+[Ducklang corpus compatibility](duck-compatibility.md) for the semantic matrix
+and deliberate boundaries.
 
 This is a research artifact, not a GHC frontend. Its purpose is to make the
 architectural claims executable and falsifiable before expanding the language.

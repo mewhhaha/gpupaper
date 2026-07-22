@@ -1,99 +1,98 @@
-# Ducklang grammar compatibility slice
+# Ducklang corpus compatibility
 
-This frontend follows the production shapes in Ducklang's grammar. The syntax
-and backend milestones are deliberately separate: Baba owns complete syntax
-acceptance, while an independent Ducklang typed IR demonstrates that an admitted
-subset can target the GPU-assisted compiler pipeline.
+The Ducklang frontend follows the production grammar and semantic examples
+vendored from the sibling `binned` repository. Baba owns syntax recognition; the
+compiler then uses a Duck-specific AST, resolver, typed IR, effect analysis,
+GPU-assisted equality checking, FCG, and Wasm backend. Duck source is never
+translated through the Haskell-like frontend.
 
-The compatibility fixtures were copied from the sibling `binned` working tree
-under its MIT license. The notice is preserved in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The copied sources retain their MIT notice in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Their origin and snapshot
+revision are recorded in [examples/binned/SOURCE.md](examples/binned/SOURCE.md).
 
-## Baba 6 syntax frontend
+## Enforced corpus contract
 
-The project pins `@mewhhaha/baba` 6.0.0. Baba now supports portable trailing
-lookahead guards and parser-state promotion for contextual trivia in its
-generated Wasm runtime. The integration gate exercises all five distinctions
-formerly implemented by Duck's external scanner:
+The generated Baba 6 Wasm parser accepts all 118 vendored `.duck` files. The
+semantic contract then classifies every file exactly once:
 
-- application whitespace and its stop keywords;
-- type-application whitespace;
-- `break` value whitespace;
-- `break` terminator whitespace;
-- extension-member newline terminators.
+- 92 success fixtures compile to Wasm and return every declared result;
+- 12 intentional compile failures reject for their declared reason;
+- 4 trap fixtures compile and trap for every declared runtime input;
+- 1 inline source-test module discovers and executes its `@[test]` functions;
+- 9 dependency modules compile through their success, failure, or managed host
+  consumers.
 
-The vendored `grammar/ducklang-tree-sitter-grammar.json` snapshot is translated
-into `grammar/duck.baba`. Tree-sitter precedence annotations become explicit
-effect, expression, and type layers; attributed statements are left-factored;
-and Baba metadata records deterministic LR choices. A few prefixes requiring
-more than one token of lookahead use portable fused DFA tokens. Their complete
-source text remains available to cursor lowering.
+The effect dependencies include three standalone managed programs and a
+host-interface/logger/entry module graph. Their JavaScript runtime tests verify
+dynamic Unicode `Text`, exact effect requirements, missing-method failures, and
+capability narrowing across files.
 
-The generated standalone Wasm parser accepts all 118 vendored `.duck` files.
-This establishes syntax compatibility, not type checking or execution parity.
-The admitted grammar below describes the executable typed-IR slice.
+## Frontend and typed-IR pipeline
 
-## Admitted grammar
-
-The implemented contract can be summarized as:
-
-```ebnf
-source       = { binding | assignment }, expression ;
-binding      = "let", [ "rec" ], identifier, "=", expression ;
-assignment   = identifier, ( "=" | ":=" ), expression ;
-expression   = arrow | if | block | binary | call | primary ;
-arrow        = ( identifier | "(", identifiers, ")" ), "=>", expression ;
-if           = "if", expression, block, "else", ( block | if ) ;
-block        = "{", { binding | assignment }, expression, "}" ;
-binary       = expression, ( "+" | "-" | "*" | "==" ), expression ;
-call         = expression, "(", [ expressions ], ")" ;
-primary      = i32 | boolean | identifier | "(", expression, ")"
-             | "comptime", expression ;
+```text
+Baba cursor
+  -> Duck AST
+  -> includes, imports, attributes, derivations, handlers, and control flow
+  -> module/name resolution
+  -> Duck type and effect inference
+  -> GPU differential equality solving
+  -> compile-time and closure specialization
+  -> expanded FCG
+  -> Wasm
+  -> optional managed JavaScript ABI
 ```
 
-Newlines and semicolons terminate statements. `//` comments are ignored. Integer
-literals may be unsuffixed or use `i32`. Operator precedence matches the
-corresponding Ducklang productions for the admitted operators.
+The CPU type engine remains the semantic oracle. It records constructor
+equalities for the WebGPU solver, which independently detects constructor
+clashes and infinite types. Effect rows are finite operation sets analyzed on
+the CPU because their ordering, diagnostics, and module-capability provenance
+are semantic control decisions rather than bulk equality closure.
 
-## Pipeline invariants
+Source spans survive every frontend stage. Module, parameter, and local names
+receive stable symbols. Assignment, linear use, ownership escape, effect-row,
+and aggregate-shape failures therefore report the original file offset and the
+values that violated the invariant.
 
-- Baba cursor spans are preserved on every Ducklang AST and typed-IR node.
-- Every module binding, parameter, and local binding receives a stable numeric
-  symbol; references retain that identity instead of relying on rewritten text.
-- `=` adds an equality between the preceding and replacement symbol types; `:=`
-  deliberately permits a new type.
-- Ducklang type inference remains the CPU oracle and records every equality in
-  the term format independently checked by the WebGPU solver.
-- A top-level arrow becomes a direct Ducklang FCG function. Captured module
-  scalars become zero-argument direct calls, so this case needs no closure.
-- Multi-argument calls remain multi-argument operations through the AST, typed
-  IR, and FCG.
-- Explicit `comptime` uses the same bounded CPU/WebGPU bytecode evaluator as the
-  Haskell-like frontend, without passing through its AST.
+## Implemented semantic families
 
-## Explicitly rejected grammar families
+| Family       | Corpus behavior                                                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scalars      | signed `I32`, `I64`, booleans, packed integer literals, arithmetic, comparison, and logic                                                                   |
+| Functions    | multiple arguments, recursion, mutual recursion, captures, returned and selected closures, and early return                                                 |
+| Control flow | conditional chains, dynamic branches, ranges, collection loops, `break`, `continue`, and loop expressions                                                   |
+| Aggregates   | tuples, arrays, structs, generic structs, updates, dynamic indexing, unions, matches, and type rows/sets                                                    |
+| Text         | UTF-8 length, append, slicing, equality, byte indexing, dynamic host values, and bounds traps                                                               |
+| Compile time | `const`, `comptime`, higher-order specialization, includes, attributes, type reflection, protocols, extensions, custom operators, and structural derivation |
+| Modules      | open imports, namespace modules, parameter records, capability narrowing, exported functions, and missing-export diagnostics                                |
+| Effects      | declarations, inferred and annotated latent rows, effectful `<-` sequencing, source handlers, ordered defaults, and host operations                         |
+| Ownership    | linear consumption, borrow/freeze checks, scratch promotion, frozen mutation rejection, and host ownership contracts                                        |
+| Testing      | ordered `@[test]` discovery plus trapping `assert` and `assert_false` intrinsics                                                                            |
 
-| Duck grammar family                                    | Required compiler representation                            |
-| ------------------------------------------------------ | ----------------------------------------------------------- |
-| `const` parameters and compile-time functions          | dependency-aware staged environment and specialization      |
-| numeric widths other than signed i32                   | typed scalar FCG operations and additional Wasm value types |
-| `/`, `%`, comparisons, logic, custom fixity            | corresponding typed primitive operations                    |
-| strings, characters, arrays, products, structs, unions | memory layout and aggregate FCG values                      |
-| local and returned functions                           | closure conversion and indirect calls                       |
-| `return`, loops, `break`, `continue`                   | structured control-flow regions                             |
-| modules, imports, includes                             | module graph and linking contract                           |
-| effects, handlers, ownership, borrowing                | effect rows, linearity proofs, and resource-aware lowering  |
-| type declarations and annotations                      | Duck type syntax elaboration into shared type terms         |
-| pattern, `match`, and `if let` forms                   | full pattern decision trees and aggregate projections       |
+## Managed host ABI
 
-Each recognized but unsupported construct fails at the source boundary with its
-file offset and the missing representation. Unknown syntax is never silently
-reinterpreted as Haskell-like source.
+Dynamic `Text` and host effects use a deliberately small browser-compatible ABI.
+Wasm carries artifact-local `i32` text handles; JavaScript owns the string
+table, decodes host arguments, allocates handles for returned strings, and
+decodes the declared scalar export. Static text handles are deterministic and
+recorded in the compilation artifact.
 
-## Backend result
+The artifact also records:
 
-The copied Ducklang programs compile to validated Wasm: arithmetic/shadowing
-returns 42, functions/blocks returns 42, `else if` returns 42, and lexical
-capture returns 43. They reach Wasm through Ducklang's own AST, symbol resolver,
-typed IR, and FCG. The rejection table is the concrete growth plan for the
-remaining language families.
+- effect operation parameter and result types;
+- `Init` field-to-effect capabilities;
+- exact module and per-function operation requirements;
+- source export names and scalar representations.
+
+Host methods are synchronous. Missing fields, missing methods, invalid return
+types, unknown text handles, and out-of-range `i32` results fail before Wasm can
+silently coerce them.
+
+## Deliberate boundaries
+
+This proof of concept implements the complete vendored corpus, not every legal
+program in the grammar. The managed ABI currently exposes at most one scalar
+module export, uses opaque handles instead of a linear-memory text layout, and
+does not provide asynchronous host effects. The module elaborator implements the
+record and function-export shapes exercised by the corpus rather than a general
+separately compiled linker. WebGPU remains a differential accelerator; it does
+not replace the CPU oracle or perform effect/module policy decisions.
