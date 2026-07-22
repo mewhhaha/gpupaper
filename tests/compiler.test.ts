@@ -352,6 +352,20 @@ Deno.test("ADTs classes macros and both comptime backends compile to executable 
   assertEquals(artifact.interactionResults[0].value, 42);
 });
 
+Deno.test("packed ADTs reject constructor tags wider than eight bits", async () => {
+  const constructors = Array.from({ length: 257 }, (_, index) => `C${index}`)
+    .join(" | ");
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.hs",
+        `data Many = ${constructors}\nmain = C0\n`,
+        { gpuMode: "off" },
+      ),
+    /packed ADT representation supports 256 constructor tags; C256 would require tag 256/,
+  );
+});
+
 Deno.test("repeated CPU compilation emits byte-identical Wasm", async () => {
   const source = `identity x = x\nmain = identity 42\n`;
   const first = await compileModuleSource("test.hs", source, {
