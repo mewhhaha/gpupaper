@@ -47,6 +47,19 @@ Deno.test("dependency analysis groups independent definitions before their calle
   );
 });
 
+Deno.test("lexical bindings shadow top-level declarations", async () => {
+  const artifact = await compileModuleSource(
+    "test.hs",
+    `value = 1\nidentity value = let value = value in value\nmain = identity 42\n`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(
+    artifact.inferred.resolution.dependencies.get("identity")?.size,
+    0,
+  );
+});
+
 Deno.test("CPU inference rejects an infinite self-application type", () => {
   assertThrows(
     () => inferModule(parseModule("test.hs", `broken x = x x\nmain = 0\n`)),

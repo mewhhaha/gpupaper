@@ -81,9 +81,11 @@ function resolveExpression(
     case "boolean":
       return;
     case "variable": {
-      const candidates = bindings.filter((binding) =>
+      const candidates = bindings.flatMap((binding, bindingIndex) =>
         binding.name.text === expression.name.text &&
-        isScopeSubset(binding.name.scopes, expression.name.scopes)
+          isScopeSubset(binding.name.scopes, expression.name.scopes)
+          ? [{ binding, bindingIndex }]
+          : []
       );
       if (candidates.length === 0) {
         throw new TypeError(
@@ -91,25 +93,31 @@ function resolveExpression(
         );
       }
       candidates.sort((left, right) =>
-        right.name.scopes.length - left.name.scopes.length ||
-        left.name.span.start - right.name.span.start
+        right.binding.name.scopes.length - left.binding.name.scopes.length ||
+        right.bindingIndex - left.bindingIndex
       );
       if (
         candidates.length > 1 &&
-        candidates[0].name.scopes.length === candidates[1].name.scopes.length
+        candidates[0].binding.name.scopes.length ===
+          candidates[1].binding.name.scopes.length &&
+        !haveEqualScopes(
+          candidates[0].binding.name.scopes,
+          candidates[1].binding.name.scopes,
+        )
       ) {
         throw new TypeError(
           `${expression.span.file}:${expression.span.start}: ambiguous name ${expression.name.text}`,
         );
       }
+      const resolved = candidates[0].binding;
       references.push({
         use: expression.name,
-        declaration: candidates[0].name,
+        declaration: resolved.name,
       });
       if (
-        candidates[0].topLevel &&
-        topLevelValueNames.has(candidates[0].name.text)
-      ) dependencies.add(candidates[0].name.text);
+        resolved.topLevel &&
+        topLevelValueNames.has(resolved.name.text)
+      ) dependencies.add(resolved.name.text);
       return;
     }
     case "lambda":
@@ -268,6 +276,14 @@ function isScopeSubset(
   useScopes: readonly number[],
 ): boolean {
   return bindingScopes.every((scope) => useScopes.includes(scope));
+}
+
+function haveEqualScopes(
+  left: readonly number[],
+  right: readonly number[],
+): boolean {
+  return left.length === right.length &&
+    left.every((scope) => right.includes(scope));
 }
 
 function buildDependencyStrata(
