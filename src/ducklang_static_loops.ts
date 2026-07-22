@@ -328,6 +328,25 @@ function substituteExpression(
           replaceReferences,
         ),
       };
+    case "indexUpdate":
+      return {
+        ...expression,
+        product: substituteExpression(
+          expression.product,
+          values,
+          replaceReferences,
+        ),
+        index: substituteExpression(
+          expression.index,
+          values,
+          replaceReferences,
+        ),
+        value: substituteExpression(
+          expression.value,
+          values,
+          replaceReferences,
+        ),
+      };
     case "unionCase":
       return {
         ...expression,

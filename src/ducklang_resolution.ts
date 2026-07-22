@@ -118,6 +118,13 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "indexUpdate";
+    readonly product: ResolvedDucklangExpression;
+    readonly index: ResolvedDucklangExpression;
+    readonly value: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: string;
     readonly left: ResolvedDucklangExpression;
@@ -816,6 +823,25 @@ class DucklangResolver {
           ),
           index: this.#resolveExpression(
             expression.index,
+            environment,
+            currentRecursive,
+          ),
+        };
+      case "indexUpdate":
+        return {
+          ...expression,
+          product: this.#resolveExpression(
+            expression.product,
+            environment,
+            currentRecursive,
+          ),
+          index: this.#resolveExpression(
+            expression.index,
+            environment,
+            currentRecursive,
+          ),
+          value: this.#resolveExpression(
+            expression.value,
             environment,
             currentRecursive,
           ),

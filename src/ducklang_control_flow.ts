@@ -297,6 +297,13 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
         collection: lowerExpression(expression.collection),
         index: lowerExpression(expression.index),
       };
+    case "indexUpdate":
+      return {
+        ...expression,
+        product: lowerExpression(expression.product),
+        index: lowerExpression(expression.index),
+        value: lowerExpression(expression.value),
+      };
     case "binary":
       return {
         ...expression,

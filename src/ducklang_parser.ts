@@ -399,6 +399,25 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
+    if (
+      expression.kind === "binary" && expression.operator === "=" &&
+      expression.left.kind === "index" &&
+      expression.left.collection.kind === "reference"
+    ) {
+      return {
+        kind: "assignment",
+        operator: "=",
+        name: expression.left.collection.name,
+        value: {
+          kind: "indexUpdate",
+          product: expression.left.collection,
+          index: expression.left.index,
+          value: expression.right,
+          span: expression.span,
+        },
+        span: sourceSpan(file, statement),
+      };
+    }
     return {
       kind: "expression",
       expression,

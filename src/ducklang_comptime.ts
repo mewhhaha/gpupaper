@@ -113,6 +113,17 @@ function collectComptimeExpressions(
       collectComptimeExpressions(expression.collection, expressions);
       collectComptimeExpressions(expression.index, expressions);
       return;
+    case "selectProductElement":
+      for (const value of expression.values) {
+        collectComptimeExpressions(value, expressions);
+      }
+      collectComptimeExpressions(expression.index, expressions);
+      return;
+    case "indexUpdate":
+      collectComptimeExpressions(expression.product, expressions);
+      collectComptimeExpressions(expression.index, expressions);
+      collectComptimeExpressions(expression.value, expressions);
+      return;
     case "textAppend":
       collectComptimeExpressions(expression.left, expressions);
       collectComptimeExpressions(expression.right, expressions);
@@ -320,6 +331,37 @@ function replaceComptimeExpressions(
         ),
         index: replaceComptimeExpressions(
           expression.index,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "selectProductElement":
+      return {
+        ...expression,
+        values: expression.values.map((value) =>
+          replaceComptimeExpressions(value, values, nextValueIndex)
+        ),
+        index: replaceComptimeExpressions(
+          expression.index,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "indexUpdate":
+      return {
+        ...expression,
+        product: replaceComptimeExpressions(
+          expression.product,
+          values,
+          nextValueIndex,
+        ),
+        index: replaceComptimeExpressions(
+          expression.index,
+          values,
+          nextValueIndex,
+        ),
+        value: replaceComptimeExpressions(
+          expression.value,
           values,
           nextValueIndex,
         ),

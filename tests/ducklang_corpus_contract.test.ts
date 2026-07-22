@@ -32,6 +32,8 @@ const supportedSuccessPaths = new Set([
   "examples/data/02_projected_struct_update.duck",
   "examples/data/03_nested_structs.duck",
   "examples/data/04_dynamic_struct_branch.duck",
+  "examples/data/05_struct_runtime_index.duck",
+  "examples/data/06_struct_index_assignment.duck",
   "examples/data/07_generic_option.duck",
   "examples/data/08_dynamic_union_result.duck",
   "examples/data/09_union_struct_payload.duck",

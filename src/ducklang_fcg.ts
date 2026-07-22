@@ -42,6 +42,10 @@ type DucklangFcgInstruction =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "trap";
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: DucklangBinaryOperator;
     readonly valueType: "i32" | "i64";
@@ -302,6 +306,15 @@ function visitHostCalls(
       visitHostCalls(expression.collection, calls);
       visitHostCalls(expression.index, calls);
       return;
+    case "selectProductElement":
+      for (const value of expression.values) visitHostCalls(value, calls);
+      visitHostCalls(expression.index, calls);
+      return;
+    case "indexUpdate":
+      visitHostCalls(expression.product, calls);
+      visitHostCalls(expression.index, calls);
+      visitHostCalls(expression.value, calls);
+      return;
     case "textAppend":
     case "binary":
       visitHostCalls(expression.left, calls);
@@ -471,6 +484,7 @@ class DucklangFcgCompiler {
       case "product":
       case "project":
       case "recordUpdate":
+      case "indexUpdate":
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang ${expression.kind} reached FCG without aggregate layout lowering`,
         );
@@ -534,6 +548,52 @@ class DucklangFcgCompiler {
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang index reached FCG without collection lowering`,
         );
+      case "selectProductElement": {
+        const indexLocal = this.#allocateLocal(wasmType.i32);
+        const resultType = wasmValueType(
+            this.#file,
+            expression.span,
+            expression.type,
+            this.#unionNames,
+          ) === wasmType.i64
+          ? "i64"
+          : "i32";
+        const compileSelection = (
+          fieldIndex: number,
+        ): readonly DucklangFcgInstruction[] => {
+          const value = expression.values[fieldIndex];
+          if (value === undefined) {
+            return [{ kind: "trap", span: expression.span }];
+          }
+          return [
+            { kind: "localGet", local: indexLocal, span: expression.span },
+            {
+              kind: "constant",
+              value: fieldIndex,
+              valueType: "i32",
+              span: expression.span,
+            },
+            {
+              kind: "binary",
+              operator: "==",
+              valueType: "i32",
+              span: expression.span,
+            },
+            {
+              kind: "if",
+              resultType,
+              consequence: this.#compileExpression(value),
+              alternative: compileSelection(fieldIndex + 1),
+              span: expression.span,
+            },
+          ];
+        };
+        return [
+          ...this.#compileExpression(expression.index),
+          { kind: "localSet", local: indexLocal, span: expression.span },
+          ...compileSelection(0),
+        ];
+      }
       case "textAppend":
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang text append reached FCG without data-layout lowering`,
@@ -690,6 +750,8 @@ function emitInstructions(
         return wasmInstruction.return;
       case "drop":
         return wasmInstruction.drop;
+      case "trap":
+        return wasmInstruction.unreachable;
       case "binary":
         if (instruction.valueType === "i64") {
           return {
@@ -803,6 +865,8 @@ function publicOperations(
         return [{ opcode: "return", operands: [], sourceStart }];
       case "drop":
         return [{ opcode: "drop", operands: [], sourceStart }];
+      case "trap":
+        return [{ opcode: "trap", operands: [], sourceStart }];
       case "binary":
         return [{
           opcode: `${instruction.valueType}.${instruction.operator}`,

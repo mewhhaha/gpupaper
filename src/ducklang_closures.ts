@@ -106,6 +106,24 @@ function rewriteExpression(
       }
       return value;
     }
+    if (collection.kind === "product" && collection.nominalType !== undefined) {
+      if (index.kind === "integer") {
+        const value = collection.values[index.value];
+        if (value === undefined) {
+          throw new RangeError(
+            `${rewritten.span.file}:${rewritten.span.start}: Ducklang struct index ${index.value} is outside ${collection.values.length} fields`,
+          );
+        }
+        return value;
+      }
+      return {
+        kind: "selectProductElement",
+        values: collection.values,
+        index,
+        type: rewritten.type,
+        span: rewritten.span,
+      };
+    }
   }
   if (rewritten.kind === "project") {
     const product = staticValue(rewritten.product, values);
@@ -147,6 +165,20 @@ function rewriteExpression(
       for (const field of rewritten.fields) {
         updatedValues[field.index] = field.value;
       }
+      return { ...product, values: updatedValues, type: rewritten.type };
+    }
+  }
+  if (rewritten.kind === "indexUpdate") {
+    const product = staticValue(rewritten.product, values);
+    const index = staticValue(rewritten.index, values);
+    if (product.kind === "product" && index.kind === "integer") {
+      if (product.values[index.value] === undefined) {
+        throw new RangeError(
+          `${rewritten.span.file}:${rewritten.span.start}: Ducklang struct assignment index ${index.value} is outside ${product.values.length} fields`,
+        );
+      }
+      const updatedValues = [...product.values];
+      updatedValues[index.value] = rewritten.value;
       return { ...product, values: updatedValues, type: rewritten.type };
     }
   }
@@ -629,6 +661,19 @@ function rewriteChildren(
         ...expression,
         collection: rewrite(expression.collection),
         index: rewrite(expression.index),
+      };
+    case "selectProductElement":
+      return {
+        ...expression,
+        values: expression.values.map(rewrite),
+        index: rewrite(expression.index),
+      };
+    case "indexUpdate":
+      return {
+        ...expression,
+        product: rewrite(expression.product),
+        index: rewrite(expression.index),
+        value: rewrite(expression.value),
       };
     case "textAppend":
       return {

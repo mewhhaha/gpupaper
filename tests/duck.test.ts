@@ -280,6 +280,26 @@ stored[0]
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang runtime struct indexing traps outside its field range", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `module (!init: Init) where
+const { struct } = import "duck:prelude" ()
+declare effect Input { index: () => I32 }
+declare Init { input: Input }
+type Pair = struct { .first = Int, .second = Int }
+let pair: Pair = [20, 22]
+index <- Input.index()
+return { .result = pair[index] }
+`,
+    { gpuMode: "off" },
+  );
+  await assertRejects(
+    () => runMain(artifact.wasm, { input: { index: 2 } }),
+    /unreachable/,
+  );
+});
+
 Deno.test("Ducklang unrolls bounded ranges with break and continue", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

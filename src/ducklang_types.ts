@@ -119,6 +119,21 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "selectProductElement";
+    readonly values: readonly TypedDucklangExpression[];
+    readonly index: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "indexUpdate";
+    readonly product: TypedDucklangExpression;
+    readonly index: TypedDucklangExpression;
+    readonly value: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "textAppend";
     readonly left: TypedDucklangExpression;
     readonly right: TypedDucklangExpression;
@@ -767,9 +782,29 @@ class DucklangInference {
           collectionType.arguments.length === 1
         ) {
           type = collectionType.arguments[0];
+        } else if (collectionType.kind === "constructor") {
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === collectionType.name
+          );
+          const firstField = declaration?.fields[0];
+          if (declaration === undefined || firstField === undefined) {
+            throw new TypeError(
+              `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text, an array, or a nonempty homogeneous struct; received ${
+                formatDucklangType(collectionType)
+              }`,
+            );
+          }
+          type = this.#typeReference(firstField.type, new Map(), []);
+          for (const field of declaration.fields.slice(1)) {
+            this.#unify(
+              type,
+              this.#typeReference(field.type, new Map(), []),
+              field.span,
+            );
+          }
         } else {
           throw new TypeError(
-            `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text or an array; received ${
+            `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text, an array, or a nonempty homogeneous struct; received ${
               formatDucklangType(collectionType)
             }`,
           );
@@ -782,6 +817,45 @@ class DucklangInference {
             type,
           },
           type,
+        };
+      }
+      case "indexUpdate": {
+        const product = this.inferExpression(expression.product, environment);
+        const index = this.inferExpression(expression.index, environment);
+        this.#unify(index.type, i32Type, expression.index.span);
+        const productType = this.#apply(product.type);
+        const declaration = productType.kind === "constructor"
+          ? this.#structTypes.find((candidate) =>
+            candidate.name === productType.name
+          )
+          : undefined;
+        const firstField = declaration?.fields[0];
+        if (declaration === undefined || firstField === undefined) {
+          throw new TypeError(
+            `${this.#file}:${expression.product.span.start}: Ducklang indexed assignment requires a nonempty homogeneous struct; received ${
+              formatDucklangType(productType)
+            }`,
+          );
+        }
+        const fieldType = this.#typeReference(firstField.type, new Map(), []);
+        for (const field of declaration.fields.slice(1)) {
+          this.#unify(
+            fieldType,
+            this.#typeReference(field.type, new Map(), []),
+            field.span,
+          );
+        }
+        const value = this.inferExpression(expression.value, environment);
+        this.#unify(fieldType, value.type, expression.value.span);
+        return {
+          expression: {
+            ...expression,
+            product: product.expression,
+            index: index.expression,
+            value: value.expression,
+            type: productType,
+          },
+          type: productType,
         };
       }
       case "binary": {
@@ -1318,6 +1392,23 @@ class DucklangInference {
           ...expression,
           collection: this.#normalizeExpression(expression.collection),
           index: this.#normalizeExpression(expression.index),
+          type,
+        };
+      case "selectProductElement":
+        return {
+          ...expression,
+          values: expression.values.map((value) =>
+            this.#normalizeExpression(value)
+          ),
+          index: this.#normalizeExpression(expression.index),
+          type,
+        };
+      case "indexUpdate":
+        return {
+          ...expression,
+          product: this.#normalizeExpression(expression.product),
+          index: this.#normalizeExpression(expression.index),
+          value: this.#normalizeExpression(expression.value),
           type,
         };
       case "textAppend":
