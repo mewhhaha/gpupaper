@@ -5,6 +5,7 @@ import type {
   ResolvedDucklangBinding,
   ResolvedDucklangExpression,
   ResolvedDucklangModule,
+  ResolvedDucklangUnionType,
 } from "./ducklang_resolution.ts";
 
 export type TypedDucklangExpression =
@@ -36,6 +37,13 @@ export type TypedDucklangExpression =
     readonly kind: "intrinsic";
     readonly modulePath: string;
     readonly exportName: string;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "unionCase";
+    readonly caseName: string;
+    readonly value: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -104,6 +112,16 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "ifUnion";
+    readonly caseName: string;
+    readonly payloadSymbol: DucklangSymbol | undefined;
+    readonly value: TypedDucklangExpression;
+    readonly consequence: TypedDucklangExpression;
+    readonly alternative: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "block";
     readonly steps: readonly TypedDucklangBlockStep[];
     readonly result: TypedDucklangExpression;
@@ -158,6 +176,7 @@ export type TypedDucklangModule = {
   readonly resultType: Type;
   readonly equalities: readonly EqualityConstraint[];
   readonly symbolTypes: ReadonlyMap<number, Type>;
+  readonly unionTypes: readonly ResolvedDucklangUnionType[];
 };
 
 type InferredExpression = {
@@ -188,7 +207,7 @@ const binaryOperators = new Set([
 export function inferDucklangModule(
   module: ResolvedDucklangModule,
 ): TypedDucklangModule {
-  const inference = new DucklangInference(module.file);
+  const inference = new DucklangInference(module.file, module.unionTypes);
   const environment = new Map<number, Type>();
   const bindings = inference.inferBindings(module.bindings, environment);
   const result = inference.inferExpression(module.result, environment);
@@ -213,10 +232,23 @@ class DucklangInference {
   readonly #substitutions = new Map<number, Type>();
   readonly #symbolTypes = new Map<number, Type>();
   readonly #numericVariables = new Set<number>();
+  readonly #unionTypes: readonly ResolvedDucklangUnionType[];
   #nextVariable = 0;
 
-  constructor(file: string) {
+  constructor(file: string, unionTypes: readonly ResolvedDucklangUnionType[]) {
     this.#file = file;
+    this.#unionTypes = unionTypes;
+    const caseNames = new Set<string>();
+    for (const declaration of unionTypes) {
+      for (const unionCase of declaration.cases) {
+        if (caseNames.has(unionCase.name)) {
+          throw new TypeError(
+            `${file}:${unionCase.span.start}: duplicate Ducklang union constructor ${unionCase.name}`,
+          );
+        }
+        caseNames.add(unionCase.name);
+      }
+    }
   }
 
   inferBindings(
@@ -330,6 +362,22 @@ class DucklangInference {
         }
         return { expression: { ...expression, type }, type };
       }
+      case "unionCase": {
+        const unionCase = this.#unionCaseType(
+          expression.caseName,
+          expression.span,
+        );
+        const value = this.inferExpression(expression.value, environment);
+        this.#unify(value.type, unionCase.payload, expression.value.span);
+        return {
+          expression: {
+            ...expression,
+            value: value.expression,
+            type: unionCase.union,
+          },
+          type: unionCase.union,
+        };
+      }
       case "reference": {
         const type = environment.get(expression.symbol.id);
         if (type === undefined) {
@@ -344,7 +392,7 @@ class DucklangInference {
         const parameterTypes = expression.parameters.map((parameter) => {
           const type = parameter.declaredType === undefined
             ? this.#freshVariable()
-            : declaredDucklangType(parameter.declaredType);
+            : this.#declaredType(parameter.declaredType, parameter.span);
           functionEnvironment.set(parameter.id, type);
           this.#symbolTypes.set(parameter.id, type);
           return type;
@@ -624,6 +672,51 @@ class DucklangInference {
           type: consequence.type,
         };
       }
+      case "ifUnion": {
+        const unionCase = this.#unionCaseType(
+          expression.caseName,
+          expression.span,
+        );
+        const value = this.inferExpression(expression.value, environment);
+        this.#unify(value.type, unionCase.union, expression.value.span);
+        const consequenceEnvironment = new Map(environment);
+        if (expression.payloadSymbol !== undefined) {
+          consequenceEnvironment.set(
+            expression.payloadSymbol.id,
+            unionCase.payload,
+          );
+          this.#symbolTypes.set(
+            expression.payloadSymbol.id,
+            unionCase.payload,
+          );
+        }
+        const consequence = this.inferExpression(
+          expression.consequence,
+          consequenceEnvironment,
+        );
+        const alternative = expression.alternative === undefined
+          ? {
+            expression: {
+              kind: "integer" as const,
+              value: 0,
+              type: i32Type,
+              span: expression.span,
+            },
+            type: i32Type,
+          }
+          : this.inferExpression(expression.alternative, environment);
+        this.#unify(consequence.type, alternative.type, expression.span);
+        return {
+          expression: {
+            ...expression,
+            value: value.expression,
+            consequence: consequence.expression,
+            alternative: alternative.expression,
+            type: consequence.type,
+          },
+          type: consequence.type,
+        };
+      }
       case "block": {
         const blockEnvironment = new Map(environment);
         const steps: TypedDucklangBlockStep[] = [];
@@ -682,6 +775,58 @@ class DucklangInference {
     }
   }
 
+  #unionCaseType(
+    caseName: string,
+    span: SourceSpan,
+  ): { readonly union: Type; readonly payload: Type } {
+    const declaration = this.#unionTypes.find((candidate) =>
+      candidate.cases.some((unionCase) => unionCase.name === caseName)
+    );
+    if (declaration === undefined) {
+      throw new TypeError(
+        `${this.#file}:${span.start}: unknown Ducklang union constructor ${caseName}`,
+      );
+    }
+    const parameters = new Map(
+      declaration.parameters.map((name) => [name, this.#freshVariable()]),
+    );
+    const unionCase = declaration.cases.find((candidate) =>
+      candidate.name === caseName
+    )!;
+    return {
+      union: {
+        kind: "constructor",
+        name: declaration.name,
+        arguments: declaration.parameters.map((name) => parameters.get(name)!),
+      },
+      payload: parameters.get(unionCase.payloadType) ??
+        this.#declaredType(unionCase.payloadType, unionCase.span),
+    };
+  }
+
+  #declaredType(name: string, span: SourceSpan): Type {
+    if (name === "Int" || name === "I32") return i32Type;
+    if (name === "I64") return i64Type;
+    if (name === "Bool") return booleanType;
+    if (name === "Text") return textType;
+    if (name === "Unit") {
+      return { kind: "constructor", name: "unit", arguments: [] };
+    }
+    const declaration = this.#unionTypes.find((candidate) =>
+      candidate.name === name
+    );
+    if (declaration === undefined) {
+      throw new TypeError(
+        `${this.#file}:${span.start}: unknown Ducklang type ${name}`,
+      );
+    }
+    return {
+      kind: "constructor",
+      name,
+      arguments: declaration.parameters.map(() => this.#freshVariable()),
+    };
+  }
+
   finish(
     bindings: readonly TypedDucklangBinding[],
     result: InferredExpression,
@@ -706,6 +851,7 @@ class DucklangInference {
       symbolTypes: new Map(
         [...this.#symbolTypes].map(([id, type]) => [id, this.#apply(type)]),
       ),
+      unionTypes: this.#unionTypes,
     };
   }
 
@@ -721,6 +867,12 @@ class DucklangInference {
       case "intrinsic":
       case "reference":
         return { ...expression, type };
+      case "unionCase":
+        return {
+          ...expression,
+          value: this.#normalizeExpression(expression.value),
+          type,
+        };
       case "function":
         return {
           ...expression,
@@ -773,6 +925,14 @@ class DucklangInference {
         return {
           ...expression,
           condition: this.#normalizeExpression(expression.condition),
+          consequence: this.#normalizeExpression(expression.consequence),
+          alternative: this.#normalizeExpression(expression.alternative),
+          type,
+        };
+      case "ifUnion":
+        return {
+          ...expression,
+          value: this.#normalizeExpression(expression.value),
           consequence: this.#normalizeExpression(expression.consequence),
           alternative: this.#normalizeExpression(expression.alternative),
           type,
@@ -934,15 +1094,6 @@ class DucklangInference {
       this.#occurs(variable, argument)
     );
   }
-}
-
-function declaredDucklangType(
-  name: "I32" | "I64" | "Bool" | "Text",
-): Type {
-  if (name === "I32") return i32Type;
-  if (name === "I64") return i64Type;
-  if (name === "Text") return textType;
-  return booleanType;
 }
 
 function functionType(parameters: readonly Type[], result: Type): Type {

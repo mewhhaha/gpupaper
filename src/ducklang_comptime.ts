@@ -77,6 +77,9 @@ function collectComptimeExpressions(
     case "intrinsic":
     case "reference":
       return;
+    case "unionCase":
+      collectComptimeExpressions(expression.value, expressions);
+      return;
     case "function":
       collectComptimeExpressions(expression.body, expressions);
       return;
@@ -109,6 +112,11 @@ function collectComptimeExpressions(
       return;
     case "if":
       collectComptimeExpressions(expression.condition, expressions);
+      collectComptimeExpressions(expression.consequence, expressions);
+      collectComptimeExpressions(expression.alternative, expressions);
+      return;
+    case "ifUnion":
+      collectComptimeExpressions(expression.value, expressions);
       collectComptimeExpressions(expression.consequence, expressions);
       collectComptimeExpressions(expression.alternative, expressions);
       return;
@@ -202,6 +210,15 @@ function replaceComptimeExpressions(
     case "intrinsic":
     case "reference":
       return expression;
+    case "unionCase":
+      return {
+        ...expression,
+        value: replaceComptimeExpressions(
+          expression.value,
+          values,
+          nextValueIndex,
+        ),
+      };
     case "function":
       return {
         ...expression,
@@ -297,6 +314,25 @@ function replaceComptimeExpressions(
         ...expression,
         condition: replaceComptimeExpressions(
           expression.condition,
+          values,
+          nextValueIndex,
+        ),
+        consequence: replaceComptimeExpressions(
+          expression.consequence,
+          values,
+          nextValueIndex,
+        ),
+        alternative: replaceComptimeExpressions(
+          expression.alternative,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "ifUnion":
+      return {
+        ...expression,
+        value: replaceComptimeExpressions(
+          expression.value,
           values,
           nextValueIndex,
         ),

@@ -2,7 +2,7 @@ import type { SourceSpan } from "./syntax.ts";
 
 export type DucklangName = {
   readonly text: string;
-  readonly declaredType?: "I32" | "I64" | "Bool" | "Text";
+  readonly declaredType?: string;
   readonly span: SourceSpan;
 };
 
@@ -11,6 +11,12 @@ export type DucklangParameter = DucklangName;
 export type DucklangImportSelection = {
   readonly exportName: string;
   readonly localName: DucklangName | undefined;
+  readonly span: SourceSpan;
+};
+
+export type DucklangUnionCase = {
+  readonly name: string;
+  readonly payloadType: string;
   readonly span: SourceSpan;
 };
 
@@ -38,6 +44,12 @@ export type DucklangExpression =
   | {
     readonly kind: "moduleImport";
     readonly path: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "unionCase";
+    readonly caseName: string;
+    readonly value: DucklangExpression;
     readonly span: SourceSpan;
   }
   | {
@@ -90,6 +102,15 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "ifUnion";
+    readonly caseName: string;
+    readonly payloadName: DucklangName | undefined;
+    readonly value: DucklangExpression;
+    readonly consequence: DucklangExpression;
+    readonly alternative: DucklangExpression | undefined;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "block";
     readonly statements: readonly DucklangStatement[];
     readonly span: SourceSpan;
@@ -106,6 +127,13 @@ export type DucklangExpression =
   };
 
 export type DucklangStatement =
+  | {
+    readonly kind: "unionType";
+    readonly name: string;
+    readonly parameters: readonly string[];
+    readonly cases: readonly DucklangUnionCase[];
+    readonly span: SourceSpan;
+  }
   | {
     readonly kind: "import";
     readonly path: string;

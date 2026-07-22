@@ -3,6 +3,7 @@ import type {
   DucklangModule,
   DucklangName,
   DucklangStatement,
+  DucklangUnionCase,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
 
@@ -10,7 +11,7 @@ export type DucklangSymbol = {
   readonly id: number;
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
-  readonly declaredType?: "I32" | "I64" | "Bool" | "Text";
+  readonly declaredType?: string;
   readonly span: SourceSpan;
 };
 
@@ -39,6 +40,12 @@ export type ResolvedDucklangExpression =
     readonly kind: "intrinsic";
     readonly modulePath: string;
     readonly exportName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "unionCase";
+    readonly caseName: string;
+    readonly value: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
   | {
@@ -91,6 +98,15 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "ifUnion";
+    readonly caseName: string;
+    readonly payloadSymbol: DucklangSymbol | undefined;
+    readonly value: ResolvedDucklangExpression;
+    readonly consequence: ResolvedDucklangExpression;
+    readonly alternative: ResolvedDucklangExpression | undefined;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "block";
     readonly steps: readonly ResolvedDucklangBlockStep[];
     readonly result: ResolvedDucklangExpression;
@@ -123,11 +139,19 @@ export type ResolvedDucklangBlockStep =
     readonly expression: ResolvedDucklangExpression;
   };
 
+export type ResolvedDucklangUnionType = {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly cases: readonly DucklangUnionCase[];
+  readonly span: SourceSpan;
+};
+
 export type ResolvedDucklangModule = {
   readonly file: string;
   readonly bindings: readonly ResolvedDucklangBinding[];
   readonly result: ResolvedDucklangExpression;
   readonly symbols: readonly DucklangSymbol[];
+  readonly unionTypes: readonly ResolvedDucklangUnionType[];
 };
 
 type ResolvedStatements = {
@@ -152,12 +176,14 @@ export function resolveDucklangModule(
     bindings: resolved.bindings,
     result: resolved.result,
     symbols: resolver.symbols,
+    unionTypes: resolver.unionTypes,
   };
 }
 
 class DucklangResolver {
   readonly #file: string;
   readonly #symbols: DucklangSymbol[] = [];
+  readonly #unionTypes: ResolvedDucklangUnionType[] = [];
 
   constructor(file: string) {
     this.#file = file;
@@ -165,6 +191,10 @@ class DucklangResolver {
 
   get symbols(): readonly DucklangSymbol[] {
     return this.#symbols;
+  }
+
+  get unionTypes(): ResolvedDucklangModule["unionTypes"] {
+    return this.#unionTypes;
   }
 
   resolveStatements(
@@ -180,6 +210,24 @@ class DucklangResolver {
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
+      if (statement.kind === "unionType") {
+        if (scope !== "module") {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang type declarations must be module-level`,
+          );
+        }
+        if (
+          this.#unionTypes.some((declaration) =>
+            declaration.name === statement.name
+          )
+        ) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+          );
+        }
+        this.#unionTypes.push(statement);
+        continue;
+      }
       if (statement.kind === "import") {
         if (statement.namespace !== undefined || statement.open) {
           throw new SyntaxError(
@@ -316,6 +364,15 @@ class DucklangResolver {
       case "boolean":
       case "string":
         return expression;
+      case "unionCase":
+        return {
+          ...expression,
+          value: this.#resolveExpression(
+            expression.value,
+            environment,
+            currentRecursive,
+          ),
+        };
       case "moduleImport":
         throw new SyntaxError(
           `${this.#file}:${expression.span.start}: Ducklang import expression must initialize a module binding`,
@@ -449,6 +506,38 @@ class DucklangResolver {
               currentRecursive,
             ),
         };
+      case "ifUnion": {
+        const consequenceEnvironment = new Map(environment);
+        const payloadSymbol = expression.payloadName === undefined
+          ? undefined
+          : this.#declare(expression.payloadName, "local");
+        if (payloadSymbol !== undefined) {
+          consequenceEnvironment.set(payloadSymbol.text, payloadSymbol);
+        }
+        return {
+          kind: "ifUnion",
+          caseName: expression.caseName,
+          payloadSymbol,
+          value: this.#resolveExpression(
+            expression.value,
+            environment,
+            currentRecursive,
+          ),
+          consequence: this.#resolveExpression(
+            expression.consequence,
+            consequenceEnvironment,
+            currentRecursive,
+          ),
+          alternative: expression.alternative === undefined
+            ? undefined
+            : this.#resolveExpression(
+              expression.alternative,
+              environment,
+              currentRecursive,
+            ),
+          span: expression.span,
+        };
+      }
       case "block": {
         const resolved = this.resolveStatements(
           expression.statements,

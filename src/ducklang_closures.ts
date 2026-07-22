@@ -95,6 +95,27 @@ function rewriteExpression(
       };
     }
   }
+  if (rewritten.kind === "ifUnion") {
+    const value = staticValue(rewritten.value, values);
+    if (value.kind === "unionCase") {
+      const selected = value.caseName === rewritten.caseName
+        ? rewritten.consequence
+        : rewritten.alternative;
+      if (
+        value.caseName === rewritten.caseName &&
+        rewritten.payloadSymbol !== undefined
+      ) {
+        return rewriteExpression(
+          substitute(
+            selected,
+            new Map([[rewritten.payloadSymbol.id, value.value]]),
+          ),
+          values,
+        );
+      }
+      return rewriteExpression(selected, values);
+    }
+  }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
@@ -122,9 +143,14 @@ function rewriteExpression(
       referencesSymbol(factory.body, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "string",
   );
+  const specializesUnionParameter = factory.parameters.some(
+    (parameter, index) =>
+      referencesSymbol(factory.body, parameter.id) &&
+      staticValue(rewritten.arguments[index], values).kind === "unionCase",
+  );
   if (
     !returnsFunction && !specializesFunctionParameter &&
-    !specializesTextParameter
+    !specializesTextParameter && !specializesUnionParameter
   ) {
     return collapseEmptyBlock(rewritten);
   }
@@ -414,6 +440,8 @@ function rewriteChildren(
     case "intrinsic":
     case "reference":
       return expression;
+    case "unionCase":
+      return { ...expression, value: rewrite(expression.value) };
     case "function":
       return { ...expression, body: rewrite(expression.body) };
     case "call":
@@ -451,6 +479,13 @@ function rewriteChildren(
       return {
         ...expression,
         condition: rewrite(expression.condition),
+        consequence: rewrite(expression.consequence),
+        alternative: rewrite(expression.alternative),
+      };
+    case "ifUnion":
+      return {
+        ...expression,
+        value: rewrite(expression.value),
         consequence: rewrite(expression.consequence),
         alternative: rewrite(expression.alternative),
       };

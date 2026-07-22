@@ -203,6 +203,20 @@ apply_twice(40, increment)
   );
 });
 
+Deno.test("Ducklang resolves and specializes nominal union cases", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `type Result = | \`Ok Int | \`Err Text
+let unwrap = (result: Result) => {
+  if let \`Ok value = result { value } else { 21 }
+}
+unwrap(\`Ok (21)) + unwrap(\`Err ("no"))
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

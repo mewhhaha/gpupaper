@@ -21,6 +21,7 @@ const supportedSuccessPaths = new Set([
   "examples/compile_time/03_const_parameter_twice.duck",
   "examples/compile_time/04_const_capture_snapshot.duck",
   "examples/compile_time/05_static_recursion_factorial.duck",
+  "examples/compile_time/08_union_fact_checker.duck",
   "examples/data/11_text_slices_and_equality.duck",
   "examples/data/10_text_append_and_bytes.duck",
   "examples/functions/01_closure_capture.duck",

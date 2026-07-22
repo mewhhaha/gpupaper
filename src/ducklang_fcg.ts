@@ -241,6 +241,10 @@ class DucklangFcgCompiler {
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang intrinsic ${expression.modulePath}.${expression.exportName} reached FCG without intrinsic lowering`,
         );
+      case "unionCase":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang union constructor ${expression.caseName} reached FCG without union layout lowering`,
+        );
       case "reference": {
         const local = this.#locals.get(expression.symbol.id);
         if (local !== undefined) {
@@ -336,6 +340,10 @@ class DucklangFcgCompiler {
             span: expression.span,
           },
         ];
+      case "ifUnion":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang union pattern reached FCG without union layout lowering`,
+        );
       case "block": {
         const previousLocals = new Map(this.#locals);
         const instructions: DucklangFcgInstruction[] = [];

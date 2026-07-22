@@ -89,6 +89,38 @@ function lowerModuleStatement(
       span: sourceSpan(file, statement),
     };
   }
+  if (statement.name === "type_declaration_statement") {
+    const definition = requiredField(statement, "definition");
+    const typeSum = findRule(definition, "type_sum");
+    if (typeSum === undefined) {
+      throw unsupported(file, definition, "non-union type declaration");
+    }
+    return {
+      kind: "unionType",
+      name: identifierName(
+        file,
+        requiredField(statement, "name"),
+        "type declaration name",
+      ).text,
+      parameters: tokenFields(statement, "parameter").map((token) =>
+        token.text
+      ),
+      cases: typeSum.children().flatMap((child) => {
+        if (child.type !== "rule" || child.name !== "type_case") return [];
+        const name = requiredField(child, "name");
+        return [{
+          name: tokenText(file, name, "union case name"),
+          payloadType: identifierName(
+            file,
+            requiredField(child, "payload"),
+            "union payload type",
+          ).text,
+          span: sourceSpan(file, child),
+        }];
+      }),
+      span: sourceSpan(file, statement),
+    };
+  }
   if (statement.name === "assignment") {
     const name = identifierName(
       file,
@@ -465,6 +497,37 @@ function lowerExpression(
   }
 
   if (cursor.name === "if_expression") {
+    const pattern = cursor.field("pattern");
+    if (isCursor(pattern)) {
+      const unionPattern = findRule(pattern, "union_pattern");
+      if (unionPattern === undefined) {
+        throw unsupported(file, pattern, "if-let pattern");
+      }
+      const payload = requiredField(unionPattern, "value");
+      const payloadName = payload.type === "token" &&
+          payload.kind === "identifier"
+        ? identifierName(file, payload, "union payload binding")
+        : undefined;
+      const alternative = cursor.field("alternative");
+      return {
+        kind: "ifUnion",
+        caseName: tokenText(
+          file,
+          requiredField(unionPattern, "case"),
+          "union pattern case",
+        ),
+        payloadName,
+        value: lowerExpression(file, requiredField(cursor, "value")),
+        consequence: lowerExpression(
+          file,
+          requiredField(cursor, "consequence"),
+        ),
+        alternative: isCursor(alternative)
+          ? lowerExpression(file, alternative)
+          : undefined,
+        span: sourceSpan(file, cursor),
+      };
+    }
     const condition = lowerExpression(file, requiredField(cursor, "condition"));
     const consequence = lowerExpression(
       file,
@@ -516,6 +579,19 @@ function lowerExpression(
     return {
       kind: "moduleImport",
       path: decodeStringLiteral(file, path),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
+  if (cursor.name === "union_case") {
+    return {
+      kind: "unionCase",
+      caseName: tokenText(
+        file,
+        requiredField(cursor, "case"),
+        "union case",
+      ),
+      value: lowerExpression(file, requiredField(cursor, "value")),
       span: sourceSpan(file, cursor),
     };
   }
@@ -680,8 +756,7 @@ function arrowParameters(
     const [name, separator, annotation] = group;
     const plain = group.length === 1 && name?.kind === "identifier";
     const annotated = group.length === 3 && name?.kind === "identifier" &&
-      separator?.text === ":" && annotation?.kind === "identifier" &&
-      ["I32", "I64", "Bool", "Text"].includes(annotation.text);
+      separator?.text === ":" && annotation?.kind === "identifier";
     if (!plain && !annotated) {
       throw unsupported(
         file,
@@ -692,7 +767,7 @@ function arrowParameters(
     return {
       text: name.text,
       ...(annotation === undefined ? {} : {
-        declaredType: annotation.text as "I32" | "I64" | "Bool" | "Text",
+        declaredType: annotation.text,
       }),
       span: sourceSpan(file, name),
     };
@@ -710,6 +785,15 @@ function identifierName(
   if (identifiers.length !== 1) throw unsupported(file, input, subject);
   const identifier = identifiers[0];
   return { text: identifier.text, span: sourceSpan(file, identifier) };
+}
+
+function tokenText(
+  file: string,
+  input: SyntaxCursor,
+  subject: string,
+): string {
+  if (input.type !== "token") throw unsupported(file, input, subject);
+  return input.text;
 }
 
 function collectTokens(
