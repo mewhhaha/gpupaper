@@ -270,6 +270,13 @@ class DucklangFcgCompiler {
           valueType: "i32",
           span: expression.span,
         }];
+      case "unit":
+        return [{
+          kind: "constant",
+          value: 0,
+          valueType: "i32",
+          span: expression.span,
+        }];
       case "string":
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang text reached FCG without data-layout lowering`,
@@ -670,7 +677,9 @@ function wasmValueType(
 ): number {
   if (type.kind === "constructor" && type.arguments.length === 0) {
     if (type.name === "i64") return wasmType.i64;
-    if (type.name === "i32" || type.name === "bool") return wasmType.i32;
+    if (type.name === "i32" || type.name === "bool" || type.name === "unit") {
+      return wasmType.i32;
+    }
   }
   if (type.kind === "constructor" && unionNames.has(type.name)) {
     return wasmType.i64;

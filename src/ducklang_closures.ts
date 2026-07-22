@@ -448,6 +448,7 @@ function rewriteChildren(
     case "integer":
     case "integer64":
     case "boolean":
+    case "unit":
     case "string":
     case "intrinsic":
     case "reference":

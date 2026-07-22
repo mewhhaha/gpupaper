@@ -630,6 +630,10 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "unit_pattern") {
+    return { kind: "unit", span: sourceSpan(file, cursor) };
+  }
+
   throw unsupported(file, cursor, cursor.name);
 }
 

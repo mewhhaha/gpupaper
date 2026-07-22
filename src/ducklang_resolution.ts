@@ -33,6 +33,10 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "unit";
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "string";
     readonly value: string;
     readonly span: SourceSpan;
@@ -397,6 +401,7 @@ class DucklangResolver {
       case "integer64":
       case "boolean":
       case "string":
+      case "unit":
         return expression;
       case "unionCase":
         return {

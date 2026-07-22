@@ -43,6 +43,10 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "unit";
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "string";
     readonly value: string;
     readonly span: SourceSpan;

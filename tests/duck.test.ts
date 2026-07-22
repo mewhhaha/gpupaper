@@ -233,9 +233,9 @@ if let \`Some value = choice { value + 1 } else { 0 }
 Deno.test("Ducklang lowers dynamic scalar unions to packed Wasm values", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
-    `type Maybe = | \`Some Int | \`None Int
+    `type Maybe = | \`Some Int | \`None Unit
 let choose = flag => {
-  let value = if flag { \`Some (40) } else { \`None (0) }
+  let value = if flag { \`Some (40) } else { \`None () }
   if let \`Some found = value { found + 2 } else { 7 }
 }
 if choose(1) == 42 && choose(0) == 7 { 42 } else { 0 }

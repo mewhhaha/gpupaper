@@ -30,6 +30,11 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "unit";
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "string";
     readonly value: string;
     readonly type: Type;
@@ -195,6 +200,7 @@ const booleanType: Type = {
   arguments: [],
 };
 const textType: Type = { kind: "constructor", name: "text", arguments: [] };
+const unitType: Type = { kind: "constructor", name: "unit", arguments: [] };
 const binaryOperators = new Set([
   "+",
   "-",
@@ -328,6 +334,11 @@ class DucklangInference {
         return {
           expression: { ...expression, type: booleanType },
           type: booleanType,
+        };
+      case "unit":
+        return {
+          expression: { ...expression, type: unitType },
+          type: unitType,
         };
       case "string":
         return {
@@ -852,9 +863,7 @@ class DucklangInference {
     if (reference.name === "I64") return i64Type;
     if (reference.name === "Bool") return booleanType;
     if (reference.name === "Text") return textType;
-    if (reference.name === "Unit") {
-      return { kind: "constructor", name: "unit", arguments: [] };
-    }
+    if (reference.name === "Unit") return unitType;
     const arguments_ = reference.arguments.map((argument) =>
       this.#typeReference(argument, parameters, expandingAliases)
     );
@@ -939,6 +948,7 @@ class DucklangInference {
       case "integer":
       case "integer64":
       case "boolean":
+      case "unit":
       case "string":
       case "intrinsic":
       case "reference":
