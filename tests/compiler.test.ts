@@ -419,6 +419,23 @@ Deno.test("interaction calculus makes duplicated lambda use explicit", () => {
   });
 });
 
+Deno.test("interaction evaluation cannot disable its fuel bound", () => {
+  const module = parseModule("test.hs", `main = ic 1\n`);
+  const declaration = module.declarations[0];
+  if (
+    declaration.kind !== "value" || declaration.expression.kind !== "comptime"
+  ) throw new Error("test fixture did not parse as interaction comptime");
+  const interactionExpression = declaration.expression.expression;
+  assertThrows(
+    () =>
+      evaluateWithInteractionCalculus(
+        interactionExpression,
+        Number.POSITIVE_INFINITY,
+      ),
+    /interaction fuel must be an integer from 1 through 1000000; received Infinity/,
+  );
+});
+
 Deno.test("ADTs classes macros and both comptime backends compile to executable Wasm", async () => {
   const source = await Deno.readTextFile(
     new URL("../examples/all.hs", import.meta.url),

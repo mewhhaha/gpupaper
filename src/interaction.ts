@@ -49,6 +49,8 @@ type InteractionTerm =
 
 type Reduction = { readonly term: InteractionTerm; readonly rule: string };
 
+const maximumInteractionFuel = 1_000_000;
+
 class InteractionNames {
   #nextName = 0;
   #nextLabel = 0;
@@ -70,6 +72,13 @@ export function evaluateWithInteractionCalculus(
   expression: Expression,
   fuel = 100_000,
 ): InteractionResult {
+  if (
+    !Number.isSafeInteger(fuel) || fuel < 1 || fuel > maximumInteractionFuel
+  ) {
+    throw new RangeError(
+      `interaction fuel must be an integer from 1 through ${maximumInteractionFuel}; received ${fuel}`,
+    );
+  }
   const names = new InteractionNames();
   let term = translateExpression(expression, new Map(), names);
   const rules = new Map<string, number>();
