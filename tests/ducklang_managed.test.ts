@@ -107,6 +107,23 @@ Deno.test("the managed Ducklang runtime rejects a missing effect method", async 
   );
 });
 
+Deno.test("Ducklang rejects ambiguous Init capabilities for one effect", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "ambiguous_init.duck",
+        `module (!init: Init) where
+declare effect Input { read: () => I32 }
+declare Init { primary: Input secondary: Input }
+result <- Input.read()
+return { .result = result }
+`,
+        { gpuMode: "off" },
+      ),
+    /Init fields primary and secondary both grant effect Input/,
+  );
+});
+
 async function compileManagedFixture(
   filename: string,
   options: { readonly hostInterface?: string } = {},

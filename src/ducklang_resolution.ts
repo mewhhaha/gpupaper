@@ -376,6 +376,7 @@ class DucklangResolver {
           );
         }
         const names = new Set<string>();
+        const effectFields = new Map<string, string>();
         for (const field of statement.fields) {
           if (names.has(field.name)) {
             throw new SyntaxError(
@@ -388,6 +389,13 @@ class DucklangResolver {
               `${this.#file}:${field.span.start}: Ducklang Init field ${field.name} references unknown effect ${field.effectName}`,
             );
           }
+          const existingField = effectFields.get(field.effectName);
+          if (existingField !== undefined) {
+            throw new TypeError(
+              `${this.#file}:${field.span.start}: Ducklang Init fields ${existingField} and ${field.name} both grant effect ${field.effectName}`,
+            );
+          }
+          effectFields.set(field.effectName, field.name);
           this.#initFields.push(field);
         }
         this.#structTypes.push({
