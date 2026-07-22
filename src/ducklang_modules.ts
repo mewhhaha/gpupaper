@@ -201,6 +201,9 @@ async function resolveModuleImports(
         string,
         DucklangStatement & { readonly kind: "binding" }
       >();
+      const renamedBindings: (DucklangStatement & {
+        readonly kind: "binding";
+      })[] = [];
       for (const field of rawDependencyResult.expression.fields) {
         if (field.value.kind !== "reference") continue;
         const binding = dependencyBindings.get(field.value.name.text);
@@ -212,13 +215,14 @@ async function resolveModuleImports(
             text: `$module_${namespace.text}_${binding.name.text}`,
           },
         };
-        statements.push(renamed);
+        renamedBindings.push(renamed);
         exportedFunctions.set(field.name, renamed);
       }
       if (
         exportedFunctions.size > 0 &&
         exportedFunctions.size === rawDependencyResult.expression.fields.length
       ) {
+        statements.push(...renamedBindings);
         specializedFunctionExports.set(namespace.text, exportedFunctions);
         continue;
       }
