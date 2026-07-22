@@ -223,6 +223,46 @@ function lowerModuleStatement(
       span: sourceSpan(file, statement),
     };
   }
+  if (statement.name === "for_statement") {
+    const end = statement.field("end");
+    if (!isCursor(end)) {
+      throw unsupported(file, statement, "collection loop");
+    }
+    const start = statement.field("start_or_collection") ??
+      statement.field("start");
+    if (!isCursor(start)) {
+      throw new Error("Ducklang range loop has no start expression");
+    }
+    const first = statement.field("first");
+    const iterator =
+      isCursor(first) && findRule(first, "wildcard") === undefined
+        ? identifierName(file, first, "range iterator")
+        : undefined;
+    const step = statement.field("step");
+    return {
+      kind: "forRange",
+      iterator,
+      start: lowerExpression(file, start),
+      end: lowerExpression(file, end),
+      step: isCursor(step) ? lowerExpression(file, step) : undefined,
+      inclusive: statement.children().some((child) =>
+        child.type === "token" && child.text === "..="
+      ),
+      body: lowerExpression(file, requiredField(statement, "body")),
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "break_statement") {
+    const value = statement.field("value");
+    return {
+      kind: "break",
+      value: isCursor(value) ? lowerExpression(file, value) : undefined,
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "continue_statement") {
+    return { kind: "continue", span: sourceSpan(file, statement) };
+  }
   throw unsupported(file, statement, statement.name);
 }
 

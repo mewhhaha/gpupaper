@@ -392,6 +392,14 @@ class DucklangResolver {
         }
         continue;
       }
+      if (
+        statement.kind === "forRange" || statement.kind === "break" ||
+        statement.kind === "continue"
+      ) {
+        throw new TypeError(
+          `${this.#file}:${statement.span.start}: dynamic Ducklang ${statement.kind} requires loop IR lowering`,
+        );
+      }
       if (statement.kind === "expression") {
         const expression = this.#resolveExpression(
           statement.expression,

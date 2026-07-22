@@ -190,6 +190,25 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "forRange";
+    readonly iterator: DucklangName | undefined;
+    readonly start: DucklangExpression;
+    readonly end: DucklangExpression;
+    readonly step: DucklangExpression | undefined;
+    readonly inclusive: boolean;
+    readonly body: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "break";
+    readonly value: DucklangExpression | undefined;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "continue";
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "assignment";
     readonly operator: "=" | ":=";
     readonly name: DucklangName;

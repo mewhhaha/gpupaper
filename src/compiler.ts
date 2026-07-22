@@ -8,6 +8,7 @@ import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
+import { expandStaticDucklangLoops } from "./ducklang_static_loops.ts";
 import {
   formatDucklangType,
   inferDucklangModule,
@@ -186,7 +187,9 @@ async function compileDucklangModuleSource(
 ): Promise<DucklangCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
-  const parsed = await parseDucklangModule(file, source);
+  const parsed = expandStaticDucklangLoops(
+    await parseDucklangModule(file, source),
+  );
   const parseMilliseconds = performance.now() - parseStart;
 
   const initialTypeStart = performance.now();

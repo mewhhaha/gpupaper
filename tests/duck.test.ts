@@ -258,6 +258,22 @@ stored[0]
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang unrolls bounded ranges with break and continue", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let total = 27
+for value in 0..10 {
+  if value == 6 { break }
+  if value % 2 == 1 { continue }
+  total = total + value
+}
+total + 9
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });
