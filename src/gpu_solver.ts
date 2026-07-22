@@ -405,6 +405,20 @@ async function unionOnGpu(
     const representatives = [
       ...new Uint32Array(readback.getMappedRange().slice(0)),
     ];
+    for (const [term, representative] of representatives.entries()) {
+      if (representative >= representatives.length) {
+        throw new Error(
+          `WebGPU union returned representative ${representative} for term ${term}, outside term count ${representatives.length}`,
+        );
+      }
+      if (representatives[representative] !== representative) {
+        throw new Error(
+          `WebGPU union returned uncompressed parent ${representative} for term ${term}; parent points to ${
+            representatives[representative]
+          }`,
+        );
+      }
+    }
     return { representatives, rounds };
   } finally {
     if (readbackMapped) readback.unmap();
