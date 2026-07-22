@@ -122,6 +122,17 @@ const supportedCompileFailurePaths = new Set([
   "examples/failures/compile/11_frozen_mutation.duck",
   "examples/failures/compile/12_missing_imported_export.duck",
 ]);
+const semanticallyCoveredDependencyPaths = new Set([
+  "examples/compile_time/open_module.duck",
+  "examples/ownership_modules/multi_file/score_module.duck",
+  "examples/failures/compile/missing_import_dependency.duck",
+  "examples/effects/01_inferred_io.duck",
+  "examples/effects/02_annotated_effect_row.duck",
+  "examples/effects/03_cli_stdin_stdout.duck",
+  "examples/effects/multi_file/host.duck",
+  "examples/effects/multi_file/logger.duck",
+  "examples/effects/multi_file/main.duck",
+]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {
   const contract = parseDucklangCorpusContract(
@@ -136,6 +147,13 @@ Deno.test("the vendored Ducklang contract accounts for the complete corpus", asy
   assertEquals(contract.traps.length, 4, "trap contract count");
   assertEquals(contract.sourceTests.length, 1, "source-test contract count");
   assertEquals(contract.dependencies.length, 9, "dependency count");
+  assertEquals(
+    contract.dependencies.filter((path) =>
+      semanticallyCoveredDependencyPaths.has(path)
+    ).length,
+    semanticallyCoveredDependencyPaths.size,
+    "semantically covered dependency count",
+  );
 
   const contractedPaths = new Set([
     ...contract.success.map((example) => example.path),
