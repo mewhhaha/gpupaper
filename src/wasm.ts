@@ -131,6 +131,8 @@ export const wasmInstruction = {
   i32Add: [0x6a],
   i32Subtract: [0x6b],
   i32Multiply: [0x6c],
+  i32DivideSigned: [0x6d],
+  i32RemainderSigned: [0x6f],
   i32Equal: [0x46],
   i32LessThanSigned: [0x48],
   i32GreaterThanSigned: [0x4a],

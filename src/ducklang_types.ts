@@ -42,7 +42,7 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "binary";
-    readonly operator: "+" | "-" | "*" | "==";
+    readonly operator: DucklangBinaryOperator;
     readonly left: TypedDucklangExpression;
     readonly right: TypedDucklangExpression;
     readonly type: Type;
@@ -69,6 +69,17 @@ export type TypedDucklangExpression =
     readonly type: Type;
     readonly span: SourceSpan;
   };
+
+export type DucklangBinaryOperator =
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "%"
+  | "=="
+  | "<"
+  | ">"
+  | "&&";
 
 export type TypedDucklangBinding = {
   readonly symbol: DucklangSymbol;
@@ -100,6 +111,17 @@ const booleanType: Type = {
   name: "bool",
   arguments: [],
 };
+const binaryOperators = new Set([
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "==",
+  "<",
+  ">",
+  "&&",
+]);
 
 export function inferDucklangModule(
   module: ResolvedDucklangModule,
@@ -237,20 +259,24 @@ class DucklangInference {
         };
       }
       case "binary": {
-        if (!["+", "-", "*", "=="].includes(expression.operator)) {
+        if (!binaryOperators.has(expression.operator)) {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang operator ${expression.operator} has no typed IR operation`,
           );
         }
+        const operator = expression.operator as DucklangBinaryOperator;
         const left = this.inferExpression(expression.left, environment);
         const right = this.inferExpression(expression.right, environment);
-        this.#unify(left.type, i32Type, expression.left.span);
-        this.#unify(right.type, i32Type, expression.right.span);
-        const type = expression.operator === "==" ? booleanType : i32Type;
+        const operandType = operator === "&&" ? booleanType : i32Type;
+        this.#unify(left.type, operandType, expression.left.span);
+        this.#unify(right.type, operandType, expression.right.span);
+        const type = ["==", "<", ">", "&&"].includes(operator)
+          ? booleanType
+          : i32Type;
         return {
           expression: {
             ...expression,
-            operator: expression.operator as "+" | "-" | "*" | "==",
+            operator,
             left: left.expression,
             right: right.expression,
             type,

@@ -1,6 +1,7 @@
 import type { FcgFunction, FcgOperation, WasmArtifact } from "./fcg.ts";
 import type { SourceSpan } from "./syntax.ts";
 import type {
+  DucklangBinaryOperator,
   TypedDucklangBinding,
   TypedDucklangExpression,
   TypedDucklangModule,
@@ -31,7 +32,7 @@ type DucklangFcgInstruction =
   }
   | {
     readonly kind: "binary";
-    readonly operator: "+" | "-" | "*" | "==";
+    readonly operator: DucklangBinaryOperator;
     readonly span: SourceSpan;
   }
   | {
@@ -299,13 +300,17 @@ function emitInstructions(
       case "call":
         return wasmInstruction.call(instruction.functionIndex);
       case "binary":
-        return instruction.operator === "+"
-          ? wasmInstruction.i32Add
-          : instruction.operator === "-"
-          ? wasmInstruction.i32Subtract
-          : instruction.operator === "*"
-          ? wasmInstruction.i32Multiply
-          : wasmInstruction.i32Equal;
+        return {
+          "+": wasmInstruction.i32Add,
+          "-": wasmInstruction.i32Subtract,
+          "*": wasmInstruction.i32Multiply,
+          "/": wasmInstruction.i32DivideSigned,
+          "%": wasmInstruction.i32RemainderSigned,
+          "==": wasmInstruction.i32Equal,
+          "<": wasmInstruction.i32LessThanSigned,
+          ">": wasmInstruction.i32GreaterThanSigned,
+          "&&": wasmInstruction.i32And,
+        }[instruction.operator];
       case "if":
         return [
           ...wasmInstruction.ifI32,

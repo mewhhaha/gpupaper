@@ -199,18 +199,56 @@ function lowerExpression(
       };
     }
 
-    let expression = lowerExpression(file, leftCursor);
-    for (let index = 0; index < operators.length; index += 1) {
-      const right = lowerExpression(file, rightOperands[index]);
-      expression = {
+    const operands = [
+      lowerExpression(file, leftCursor),
+      ...rightOperands.map((right) => lowerExpression(file, right)),
+    ];
+    const expressionStack: DucklangExpression[] = [operands[0]];
+    const operatorStack: TokenCursor[] = [];
+    const reduce = () => {
+      const operator = operatorStack.pop();
+      const right = expressionStack.pop();
+      const left = expressionStack.pop();
+      if (operator === undefined || left === undefined || right === undefined) {
+        throw new Error(
+          `rule ${cursor.name} has an invalid binary operator sequence`,
+        );
+      }
+      expressionStack.push({
         kind: "binary",
-        operator: operators[index].text,
-        left: expression,
+        operator: operator.text,
+        left,
         right,
-        span: spanFrom(expression.span, right.span),
-      };
+        span: spanFrom(left.span, right.span),
+      });
+    };
+    const precedence = (operator: string): number => {
+      if (operator === "||") return 20;
+      if (operator === "&&") return 30;
+      if (["==", "!=", "<", ">", "<=", ">="].includes(operator)) {
+        return 40;
+      }
+      if (operator === "+" || operator === "-") return 60;
+      return 70;
+    };
+    for (let index = 0; index < operators.length; index += 1) {
+      const operator = operators[index];
+      while (
+        operatorStack.length > 0 &&
+        precedence(operatorStack.at(-1)!.text) >= precedence(operator.text)
+      ) {
+        reduce();
+      }
+      operatorStack.push(operator);
+      expressionStack.push(operands[index + 1]);
     }
-    return expression;
+    while (operatorStack.length > 0) reduce();
+    if (expressionStack.length !== 1) {
+      throw new Error(
+        `rule ${cursor.name} produced ${expressionStack.length} binary expressions`,
+      );
+    }
+    return expressionStack[0];
   }
 
   if (
@@ -347,7 +385,7 @@ function lowerTokenExpression(
   if (cursor.text === "true" || cursor.text === "false") {
     return { kind: "boolean", value: cursor.text === "true", span };
   }
-  if (cursor.kind === "identifier") {
+  if (cursor.kind === "identifier" || cursor.text === "loop") {
     const name = { text: cursor.text, span };
     return { kind: "reference", name, span };
   }

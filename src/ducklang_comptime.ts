@@ -124,6 +124,13 @@ function scalarExpression(
       };
     case "comptime":
       return scalarExpression(expression.expression);
+    case "block":
+      if (expression.bindings.length === 0) {
+        return scalarExpression(expression.result);
+      }
+      throw new TypeError(
+        `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar block; found ${expression.bindings.length} bindings`,
+      );
     default:
       throw new TypeError(
         `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar expression; found ${expression.kind}`,

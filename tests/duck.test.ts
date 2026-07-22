@@ -26,10 +26,30 @@ Deno.test("Ducklang comptime expressions are evaluated before FCG lowering", asy
   assertEquals(artifact.comptimeCpuValues, [{ kind: "integer", value: 42 }]);
 });
 
+Deno.test("Ducklang scalar operators agree across comptime and Wasm", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `comptime (if 40 < 41 && 2 == 2 {
+  100 / 5 * 2 + 5 % 3
+} else {
+  0
+})
+`,
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(artifact.comptimeCpuValues, [{ kind: "integer", value: 42 }]);
+  if (artifact.comptimeGpuResult?.status === "completed") {
+    assertEquals(
+      artifact.comptimeGpuResult.values,
+      artifact.comptimeCpuValues,
+    );
+  }
+});
+
 Deno.test("unsupported Ducklang operators fail during typed IR elaboration", async () => {
   await assertRejects(
-    () => compileModuleSource("test.duck", "40 / 2\n", { gpuMode: "off" }),
-    /Ducklang operator \/ has no typed IR operation/,
+    () => compileModuleSource("test.duck", "40 || 2\n", { gpuMode: "off" }),
+    /Ducklang operator \|\| has no typed IR operation/,
   );
 });
 

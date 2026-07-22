@@ -8,8 +8,11 @@ const corpusDirectory = new URL("../examples/binned/", import.meta.url);
 const contractUrl = new URL("contract.json", corpusDirectory);
 const supportedSuccessPaths = new Set([
   "examples/basics/01_arithmetic_and_shadowing.duck",
+  "examples/basics/03_numeric_primitives.duck",
+  "examples/basics/04_comparisons_and_logic.duck",
   "examples/basics/06_functions_and_blocks.duck",
   "examples/basics/10_else_if.duck",
+  "examples/basics/13_contextual_keyword_names.duck",
   "examples/compile_time/04_const_capture_snapshot.duck",
   "examples/functions/01_closure_capture.duck",
   "examples/functions/03_closure_local_shadow.duck",

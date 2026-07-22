@@ -41,7 +41,7 @@ export type ScalarComptimeExpression =
   }
   | {
     readonly kind: "binary";
-    readonly operator: "+" | "-" | "*" | "==";
+    readonly operator: "+" | "-" | "*" | "/" | "%" | "==" | "<" | ">" | "&&";
     readonly left: ScalarComptimeExpression;
     readonly right: ScalarComptimeExpression;
     readonly span: SourceSpan;
@@ -62,6 +62,11 @@ const opcode = {
   multiply: 4,
   equal: 5,
   select: 6,
+  divide: 7,
+  remainder: 8,
+  lessThan: 9,
+  greaterThan: 10,
+  and: 11,
 } as const;
 
 const comptimeStackCapacity = 64;
@@ -117,6 +122,11 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
     else if (operation == 3u) { stacks[stack_start + stack_size - 1u] = left - right; }
     else if (operation == 4u) { stacks[stack_start + stack_size - 1u] = left * right; }
     else if (operation == 5u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left == right); }
+    else if (operation == 7u) { stacks[stack_start + stack_size - 1u] = left / right; }
+    else if (operation == 8u) { stacks[stack_start + stack_size - 1u] = left % right; }
+    else if (operation == 9u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left < right); }
+    else if (operation == 10u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left > right); }
+    else if (operation == 11u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 && right != 0); }
     else { statuses[job] = 2u; return; }
     pc += 1u;
   }
@@ -151,16 +161,22 @@ export function compileScalarComptimeExpression(
         emit(node.left);
         emit(node.right);
         opcodes.push(
-          node.operator === "+"
-            ? opcode.add
-            : node.operator === "-"
-            ? opcode.subtract
-            : node.operator === "*"
-            ? opcode.multiply
-            : opcode.equal,
+          {
+            "+": opcode.add,
+            "-": opcode.subtract,
+            "*": opcode.multiply,
+            "/": opcode.divide,
+            "%": opcode.remainder,
+            "==": opcode.equal,
+            "<": opcode.lessThan,
+            ">": opcode.greaterThan,
+            "&&": opcode.and,
+          }[node.operator],
         );
         operands.push(0);
-        return node.operator === "==" ? "boolean" : "integer";
+        return ["==", "<", ">", "&&"].includes(node.operator)
+          ? "boolean"
+          : "integer";
       case "if": {
         emit(node.condition);
         const thenKind = emit(node.thenBranch);
@@ -267,8 +283,28 @@ export function evaluateBytecodeOnCpu(
       else if (operation === opcode.subtract) stack.push((left - right) | 0);
       else if (operation === opcode.multiply) {
         stack.push(Math.imul(left, right));
+      } else if (operation === opcode.divide) {
+        if (right === 0) {
+          throw new Error(
+            `comptime program at ${program.sourceStart} divided by zero`,
+          );
+        }
+        stack.push(Math.trunc(left / right));
+      } else if (operation === opcode.remainder) {
+        if (right === 0) {
+          throw new Error(
+            `comptime program at ${program.sourceStart} divided by zero`,
+          );
+        }
+        stack.push(left % right);
       } else if (operation === opcode.equal) {
         stack.push(left === right ? 1 : 0);
+      } else if (operation === opcode.lessThan) {
+        stack.push(left < right ? 1 : 0);
+      } else if (operation === opcode.greaterThan) {
+        stack.push(left > right ? 1 : 0);
+      } else if (operation === opcode.and) {
+        stack.push(left !== 0 && right !== 0 ? 1 : 0);
       } else {
         throw new Error(
           `comptime program at ${program.sourceStart} has unknown opcode ${operation}`,
