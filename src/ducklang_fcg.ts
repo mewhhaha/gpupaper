@@ -48,6 +48,21 @@ type DucklangFcgInstruction =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "unionPack";
+    readonly tag: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "unionMatch";
+    readonly unionLocal: number;
+    readonly tag: number;
+    readonly payloadLocal: number | undefined;
+    readonly resultType: "i32" | "i64";
+    readonly consequence: readonly DucklangFcgInstruction[];
+    readonly alternative: readonly DucklangFcgInstruction[];
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "if";
     readonly resultType: "i32" | "i64";
     readonly consequence: readonly DucklangFcgInstruction[];
@@ -77,6 +92,14 @@ export function lowerDucklangToFcgAndWasm(
   const builder = new WasmModuleBuilder();
   const shapes = new Map<number, FunctionShape>();
   const orderedShapes: FunctionShape[] = [];
+  const unionNames = new Set(
+    module.unionTypes.map((declaration) => declaration.name),
+  );
+  const unionTags = new Map(
+    module.unionTypes.flatMap((declaration) =>
+      declaration.cases.map((unionCase, tag) => [unionCase.name, tag] as const)
+    ),
+  );
 
   for (const binding of module.bindings) {
     const parameterCount = binding.value.kind === "function"
@@ -90,7 +113,7 @@ export function lowerDucklangToFcgAndWasm(
             `${module.file}:${parameter.span.start}: missing type for Ducklang parameter ${parameter.text}#${parameter.id}`,
           );
         }
-        return wasmValueType(module.file, parameter.span, type);
+        return wasmValueType(module.file, parameter.span, type, unionNames);
       })
       : [];
     const resultType = wasmValueType(
@@ -99,6 +122,7 @@ export function lowerDucklangToFcgAndWasm(
       binding.value.kind === "function"
         ? binding.value.body.type
         : binding.type,
+      unionNames,
     );
     const shape = {
       index: orderedShapes.length,
@@ -120,6 +144,7 @@ export function lowerDucklangToFcgAndWasm(
       module.file,
       module.result.span,
       module.resultType,
+      unionNames,
     ),
     binding: undefined,
   } satisfies FunctionShape;
@@ -138,7 +163,13 @@ export function lowerDucklangToFcgAndWasm(
       ? expression.parameters
       : [];
     const body = expression.kind === "function" ? expression.body : expression;
-    const compiler = new DucklangFcgCompiler(module.file, shapes, parameters);
+    const compiler = new DucklangFcgCompiler(
+      module.file,
+      shapes,
+      parameters,
+      unionNames,
+      unionTags,
+    );
     const compiled = compiler.compile(body);
     const functionIndex = builder.addFunction(
       typeIndices[shape.index],
@@ -177,6 +208,8 @@ export function lowerDucklangToFcgAndWasm(
 class DucklangFcgCompiler {
   readonly #file: string;
   readonly #shapes: ReadonlyMap<number, FunctionShape>;
+  readonly #unionNames: ReadonlySet<string>;
+  readonly #unionTags: ReadonlyMap<string, number>;
   readonly #locals = new Map<number, number>();
   readonly #localTypes: number[] = [];
   #nextLocal: number;
@@ -185,9 +218,13 @@ class DucklangFcgCompiler {
     file: string,
     shapes: ReadonlyMap<number, FunctionShape>,
     parameters: readonly { readonly id: number }[],
+    unionNames: ReadonlySet<string>,
+    unionTags: ReadonlyMap<string, number>,
   ) {
     this.#file = file;
     this.#shapes = shapes;
+    this.#unionNames = unionNames;
+    this.#unionTags = unionTags;
     parameters.forEach((parameter, index) =>
       this.#locals.set(parameter.id, index)
     );
@@ -241,10 +278,29 @@ class DucklangFcgCompiler {
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang intrinsic ${expression.modulePath}.${expression.exportName} reached FCG without intrinsic lowering`,
         );
-      case "unionCase":
-        throw new TypeError(
-          `${this.#file}:${expression.span.start}: Ducklang union constructor ${expression.caseName} reached FCG without union layout lowering`,
+      case "unionCase": {
+        const tag = this.#unionTags.get(expression.caseName);
+        if (tag === undefined) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang union constructor ${expression.caseName} has no layout tag`,
+          );
+        }
+        const payloadType = wasmValueType(
+          this.#file,
+          expression.value.span,
+          expression.value.type,
+          this.#unionNames,
         );
+        if (payloadType !== wasmType.i32) {
+          throw new TypeError(
+            `${this.#file}:${expression.value.span.start}: packed Ducklang union ${expression.caseName} requires an i32 payload`,
+          );
+        }
+        return [
+          ...this.#compileExpression(expression.value),
+          { kind: "unionPack", tag, span: expression.span },
+        ];
+      }
       case "reference": {
         const local = this.#locals.get(expression.symbol.id);
         if (local !== undefined) {
@@ -334,16 +390,61 @@ class DucklangFcgCompiler {
           ...this.#compileExpression(expression.condition),
           {
             kind: "if",
-            resultType: isI64(expression.type) ? "i64" : "i32",
+            resultType: wasmValueType(
+                this.#file,
+                expression.span,
+                expression.type,
+                this.#unionNames,
+              ) === wasmType.i64
+              ? "i64"
+              : "i32",
             consequence: this.#compileExpression(expression.consequence),
             alternative: this.#compileExpression(expression.alternative),
             span: expression.span,
           },
         ];
-      case "ifUnion":
-        throw new TypeError(
-          `${this.#file}:${expression.span.start}: Ducklang union pattern reached FCG without union layout lowering`,
-        );
+      case "ifUnion": {
+        const tag = this.#unionTags.get(expression.caseName);
+        if (tag === undefined) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang union pattern ${expression.caseName} has no layout tag`,
+          );
+        }
+        const unionLocal = this.#allocateLocal(wasmType.i64);
+        const payloadLocal = expression.payloadSymbol === undefined
+          ? undefined
+          : this.#allocateLocal(wasmType.i32);
+        if (
+          payloadLocal !== undefined && expression.payloadSymbol !== undefined
+        ) {
+          this.#locals.set(expression.payloadSymbol.id, payloadLocal);
+        }
+        const consequence = this.#compileExpression(expression.consequence);
+        if (expression.payloadSymbol !== undefined) {
+          this.#locals.delete(expression.payloadSymbol.id);
+        }
+        return [
+          ...this.#compileExpression(expression.value),
+          { kind: "localSet", local: unionLocal, span: expression.value.span },
+          {
+            kind: "unionMatch",
+            unionLocal,
+            tag,
+            payloadLocal,
+            resultType: wasmValueType(
+                this.#file,
+                expression.span,
+                expression.type,
+                this.#unionNames,
+              ) === wasmType.i64
+              ? "i64"
+              : "i32",
+            consequence,
+            alternative: this.#compileExpression(expression.alternative),
+            span: expression.span,
+          },
+        ];
+      }
       case "block": {
         const previousLocals = new Map(this.#locals);
         const instructions: DucklangFcgInstruction[] = [];
@@ -360,10 +461,13 @@ class DucklangFcgCompiler {
             );
           }
           instructions.push(...this.#compileExpression(binding.value));
-          const local = this.#nextLocal;
-          this.#nextLocal += 1;
-          this.#localTypes.push(
-            wasmValueType(this.#file, binding.span, binding.type),
+          const local = this.#allocateLocal(
+            wasmValueType(
+              this.#file,
+              binding.span,
+              binding.type,
+              this.#unionNames,
+            ),
           );
           this.#locals.set(binding.symbol.id, local);
           instructions.push({ kind: "localSet", local, span: binding.span });
@@ -384,6 +488,13 @@ class DucklangFcgCompiler {
           `${this.#file}:${expression.span.start}: Ducklang scratch region reached FCG without region lowering`,
         );
     }
+  }
+
+  #allocateLocal(type: number): number {
+    const local = this.#nextLocal;
+    this.#nextLocal += 1;
+    this.#localTypes.push(type);
+    return local;
   }
 }
 
@@ -431,6 +542,33 @@ function emitInstructions(
           ">": wasmInstruction.i32GreaterThanSigned,
           "&&": wasmInstruction.i32And,
         }[instruction.operator];
+      case "unionPack":
+        return [
+          ...wasmInstruction.i64ExtendI32Unsigned,
+          ...wasmInstruction.i64Constant(BigInt(instruction.tag) << 32n),
+          ...wasmInstruction.i64Or,
+        ];
+      case "unionMatch":
+        return [
+          ...wasmInstruction.localGet(instruction.unionLocal),
+          ...wasmInstruction.i64Constant(32n),
+          ...wasmInstruction.i64ShiftRightUnsigned,
+          ...wasmInstruction.i32WrapI64,
+          ...wasmInstruction.i32Constant(instruction.tag),
+          ...wasmInstruction.i32Equal,
+          ...(instruction.resultType === "i64"
+            ? wasmInstruction.ifI64
+            : wasmInstruction.ifI32),
+          ...(instruction.payloadLocal === undefined ? [] : [
+            ...wasmInstruction.localGet(instruction.unionLocal),
+            ...wasmInstruction.i32WrapI64,
+            ...wasmInstruction.localSet(instruction.payloadLocal),
+          ]),
+          ...emitInstructions(instruction.consequence),
+          ...wasmInstruction.else,
+          ...emitInstructions(instruction.alternative),
+          ...wasmInstruction.end,
+        ];
       case "if":
         return [
           ...(instruction.resultType === "i64"
@@ -498,6 +636,22 @@ function publicOperations(
           operands: [],
           sourceStart,
         }];
+      case "unionPack":
+        return [{
+          opcode: "union.pack",
+          operands: [instruction.tag],
+          sourceStart,
+        }];
+      case "unionMatch":
+        return [
+          {
+            opcode: "union.match",
+            operands: [instruction.tag],
+            sourceStart,
+          },
+          ...publicOperations(instruction.consequence),
+          ...publicOperations(instruction.alternative),
+        ];
       case "if":
         return [
           { opcode: "if", operands: [], sourceStart },
@@ -508,10 +662,18 @@ function publicOperations(
   });
 }
 
-function wasmValueType(file: string, span: SourceSpan, type: Type): number {
+function wasmValueType(
+  file: string,
+  span: SourceSpan,
+  type: Type,
+  unionNames: ReadonlySet<string>,
+): number {
   if (type.kind === "constructor" && type.arguments.length === 0) {
     if (type.name === "i64") return wasmType.i64;
     if (type.name === "i32" || type.name === "bool") return wasmType.i32;
+  }
+  if (type.kind === "constructor" && unionNames.has(type.name)) {
+    return wasmType.i64;
   }
   throw new TypeError(
     `${file}:${span.start}: Ducklang Wasm backend cannot represent ${

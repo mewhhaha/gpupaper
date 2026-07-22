@@ -116,6 +116,18 @@ function rewriteExpression(
       return rewriteExpression(selected, values);
     }
   }
+  if (rewritten.kind === "if") {
+    const condition = staticValue(rewritten.condition, values);
+    if (condition.kind === "boolean" || condition.kind === "integer") {
+      const selected = condition.kind === "boolean"
+        ? condition.value
+        : condition.value !== 0;
+      return rewriteExpression(
+        selected ? rewritten.consequence : rewritten.alternative,
+        values,
+      );
+    }
+  }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);

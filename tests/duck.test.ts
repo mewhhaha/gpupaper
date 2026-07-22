@@ -230,6 +230,21 @@ if let \`Some value = choice { value + 1 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang lowers dynamic scalar unions to packed Wasm values", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `type Maybe = | \`Some Int | \`None Int
+let choose = flag => {
+  let value = if flag { \`Some (40) } else { \`None (0) }
+  if let \`Some found = value { found + 2 } else { 7 }
+}
+if choose(1) == 42 && choose(0) == 7 { 42 } else { 0 }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });
