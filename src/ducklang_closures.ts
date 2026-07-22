@@ -499,6 +499,12 @@ function foldStaticIntrinsic(
     return expression.arguments[0];
   }
   if (
+    callee.modulePath.startsWith("duck:struct/") &&
+    callee.exportName === "new" && arguments_.length === 1
+  ) {
+    return expression.arguments[0];
+  }
+  if (
     ((callee.modulePath === "duck:prelude/functional" &&
       callee.exportName === "compose") ||
       (callee.modulePath === "duck:prelude/abstractions" &&

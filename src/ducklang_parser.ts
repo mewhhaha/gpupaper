@@ -1156,6 +1156,14 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "field_block") {
+    return {
+      kind: "record",
+      fields: lowerRecordFields(file, cursor),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   if (cursor.name === "array_expression") {
     return {
       kind: "product",
@@ -1192,7 +1200,10 @@ function lowerRecordFields(
   fieldBlock: RuleCursor,
 ): readonly DucklangRecordField[] {
   return fieldBlock.children().flatMap((child) => {
-    if (child.type !== "rule" || child.name !== "shape_field") return [];
+    if (child.type !== "rule") return [];
+    if (child.name !== "shape_field") {
+      throw unsupported(file, child, "record field");
+    }
     return [{
       name: identifierName(
         file,

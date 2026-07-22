@@ -614,6 +614,46 @@ class DucklangResolver {
       }
 
       if (statement.kind === "binding") {
+        if (
+          scope === "module" && statement.declarationKind === "const" &&
+          statement.value.kind === "field" &&
+          statement.value.product.kind === "field" &&
+          statement.value.product.fieldName === "shape" &&
+          statement.value.product.product.kind === "reference"
+        ) {
+          const structName = statement.value.product.product.name.text;
+          const projectedFieldName = statement.value.fieldName;
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === structName
+          );
+          const field = declaration?.fields.find((candidate) =>
+            candidate.name === projectedFieldName
+          );
+          if (declaration === undefined || field === undefined) {
+            throw new TypeError(
+              `${this.#file}:${statement.value.span.start}: Ducklang struct type projection ${structName}.shape.${projectedFieldName} does not name a declared field`,
+            );
+          }
+          const duplicate = this.#typeAliases.some((alias) =>
+            alias.name === statement.name.text
+          ) || this.#structTypes.some((candidate) =>
+            candidate.name === statement.name.text
+          ) || this.#unionTypes.some((candidate) =>
+            candidate.name === statement.name.text
+          );
+          if (duplicate) {
+            throw new SyntaxError(
+              `${this.#file}:${statement.name.span.start}: duplicate Ducklang type ${statement.name.text}`,
+            );
+          }
+          this.#typeAliases.push({
+            name: statement.name.text,
+            parameters: [],
+            target: field.type,
+            span: statement.span,
+          });
+          continue;
+        }
         const symbol = this.#declare(statement.name, scope);
         const recursive = statement.recursive ||
           (statement.value.kind === "function" && statement.value.recursive);
@@ -701,6 +741,24 @@ class DucklangResolver {
           ),
         };
       case "field":
+        if (
+          expression.fieldName === "new" &&
+          expression.product.kind === "reference"
+        ) {
+          const structName = expression.product.name.text;
+          if (
+            this.#structTypes.some((declaration) =>
+              declaration.name === structName
+            )
+          ) {
+            return {
+              kind: "intrinsic",
+              modulePath: `duck:struct/${structName}`,
+              exportName: "new",
+              span: expression.span,
+            };
+          }
+        }
         return {
           ...expression,
           product: this.#resolveExpression(

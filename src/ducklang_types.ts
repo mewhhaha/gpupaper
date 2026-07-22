@@ -529,6 +529,25 @@ class DucklangInference {
             arguments: [i32Type, i32Type],
           }, i32Type], booleanType);
         } else if (
+          expression.modulePath.startsWith("duck:struct/") &&
+          expression.exportName === "new"
+        ) {
+          const name = expression.modulePath.slice("duck:struct/".length);
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === name
+          );
+          if (declaration === undefined) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: unknown Ducklang struct constructor ${name}.new`,
+            );
+          }
+          const structType: Type = {
+            kind: "constructor",
+            name,
+            arguments: [],
+          };
+          type = functionType([structType], structType);
+        } else if (
           expression.modulePath === "duck:prelude" &&
           expression.exportName === "struct"
         ) {
