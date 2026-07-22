@@ -90,6 +90,11 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "optionDo";
+    readonly option: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "unionCase";
     readonly caseName: string;
     readonly value: DucklangExpression;

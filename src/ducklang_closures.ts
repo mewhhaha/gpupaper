@@ -102,6 +102,17 @@ function rewriteExpression(
       return { ...rewritten, arguments: runtimeArguments };
     }
   }
+  if (rewritten.kind === "optionDo") {
+    const option = staticValue(rewritten.option, values);
+    if (option.kind === "unionCase" && option.caseName === "Some") {
+      return option.value;
+    }
+    if (option.kind === "unionCase" && option.caseName === "None") {
+      throw new TypeError(
+        `${rewritten.span.file}:${rewritten.span.start}: static Ducklang do encountered None without handler lowering`,
+      );
+    }
+  }
   if (rewritten.kind === "scratch") {
     const body = collapseEmptyBlock(rewritten.body);
     if (body.kind === "string") return body;
@@ -538,6 +549,15 @@ function foldStaticIntrinsic(
     return expression.arguments[0];
   }
   if (
+    callee.modulePath === "duck:prelude/functional" &&
+    callee.exportName === "option_unwrap_or" && arguments_.length === 2 &&
+    arguments_[1].kind === "unionCase"
+  ) {
+    return arguments_[1].caseName === "Some"
+      ? arguments_[1].value
+      : expression.arguments[0];
+  }
+  if (
     callee.modulePath.startsWith("duck:struct/") &&
     callee.exportName === "new" && arguments_.length === 1
   ) {
@@ -830,6 +850,8 @@ function rewriteChildren(
       };
     case "hostCall":
       return { ...expression, arguments: expression.arguments.map(rewrite) };
+    case "optionDo":
+      return { ...expression, option: rewrite(expression.option) };
     case "index":
       return {
         ...expression,

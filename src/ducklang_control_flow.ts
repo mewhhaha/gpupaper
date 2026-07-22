@@ -269,6 +269,8 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
         ...expression,
         arguments: expression.arguments.map(lowerExpression),
       };
+    case "optionDo":
+      return { ...expression, option: lowerExpression(expression.option) };
     case "unionCase":
       return { ...expression, value: lowerExpression(expression.value) };
     case "product":

@@ -278,6 +278,9 @@ function visitHostCalls(
     case "intrinsic":
     case "reference":
       return;
+    case "optionDo":
+      visitHostCalls(expression.option, calls);
+      return;
     case "unionCase":
       visitHostCalls(expression.value, calls);
       return;
@@ -458,6 +461,10 @@ class DucklangFcgCompiler {
           },
         ];
       }
+      case "optionDo":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: dynamic Ducklang do requires handler lowering`,
+        );
       case "unionCase": {
         const tag = this.#unionTags.get(expression.caseName);
         if (tag === undefined) {

@@ -109,6 +109,9 @@ function collectComptimeExpressions(
         collectComptimeExpressions(argument, expressions);
       }
       return;
+    case "optionDo":
+      collectComptimeExpressions(expression.option, expressions);
+      return;
     case "index":
       collectComptimeExpressions(expression.collection, expressions);
       collectComptimeExpressions(expression.index, expressions);
@@ -319,6 +322,15 @@ function replaceComptimeExpressions(
         ...expression,
         arguments: expression.arguments.map((argument) =>
           replaceComptimeExpressions(argument, values, nextValueIndex)
+        ),
+      };
+    case "optionDo":
+      return {
+        ...expression,
+        option: replaceComptimeExpressions(
+          expression.option,
+          values,
+          nextValueIndex,
         ),
       };
     case "index":

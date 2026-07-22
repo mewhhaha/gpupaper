@@ -57,6 +57,12 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "optionDo";
+    readonly option: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "unionCase";
     readonly caseName: string;
     readonly value: TypedDucklangExpression;
@@ -440,6 +446,16 @@ class DucklangInference {
           type = functionType([textType, i32Type], i32Type);
         } else if (
           expression.modulePath === "duck:prelude/functional" &&
+          expression.exportName === "option_unwrap_or"
+        ) {
+          const value = this.#freshVariable();
+          type = functionType([value, {
+            kind: "constructor",
+            name: "Option",
+            arguments: [value],
+          }], value);
+        } else if (
+          expression.modulePath === "duck:prelude/functional" &&
           expression.exportName === "apply"
         ) {
           const parameter = this.#freshVariable();
@@ -587,6 +603,19 @@ class DucklangInference {
             span: expression.span,
           },
           type,
+        };
+      }
+      case "optionDo": {
+        const option = this.inferExpression(expression.option, environment);
+        const some = this.#unionCaseType("Some", expression.span);
+        this.#unify(option.type, some.union, expression.option.span);
+        return {
+          expression: {
+            ...expression,
+            option: option.expression,
+            type: some.payload,
+          },
+          type: some.payload,
         };
       }
       case "unionCase": {
@@ -1491,6 +1520,12 @@ class DucklangInference {
           arguments: expression.arguments.map((argument) =>
             this.#normalizeExpression(argument)
           ),
+          type,
+        };
+      case "optionDo":
+        return {
+          ...expression,
+          option: this.#normalizeExpression(expression.option),
           type,
         };
       case "unionCase":

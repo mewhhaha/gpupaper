@@ -172,6 +172,13 @@ function lowerModuleStatement(
     };
   }
   if (statement.name === "effect_binding_statement") {
+    const value = lowerExpression(file, requiredField(statement, "value"));
+    const option = value.kind === "unary" && value.operator === "do"
+      ? value.operand
+      : value.kind === "call" && value.callee.kind === "reference" &&
+          value.callee.name.text === "do" && value.arguments.length === 1
+      ? value.arguments[0]
+      : undefined;
     return {
       kind: "binding",
       declarationKind: "let",
@@ -181,7 +188,9 @@ function lowerModuleStatement(
         requiredField(statement, "name"),
         "effect result binding",
       ),
-      value: lowerHostCall(file, requiredField(statement, "value")),
+      value: option === undefined
+        ? lowerHostCall(file, requiredField(statement, "value"))
+        : { kind: "optionDo", option, span: value.span },
       span: sourceSpan(file, statement),
     };
   }
@@ -702,6 +711,18 @@ function lowerExpression(
     ]),
   );
   if (cursor.type === "token") return lowerTokenExpression(file, cursor);
+
+  if (cursor.name === "try_with_expression") {
+    if (isCursor(cursor.field("handler"))) {
+      throw unsupported(file, cursor, "try-with handler");
+    }
+    return {
+      kind: "unionCase",
+      caseName: "Some",
+      value: lowerExpression(file, requiredField(cursor, "body")),
+      span: sourceSpan(file, cursor),
+    };
+  }
 
   if (
     cursor.name === "binary_expression" ||

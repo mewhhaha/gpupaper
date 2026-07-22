@@ -59,6 +59,11 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "optionDo";
+    readonly option: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "unionCase";
     readonly caseName: string;
     readonly value: ResolvedDucklangExpression;
@@ -444,6 +449,37 @@ class DucklangResolver {
             `${this.#file}:${statement.span.start}: Ducklang local and open imports require module graph resolution`,
           );
         }
+        if (
+          statement.path === "duck:prelude/effects/defaults" &&
+          !this.#unionTypes.some((declaration) => declaration.name === "Option")
+        ) {
+          const typeParameter = {
+            name: "t",
+            arguments: [],
+            span: statement.span,
+          };
+          this.#unionTypes.push({
+            name: "Option",
+            parameters: ["t"],
+            cases: [
+              {
+                name: "Some",
+                payloadType: typeParameter,
+                span: statement.span,
+              },
+              {
+                name: "None",
+                payloadType: {
+                  name: "Unit",
+                  arguments: [],
+                  span: statement.span,
+                },
+                span: statement.span,
+              },
+            ],
+            span: statement.span,
+          });
+        }
         for (const selection of statement.selections) {
           if (selection.localName === undefined) continue;
           const symbol = this.#declare(selection.localName, scope);
@@ -822,6 +858,15 @@ class DucklangResolver {
           ),
         };
       }
+      case "optionDo":
+        return {
+          ...expression,
+          option: this.#resolveExpression(
+            expression.option,
+            environment,
+            currentRecursive,
+          ),
+        };
       case "reference": {
         const symbol = environment.get(expression.name.text);
         if (symbol === undefined) {

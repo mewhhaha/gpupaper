@@ -407,6 +407,15 @@ function substituteExpression(
           substituteExpression(argument, values, replaceReferences)
         ),
       };
+    case "optionDo":
+      return {
+        ...expression,
+        option: substituteExpression(
+          expression.option,
+          values,
+          replaceReferences,
+        ),
+      };
     case "reference":
       return replaceReferences
         ? values.get(expression.name.text) ?? expression
