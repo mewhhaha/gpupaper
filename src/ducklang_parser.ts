@@ -611,7 +611,10 @@ function lowerExpression(
     cursor.name === "unary_expression" ||
     cursor.name === "condition_unary_expression"
   ) {
-    const operator = tokenField(cursor, "operator");
+    const operator = tokenField(cursor, "operator") ??
+      cursor.children().find((child): child is TokenCursor =>
+        child.type === "token" && (child.text === "!" || child.text === "-")
+      );
     if (operator === undefined) {
       return lowerExpression(file, onlyRuleChild(cursor));
     }
@@ -763,7 +766,38 @@ function lowerExpression(
     if (isCursor(pattern)) {
       const unionPattern = findRule(pattern, "union_pattern");
       if (unionPattern === undefined) {
-        throw unsupported(file, pattern, "if-let pattern");
+        const literal = descendSingleRule(
+          pattern,
+          new Set(["_match_pattern", "_single_match_pattern"]),
+        );
+        if (literal.type !== "token") {
+          throw unsupported(file, pattern, "if-let pattern");
+        }
+        const value = lowerExpression(file, requiredField(cursor, "value"));
+        const literalExpression = lowerTokenExpression(file, literal);
+        const alternative = cursor.field("alternative");
+        return {
+          kind: "if",
+          condition: {
+            kind: "binary",
+            operator: "==",
+            left: value,
+            right: literalExpression,
+            span: {
+              file,
+              start: literalExpression.span.start,
+              end: value.span.end,
+            },
+          },
+          consequence: lowerExpression(
+            file,
+            requiredField(cursor, "consequence"),
+          ),
+          alternative: isCursor(alternative)
+            ? lowerExpression(file, alternative)
+            : undefined,
+          span: sourceSpan(file, cursor),
+        };
       }
       const payload = requiredField(unionPattern, "value");
       const payloadName = payload.type === "token" &&
@@ -937,6 +971,10 @@ function lowerTokenExpression(
   }
   if (cursor.kind === "string") {
     return { kind: "string", value: decodeStringLiteral(file, cursor), span };
+  }
+  if (cursor.kind === "character") {
+    const value = decodeCharacterLiteral(file, cursor);
+    return { kind: "integer", value, span };
   }
   if (cursor.kind === "identifier" || cursor.text === "loop") {
     const name = { text: cursor.text, span };
@@ -1133,6 +1171,26 @@ function decodeStringLiteral(file: string, token: TokenCursor): string {
   } catch (cause) {
     throw new SyntaxError(
       `${file}:${token.span.start}: invalid Ducklang string literal ${token.text}`,
+      { cause },
+    );
+  }
+}
+
+function decodeCharacterLiteral(file: string, token: TokenCursor): number {
+  try {
+    const contents = token.text.slice(1, -1).replaceAll('"', '\\"');
+    const value = JSON.parse(`"${contents}"`) as string;
+    const characters = [...value];
+    const character = characters[0];
+    if (characters.length !== 1 || character === undefined) {
+      throw new Error("not one character");
+    }
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) throw new Error("empty character");
+    return codePoint;
+  } catch (cause) {
+    throw new SyntaxError(
+      `${file}:${token.span.start}: invalid Ducklang character literal ${token.text}`,
       { cause },
     );
   }

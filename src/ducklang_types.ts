@@ -385,6 +385,11 @@ class DucklangInference {
         ) {
           type = functionType([textType, i32Type, i32Type], textType);
         } else if (
+          expression.modulePath === "duck:prelude/runtime" &&
+          expression.exportName === "get"
+        ) {
+          type = functionType([textType, i32Type], i32Type);
+        } else if (
           expression.modulePath === "duck:prelude/functional" &&
           expression.exportName === "apply"
         ) {

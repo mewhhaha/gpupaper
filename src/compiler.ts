@@ -4,6 +4,7 @@ import {
   evaluateModuleComptime,
 } from "./comptime.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
+import { lowerDucklangConditionalAssignments } from "./ducklang_control_flow.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
@@ -187,8 +188,8 @@ async function compileDucklangModuleSource(
 ): Promise<DucklangCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
-  const parsed = expandStaticDucklangLoops(
-    await parseDucklangModule(file, source),
+  const parsed = lowerDucklangConditionalAssignments(
+    expandStaticDucklangLoops(await parseDucklangModule(file, source)),
   );
   const parseMilliseconds = performance.now() - parseStart;
 

@@ -415,6 +415,24 @@ function foldStaticIntrinsic(
     };
   }
   if (
+    callee.exportName === "get" && arguments_.length === 2 &&
+    arguments_[0].kind === "string" && arguments_[1].kind === "integer"
+  ) {
+    const bytes = new TextEncoder().encode(arguments_[0].value);
+    const index = arguments_[1].value;
+    if (index < 0 || index >= bytes.length) {
+      throw new RangeError(
+        `${expression.span.file}:${expression.span.start}: Ducklang text index ${index} is outside byte length ${bytes.length}`,
+      );
+    }
+    return {
+      kind: "integer",
+      value: bytes[index],
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
     callee.exportName !== "slice" || arguments_.length !== 3 ||
     arguments_[0].kind !== "string" || arguments_[1].kind !== "integer" ||
     arguments_[2].kind !== "integer"
