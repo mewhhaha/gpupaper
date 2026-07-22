@@ -24,20 +24,26 @@ export function resolveModuleNames(module: Module): ResolutionResult {
     declaration,
   ): declaration is ValueDeclaration => declaration.kind === "value");
   const topLevelBindings: LexicalBinding[] = [];
-  for (const declaration of module.declarations) {
-    if (
-      declaration.kind === "value" || declaration.kind === "datatype" ||
-      declaration.kind === "class"
-    ) {
-      topLevelBindings.push({ name: declaration.name, topLevel: true });
+  const topLevelNameOrigins = new Map<string, Name>();
+  const addTopLevelBinding = (name: Name): void => {
+    const previous = topLevelNameOrigins.get(name.text);
+    if (previous !== undefined) {
+      throw new TypeError(
+        `${name.span.file}:${name.span.start}: duplicate top-level name ${name.text}; first declared at ${previous.span.file}:${previous.span.start}`,
+      );
     }
+    topLevelNameOrigins.set(name.text, name);
+    topLevelBindings.push({ name, topLevel: true });
+  };
+  for (const declaration of module.declarations) {
+    if (declaration.kind === "value") addTopLevelBinding(declaration.name);
     if (declaration.kind === "datatype") {
       for (const constructor of declaration.constructors) {
-        topLevelBindings.push({ name: constructor.name, topLevel: true });
+        addTopLevelBinding(constructor.name);
       }
     }
     if (declaration.kind === "class") {
-      topLevelBindings.push({ name: declaration.methodName, topLevel: true });
+      addTopLevelBinding(declaration.methodName);
     }
   }
 

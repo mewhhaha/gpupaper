@@ -60,6 +60,16 @@ Deno.test("lexical bindings shadow top-level declarations", async () => {
   );
 });
 
+Deno.test("duplicate top-level terms fail even when they are unused", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule("test.hs", `duplicate = 1\nduplicate = 2\nmain = 0\n`),
+      ),
+    /duplicate top-level name duplicate; first declared at test\.hs:0/,
+  );
+});
+
 Deno.test("CPU inference rejects an infinite self-application type", () => {
   assertThrows(
     () => inferModule(parseModule("test.hs", `broken x = x x\nmain = 0\n`)),
