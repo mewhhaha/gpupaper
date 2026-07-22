@@ -48,6 +48,34 @@ export type DucklangEffectOperation = {
   readonly span: SourceSpan;
 };
 
+export type DucklangProtocolDeclaration = {
+  readonly name: string;
+  readonly methods: readonly string[];
+  readonly span: SourceSpan;
+};
+
+export type DucklangExtensionMethod = {
+  readonly name: string;
+  readonly value: DucklangExpression;
+  readonly span: SourceSpan;
+};
+
+export type DucklangExtensionDeclaration = {
+  readonly targetType: string;
+  readonly parameters: readonly string[];
+  readonly methods: readonly DucklangExtensionMethod[];
+  readonly span: SourceSpan;
+};
+
+export type DucklangFixityDeclaration = {
+  readonly fixity: "infixl" | "infixr" | "infix" | "prefix";
+  readonly precedence: number;
+  readonly operator: string;
+  readonly protocolName: string;
+  readonly methodName: string;
+  readonly span: SourceSpan;
+};
+
 export type DucklangRecursiveBinding = {
   readonly name: DucklangName;
   readonly value: DucklangExpression;
@@ -237,6 +265,7 @@ export type DucklangStatement =
   | {
     readonly kind: "structType";
     readonly name: string;
+    readonly parameters: readonly string[];
     readonly fields: readonly DucklangStructField[];
     readonly span: SourceSpan;
   }
@@ -329,6 +358,9 @@ export type DucklangStatement =
 export type DucklangModule = {
   readonly file: string;
   readonly parameters: readonly DucklangParameter[];
+  readonly protocols: readonly DucklangProtocolDeclaration[];
+  readonly extensions: readonly DucklangExtensionDeclaration[];
+  readonly fixities: readonly DucklangFixityDeclaration[];
   readonly statements: readonly DucklangStatement[];
   readonly span: SourceSpan;
 };

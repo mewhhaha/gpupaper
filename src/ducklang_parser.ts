@@ -7,10 +7,13 @@ import type {
 import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 import type {
   DucklangExpression,
+  DucklangExtensionDeclaration,
+  DucklangFixityDeclaration,
   DucklangImportSelection,
   DucklangModule,
   DucklangName,
   DucklangParameter,
+  DucklangProtocolDeclaration,
   DucklangRecordField,
   DucklangStatement,
   DucklangTypeReference,
@@ -46,7 +49,23 @@ export async function parseDucklangModule(
         `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
       );
     }
+    const protocols: DucklangProtocolDeclaration[] = [];
+    const extensions: DucklangExtensionDeclaration[] = [];
+    const fixities: DucklangFixityDeclaration[] = [];
     const loweredStatements = result.cursor.children().flatMap((cursor) => {
+      const declaration = lowerDispatchDeclaration(file, cursor);
+      if (declaration?.kind === "protocol") {
+        protocols.push(declaration.value);
+        return [];
+      }
+      if (declaration?.kind === "extension") {
+        extensions.push(declaration.value);
+        return [];
+      }
+      if (declaration?.kind === "fixity") {
+        fixities.push(declaration.value);
+        return [];
+      }
       const statement = lowerModuleStatement(file, cursor);
       return statement === undefined ? [] : [statement];
     });
@@ -103,6 +122,7 @@ export async function parseDucklangModule(
       ? [{
         kind: "structType",
         name: "$TypeDescription",
+        parameters: [],
         fields: [{
           name: "size",
           type: {
@@ -130,12 +150,121 @@ export async function parseDucklangModule(
             ]
             : []
         ),
+      protocols,
+      extensions,
+      fixities,
       statements: [...typedMetadata, ...statements],
       span: sourceSpan(file, result.cursor),
     };
   } finally {
     parser.dispose();
   }
+}
+
+type DispatchDeclaration =
+  | { readonly kind: "protocol"; readonly value: DucklangProtocolDeclaration }
+  | { readonly kind: "extension"; readonly value: DucklangExtensionDeclaration }
+  | { readonly kind: "fixity"; readonly value: DucklangFixityDeclaration };
+
+function lowerDispatchDeclaration(
+  file: string,
+  cursor: SyntaxCursor,
+): DispatchDeclaration | undefined {
+  const declaration = findRule(cursor, "duck_declaration_statement") ??
+    findRule(cursor, "extension_declaration_statement") ??
+    findRule(cursor, "fixity_declaration_statement");
+  if (declaration === undefined) return undefined;
+  if (declaration.name === "duck_declaration_statement") {
+    const members = findRule(declaration, "duck_member_block");
+    if (members === undefined) {
+      throw unsupported(file, declaration, "duck member block");
+    }
+    return {
+      kind: "protocol",
+      value: {
+        name: identifierName(
+          file,
+          requiredField(declaration, "name"),
+          "duck declaration name",
+        ).text,
+        methods: members.children().flatMap((member) =>
+          member.type === "rule" && member.name === "duck_member"
+            ? [
+              identifierName(
+                file,
+                requiredField(member, "name"),
+                "duck method name",
+              ).text,
+            ]
+            : []
+        ),
+        span: sourceSpan(file, declaration),
+      },
+    };
+  }
+  if (declaration.name === "extension_declaration_statement") {
+    const memberBlock = findRule(declaration, "extension_member_block");
+    if (memberBlock === undefined) {
+      throw unsupported(file, declaration, "extension member block");
+    }
+    const parameters = cursorFields(declaration, "parameter").map((parameter) =>
+      tokenText(file, parameter, "extension parameter")
+    );
+    return {
+      kind: "extension",
+      value: {
+        targetType: identifierName(
+          file,
+          requiredField(declaration, "type"),
+          "extension target type",
+        ).text,
+        parameters,
+        methods: memberBlock.children().flatMap((member) => {
+          if (member.type !== "rule" || member.name !== "shape_field") {
+            return [];
+          }
+          return [{
+            name: identifierName(
+              file,
+              requiredField(member, "name"),
+              "extension method name",
+            ).text,
+            value: lowerExpression(file, requiredField(member, "value")),
+            span: sourceSpan(file, member),
+          }];
+        }),
+        span: sourceSpan(file, declaration),
+      },
+    };
+  }
+  if (declaration.name !== "fixity_declaration_statement") return undefined;
+  const targetTokens: TokenCursor[] = [];
+  collectAllTokens(requiredField(declaration, "target"), targetTokens);
+  const targetNames = targetTokens.filter((token) =>
+    token.kind === "identifier"
+  );
+  if (targetNames.length !== 2) {
+    throw unsupported(file, declaration, "qualified fixity target");
+  }
+  const fixity = tokenField(declaration, "fixity");
+  const precedence = tokenField(declaration, "precedence");
+  const operator = tokenField(declaration, "operator");
+  if (
+    fixity === undefined || precedence === undefined || operator === undefined
+  ) {
+    throw unsupported(file, declaration, "fixity declaration fields");
+  }
+  return {
+    kind: "fixity",
+    value: {
+      fixity: fixity.text as DucklangFixityDeclaration["fixity"],
+      precedence: Number.parseInt(precedence.text, 10),
+      operator: operator.text,
+      protocolName: targetNames[0].text,
+      methodName: targetNames[1].text,
+      span: sourceSpan(file, declaration),
+    },
+  };
 }
 
 function lowerModuleStatement(
@@ -472,6 +601,9 @@ function lowerModuleStatement(
           requiredField(statement, "name"),
           "struct type name",
         ).text,
+        parameters: tokenFields(statement, "parameter").map((token) =>
+          token.text
+        ),
         fields: fieldBlock.children().flatMap((child) => {
           if (child.type !== "rule" || child.name !== "named_type_field") {
             return [];
@@ -498,6 +630,9 @@ function lowerModuleStatement(
           requiredField(statement, "name"),
           "product type name",
         ).text,
+        parameters: tokenFields(statement, "parameter").map((token) =>
+          token.text
+        ),
         fields: positionalProduct.children().flatMap((child, index) =>
           child.type === "rule" && child.name === "type_reference"
             ? [{
@@ -869,7 +1004,6 @@ function lowerExpression(
     new Set([
       "_expression",
       "is_expression",
-      "as_expression",
       "condition_expression",
       "condition_parenthesized_expression",
       "_condition_primary",
@@ -879,6 +1013,15 @@ function lowerExpression(
     ]),
   );
   if (cursor.type === "token") return lowerTokenExpression(file, cursor);
+
+  if (cursor.name === "as_expression") {
+    const value = cursor.children().find((child): child is RuleCursor =>
+      child.type === "rule" && child.name !== "as_keyword" &&
+      child.name !== "type_reference"
+    );
+    if (value === undefined) throw unsupported(file, cursor, "cast value");
+    return lowerExpression(file, value);
+  }
 
   if (cursor.name === "condition_is_expression") {
     const [valueInput, typeInput] = cursor.children().filter(
@@ -2075,7 +2218,8 @@ function arrowParameters(
   const tokens: TokenCursor[] = [];
   collectAllTokens(cursor, tokens);
   const parameterTokens = tokens.filter((token) =>
-    token.text !== "(" && token.text !== ")"
+    token.text !== "(" && token.text !== ")" && token.text !== "[" &&
+    token.text !== "]" && !/^\s+$/.test(token.text)
   );
   const groups: TokenCursor[][] = [[]];
   for (const token of parameterTokens) {
@@ -2099,8 +2243,9 @@ function arrowParameters(
     const plain = group.length === 1 && name?.kind === "identifier";
     const linear = group.length === 2 && name?.text === "!" &&
       separator?.kind === "identifier";
-    const annotated = group.length === 3 && name?.kind === "identifier" &&
-      separator?.text === ":" && annotation?.kind === "identifier";
+    const annotated = group.length >= 3 && name?.kind === "identifier" &&
+      separator?.text === ":" && annotation?.kind === "identifier" &&
+      group.slice(3).every((token) => token.kind === "identifier");
     if (!plain && !linear && !annotated) {
       throw unsupported(
         file,

@@ -224,6 +224,7 @@ export type ResolvedDucklangTypeAlias = {
 
 export type ResolvedDucklangStructType = {
   readonly name: string;
+  readonly parameters: readonly string[];
   readonly fields: readonly DucklangStructField[];
   readonly span: SourceSpan;
 };

@@ -352,6 +352,14 @@ class DucklangInference {
       );
       this.#typeReference(alias.target, parameters, [alias.name]);
     }
+    for (const declaration of structTypes) {
+      const parameters = new Map(
+        declaration.parameters.map((name) => [name, this.#freshVariable()]),
+      );
+      for (const field of declaration.fields) {
+        this.#typeReference(field.type, parameters, []);
+      }
+    }
   }
 
   inferBindings(
@@ -684,14 +692,14 @@ class DucklangInference {
         );
         let type: Type;
         if (expression.nominalType !== undefined) {
-          const declaration = this.#structTypes.find((candidate) =>
-            candidate.name === expression.nominalType
+          const nominalType = this.#declaredType(
+            expression.nominalType,
+            expression.span,
           );
-          if (declaration === undefined) {
-            throw new TypeError(
-              `${this.#file}:${expression.span.start}: unknown Ducklang struct ${expression.nominalType}`,
-            );
-          }
+          const declaration = this.#structDeclaration(
+            nominalType,
+            expression.span,
+          );
           if (declaration.fields.length !== values.length) {
             throw new TypeError(
               `${this.#file}:${expression.span.start}: Ducklang struct ${declaration.name} expects ${declaration.fields.length} fields; received ${values.length}`,
@@ -699,16 +707,12 @@ class DucklangInference {
           }
           for (const [index, field] of declaration.fields.entries()) {
             this.#unify(
-              this.#typeReference(field.type, new Map(), []),
+              this.#structFieldType(declaration, nominalType, field.type),
               values[index].type,
               values[index].expression.span,
             );
           }
-          type = {
-            kind: "constructor",
-            name: declaration.name,
-            arguments: [],
-          };
+          type = nominalType;
         } else if (expression.productKind === "tuple") {
           type = {
             kind: "constructor",
@@ -757,10 +761,10 @@ class DucklangInference {
             `${this.#file}:${expression.span.start}: Ducklang struct ${productType.name} has no field ${expression.fieldName}`,
           );
         }
-        const type = this.#typeReference(
+        const type = this.#structFieldType(
+          declaration,
+          productType,
           declaration.fields[index].type,
-          new Map(),
-          [],
         );
         return {
           expression: {
@@ -787,13 +791,23 @@ class DucklangInference {
           declaration.fields.length === fields.size &&
           declaration.fields.every((field) => fields.has(field.name))
         );
+        let nominalType: Type | undefined;
         const declaration = expression.nominalType === undefined
           ? matchingDeclarations.length === 1
             ? matchingDeclarations[0]
             : undefined
-          : this.#structTypes.find((candidate) =>
-            candidate.name === expression.nominalType
-          );
+          : (() => {
+            const resolvedNominalType = this.#declaredType(
+              expression.nominalType,
+              expression.span,
+            );
+            nominalType = resolvedNominalType;
+            return resolvedNominalType.kind === "constructor"
+              ? this.#structTypes.find((candidate) =>
+                candidate.name === resolvedNominalType.name
+              )
+              : undefined;
+          })();
         if (declaration === undefined) {
           const requested = expression.nominalType === undefined
             ? [...fields.keys()].join(", ")
@@ -818,6 +832,11 @@ class DucklangInference {
             }`,
           );
         }
+        const structType = nominalType ?? {
+          kind: "constructor" as const,
+          name: declaration.name,
+          arguments: declaration.parameters.map(() => this.#freshVariable()),
+        };
         const values = declaration.fields.map((field) => {
           const valueExpression = fields.get(field.name);
           if (valueExpression === undefined) {
@@ -827,17 +846,13 @@ class DucklangInference {
           }
           const value = this.inferExpression(valueExpression, environment);
           this.#unify(
-            this.#typeReference(field.type, new Map(), []),
+            this.#structFieldType(declaration, structType, field.type),
             value.type,
             valueExpression.span,
           );
           return value.expression;
         });
-        const type: Type = {
-          kind: "constructor",
-          name: declaration.name,
-          arguments: [],
-        };
+        const type: Type = structType;
         return {
           expression: {
             kind: "product",
@@ -1561,12 +1576,21 @@ class DucklangInference {
         declaration.name === reference.name
       )
     ) {
-      if (reference.arguments.length !== 0) {
+      const declaration = this.#structTypes.find((candidate) =>
+        candidate.name === reference.name
+      )!;
+      if (reference.arguments.length !== declaration.parameters.length) {
         throw new TypeError(
-          `${this.#file}:${reference.span.start}: Ducklang struct ${reference.name} expects 0 arguments; received ${reference.arguments.length}`,
+          `${this.#file}:${reference.span.start}: Ducklang struct ${reference.name} expects ${declaration.parameters.length} arguments; received ${reference.arguments.length}`,
         );
       }
-      return { kind: "constructor", name: reference.name, arguments: [] };
+      return {
+        kind: "constructor",
+        name: reference.name,
+        arguments: reference.arguments.map((argument) =>
+          this.#typeReference(argument, parameters, expandingAliases)
+        ),
+      };
     }
     const arguments_ = reference.arguments.map((argument) =>
       this.#typeReference(argument, parameters, expandingAliases)
@@ -1613,6 +1637,48 @@ class DucklangInference {
       name: declaration.name,
       arguments: arguments_,
     };
+  }
+
+  #structDeclaration(
+    type: Type,
+    span: SourceSpan,
+  ): ResolvedDucklangStructType {
+    const applied = this.#apply(type);
+    const declaration = applied.kind === "constructor"
+      ? this.#structTypes.find((candidate) => candidate.name === applied.name)
+      : undefined;
+    if (declaration !== undefined) return declaration;
+    throw new TypeError(
+      `${this.#file}:${span.start}: Ducklang type ${
+        formatDucklangType(applied)
+      } is not a struct`,
+    );
+  }
+
+  #structFieldType(
+    declaration: ResolvedDucklangStructType,
+    structType: Type,
+    fieldType: DucklangTypeReference,
+  ): Type {
+    const applied = this.#apply(structType);
+    if (
+      applied.kind !== "constructor" ||
+      applied.arguments.length !== declaration.parameters.length
+    ) {
+      throw new TypeError(
+        `${this.#file}:${fieldType.span.start}: Ducklang struct ${declaration.name} has an invalid type application`,
+      );
+    }
+    return this.#typeReference(
+      fieldType,
+      new Map(
+        declaration.parameters.map((name, index) => [
+          name,
+          applied.arguments[index],
+        ]),
+      ),
+      [],
+    );
   }
 
   finish(

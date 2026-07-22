@@ -106,6 +106,7 @@ async function resolveModuleImports(
       statements.push({
         kind: "structType",
         name: typeName,
+        parameters: [],
         fields: fieldNames.map((name) => ({
           name,
           type: { name: "Int", arguments: [], span: parameter.span },
@@ -124,6 +125,7 @@ async function resolveModuleImports(
       statements.push({
         kind: "structType",
         name: typeName,
+        parameters: [],
         fields: dependencyResult.expression.fields.map((field) => ({
           name: field.name,
           type: { name: "Int", arguments: [], span: field.span },
