@@ -115,7 +115,7 @@ export function inferModule(module: Module): InferredModule {
     }
     instanceOrigins.set(instanceKey, instance);
   }
-  const state = new InferenceState(instances);
+  const state = new InferenceState(instances, classes);
   let environment = state.initialEnvironment(module, classes);
   const typedByName = new Map<string, TypedDeclaration>();
 
@@ -134,21 +134,26 @@ export function inferModule(module: Module): InferredModule {
 
     const inferredByName = new Map<string, InferredExpression>();
     for (const declaration of stratum) {
-      const inferred = state.inferValueDeclaration(
+      const inferredBody = state.inferValueDeclaration(
         declaration,
         recursiveEnvironment,
       );
+      let inferred = inferredBody;
       state.unify(
         placeholders.get(declaration.name.text)!,
         inferred.type,
         declaration.span,
       );
       if (declaration.signature !== undefined) {
-        state.checkSignature(
+        const declaredPredicates = state.checkSignature(
           declaration.signature,
           inferred,
           declaration.name.text,
         );
+        inferred = {
+          ...inferred,
+          predicates: [...inferred.predicates, ...declaredPredicates],
+        };
       }
       inferredByName.set(declaration.name.text, inferred);
     }
@@ -196,14 +201,21 @@ class InferenceState {
   readonly equalities: EqualityConstraint[] = [];
   readonly #substitution = new Map<number, Type>();
   readonly #instances: readonly InstanceDeclaration[];
+  readonly #classNames: ReadonlySet<string>;
   readonly #typeConstructorArities = new Map<string, number>([["Int", 0], [
     "Bool",
     0,
   ]]);
   #nextVariable = 0;
 
-  constructor(instances: readonly InstanceDeclaration[]) {
+  constructor(
+    instances: readonly InstanceDeclaration[],
+    classes: readonly ClassDeclaration[],
+  ) {
     this.#instances = instances;
+    this.#classNames = new Set(
+      classes.map((declaration) => declaration.name.text),
+    );
   }
 
   freshVariable(): Type {
@@ -569,7 +581,7 @@ class InferenceState {
     signature: TypeSignature,
     inferred: InferredExpression,
     declarationName: string,
-  ): void {
+  ): readonly Predicate[] {
     const variables = new Map<string, Type>();
     const expected = this.typeFromSyntax(signature.type, variables);
     try {
@@ -593,14 +605,26 @@ class InferenceState {
         );
       }
     }
-    const declaredClasses = new Set(
-      signature.predicates.map((predicate) => predicate.className),
+    const declaredPredicates = signature.predicates.map((predicate) => {
+      if (!this.#classNames.has(predicate.className)) {
+        throw new TypeError(
+          `${predicate.span.file}:${predicate.span.start}: signature for ${declarationName} refers to unknown class ${predicate.className}`,
+        );
+      }
+      return {
+        className: predicate.className,
+        type: this.apply(this.typeFromSyntax(predicate.argument, variables)),
+        span: predicate.span,
+      };
+    });
+    const declaredPredicateKeys = new Set(
+      declaredPredicates.map(formatPredicate),
     );
     for (const predicate of inferred.predicates) {
       const resolved = { ...predicate, type: this.apply(predicate.type) };
       if (
         !this.predicateHasInstance(resolved) &&
-        !declaredClasses.has(resolved.className)
+        !declaredPredicateKeys.has(formatPredicate(resolved))
       ) {
         throw new TypeError(
           `${predicate.span.file}:${predicate.span.start}: signature for ${declarationName} is missing ${
@@ -609,6 +633,7 @@ class InferenceState {
         );
       }
     }
+    return declaredPredicates;
   }
 
   typeFromSyntax(syntax: TypeSyntax, variables: Map<string, Type>): Type {

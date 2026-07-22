@@ -107,6 +107,19 @@ Deno.test("a polymorphic signature cannot conceal a monomorphic definition", () 
   );
 });
 
+Deno.test("declared class constraints remain part of the inferred scheme", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `class Eq a where eq :: a -> a -> Bool\nrestricted :: Eq a => a -> a\nrestricted value = value\nmain = restricted True\n`,
+        ),
+      ),
+    /no instance for Eq Bool/,
+  );
+});
+
 Deno.test("instances must define the method declared by their class", () => {
   assertThrows(
     () =>
