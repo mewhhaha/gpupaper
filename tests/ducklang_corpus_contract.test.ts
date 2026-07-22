@@ -17,6 +17,7 @@ const supportedSuccessPaths = new Set([
   "examples/basics/13_contextual_keyword_names.duck",
   "examples/compile_time/04_const_capture_snapshot.duck",
   "examples/functions/01_closure_capture.duck",
+  "examples/functions/02_returned_closure.duck",
   "examples/functions/03_closure_local_shadow.duck",
   "examples/functions/04_recursive_fibonacci.duck",
   "examples/functions/05_tail_recursive_gcd.duck",

@@ -4,6 +4,7 @@ import {
   evaluateModuleComptime,
 } from "./comptime.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
+import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
@@ -228,13 +229,14 @@ async function compileDucklangModuleSource(
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
   const wasmStart = performance.now();
-  const lowered = lowerDucklangToFcgAndWasm(comptime.module);
+  const specialized = specializeStaticDucklangClosures(comptime.module);
+  const lowered = lowerDucklangToFcgAndWasm(specialized);
   const wasmMilliseconds = performance.now() - wasmStart;
   return {
     language: "ducklang",
     wasm: lowered.wasm,
     fcg: lowered.fcg,
-    inferred: comptime.module,
+    inferred: specialized,
     initialTypes,
     finalTypes: initialTypes,
     gpuTypeResult,

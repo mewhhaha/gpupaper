@@ -51,6 +51,24 @@ Deno.test("Ducklang functions capture the module symbol visible at declaration",
   await assertDuckFixture("closure_capture.duck", 43);
 });
 
+Deno.test("Ducklang specializes a statically returned closure", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let make_adder = amount => {
+  value => value + amount
+}
+let add_two = make_adder(2)
+add_two(40)
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(
+    artifact.fcg.functions.map((function_) => function_.name),
+    ["add_two__duck3", "main"],
+  );
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });
