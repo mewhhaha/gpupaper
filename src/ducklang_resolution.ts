@@ -4,6 +4,7 @@ import type {
   DucklangModule,
   DucklangName,
   DucklangStatement,
+  DucklangStructField,
   DucklangTypeReference,
   DucklangUnionCase,
 } from "./ducklang_ast.ts";
@@ -67,6 +68,23 @@ export type ResolvedDucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly ResolvedDucklangExpression[];
+    readonly nominalType?: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "field";
+    readonly product: ResolvedDucklangExpression;
+    readonly fieldName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recordUpdate";
+    readonly product: ResolvedDucklangExpression;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly value: ResolvedDucklangExpression;
+      readonly span: SourceSpan;
+    }[];
     readonly span: SourceSpan;
   }
   | {
@@ -180,6 +198,12 @@ export type ResolvedDucklangTypeAlias = {
   readonly span: SourceSpan;
 };
 
+export type ResolvedDucklangStructType = {
+  readonly name: string;
+  readonly fields: readonly DucklangStructField[];
+  readonly span: SourceSpan;
+};
+
 export type ResolvedDucklangModule = {
   readonly file: string;
   readonly bindings: readonly ResolvedDucklangBinding[];
@@ -188,6 +212,7 @@ export type ResolvedDucklangModule = {
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly effects: ReadonlyMap<string, readonly DucklangEffectOperation[]>;
+  readonly structTypes: readonly ResolvedDucklangStructType[];
 };
 
 type ResolvedStatements = {
@@ -215,6 +240,7 @@ export function resolveDucklangModule(
     unionTypes: resolver.unionTypes,
     typeAliases: resolver.typeAliases,
     effects: resolver.effects,
+    structTypes: resolver.structTypes,
   };
 }
 
@@ -224,6 +250,7 @@ class DucklangResolver {
   readonly #unionTypes: ResolvedDucklangUnionType[] = [];
   readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
   readonly #effects = new Map<string, readonly DucklangEffectOperation[]>();
+  readonly #structTypes: ResolvedDucklangStructType[] = [];
 
   constructor(file: string) {
     this.#file = file;
@@ -243,6 +270,10 @@ class DucklangResolver {
 
   get effects(): ResolvedDucklangModule["effects"] {
     return this.#effects;
+  }
+
+  get structTypes(): ResolvedDucklangModule["structTypes"] {
+    return this.#structTypes;
   }
 
   resolveStatements(
@@ -316,6 +347,36 @@ class DucklangResolver {
         this.#effects.set(statement.name, statement.operations);
         continue;
       }
+      if (statement.kind === "structType") {
+        if (scope !== "module") {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang struct declarations must be module-level`,
+          );
+        }
+        const duplicate = this.#structTypes.some((declaration) =>
+          declaration.name === statement.name
+        ) || this.#unionTypes.some((declaration) =>
+          declaration.name === statement.name
+        ) || this.#typeAliases.some((declaration) =>
+          declaration.name === statement.name
+        );
+        if (duplicate) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+          );
+        }
+        const fieldNames = new Set<string>();
+        for (const field of statement.fields) {
+          if (fieldNames.has(field.name)) {
+            throw new SyntaxError(
+              `${this.#file}:${field.span.start}: duplicate Ducklang field ${statement.name}.${field.name}`,
+            );
+          }
+          fieldNames.add(field.name);
+        }
+        this.#structTypes.push(statement);
+        continue;
+      }
       if (statement.kind === "unionType") {
         if (scope !== "module") {
           throw new SyntaxError(
@@ -325,7 +386,12 @@ class DucklangResolver {
         if (
           this.#unionTypes.some((declaration) =>
             declaration.name === statement.name
-          ) || this.#typeAliases.some((alias) => alias.name === statement.name)
+          ) || this.#typeAliases.some((alias) =>
+            alias.name === statement.name
+          ) ||
+          this.#structTypes.some((declaration) =>
+            declaration.name === statement.name
+          )
         ) {
           throw new SyntaxError(
             `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
@@ -343,6 +409,8 @@ class DucklangResolver {
         const duplicate = this.#typeAliases.some((alias) =>
           alias.name === statement.name
         ) || this.#unionTypes.some((declaration) =>
+          declaration.name === statement.name
+        ) || this.#structTypes.some((declaration) =>
           declaration.name === statement.name
         );
         if (duplicate) {
@@ -614,6 +682,32 @@ class DucklangResolver {
           values: expression.values.map((value) =>
             this.#resolveExpression(value, environment, currentRecursive)
           ),
+        };
+      case "field":
+        return {
+          ...expression,
+          product: this.#resolveExpression(
+            expression.product,
+            environment,
+            currentRecursive,
+          ),
+        };
+      case "recordUpdate":
+        return {
+          ...expression,
+          product: this.#resolveExpression(
+            expression.product,
+            environment,
+            currentRecursive,
+          ),
+          fields: expression.fields.map((field) => ({
+            ...field,
+            value: this.#resolveExpression(
+              field.value,
+              environment,
+              currentRecursive,
+            ),
+          })),
         };
       case "moduleImport":
         throw new SyntaxError(

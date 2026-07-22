@@ -239,6 +239,7 @@ function lowerStatementExpressions(
         expression: lowerExpression(statement.expression),
       };
     case "effectDeclaration":
+    case "structType":
     case "unionType":
     case "typeAlias":
     case "import":
@@ -266,6 +267,17 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
       return { ...expression, value: lowerExpression(expression.value) };
     case "product":
       return { ...expression, values: expression.values.map(lowerExpression) };
+    case "field":
+      return { ...expression, product: lowerExpression(expression.product) };
+    case "recordUpdate":
+      return {
+        ...expression,
+        product: lowerExpression(expression.product),
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: lowerExpression(field.value),
+        })),
+      };
     case "function":
       return { ...expression, body: lowerExpression(expression.body) };
     case "recursiveCall":

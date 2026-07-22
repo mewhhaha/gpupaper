@@ -250,6 +250,7 @@ function substituteStatement(
     case "continue":
     case "import":
     case "effectDeclaration":
+    case "structType":
     case "unionType":
     case "typeAlias":
       return statement;
@@ -342,6 +343,32 @@ function substituteExpression(
         values: expression.values.map((value) =>
           substituteExpression(value, values, replaceReferences)
         ),
+      };
+    case "field":
+      return {
+        ...expression,
+        product: substituteExpression(
+          expression.product,
+          values,
+          replaceReferences,
+        ),
+      };
+    case "recordUpdate":
+      return {
+        ...expression,
+        product: substituteExpression(
+          expression.product,
+          values,
+          replaceReferences,
+        ),
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: substituteExpression(
+            field.value,
+            values,
+            replaceReferences,
+          ),
+        })),
       };
     case "binary":
       return {

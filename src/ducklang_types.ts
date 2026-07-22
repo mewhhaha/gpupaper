@@ -6,6 +6,7 @@ import type {
   ResolvedDucklangBinding,
   ResolvedDucklangExpression,
   ResolvedDucklangModule,
+  ResolvedDucklangStructType,
   ResolvedDucklangTypeAlias,
   ResolvedDucklangUnionType,
 } from "./ducklang_resolution.ts";
@@ -66,6 +67,7 @@ export type TypedDucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly TypedDucklangExpression[];
+    readonly nominalType?: string;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -73,6 +75,18 @@ export type TypedDucklangExpression =
     readonly kind: "project";
     readonly product: TypedDucklangExpression;
     readonly index: number;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recordUpdate";
+    readonly product: TypedDucklangExpression;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly value: TypedDucklangExpression;
+      readonly index: number;
+      readonly span: SourceSpan;
+    }[];
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -207,6 +221,7 @@ export type TypedDucklangModule = {
   readonly symbolTypes: ReadonlyMap<number, Type>;
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
+  readonly structTypes: readonly ResolvedDucklangStructType[];
 };
 
 type InferredExpression = {
@@ -242,6 +257,7 @@ export function inferDucklangModule(
     module.file,
     module.unionTypes,
     module.typeAliases,
+    module.structTypes,
   );
   const environment = new Map<number, Type>();
   const bindings = inference.inferBindings(module.bindings, environment);
@@ -269,16 +285,19 @@ class DucklangInference {
   readonly #numericVariables = new Set<number>();
   readonly #unionTypes: readonly ResolvedDucklangUnionType[];
   readonly #typeAliases: readonly ResolvedDucklangTypeAlias[];
+  readonly #structTypes: readonly ResolvedDucklangStructType[];
   #nextVariable = 0;
 
   constructor(
     file: string,
     unionTypes: readonly ResolvedDucklangUnionType[],
     typeAliases: readonly ResolvedDucklangTypeAlias[],
+    structTypes: readonly ResolvedDucklangStructType[],
   ) {
     this.#file = file;
     this.#unionTypes = unionTypes;
     this.#typeAliases = typeAliases;
+    this.#structTypes = structTypes;
     const caseNames = new Set<string>();
     for (const declaration of unionTypes) {
       for (const unionCase of declaration.cases) {
@@ -339,6 +358,13 @@ class DucklangInference {
           );
         }
         this.#unify(previousType, bindingType, binding.span);
+      }
+      if (binding.symbol.declaredType !== undefined) {
+        this.#unify(
+          this.#declaredType(binding.symbol.declaredType, binding.symbol.span),
+          bindingType,
+          binding.span,
+        );
       }
       environment.set(binding.symbol.id, bindingType);
       this.#symbolTypes.set(binding.symbol.id, bindingType);
@@ -434,6 +460,11 @@ class DucklangInference {
         ) {
           const value = this.#freshVariable();
           type = functionType([value], value);
+        } else if (
+          expression.modulePath === "duck:prelude" &&
+          expression.exportName === "struct"
+        ) {
+          type = unitType;
         } else {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
@@ -491,7 +522,33 @@ class DucklangInference {
           this.inferExpression(value, environment)
         );
         let type: Type;
-        if (expression.productKind === "tuple") {
+        if (expression.nominalType !== undefined) {
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === expression.nominalType
+          );
+          if (declaration === undefined) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: unknown Ducklang struct ${expression.nominalType}`,
+            );
+          }
+          if (declaration.fields.length !== values.length) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang struct ${declaration.name} expects ${declaration.fields.length} fields; received ${values.length}`,
+            );
+          }
+          for (const [index, field] of declaration.fields.entries()) {
+            this.#unify(
+              this.#typeReference(field.type, new Map(), []),
+              values[index].type,
+              values[index].expression.span,
+            );
+          }
+          type = {
+            kind: "constructor",
+            name: declaration.name,
+            arguments: [],
+          };
+        } else if (expression.productKind === "tuple") {
           type = {
             kind: "constructor",
             name: "tuple",
@@ -515,6 +572,100 @@ class DucklangInference {
             type,
           },
           type,
+        };
+      }
+      case "field": {
+        const product = this.inferExpression(expression.product, environment);
+        const productType = this.#apply(product.type);
+        if (productType.kind !== "constructor") {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang field ${expression.fieldName} requires a struct; received ${
+              formatDucklangType(productType)
+            }`,
+          );
+        }
+        const declaration = this.#structTypes.find((candidate) =>
+          candidate.name === productType.name
+        );
+        const index =
+          declaration?.fields.findIndex((field) =>
+            field.name === expression.fieldName
+          ) ?? -1;
+        if (declaration === undefined || index < 0) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang struct ${productType.name} has no field ${expression.fieldName}`,
+          );
+        }
+        const type = this.#typeReference(
+          declaration.fields[index].type,
+          new Map(),
+          [],
+        );
+        return {
+          expression: {
+            kind: "project",
+            product: product.expression,
+            index,
+            type,
+            span: expression.span,
+          },
+          type,
+        };
+      }
+      case "recordUpdate": {
+        const product = this.inferExpression(expression.product, environment);
+        const productType = this.#apply(product.type);
+        if (productType.kind !== "constructor") {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang struct update requires a struct; received ${
+              formatDucklangType(productType)
+            }`,
+          );
+        }
+        const declaration = this.#structTypes.find((candidate) =>
+          candidate.name === productType.name
+        );
+        if (declaration === undefined) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang type ${productType.name} does not support field updates`,
+          );
+        }
+        const seen = new Set<string>();
+        const fields = expression.fields.map((field) => {
+          if (seen.has(field.name)) {
+            throw new TypeError(
+              `${this.#file}:${field.span.start}: duplicate Ducklang struct update field ${field.name}`,
+            );
+          }
+          seen.add(field.name);
+          const index = declaration.fields.findIndex((candidate) =>
+            candidate.name === field.name
+          );
+          if (index < 0) {
+            throw new TypeError(
+              `${this.#file}:${field.span.start}: Ducklang struct ${declaration.name} has no field ${field.name}`,
+            );
+          }
+          const value = this.inferExpression(field.value, environment);
+          this.#unify(
+            this.#typeReference(
+              declaration.fields[index].type,
+              new Map(),
+              [],
+            ),
+            value.type,
+            field.span,
+          );
+          return { ...field, value: value.expression, index };
+        });
+        return {
+          expression: {
+            ...expression,
+            product: product.expression,
+            fields,
+            type: productType,
+          },
+          type: productType,
         };
       }
       case "project": {
@@ -1007,6 +1158,18 @@ class DucklangInference {
     if (reference.name === "Bool") return booleanType;
     if (reference.name === "Text") return textType;
     if (reference.name === "Unit") return unitType;
+    if (
+      this.#structTypes.some((declaration) =>
+        declaration.name === reference.name
+      )
+    ) {
+      if (reference.arguments.length !== 0) {
+        throw new TypeError(
+          `${this.#file}:${reference.span.start}: Ducklang struct ${reference.name} expects 0 arguments; received ${reference.arguments.length}`,
+        );
+      }
+      return { kind: "constructor", name: reference.name, arguments: [] };
+    }
     const arguments_ = reference.arguments.map((argument) =>
       this.#typeReference(argument, parameters, expandingAliases)
     );
@@ -1080,6 +1243,7 @@ class DucklangInference {
       ),
       unionTypes: this.#unionTypes,
       typeAliases: this.#typeAliases,
+      structTypes: this.#structTypes,
     };
   }
 
@@ -1122,6 +1286,16 @@ class DucklangInference {
         return {
           ...expression,
           product: this.#normalizeExpression(expression.product),
+          type,
+        };
+      case "recordUpdate":
+        return {
+          ...expression,
+          product: this.#normalizeExpression(expression.product),
+          fields: expression.fields.map((field) => ({
+            ...field,
+            value: this.#normalizeExpression(field.value),
+          })),
           type,
         };
       case "function":

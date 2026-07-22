@@ -27,6 +27,18 @@ export type DucklangUnionCase = {
   readonly span: SourceSpan;
 };
 
+export type DucklangStructField = {
+  readonly name: string;
+  readonly type: DucklangTypeReference;
+  readonly span: SourceSpan;
+};
+
+export type DucklangRecordField = {
+  readonly name: string;
+  readonly value: DucklangExpression;
+  readonly span: SourceSpan;
+};
+
 export type DucklangEffectOperation = {
   readonly name: string;
   readonly parameterTypes: readonly DucklangTypeReference[];
@@ -87,6 +99,19 @@ export type DucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly DucklangExpression[];
+    readonly nominalType?: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "field";
+    readonly product: DucklangExpression;
+    readonly fieldName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recordUpdate";
+    readonly product: DucklangExpression;
+    readonly fields: readonly DucklangRecordField[];
     readonly span: SourceSpan;
   }
   | {
@@ -186,6 +211,12 @@ export type DucklangStatement =
     readonly name: string;
     readonly parameters: readonly string[];
     readonly cases: readonly DucklangUnionCase[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "structType";
+    readonly name: string;
+    readonly fields: readonly DucklangStructField[];
     readonly span: SourceSpan;
   }
   | {

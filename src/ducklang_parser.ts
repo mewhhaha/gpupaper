@@ -11,6 +11,7 @@ import type {
   DucklangModule,
   DucklangName,
   DucklangParameter,
+  DucklangRecordField,
   DucklangStatement,
   DucklangTypeReference,
 } from "./ducklang_ast.ts";
@@ -177,6 +178,12 @@ function lowerModuleStatement(
         ],
       };
     }
+    const declaredTypeName = isCursor(declaredType)
+      ? simpleTypeName(declaredType)
+      : undefined;
+    if (declaredTypeName !== undefined) {
+      value = applyNominalProductType(value, declaredTypeName);
+    }
     const bindingPattern = requiredField(statement, "name");
     const children = statement.children();
     const conjunctionIndices = children.flatMap((child, index) =>
@@ -271,11 +278,14 @@ function lowerModuleStatement(
     if (singlePattern.type === "rule" && singlePattern.name === "wildcard") {
       return undefined;
     }
-    const name = identifierName(
+    const parsedName = identifierName(
       file,
       requiredField(statement, "name"),
       "binding pattern",
     );
+    const name = declaredTypeName === undefined
+      ? parsedName
+      : { ...parsedName, declaredType: declaredTypeName };
     const kind = tokenField(statement, "kind");
     return {
       kind: "binding",
@@ -288,6 +298,36 @@ function lowerModuleStatement(
   }
   if (statement.name === "type_declaration_statement") {
     const definition = requiredField(statement, "definition");
+    const structType = findRule(definition, "struct_type");
+    if (structType !== undefined) {
+      const fieldBlock = findRule(structType, "type_field_block");
+      if (fieldBlock === undefined) {
+        throw unsupported(file, structType, "struct field block");
+      }
+      return {
+        kind: "structType",
+        name: identifierName(
+          file,
+          requiredField(statement, "name"),
+          "struct type name",
+        ).text,
+        fields: fieldBlock.children().flatMap((child) => {
+          if (child.type !== "rule" || child.name !== "named_type_field") {
+            return [];
+          }
+          return [{
+            name: identifierName(
+              file,
+              requiredField(child, "name"),
+              "struct field name",
+            ).text,
+            type: lowerTypeReference(file, requiredField(child, "type")),
+            span: sourceSpan(file, child),
+          }];
+        }),
+        span: sourceSpan(file, statement),
+      };
+    }
     const typeSum = findRule(definition, "type_sum");
     if (typeSum === undefined) {
       return {
@@ -609,6 +649,20 @@ function lowerExpression(
       };
     }
 
+    if (operators.length === 1 && operators[0].text === ":+") {
+      const fieldBlock = findRule(rightOperands[0], "nonempty_field_block");
+      if (fieldBlock === undefined) {
+        throw unsupported(file, rightOperands[0], "struct update fields");
+      }
+      const product = lowerExpression(file, leftCursor);
+      return {
+        kind: "recordUpdate",
+        product,
+        fields: lowerRecordFields(file, fieldBlock),
+        span: spanFrom(product.span, sourceSpan(file, fieldBlock)),
+      };
+    }
+
     const operands = [
       lowerExpression(file, leftCursor),
       ...rightOperands.map((right) => lowerExpression(file, right)),
@@ -754,7 +808,18 @@ function lowerExpression(
     for (const suffix of suffixes) {
       const index = suffix.field("index");
       if (!isCursor(index)) {
-        throw unsupported(file, suffix, "field or effect-handler postfix");
+        const names: TokenCursor[] = [];
+        collectTokens(suffix, names, "identifier");
+        if (names.length !== 1) {
+          throw unsupported(file, suffix, "field or effect-handler postfix");
+        }
+        expression = {
+          kind: "field",
+          product: expression,
+          fieldName: names[0].text,
+          span: spanFrom(expression.span, sourceSpan(file, suffix)),
+        };
+        continue;
       }
       expression = {
         kind: "index",
@@ -987,6 +1052,62 @@ function lowerBinaryExpression(
     return { kind: "call", callee: right, arguments: [left], span };
   }
   return { kind: "binary", operator, left, right, span };
+}
+
+function lowerRecordFields(
+  file: string,
+  fieldBlock: RuleCursor,
+): readonly DucklangRecordField[] {
+  return fieldBlock.children().flatMap((child) => {
+    if (child.type !== "rule" || child.name !== "shape_field") return [];
+    return [{
+      name: identifierName(
+        file,
+        requiredField(child, "name"),
+        "struct update field",
+      ).text,
+      value: lowerExpression(file, requiredField(child, "value")),
+      span: sourceSpan(file, child),
+    }];
+  });
+}
+
+function applyNominalProductType(
+  expression: DucklangExpression,
+  nominalType: string,
+): DucklangExpression {
+  if (expression.kind === "product" && expression.productKind === "array") {
+    return { ...expression, productKind: "tuple", nominalType };
+  }
+  if (expression.kind === "if") {
+    return {
+      ...expression,
+      consequence: applyNominalProductType(expression.consequence, nominalType),
+      alternative: expression.alternative === undefined
+        ? undefined
+        : applyNominalProductType(expression.alternative, nominalType),
+    };
+  }
+  if (expression.kind !== "block" || expression.statements.length === 0) {
+    return expression;
+  }
+  const statements = [...expression.statements];
+  const last = statements.at(-1);
+  if (last === undefined || last.kind !== "expression") return expression;
+  statements[statements.length - 1] = {
+    ...last,
+    expression: applyNominalProductType(last.expression, nominalType),
+  };
+  return { ...expression, statements };
+}
+
+function simpleTypeName(input: SyntaxCursor): string | undefined {
+  const tokens: TokenCursor[] = [];
+  collectAllTokens(input, tokens);
+  const [token] = tokens;
+  return tokens.length === 1 && token.kind === "identifier"
+    ? token.text
+    : undefined;
 }
 
 function lowerTokenExpression(

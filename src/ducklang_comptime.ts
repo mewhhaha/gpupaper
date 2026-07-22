@@ -89,6 +89,12 @@ function collectComptimeExpressions(
     case "project":
       collectComptimeExpressions(expression.product, expressions);
       return;
+    case "recordUpdate":
+      collectComptimeExpressions(expression.product, expressions);
+      for (const field of expression.fields) {
+        collectComptimeExpressions(field.value, expressions);
+      }
+      return;
     case "function":
       collectComptimeExpressions(expression.body, expressions);
       return;
@@ -249,6 +255,23 @@ function replaceComptimeExpressions(
           values,
           nextValueIndex,
         ),
+      };
+    case "recordUpdate":
+      return {
+        ...expression,
+        product: replaceComptimeExpressions(
+          expression.product,
+          values,
+          nextValueIndex,
+        ),
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: replaceComptimeExpressions(
+            field.value,
+            values,
+            nextValueIndex,
+          ),
+        })),
       };
     case "function":
       return {

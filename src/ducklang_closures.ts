@@ -118,6 +118,37 @@ function rewriteExpression(
       }
       return value;
     }
+    if (product.kind === "if") {
+      return rewriteExpression({
+        ...product,
+        consequence: {
+          kind: "project",
+          product: product.consequence,
+          index: rewritten.index,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
+        alternative: {
+          kind: "project",
+          product: product.alternative,
+          index: rewritten.index,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
+        type: rewritten.type,
+        span: rewritten.span,
+      }, values);
+    }
+  }
+  if (rewritten.kind === "recordUpdate") {
+    const product = staticValue(rewritten.product, values);
+    if (product.kind === "product") {
+      const updatedValues = [...product.values];
+      for (const field of rewritten.fields) {
+        updatedValues[field.index] = field.value;
+      }
+      return { ...product, values: updatedValues, type: rewritten.type };
+    }
   }
   if (rewritten.kind === "ifUnion") {
     const value = staticValue(rewritten.value, values);
@@ -574,6 +605,15 @@ function rewriteChildren(
       return { ...expression, values: expression.values.map(rewrite) };
     case "project":
       return { ...expression, product: rewrite(expression.product) };
+    case "recordUpdate":
+      return {
+        ...expression,
+        product: rewrite(expression.product),
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: rewrite(field.value),
+        })),
+      };
     case "function":
       return { ...expression, body: rewrite(expression.body) };
     case "call":

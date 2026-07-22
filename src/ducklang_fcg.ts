@@ -283,6 +283,12 @@ function visitHostCalls(
     case "project":
       visitHostCalls(expression.product, calls);
       return;
+    case "recordUpdate":
+      visitHostCalls(expression.product, calls);
+      for (const field of expression.fields) {
+        visitHostCalls(field.value, calls);
+      }
+      return;
     case "function":
       visitHostCalls(expression.body, calls);
       return;
@@ -464,6 +470,7 @@ class DucklangFcgCompiler {
       }
       case "product":
       case "project":
+      case "recordUpdate":
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang ${expression.kind} reached FCG without aggregate layout lowering`,
         );
