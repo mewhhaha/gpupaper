@@ -301,11 +301,6 @@ class FunctionCompiler {
     if (constructor.fieldCount === 0) {
       return wasmInstruction.i32Constant(constructor.tag);
     }
-    if (constructor.fieldCount > 1) {
-      throw new TypeError(
-        `${span.file}:${span.start}: packed ADT proof of concept supports at most one constructor field`,
-      );
-    }
     const field = this.#compileExpression(callArguments[0]);
     const payloadLocal = this.#allocateLocal(`$payload${span.start}`);
     this.#record("constructor.pack", [constructor.tag], span);
