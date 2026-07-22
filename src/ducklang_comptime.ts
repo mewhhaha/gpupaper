@@ -96,6 +96,9 @@ function collectComptimeExpressions(
     case "return":
       collectComptimeExpressions(expression.expression, expressions);
       return;
+    case "scratch":
+      collectComptimeExpressions(expression.body, expressions);
+      return;
     case "if":
       collectComptimeExpressions(expression.condition, expressions);
       collectComptimeExpressions(expression.consequence, expressions);
@@ -240,6 +243,15 @@ function replaceComptimeExpressions(
         ...expression,
         expression: replaceComptimeExpressions(
           expression.expression,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "scratch":
+      return {
+        ...expression,
+        body: replaceComptimeExpressions(
+          expression.body,
           values,
           nextValueIndex,
         ),

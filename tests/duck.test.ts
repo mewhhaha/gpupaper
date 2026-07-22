@@ -41,6 +41,21 @@ length(&message) * 7
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang specializes scalar results from scratch regions", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { length } = import "duck:prelude/runtime" ()
+let total = scratch {
+  let message = "temporary"
+  length(message) + 33
+}
+total
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang multi-argument functions and local blocks return 42", async () => {
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });

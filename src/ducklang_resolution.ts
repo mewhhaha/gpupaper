@@ -94,6 +94,11 @@ export type ResolvedDucklangExpression =
     readonly kind: "comptime";
     readonly expression: ResolvedDucklangExpression;
     readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "scratch";
+    readonly body: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
   };
 
 export type ResolvedDucklangBinding = {
@@ -444,6 +449,15 @@ class DucklangResolver {
           ...expression,
           expression: this.#resolveExpression(
             expression.expression,
+            environment,
+            currentRecursive,
+          ),
+        };
+      case "scratch":
+        return {
+          ...expression,
+          body: this.#resolveExpression(
+            expression.body,
             environment,
             currentRecursive,
           ),

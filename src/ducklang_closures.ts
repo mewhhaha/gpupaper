@@ -44,6 +44,9 @@ function rewriteExpression(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression {
+  if (expression.kind === "block") {
+    return rewriteBlock(expression, values);
+  }
   const rewritten = rewriteChildren(
     expression,
     (child) => rewriteExpression(child, values),
@@ -51,6 +54,16 @@ function rewriteExpression(
   if (rewritten.kind === "ownership") {
     const ownedValue = staticValue(rewritten.expression, values);
     if (ownedValue.kind === "string") return ownedValue;
+  }
+  if (rewritten.kind === "scratch") {
+    const body = collapseEmptyBlock(rewritten.body);
+    if (
+      rewritten.type.kind === "constructor" &&
+      rewritten.type.arguments.length === 0 &&
+      ["i32", "i64", "bool"].includes(rewritten.type.name)
+    ) {
+      return body;
+    }
   }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
@@ -84,6 +97,57 @@ function rewriteExpression(
     ]),
   );
   return rewriteExpression(substitute(factory.body, substitutions), values);
+}
+
+function rewriteBlock(
+  block: Extract<TypedDucklangExpression, { readonly kind: "block" }>,
+  outerValues: ReadonlyMap<number, TypedDucklangExpression>,
+): TypedDucklangExpression {
+  const values = new Map(outerValues);
+  const steps = block.steps.map((step): TypedDucklangBlockStep => {
+    if (step.kind === "expression") {
+      return {
+        kind: "expression",
+        expression: rewriteExpression(step.expression, values),
+      };
+    }
+    const binding = {
+      ...step.binding,
+      value: rewriteExpression(step.binding.value, values),
+    };
+    values.set(binding.symbol.id, binding.value);
+    return { kind: "binding", binding };
+  });
+  const result = rewriteExpression(block.result, values);
+  const live = new Set<number>();
+  collectReferences(result, live);
+  const retained: TypedDucklangBlockStep[] = [];
+  for (const step of steps.toReversed()) {
+    if (step.kind === "expression") {
+      collectReferences(step.expression, live);
+      retained.push(step);
+      continue;
+    }
+    if (!live.delete(step.binding.symbol.id)) continue;
+    collectReferences(step.binding.value, live);
+    retained.push(step);
+  }
+  return collapseEmptyBlock({
+    ...block,
+    steps: retained.toReversed(),
+    result,
+  });
+}
+
+function collectReferences(
+  expression: TypedDucklangExpression,
+  references: Set<number>,
+): void {
+  if (expression.kind === "reference") {
+    references.add(expression.symbol.id);
+    return;
+  }
+  visitChildren(expression, (child) => collectReferences(child, references));
 }
 
 function isCalledParameter(
@@ -315,6 +379,8 @@ function rewriteChildren(
     case "return":
     case "comptime":
       return { ...expression, expression: rewrite(expression.expression) };
+    case "scratch":
+      return { ...expression, body: rewrite(expression.body) };
     case "if":
       return {
         ...expression,

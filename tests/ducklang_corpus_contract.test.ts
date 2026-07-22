@@ -28,6 +28,7 @@ const supportedSuccessPaths = new Set([
   "examples/functions/04_recursive_fibonacci.duck",
   "examples/functions/05_tail_recursive_gcd.duck",
   "examples/ownership_modules/04_freeze_and_share.duck",
+  "examples/ownership_modules/03_scratch_cleanup.duck",
 ]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {

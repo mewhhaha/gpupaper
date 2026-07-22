@@ -92,6 +92,11 @@ export type DucklangExpression =
     readonly kind: "comptime";
     readonly expression: DucklangExpression;
     readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "scratch";
+    readonly body: DucklangExpression;
+    readonly span: SourceSpan;
   };
 
 export type DucklangStatement =

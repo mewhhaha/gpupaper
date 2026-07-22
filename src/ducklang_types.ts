@@ -101,6 +101,12 @@ export type TypedDucklangExpression =
     readonly expression: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "scratch";
+    readonly body: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
   };
 
 export type DucklangBinaryOperator =
@@ -618,6 +624,13 @@ class DucklangInference {
           type: inferred.type,
         };
       }
+      case "scratch": {
+        const body = this.inferExpression(expression.body, environment);
+        return {
+          expression: { ...expression, body: body.expression, type: body.type },
+          type: body.type,
+        };
+      }
     }
   }
 
@@ -727,6 +740,12 @@ class DucklangInference {
         return {
           ...expression,
           expression: this.#normalizeExpression(expression.expression),
+          type,
+        };
+      case "scratch":
+        return {
+          ...expression,
+          body: this.#normalizeExpression(expression.body),
           type,
         };
     }

@@ -486,6 +486,14 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "scratch_expression") {
+    return {
+      kind: "scratch",
+      body: lowerExpression(file, requiredField(cursor, "body")),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   if (cursor.name === "parenthesized_expression") {
     return lowerExpression(file, onlyRuleChild(cursor));
   }

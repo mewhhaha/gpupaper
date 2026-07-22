@@ -363,6 +363,10 @@ class DucklangFcgCompiler {
         throw new Error(
           `${this.#file}:${expression.span.start}: Ducklang comptime reached FCG without evaluation`,
         );
+      case "scratch":
+        throw new Error(
+          `${this.#file}:${expression.span.start}: Ducklang scratch region reached FCG without region lowering`,
+        );
     }
   }
 }
