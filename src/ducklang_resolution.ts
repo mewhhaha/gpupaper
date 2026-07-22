@@ -723,6 +723,10 @@ class DucklangResolver {
             currentRecursive,
           ),
         };
+      case "loop":
+        throw new SyntaxError(
+          `${this.#file}:${expression.span.start}: dynamic Ducklang loop expression requires loop IR lowering`,
+        );
     }
   }
 

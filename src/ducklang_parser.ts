@@ -525,6 +525,19 @@ function lowerExpression(
         ),
       };
     }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
+      expression.callee.name.text === "loop" &&
+      expression.arguments.length === 1 &&
+      expression.arguments[0].kind === "block"
+    ) {
+      return {
+        kind: "loop",
+        body: expression.arguments[0],
+        span: sourceSpan(file, cursor),
+      };
+    }
     return expression;
   }
 

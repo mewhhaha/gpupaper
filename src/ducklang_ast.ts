@@ -140,6 +140,11 @@ export type DucklangExpression =
     readonly kind: "scratch";
     readonly body: DucklangExpression;
     readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "loop";
+    readonly body: DucklangExpression;
+    readonly span: SourceSpan;
   };
 
 export type DucklangStatement =

@@ -39,6 +39,7 @@ const supportedSuccessPaths = new Set([
   "examples/loops/04_break.duck",
   "examples/loops/05_continue.duck",
   "examples/loops/06_nested_ranges.duck",
+  "examples/loops/09_loop_expression_syntax.duck",
   "examples/ownership_modules/04_freeze_and_share.duck",
   "examples/ownership_modules/03_scratch_cleanup.duck",
   "examples/ownership_modules/02_borrowed_text_read.duck",
