@@ -1,7 +1,6 @@
 import type {
   CaseAlternative,
   ClassDeclaration,
-  DataDeclaration,
   Expression,
   InstanceDeclaration,
   Module,
@@ -366,7 +365,6 @@ class InferenceState {
           expression.scrutinee,
           expression.alternatives,
           environment,
-          expression.span,
         );
     }
   }
@@ -375,7 +373,6 @@ class InferenceState {
     scrutineeExpression: Expression,
     alternatives: readonly CaseAlternative[],
     environment: TypeEnvironment,
-    span: SourceSpan,
   ): InferredExpression {
     const scrutinee = this.inferExpression(scrutineeExpression, environment);
     const result = this.freshVariable();

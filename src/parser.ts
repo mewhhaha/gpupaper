@@ -410,7 +410,7 @@ class Parser {
         span: spanFrom(token.span, expression.span),
       };
     }
-    if (this.#match("case")) return this.#parseCase(token, stops);
+    if (this.#match("case")) return this.#parseCase(token);
     if (token.kind === "identifier" || token.kind === "constructor") {
       this.#position += 1;
       return {
@@ -422,7 +422,7 @@ class Parser {
     this.#fail(token, "expected an expression");
   }
 
-  #parseCase(start: Token, stops: ReadonlySet<string>): Expression {
+  #parseCase(start: Token): Expression {
     const scrutinee = this.#parseExpression(new Set(["of"]));
     this.#expectText("of");
     this.#expectText("{");

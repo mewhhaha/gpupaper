@@ -119,7 +119,7 @@ export function compileComptimeExpression(
         );
         operands.push(0);
         return node.operator === "==" ? "boolean" : "integer";
-      case "if":
+      case "if": {
         emit(node.condition);
         const thenKind = emit(node.thenBranch);
         const elseKind = emit(node.elseBranch);
@@ -131,6 +131,7 @@ export function compileComptimeExpression(
         opcodes.push(opcode.select);
         operands.push(0);
         return thenKind;
+      }
       case "comptime":
         return emit(node.expression);
       default:
