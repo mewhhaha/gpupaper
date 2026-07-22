@@ -219,8 +219,11 @@ async function compileDucklangModuleSource(
   }
 
   const comptimeStart = performance.now();
-  const comptime = await evaluateDucklangComptime(
+  const staticallySpecialized = specializeStaticDucklangClosures(
     initialInference,
+  );
+  const comptime = await evaluateDucklangComptime(
+    staticallySpecialized,
     gpuMode !== "off",
   );
   if (comptime.gpu?.status === "unavailable" && gpuMode === "required") {

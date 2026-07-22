@@ -69,6 +69,23 @@ add_two(40)
   );
 });
 
+Deno.test("Ducklang comptime specializes a closure without a scalar GPU job", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const make_adder = amount => {
+  value => value + amount
+}
+const add_three = comptime make_adder(3)
+add_three(39)
+`,
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(artifact.comptimeCpuValues, []);
+  if (artifact.comptimeGpuResult?.status === "completed") {
+    assertEquals(artifact.comptimeGpuResult.values, []);
+  }
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

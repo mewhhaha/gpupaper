@@ -65,6 +65,7 @@ function collectComptimeExpressions(
   expressions: TypedDucklangExpression[],
 ): void {
   if (expression.kind === "comptime") {
+    if (expression.expression.kind === "function") return;
     expressions.push(expression.expression);
     return;
   }
@@ -154,6 +155,9 @@ function replaceComptimeExpressions(
   nextValueIndex: () => number,
 ): TypedDucklangExpression {
   if (expression.kind === "comptime") {
+    if (expression.expression.kind === "function") {
+      return expression.expression;
+    }
     const value = values[nextValueIndex()];
     if (value === undefined) {
       throw new Error(
