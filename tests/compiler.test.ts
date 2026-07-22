@@ -343,6 +343,29 @@ Deno.test("one WebGPU union pass closes a maximum-length equality chain", async 
   assertEquals(representatives, new Array(512).fill(0));
 });
 
+Deno.test("concurrent WebGPU solves keep their results isolated", async () => {
+  const variable: Type = { kind: "variable", id: 0 };
+  const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
+  const list: Type = {
+    kind: "constructor",
+    name: "List",
+    arguments: [variable],
+  };
+  const [solved, cyclic] = await Promise.all([
+    solveTypeEqualitiesOnGpu([{
+      left: variable,
+      right: integer,
+      span: testSpan,
+    }]),
+    solveTypeEqualitiesOnGpu([{ left: variable, right: list, span: testSpan }]),
+  ]);
+  if (solved.status === "unavailable" || cyclic.status === "unavailable") {
+    return;
+  }
+  assertEquals(solved.status, "solved");
+  assertEquals(cyclic.status, "infiniteType");
+});
+
 Deno.test("CPU and WebGPU compile-time evaluators return the same batch", async () => {
   const module = parseModule(
     "test.hs",
