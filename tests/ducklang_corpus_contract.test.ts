@@ -19,6 +19,7 @@ const supportedSuccessPaths = new Set([
   "examples/compile_time/01_comptime_adder.duck",
   "examples/compile_time/04_const_capture_snapshot.duck",
   "examples/compile_time/05_static_recursion_factorial.duck",
+  "examples/data/11_text_slices_and_equality.duck",
   "examples/functions/01_closure_capture.duck",
   "examples/functions/02_returned_closure.duck",
   "examples/functions/03_closure_local_shadow.duck",

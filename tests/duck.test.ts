@@ -16,6 +16,19 @@ size("Aλ") + 39
   assertEquals(artifact.inferred.bindings, []);
 });
 
+Deno.test("Ducklang runtime imports specialize static text operations", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { append, length, slice } = import "duck:prelude/runtime" ()
+let word = "Aλ"
+let rebuilt = append(slice(word, 0, 1), slice(word, 1, length(word)))
+if rebuilt == word { 42 } else { 0 }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang multi-argument functions and local blocks return 42", async () => {
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });

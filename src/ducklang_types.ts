@@ -249,19 +249,23 @@ class DucklangInference {
           type: textType,
         };
       case "intrinsic": {
-        if (
-          expression.modulePath !== "duck:prelude/runtime" ||
-          expression.exportName !== "length"
-        ) {
+        if (expression.modulePath !== "duck:prelude/runtime") {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
           );
         }
-        const type: Type = {
-          kind: "function",
-          parameter: textType,
-          result: i32Type,
-        };
+        let type: Type;
+        if (expression.exportName === "length") {
+          type = functionType([textType], i32Type);
+        } else if (expression.exportName === "append") {
+          type = functionType([textType, textType], textType);
+        } else if (expression.exportName === "slice") {
+          type = functionType([textType, i32Type, i32Type], textType);
+        } else {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
+          );
+        }
         return { expression: { ...expression, type }, type };
       }
       case "reference": {
@@ -335,12 +339,13 @@ class DucklangInference {
         } else {
           this.#unify(left.type, right.type, expression.span);
           const operandType = this.#apply(left.type);
-          const equalityOnBooleans = operator === "==" &&
+          const equalityOnNonIntegers = operator === "==" &&
             operandType.kind === "constructor" &&
-            operandType.name === "bool" && operandType.arguments.length === 0;
+            (operandType.name === "bool" || operandType.name === "text") &&
+            operandType.arguments.length === 0;
           if (operandType.kind === "variable") {
             this.#numericVariables.add(operandType.id);
-          } else if (!isIntegerType(operandType) && !equalityOnBooleans) {
+          } else if (!isIntegerType(operandType) && !equalityOnNonIntegers) {
             throw new TypeError(
               `${this.#file}:${expression.span.start}: Ducklang operator ${operator} requires equal-width integers; received ${
                 formatDucklangType(operandType)
@@ -794,6 +799,17 @@ function declaredDucklangType(name: "I32" | "I64" | "Bool"): Type {
   if (name === "I32") return i32Type;
   if (name === "I64") return i64Type;
   return booleanType;
+}
+
+function functionType(parameters: readonly Type[], result: Type): Type {
+  return parameters.toReversed().reduce<Type>(
+    (returnType, parameter) => ({
+      kind: "function",
+      parameter,
+      result: returnType,
+    }),
+    result,
+  );
 }
 
 function isIntegerType(

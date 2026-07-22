@@ -48,6 +48,8 @@ function rewriteExpression(
     expression,
     (child) => rewriteExpression(child, values),
   );
+  const foldedBinary = foldStaticBinary(rewritten, values);
+  if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
   if (foldedIntrinsic !== undefined) return foldedIntrinsic;
   if (
@@ -72,25 +74,90 @@ function rewriteExpression(
   return rewriteExpression(substitute(factory.body, substitutions), values);
 }
 
+function foldStaticBinary(
+  expression: TypedDucklangExpression,
+  values: ReadonlyMap<number, TypedDucklangExpression>,
+): TypedDucklangExpression | undefined {
+  if (expression.kind !== "binary" || expression.operator !== "==") {
+    return undefined;
+  }
+  const left = staticValue(expression.left, values);
+  const right = staticValue(expression.right, values);
+  if (left.kind !== "string" || right.kind !== "string") return undefined;
+  return {
+    kind: "boolean",
+    value: left.value === right.value,
+    type: expression.type,
+    span: expression.span,
+  };
+}
+
 function foldStaticIntrinsic(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression | undefined {
-  if (expression.kind !== "call" || expression.arguments.length !== 1) {
-    return undefined;
-  }
+  if (expression.kind !== "call") return undefined;
   const callee = staticValue(expression.callee, values);
-  const argument = staticValue(expression.arguments[0], values);
   if (
     callee.kind !== "intrinsic" ||
-    callee.modulePath !== "duck:prelude/runtime" ||
-    callee.exportName !== "length" || argument.kind !== "string"
+    callee.modulePath !== "duck:prelude/runtime"
   ) {
     return undefined;
   }
+  const arguments_ = expression.arguments.map((argument) =>
+    staticValue(argument, values)
+  );
+  if (
+    callee.exportName === "length" && arguments_.length === 1 &&
+    arguments_[0].kind === "string"
+  ) {
+    return {
+      kind: "integer",
+      value: new TextEncoder().encode(arguments_[0].value).length,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.exportName === "append" && arguments_.length === 2 &&
+    arguments_[0].kind === "string" && arguments_[1].kind === "string"
+  ) {
+    return {
+      kind: "string",
+      value: arguments_[0].value + arguments_[1].value,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.exportName !== "slice" || arguments_.length !== 3 ||
+    arguments_[0].kind !== "string" || arguments_[1].kind !== "integer" ||
+    arguments_[2].kind !== "integer"
+  ) {
+    return undefined;
+  }
+  const bytes = new TextEncoder().encode(arguments_[0].value);
+  const start = arguments_[1].value;
+  const end = arguments_[2].value;
+  if (start < 0 || end < start || end > bytes.length) {
+    throw new RangeError(
+      `${expression.span.file}:${expression.span.start}: Ducklang slice range ${start}..${end} is outside text byte length ${bytes.length}`,
+    );
+  }
+  let value: string;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(start, end),
+    );
+  } catch (cause) {
+    throw new TypeError(
+      `${expression.span.file}:${expression.span.start}: Ducklang static slice ${start}..${end} splits a UTF-8 sequence`,
+      { cause },
+    );
+  }
   return {
-    kind: "integer",
-    value: new TextEncoder().encode(argument.value).length,
+    kind: "string",
+    value,
     type: expression.type,
     span: expression.span,
   };
