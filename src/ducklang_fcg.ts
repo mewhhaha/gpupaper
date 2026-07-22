@@ -86,6 +86,11 @@ type FunctionShape = {
   readonly binding: TypedDucklangBinding | undefined;
 };
 
+type HostFunctionShape = {
+  readonly index: number;
+  readonly name: string;
+};
+
 export function lowerDucklangToFcgAndWasm(
   module: TypedDucklangModule,
 ): WasmArtifact {
@@ -100,6 +105,32 @@ export function lowerDucklangToFcgAndWasm(
       declaration.cases.map((unionCase, tag) => [unionCase.name, tag] as const)
     ),
   );
+  const hostFunctions = new Map<string, HostFunctionShape>();
+  for (const call of collectHostCalls(module)) {
+    const key = hostFunctionKey(call.effectName, call.operationName);
+    if (hostFunctions.has(key)) continue;
+    const parameterTypes = call.arguments.map((argument) =>
+      wasmValueType(module.file, argument.span, argument.type, unionNames)
+    );
+    const resultType = wasmValueType(
+      module.file,
+      call.span,
+      call.type,
+      unionNames,
+    );
+    const typeIndex = builder.addFunctionType(parameterTypes, [resultType]);
+    const moduleName = call.effectName[0].toLowerCase() +
+      call.effectName.slice(1);
+    const index = builder.addFunctionImport(
+      moduleName,
+      call.operationName,
+      typeIndex,
+    );
+    hostFunctions.set(key, {
+      index,
+      name: `${moduleName}.${call.operationName}`,
+    });
+  }
 
   for (const binding of module.bindings) {
     const parameterCount = binding.value.kind === "function"
@@ -125,7 +156,7 @@ export function lowerDucklangToFcgAndWasm(
       unionNames,
     );
     const shape = {
-      index: orderedShapes.length,
+      index: hostFunctions.size + orderedShapes.length,
       name: `${binding.symbol.text}__duck${binding.symbol.id}`,
       parameterCount,
       parameterTypes,
@@ -136,7 +167,7 @@ export function lowerDucklangToFcgAndWasm(
     orderedShapes.push(shape);
   }
   const mainShape = {
-    index: orderedShapes.length,
+    index: hostFunctions.size + orderedShapes.length,
     name: "main",
     parameterCount: 0,
     parameterTypes: [],
@@ -166,13 +197,14 @@ export function lowerDucklangToFcgAndWasm(
     const compiler = new DucklangFcgCompiler(
       module.file,
       shapes,
+      hostFunctions,
       parameters,
       unionNames,
       unionTags,
     );
     const compiled = compiler.compile(body);
     const functionIndex = builder.addFunction(
-      typeIndices[shape.index],
+      typeIndices[shape.index - hostFunctions.size],
       compiled.localTypes,
       emitInstructions(compiled.instructions),
     );
@@ -205,9 +237,108 @@ export function lowerDucklangToFcgAndWasm(
   };
 }
 
+function collectHostCalls(
+  module: TypedDucklangModule,
+): readonly Extract<TypedDucklangExpression, { readonly kind: "hostCall" }>[] {
+  const calls: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "hostCall" }
+  >[] = [];
+  for (const binding of module.bindings) {
+    visitHostCalls(binding.value, calls);
+  }
+  visitHostCalls(module.result, calls);
+  return calls;
+}
+
+function visitHostCalls(
+  expression: TypedDucklangExpression,
+  calls: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "hostCall" }
+  >[],
+): void {
+  if (expression.kind === "hostCall") {
+    calls.push(expression);
+    for (const argument of expression.arguments) {
+      visitHostCalls(argument, calls);
+    }
+    return;
+  }
+  switch (expression.kind) {
+    case "integer":
+    case "integer64":
+    case "boolean":
+    case "unit":
+    case "string":
+    case "intrinsic":
+    case "reference":
+      return;
+    case "unionCase":
+      visitHostCalls(expression.value, calls);
+      return;
+    case "product":
+      for (const value of expression.values) visitHostCalls(value, calls);
+      return;
+    case "project":
+      visitHostCalls(expression.product, calls);
+      return;
+    case "function":
+      visitHostCalls(expression.body, calls);
+      return;
+    case "call":
+      visitHostCalls(expression.callee, calls);
+      for (const argument of expression.arguments) {
+        visitHostCalls(argument, calls);
+      }
+      return;
+    case "index":
+      visitHostCalls(expression.collection, calls);
+      visitHostCalls(expression.index, calls);
+      return;
+    case "textAppend":
+    case "binary":
+      visitHostCalls(expression.left, calls);
+      visitHostCalls(expression.right, calls);
+      return;
+    case "ownership":
+    case "return":
+    case "comptime":
+      visitHostCalls(expression.expression, calls);
+      return;
+    case "scratch":
+      visitHostCalls(expression.body, calls);
+      return;
+    case "if":
+      visitHostCalls(expression.condition, calls);
+      visitHostCalls(expression.consequence, calls);
+      visitHostCalls(expression.alternative, calls);
+      return;
+    case "ifUnion":
+      visitHostCalls(expression.value, calls);
+      visitHostCalls(expression.consequence, calls);
+      visitHostCalls(expression.alternative, calls);
+      return;
+    case "block":
+      for (const step of expression.steps) {
+        visitHostCalls(
+          step.kind === "binding" ? step.binding.value : step.expression,
+          calls,
+        );
+      }
+      visitHostCalls(expression.result, calls);
+      return;
+  }
+}
+
+function hostFunctionKey(effectName: string, operationName: string): string {
+  return `${effectName}\u0000${operationName}`;
+}
+
 class DucklangFcgCompiler {
   readonly #file: string;
   readonly #shapes: ReadonlyMap<number, FunctionShape>;
+  readonly #hostFunctions: ReadonlyMap<string, HostFunctionShape>;
   readonly #unionNames: ReadonlySet<string>;
   readonly #unionTags: ReadonlyMap<string, number>;
   readonly #locals = new Map<number, number>();
@@ -217,12 +348,14 @@ class DucklangFcgCompiler {
   constructor(
     file: string,
     shapes: ReadonlyMap<number, FunctionShape>,
+    hostFunctions: ReadonlyMap<string, HostFunctionShape>,
     parameters: readonly { readonly id: number }[],
     unionNames: ReadonlySet<string>,
     unionTags: ReadonlyMap<string, number>,
   ) {
     this.#file = file;
     this.#shapes = shapes;
+    this.#hostFunctions = hostFunctions;
     this.#unionNames = unionNames;
     this.#unionTags = unionTags;
     parameters.forEach((parameter, index) =>
@@ -285,6 +418,27 @@ class DucklangFcgCompiler {
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang intrinsic ${expression.modulePath}.${expression.exportName} reached FCG without intrinsic lowering`,
         );
+      case "hostCall": {
+        const shape = this.#hostFunctions.get(
+          hostFunctionKey(expression.effectName, expression.operationName),
+        );
+        if (shape === undefined) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang FCG has no host operation ${expression.effectName}.${expression.operationName}`,
+          );
+        }
+        return [
+          ...expression.arguments.flatMap((argument) =>
+            this.#compileExpression(argument)
+          ),
+          {
+            kind: "call",
+            functionIndex: shape.index,
+            functionName: shape.name,
+            span: expression.span,
+          },
+        ];
+      }
       case "unionCase": {
         const tag = this.#unionTags.get(expression.caseName);
         if (tag === undefined) {

@@ -1,4 +1,5 @@
 import type {
+  DucklangEffectOperation,
   DucklangExpression,
   DucklangModule,
   DucklangName,
@@ -45,6 +46,14 @@ export type ResolvedDucklangExpression =
     readonly kind: "intrinsic";
     readonly modulePath: string;
     readonly exportName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "hostCall";
+    readonly effectName: string;
+    readonly operationName: string;
+    readonly arguments: readonly ResolvedDucklangExpression[];
+    readonly operation: DucklangEffectOperation;
     readonly span: SourceSpan;
   }
   | {
@@ -177,6 +186,7 @@ export type ResolvedDucklangModule = {
   readonly symbols: readonly DucklangSymbol[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
+  readonly effects: ReadonlyMap<string, readonly DucklangEffectOperation[]>;
 };
 
 type ResolvedStatements = {
@@ -203,6 +213,7 @@ export function resolveDucklangModule(
     symbols: resolver.symbols,
     unionTypes: resolver.unionTypes,
     typeAliases: resolver.typeAliases,
+    effects: resolver.effects,
   };
 }
 
@@ -211,6 +222,7 @@ class DucklangResolver {
   readonly #symbols: DucklangSymbol[] = [];
   readonly #unionTypes: ResolvedDucklangUnionType[] = [];
   readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
+  readonly #effects = new Map<string, readonly DucklangEffectOperation[]>();
 
   constructor(file: string) {
     this.#file = file;
@@ -228,6 +240,10 @@ class DucklangResolver {
     return this.#typeAliases;
   }
 
+  get effects(): ResolvedDucklangModule["effects"] {
+    return this.#effects;
+  }
+
   resolveStatements(
     statements: readonly DucklangStatement[],
     initialEnvironment: ReadonlyMap<string, DucklangSymbol>,
@@ -241,6 +257,29 @@ class DucklangResolver {
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
+      if (statement.kind === "effectDeclaration") {
+        if (scope !== "module") {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang effect declarations must be module-level`,
+          );
+        }
+        if (this.#effects.has(statement.name)) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: duplicate Ducklang effect ${statement.name}`,
+          );
+        }
+        const operationNames = new Set<string>();
+        for (const operation of statement.operations) {
+          if (operationNames.has(operation.name)) {
+            throw new SyntaxError(
+              `${this.#file}:${operation.span.start}: duplicate Ducklang effect operation ${statement.name}.${operation.name}`,
+            );
+          }
+          operationNames.add(operation.name);
+        }
+        this.#effects.set(statement.name, statement.operations);
+        continue;
+      }
       if (statement.kind === "unionType") {
         if (scope !== "module") {
           throw new SyntaxError(
@@ -544,6 +583,28 @@ class DucklangResolver {
         throw new SyntaxError(
           `${this.#file}:${expression.span.start}: Ducklang import expression must initialize a module binding`,
         );
+      case "hostCall": {
+        const operation = this.#effects.get(expression.effectName)?.find(
+          (candidate) => candidate.name === expression.operationName,
+        );
+        if (operation === undefined) {
+          throw new ReferenceError(
+            `${this.#file}:${expression.span.start}: unknown Ducklang effect operation ${expression.effectName}.${expression.operationName}`,
+          );
+        }
+        if (operation.parameterTypes.length !== expression.arguments.length) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang effect operation ${expression.effectName}.${expression.operationName} expects ${operation.parameterTypes.length} arguments; received ${expression.arguments.length}`,
+          );
+        }
+        return {
+          ...expression,
+          operation,
+          arguments: expression.arguments.map((argument) =>
+            this.#resolveExpression(argument, environment, currentRecursive)
+          ),
+        };
+      }
       case "reference": {
         const symbol = environment.get(expression.name.text);
         if (symbol === undefined) {

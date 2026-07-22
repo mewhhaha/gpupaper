@@ -266,11 +266,26 @@ async function compileDucklangModuleSource(
   };
 }
 
-export async function runMain(wasm: Uint8Array): Promise<number | bigint> {
+export async function runMain(
+  wasm: Uint8Array,
+  hostInputs?: unknown,
+): Promise<number | bigint> {
   const module = await WebAssembly.compile(
     new Uint8Array(wasm).buffer as ArrayBuffer,
   );
-  const instance = await WebAssembly.instantiate(module);
+  const imports: WebAssembly.Imports = {};
+  for (const descriptor of WebAssembly.Module.imports(module)) {
+    if (descriptor.kind !== "function") {
+      throw new TypeError(
+        `main runner cannot provide ${descriptor.kind} import ${descriptor.module}.${descriptor.name}`,
+      );
+    }
+    const value = readHostInput(hostInputs, descriptor.module, descriptor.name);
+    const namespace = imports[descriptor.module] ?? {};
+    namespace[descriptor.name] = () => value;
+    imports[descriptor.module] = namespace;
+  }
+  const instance = await WebAssembly.instantiate(module, imports);
   const main = instance.exports.main;
   if (!(main instanceof Function)) {
     throw new Error("emitted module has no main export");
@@ -280,4 +295,34 @@ export async function runMain(wasm: Uint8Array): Promise<number | bigint> {
     throw new Error(`main returned ${typeof result}; expected i32 or i64`);
   }
   return result;
+}
+
+function readHostInput(
+  inputs: unknown,
+  effectName: string,
+  operationName: string,
+): number | bigint {
+  if (typeof inputs !== "object" || inputs === null || Array.isArray(inputs)) {
+    throw new TypeError(
+      `host input ${effectName}.${operationName} requires an input object`,
+    );
+  }
+  const effect = (inputs as Record<string, unknown>)[effectName];
+  if (typeof effect !== "object" || effect === null || Array.isArray(effect)) {
+    throw new TypeError(
+      `host input ${effectName}.${operationName} requires object property ${effectName}`,
+    );
+  }
+  const value = (effect as Record<string, unknown>)[operationName];
+  if (
+    typeof value !== "bigint" &&
+    (typeof value !== "number" || !Number.isSafeInteger(value))
+  ) {
+    throw new TypeError(
+      `host input ${effectName}.${operationName} must be a safe integer or bigint; received ${
+        String(value)
+      }`,
+    );
+  }
+  return value;
 }

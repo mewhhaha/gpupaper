@@ -220,6 +220,7 @@ function substituteStatement(
       };
     case "continue":
     case "import":
+    case "effectDeclaration":
     case "unionType":
     case "typeAlias":
       return statement;
@@ -239,6 +240,13 @@ function substituteExpression(
     case "string":
     case "moduleImport":
       return expression;
+    case "hostCall":
+      return {
+        ...expression,
+        arguments: expression.arguments.map((argument) =>
+          substituteExpression(argument, values, replaceReferences)
+        ),
+      };
     case "reference":
       return replaceReferences
         ? values.get(expression.name.text) ?? expression

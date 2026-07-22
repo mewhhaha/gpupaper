@@ -72,6 +72,95 @@ function lowerModuleStatement(
   if (statement.type !== "rule") {
     throw unsupported(file, statement, "module statement");
   }
+  if (statement.name === "module_header") return undefined;
+  if (statement.name === "declare_record_statement") {
+    const name = identifierName(
+      file,
+      requiredField(statement, "name"),
+      "record declaration name",
+    );
+    if (name.text !== "Init") {
+      throw unsupported(file, statement, `record declaration ${name.text}`);
+    }
+    return undefined;
+  }
+  if (statement.name === "declare_effect_statement") {
+    const operationBlock = findRule(statement, "effect_operation_block");
+    if (operationBlock === undefined) {
+      throw unsupported(file, statement, "effect operation block");
+    }
+    return {
+      kind: "effectDeclaration",
+      name: tokenText(
+        file,
+        requiredField(statement, "name"),
+        "effect declaration name",
+      ),
+      operations: operationBlock.children().flatMap((child) => {
+        if (child.type !== "rule" || child.name !== "effect_operation") {
+          return [];
+        }
+        const parameters = requiredField(child, "parameters");
+        if (parameters.type !== "rule") {
+          throw unsupported(file, parameters, "effect parameters");
+        }
+        return [{
+          name: identifierName(
+            file,
+            requiredField(child, "name"),
+            "effect operation name",
+          ).text,
+          parameterTypes: parameters.children().flatMap((parameter) =>
+            parameter.type === "rule" && parameter.name === "host_parameter"
+              ? [lowerTypeReference(file, parameter)]
+              : []
+          ),
+          resultType: lowerTypeReference(
+            file,
+            requiredField(child, "result"),
+          ),
+          span: sourceSpan(file, child),
+        }];
+      }),
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "effect_binding_statement") {
+    return {
+      kind: "binding",
+      declarationKind: "let",
+      recursive: false,
+      name: identifierName(
+        file,
+        requiredField(statement, "name"),
+        "effect result binding",
+      ),
+      value: lowerHostCall(file, requiredField(statement, "value")),
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "module_return_statement") {
+    const fieldBlock = findRule(statement, "field_block");
+    const fields = fieldBlock?.children().filter((child): child is RuleCursor =>
+      child.type === "rule" && child.name === "shape_field"
+    ) ?? [];
+    const field = fields.length === 1 ? fields[0] : undefined;
+    if (
+      field === undefined ||
+      identifierName(
+          file,
+          requiredField(field, "name"),
+          "module return field",
+        ).text !== "result"
+    ) {
+      throw unsupported(file, statement, "module result return");
+    }
+    return {
+      kind: "expression",
+      expression: lowerExpression(file, requiredField(field, "value")),
+      span: sourceSpan(file, statement),
+    };
+  }
   if (statement.name === "binding_statement") {
     const value = lowerExpression(file, requiredField(statement, "value"));
     const bindingPattern = requiredField(statement, "name");
@@ -275,6 +364,34 @@ function lowerModuleStatement(
     return { kind: "continue", span: sourceSpan(file, statement) };
   }
   throw unsupported(file, statement, statement.name);
+}
+
+function lowerHostCall(
+  file: string,
+  input: SyntaxCursor,
+): DucklangExpression {
+  const application = findRule(input, "application_expression");
+  const postfix = application === undefined
+    ? undefined
+    : findRule(application, "postfix_expression");
+  if (application === undefined || postfix === undefined) {
+    throw unsupported(file, input, "effect operation call");
+  }
+  const names: TokenCursor[] = [];
+  collectTokens(postfix, names, "identifier");
+  if (names.length !== 2) {
+    throw unsupported(file, postfix, "effect operation reference");
+  }
+  const arguments_ = cursorFields(application, "argument").flatMap((argument) =>
+    lowerCallArguments(file, argument)
+  );
+  return {
+    kind: "hostCall",
+    effectName: names[0].text,
+    operationName: names[1].text,
+    arguments: arguments_,
+    span: sourceSpan(file, application),
+  };
 }
 
 function lowerTypeReference(

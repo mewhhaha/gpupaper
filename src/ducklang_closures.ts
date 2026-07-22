@@ -512,6 +512,8 @@ function rewriteChildren(
         callee: rewrite(expression.callee),
         arguments: expression.arguments.map(rewrite),
       };
+    case "hostCall":
+      return { ...expression, arguments: expression.arguments.map(rewrite) };
     case "index":
       return {
         ...expression,

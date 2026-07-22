@@ -98,6 +98,11 @@ function collectComptimeExpressions(
         collectComptimeExpressions(argument, expressions);
       }
       return;
+    case "hostCall":
+      for (const argument of expression.arguments) {
+        collectComptimeExpressions(argument, expressions);
+      }
+      return;
     case "index":
       collectComptimeExpressions(expression.collection, expressions);
       collectComptimeExpressions(expression.index, expressions);
@@ -271,6 +276,13 @@ function replaceComptimeExpressions(
           values,
           nextValueIndex,
         ),
+        arguments: expression.arguments.map((argument) =>
+          replaceComptimeExpressions(argument, values, nextValueIndex)
+        ),
+      };
+    case "hostCall":
+      return {
+        ...expression,
         arguments: expression.arguments.map((argument) =>
           replaceComptimeExpressions(argument, values, nextValueIndex)
         ),

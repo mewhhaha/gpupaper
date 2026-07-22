@@ -134,6 +134,28 @@ if positive(1) { 42 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang host effects import scalar runtime inputs", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `module (!init: Init) where
+declare effect Input {
+  flag: () => Bool
+}
+declare Init { input: Input }
+flag <- Input.flag()
+let result = if flag { 21 } else { 41 }
+return { .result = result }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm, { input: { flag: 1 } }), 21);
+  assertEquals(await runMain(artifact.wasm, { input: { flag: 0 } }), 41);
+  await assertRejects(
+    () => runMain(artifact.wasm),
+    /host input input\.flag requires an input object/,
+  );
+});
+
 Deno.test("Ducklang functions capture the module symbol visible at declaration", async () => {
   await assertDuckFixture("closure_capture.duck", 43);
 });

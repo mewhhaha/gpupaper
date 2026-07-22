@@ -48,6 +48,14 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "hostCall";
+    readonly effectName: string;
+    readonly operationName: string;
+    readonly arguments: readonly TypedDucklangExpression[];
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "unionCase";
     readonly caseName: string;
     readonly value: TypedDucklangExpression;
@@ -413,6 +421,35 @@ class DucklangInference {
           );
         }
         return { expression: { ...expression, type }, type };
+      }
+      case "hostCall": {
+        const arguments_ = expression.arguments.map((argument) =>
+          this.inferExpression(argument, environment)
+        );
+        for (const [index, argument] of arguments_.entries()) {
+          const declared = this.#typeReference(
+            expression.operation.parameterTypes[index],
+            new Map(),
+            [],
+          );
+          this.#unify(declared, argument.type, argument.expression.span);
+        }
+        const type = this.#typeReference(
+          expression.operation.resultType,
+          new Map(),
+          [],
+        );
+        return {
+          expression: {
+            kind: "hostCall",
+            effectName: expression.effectName,
+            operationName: expression.operationName,
+            arguments: arguments_.map((argument) => argument.expression),
+            type,
+            span: expression.span,
+          },
+          type,
+        };
       }
       case "unionCase": {
         const unionCase = this.#unionCaseType(
@@ -1035,6 +1072,14 @@ class DucklangInference {
       case "intrinsic":
       case "reference":
         return { ...expression, type };
+      case "hostCall":
+        return {
+          ...expression,
+          arguments: expression.arguments.map((argument) =>
+            this.#normalizeExpression(argument)
+          ),
+          type,
+        };
       case "unionCase":
         return {
           ...expression,
@@ -1165,6 +1210,11 @@ class DucklangInference {
     switch (expression.kind) {
       case "return":
         this.#unify(expression.type, result, expression.span);
+        return;
+      case "hostCall":
+        for (const argument of expression.arguments) {
+          this.#unifyReturnTypes(argument, result);
+        }
         return;
       case "function":
       case "integer":

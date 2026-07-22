@@ -14,6 +14,7 @@ const supportedSuccessPaths = new Set([
   "examples/basics/05_i64_pipeline.duck",
   "examples/basics/06_functions_and_blocks.duck",
   "examples/basics/07_early_return.duck",
+  "examples/basics/08_dynamic_condition.duck",
   "examples/basics/10_else_if.duck",
   "examples/basics/11_no_demand_bindings.duck",
   "examples/basics/12_value_packs_and_tuples.duck",
@@ -97,12 +98,7 @@ async function assertSuccessContract(
     gpuMode: "off",
   });
   for (const run of example.runs) {
-    if (run.inputs !== undefined) {
-      throw new Error(
-        `${example.path} entered the executable baseline before runtime inputs were implemented`,
-      );
-    }
-    const actual = await runMain(artifact.wasm);
+    const actual = await runMain(artifact.wasm, run.inputs);
     const expected = run.expected.type === "i32"
       ? run.expected.value
       : BigInt(run.expected.value);

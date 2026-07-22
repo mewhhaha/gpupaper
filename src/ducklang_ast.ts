@@ -26,6 +26,13 @@ export type DucklangUnionCase = {
   readonly span: SourceSpan;
 };
 
+export type DucklangEffectOperation = {
+  readonly name: string;
+  readonly parameterTypes: readonly DucklangTypeReference[];
+  readonly resultType: DucklangTypeReference;
+  readonly span: SourceSpan;
+};
+
 export type DucklangExpression =
   | {
     readonly kind: "integer";
@@ -54,6 +61,13 @@ export type DucklangExpression =
   | {
     readonly kind: "moduleImport";
     readonly path: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "hostCall";
+    readonly effectName: string;
+    readonly operationName: string;
+    readonly arguments: readonly DucklangExpression[];
     readonly span: SourceSpan;
   }
   | {
@@ -148,6 +162,12 @@ export type DucklangExpression =
   };
 
 export type DucklangStatement =
+  | {
+    readonly kind: "effectDeclaration";
+    readonly name: string;
+    readonly operations: readonly DucklangEffectOperation[];
+    readonly span: SourceSpan;
+  }
   | {
     readonly kind: "unionType";
     readonly name: string;
