@@ -340,7 +340,6 @@ async function unionOnGpu(
         }`,
       );
     }
-    device.pushErrorScope("validation");
     const bindGroupLayout = device.createBindGroupLayout({
       entries: [
         {
@@ -358,11 +357,11 @@ async function unionOnGpu(
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [bindGroupLayout],
     });
-    const unionPipeline = device.createComputePipeline({
+    const unionPipeline = await device.createComputePipelineAsync({
       layout: pipelineLayout,
       compute: { module: shader, entryPoint: "union_equalities" },
     });
-    const compressionPipeline = device.createComputePipeline({
+    const compressionPipeline = await device.createComputePipelineAsync({
       layout: pipelineLayout,
       compute: { module: shader, entryPoint: "compress_paths" },
     });
@@ -402,12 +401,6 @@ async function unionOnGpu(
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
     readbackMapped = true;
-    const validationError = await device.popErrorScope();
-    if (validationError !== null) {
-      throw new Error(
-        `WebGPU union validation failed: ${validationError.message}`,
-      );
-    }
     const representatives = [
       ...new Uint32Array(readback.getMappedRange().slice(0)),
     ];
@@ -482,8 +475,7 @@ async function findInfiniteTypeOnGpu(
         }`,
       );
     }
-    device.pushErrorScope("validation");
-    const pipeline = device.createComputePipeline({
+    const pipeline = await device.createComputePipelineAsync({
       layout: "auto",
       compute: { module: shader, entryPoint: "close_reachability" },
     });
@@ -513,12 +505,6 @@ async function findInfiniteTypeOnGpu(
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
     readbackMapped = true;
-    const validationError = await device.popErrorScope();
-    if (validationError !== null) {
-      throw new Error(
-        `WebGPU reachability validation failed: ${validationError.message}`,
-      );
-    }
     const closure = new Uint32Array(readback.getMappedRange());
     for (let index = 0; index < count; index += 1) {
       if (closure[index * count + index] !== 0) return roots[index];
