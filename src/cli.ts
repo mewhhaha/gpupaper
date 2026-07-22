@@ -68,13 +68,20 @@ async function main(arguments_: readonly string[]): Promise<void> {
   if (command === "compile") {
     const output = outputArgument ?? file.replace(/\.hs$/, "") + ".wasm";
     const inputPath = await Deno.realPath(file);
+    const inputFile = await Deno.stat(inputPath);
     let existingOutputPath: string | undefined;
+    let existingOutputFile: Deno.FileInfo | undefined;
     try {
       existingOutputPath = await Deno.realPath(output);
+      existingOutputFile = await Deno.stat(existingOutputPath);
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
-    if (existingOutputPath === inputPath) {
+    const aliasesInput = existingOutputFile !== undefined &&
+      inputFile.dev !== null && inputFile.ino !== null &&
+      inputFile.dev === existingOutputFile.dev &&
+      inputFile.ino === existingOutputFile.ino;
+    if (existingOutputPath === inputPath || aliasesInput) {
       throw new Error(`compile output must differ from input ${file}`);
     }
     await Deno.writeFile(output, artifact.wasm);
