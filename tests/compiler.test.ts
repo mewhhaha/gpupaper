@@ -192,6 +192,19 @@ Deno.test("instance primitives require their exact class method type", () => {
   );
 });
 
+Deno.test("class methods cannot introduce unquantified type variables", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `class Convert a where convert :: b -> a\nmain = 0\n`,
+        ),
+      ),
+    /class method convert uses undeclared type variable b/,
+  );
+});
+
 Deno.test("datatype fields cannot introduce hidden type variables", () => {
   assertThrows(
     () =>

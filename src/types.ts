@@ -83,6 +83,36 @@ export function inferModule(module: Module): InferredModule {
       );
     }
     classByName.set(declaration.name.text, declaration);
+    if (declaration.methodType.predicates.length !== 0) {
+      throw new TypeError(
+        `${declaration.methodType.span.file}:${declaration.methodType.span.start}: class method predicates are outside this proof of concept`,
+      );
+    }
+    const pendingTypes: TypeSyntax[] = [declaration.methodType.type];
+    let parameterReferenced = false;
+    while (pendingTypes.length !== 0) {
+      const syntax = pendingTypes.pop()!;
+      if (syntax.kind === "function") {
+        pendingTypes.push(syntax.parameter, syntax.result);
+        continue;
+      }
+      if (syntax.kind === "apply") {
+        pendingTypes.push(syntax.constructor, syntax.argument);
+        continue;
+      }
+      if (syntax.name[0] !== syntax.name[0].toLowerCase()) continue;
+      if (syntax.name !== declaration.parameter) {
+        throw new TypeError(
+          `${syntax.span.file}:${syntax.span.start}: class method ${declaration.methodName.text} uses undeclared type variable ${syntax.name}`,
+        );
+      }
+      parameterReferenced = true;
+    }
+    if (!parameterReferenced) {
+      throw new TypeError(
+        `${declaration.methodType.span.file}:${declaration.methodType.span.start}: class method ${declaration.methodName.text} does not mention class parameter ${declaration.parameter}`,
+      );
+    }
   }
   const instanceOrigins = new Map<string, InstanceDeclaration>();
   for (const instance of instances) {
