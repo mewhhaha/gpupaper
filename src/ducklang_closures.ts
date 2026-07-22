@@ -364,6 +364,11 @@ function rewriteExpression(
       referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "unionCase",
   );
+  const specializesProductParameter = factory.parameters.some(
+    (parameter, index) =>
+      referencesSymbol(factoryBody, parameter.id) &&
+      staticValue(rewritten.arguments[index], values).kind === "product",
+  );
   const specializesIntrinsicParameter = factory.parameters.some(
     (parameter, index) =>
       isCalledParameter(factoryBody, parameter.id) &&
@@ -373,7 +378,8 @@ function rewriteExpression(
   if (
     !returnsFunction && !returnsAggregate && !inlinesFunctionLiteral &&
     !specializesFunctionParameter && !specializesTextParameter &&
-    !specializesUnionParameter && !specializesIntrinsicParameter
+    !specializesUnionParameter && !specializesProductParameter &&
+    !specializesIntrinsicParameter
   ) {
     return collapseEmptyBlock(rewritten);
   }
