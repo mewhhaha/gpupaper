@@ -3,6 +3,7 @@ export class WasmModuleBuilder {
   readonly #imports: number[][] = [];
   readonly #functions: number[] = [];
   readonly #exports: number[][] = [];
+  readonly #exportNames = new Set<string>();
   readonly #codes: number[][] = [];
 
   addFunctionType(
@@ -76,6 +77,10 @@ export class WasmModuleBuilder {
         `export ${name} uses function index ${functionIndex}; ${functionCount} functions are defined`,
       );
     }
+    if (this.#exportNames.has(name)) {
+      throw new Error(`duplicate Wasm export ${name}`);
+    }
+    this.#exportNames.add(name);
     this.#exports.push([
       ...encodeName(name),
       0x00,

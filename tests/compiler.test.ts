@@ -591,6 +591,26 @@ Deno.test("Wasm builder rejects nonexistent indices at their boundary", () => {
   );
 });
 
+Deno.test("Wasm builder rejects duplicate export names", () => {
+  const builder = new WasmModuleBuilder();
+  const typeIndex = builder.addFunctionType([], [wasmType.i32]);
+  const first = builder.addFunction(
+    typeIndex,
+    [],
+    wasmInstruction.i32Constant(0),
+  );
+  const second = builder.addFunction(
+    typeIndex,
+    [],
+    wasmInstruction.i32Constant(1),
+  );
+  builder.exportFunction("main", first);
+  assertThrows(
+    () => builder.exportFunction("main", second),
+    /duplicate Wasm export main/,
+  );
+});
+
 function assertEquals(actual: unknown, expected: unknown): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
