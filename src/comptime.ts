@@ -277,23 +277,6 @@ export async function evaluateBytecodeOnGpu(
     size: programs.length * 8,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
-  const shader = device.createShaderModule({ code: evaluatorShader });
-  const compilation = await shader.getCompilationInfo();
-  const errors = compilation.messages.filter((message) =>
-    message.type === "error"
-  );
-  if (errors.length > 0) {
-    throw new Error(
-      `WebGPU comptime shader failed: ${
-        errors.map((message) => message.message).join("; ")
-      }`,
-    );
-  }
-  device.pushErrorScope("validation");
-  const pipeline = device.createComputePipeline({
-    layout: "auto",
-    compute: { module: shader, entryPoint: "evaluate" },
-  });
   const buffers = [
     opcodeBuffer,
     operandBuffer,
@@ -303,61 +286,89 @@ export async function evaluateBytecodeOnGpu(
     stackBuffer,
     parameterBuffer,
   ];
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
-    entries: buffers.map((buffer, binding) => ({
-      binding,
-      resource: { buffer },
-    })),
-  });
-  const encoder = device.createCommandEncoder();
-  const pass = encoder.beginComputePass();
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(Math.ceil(programs.length / 64));
-  pass.end();
-  encoder.copyBufferToBuffer(resultBuffer, 0, readback, 0, programs.length * 4);
-  encoder.copyBufferToBuffer(
-    statusBuffer,
-    0,
-    readback,
-    programs.length * 4,
-    programs.length * 4,
-  );
-  device.queue.submit([encoder.finish()]);
-  await readback.mapAsync(GPUMapMode.READ);
-  const validationError = await device.popErrorScope();
-  if (validationError !== null) {
-    throw new Error(
-      `WebGPU comptime validation failed: ${validationError.message}`,
+  let readbackMapped = false;
+  try {
+    const shader = device.createShaderModule({ code: evaluatorShader });
+    const compilation = await shader.getCompilationInfo();
+    const errors = compilation.messages.filter((message) =>
+      message.type === "error"
     );
-  }
-  const mapped = readback.getMappedRange();
-  const values = new Int32Array(mapped, 0, programs.length);
-  const statuses = new Uint32Array(
-    mapped,
-    programs.length * 4,
-    programs.length,
-  );
-  const completed: ComptimeValue[] = [];
-  for (let index = 0; index < programs.length; index += 1) {
-    if (statuses[index] !== 1) {
+    if (errors.length > 0) {
       throw new Error(
-        `GPU comptime program at ${
-          programs[index].sourceStart
-        } failed with status ${statuses[index]}`,
+        `WebGPU comptime shader failed: ${
+          errors.map((message) => message.message).join("; ")
+        }`,
       );
     }
-    completed.push(
-      programs[index].resultKind === "boolean"
-        ? { kind: "boolean", value: values[index] !== 0 }
-        : { kind: "integer", value: values[index] },
+    device.pushErrorScope("validation");
+    const pipeline = device.createComputePipeline({
+      layout: "auto",
+      compute: { module: shader, entryPoint: "evaluate" },
+    });
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: buffers.map((buffer, binding) => ({
+        binding,
+        resource: { buffer },
+      })),
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.dispatchWorkgroups(Math.ceil(programs.length / 64));
+    pass.end();
+    encoder.copyBufferToBuffer(
+      resultBuffer,
+      0,
+      readback,
+      0,
+      programs.length * 4,
     );
+    encoder.copyBufferToBuffer(
+      statusBuffer,
+      0,
+      readback,
+      programs.length * 4,
+      programs.length * 4,
+    );
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    readbackMapped = true;
+    const validationError = await device.popErrorScope();
+    if (validationError !== null) {
+      throw new Error(
+        `WebGPU comptime validation failed: ${validationError.message}`,
+      );
+    }
+    const mapped = readback.getMappedRange();
+    const values = new Int32Array(mapped, 0, programs.length);
+    const statuses = new Uint32Array(
+      mapped,
+      programs.length * 4,
+      programs.length,
+    );
+    const completed: ComptimeValue[] = [];
+    for (let index = 0; index < programs.length; index += 1) {
+      if (statuses[index] !== 1) {
+        throw new Error(
+          `GPU comptime program at ${
+            programs[index].sourceStart
+          } failed with status ${statuses[index]}`,
+        );
+      }
+      completed.push(
+        programs[index].resultKind === "boolean"
+          ? { kind: "boolean", value: values[index] !== 0 }
+          : { kind: "integer", value: values[index] },
+      );
+    }
+    return { status: "completed", values: completed, backend: "gpu" };
+  } finally {
+    if (readbackMapped) readback.unmap();
+    for (const buffer of [...buffers, readback]) buffer.destroy();
+    device.destroy();
   }
-  readback.unmap();
-  for (const buffer of [...buffers, readback]) buffer.destroy();
-  device.destroy();
-  return { status: "completed", values: completed, backend: "gpu" };
 }
 
 export async function evaluateModuleComptime(
