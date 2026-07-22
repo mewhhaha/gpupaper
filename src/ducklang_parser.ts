@@ -2184,28 +2184,34 @@ function constParameterNames(
   let searchStart = 1;
   return parameters.map((parameter) => {
     const match = parameter.trim().match(
-      /^(?:const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*(I32|I64|Bool|Text))?$/,
+      /^(const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*([A-Za-z][A-Za-z0-9_]*(?:\s+[A-Za-z][A-Za-z0-9_]*)*))?$/,
     );
     if (match === null) {
       throw unsupported(file, list, "const parameter list");
     }
-    const nameOffset = list.text.indexOf(match[1], searchStart);
+    const nameOffset = list.text.indexOf(match[2], searchStart);
     if (nameOffset < 0) {
       throw new Error(
-        `Ducklang const parameter ${match[1]} has no source span`,
+        `Ducklang const parameter ${match[2]} has no source span`,
       );
     }
-    searchStart = nameOffset + match[1].length;
+    searchStart = nameOffset + match[2].length;
+    const declaredType = match[3] === "I32" || match[3] === "I64" ||
+        match[3] === "Bool" || match[3] === "Text"
+      ? match[3]
+      : undefined;
     return {
-      text: match[1],
+      text: match[2],
       ...(parameter.includes("...") ? { variadic: true } : {}),
-      ...(match[2] === undefined ? {} : {
-        declaredType: match[2] as "I32" | "I64" | "Bool" | "Text",
-      }),
+      ...(match[1] !== undefined && match[3] !== undefined &&
+          declaredType === undefined && /^[a-z]/.test(match[3])
+        ? { compileTimeRecord: true }
+        : {}),
+      ...(declaredType === undefined ? {} : { declaredType }),
       span: {
         file,
         start: list.span.start + nameOffset,
-        end: list.span.start + nameOffset + match[1].length,
+        end: list.span.start + nameOffset + match[2].length,
       },
     };
   });

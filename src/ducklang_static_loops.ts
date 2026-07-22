@@ -31,7 +31,7 @@ function expandStatements(
 ): Expansion {
   let values = new Map(initialValues);
   const expanded: DucklangStatement[] = [];
-  for (const statement of statements) {
+  for (const [statementIndex, statement] of statements.entries()) {
     if (statement.kind === "break" || statement.kind === "continue") {
       if (!inLoop) {
         throw new SyntaxError(
@@ -41,14 +41,21 @@ function expandStatements(
       return { statements: expanded, control: statement.kind, values };
     }
     if (
-      statement.kind === "binding" && statement.declarationKind === "const" &&
-      statement.value.kind === "function" &&
-      statement.value.parameters.some((parameter) => parameter.variadic)
+      statement.kind === "binding" && statement.value.kind === "function" &&
+      statement.value.parameters.some((parameter) =>
+        parameter.variadic || parameter.compileTimeRecord
+      )
     ) {
       values.set(
         statement.name.text,
         substituteExpression(statement.value, values),
       );
+      continue;
+    }
+    if (
+      statementIndex < statements.length - 1 &&
+      statement.kind === "expression" && statement.expression.kind === "field"
+    ) {
       continue;
     }
     if (inLoop && statement.kind === "unionBinding") {
@@ -259,6 +266,22 @@ function expandStatements(
       continue;
     }
     const substituted = substituteStatement(statement, values, inLoop);
+    if (
+      substituted.kind === "binding" &&
+      substituted.value.kind !== "function"
+    ) {
+      const staticRecord = evaluateStaticValue(
+        substituteExpression(substituted.value, values),
+      );
+      if (
+        staticRecord?.kind === "record" &&
+        staticRecord.nominalType === undefined &&
+        staticRecord.fields.some((field) => field.value.kind === "function")
+      ) {
+        values.set(substituted.name.text, staticRecord);
+        continue;
+      }
+    }
     expanded.push(substituted);
     if (substituted.kind === "binding" || substituted.kind === "assignment") {
       const staticValue = evaluateStaticValue(
@@ -449,7 +472,9 @@ function substituteExpression(
       }
       const staticFunction = values.get(expression.name.text);
       return staticFunction?.kind === "function" &&
-          staticFunction.parameters.some((parameter) => parameter.variadic)
+          staticFunction.parameters.some((parameter) =>
+            parameter.variadic || parameter.compileTimeRecord
+          )
         ? staticFunction
         : expression;
     }
@@ -489,29 +514,47 @@ function substituteExpression(
       const variadicIndex = callee.parameters.findIndex((parameter) =>
         parameter.variadic
       );
-      if (variadicIndex < 0) {
+      const hasCompileTimeRecord = callee.parameters.some((parameter) =>
+        parameter.compileTimeRecord
+      );
+      if (variadicIndex < 0 && !hasCompileTimeRecord) {
         return { ...expression, callee, arguments: arguments_ };
       }
-      if (variadicIndex !== callee.parameters.length - 1) {
+      if (variadicIndex < 0 && arguments_.length !== callee.parameters.length) {
+        throw new TypeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang specialized call expects ${callee.parameters.length} arguments; received ${arguments_.length}`,
+        );
+      }
+      if (
+        variadicIndex >= 0 && variadicIndex !== callee.parameters.length - 1
+      ) {
         throw new TypeError(
           `${expression.span.file}:${expression.span.start}: Ducklang variadic parameter must be last`,
         );
       }
-      if (arguments_.length < variadicIndex) {
+      if (variadicIndex >= 0 && arguments_.length < variadicIndex) {
         throw new TypeError(
           `${expression.span.file}:${expression.span.start}: Ducklang variadic call expects at least ${variadicIndex} arguments; received ${arguments_.length}`,
         );
       }
+      const fixedParameterCount = variadicIndex < 0
+        ? callee.parameters.length
+        : variadicIndex;
       const parameterValues = new Map<string, DucklangExpression>();
-      for (let index = 0; index < variadicIndex; index += 1) {
-        parameterValues.set(callee.parameters[index].text, arguments_[index]);
+      for (let index = 0; index < fixedParameterCount; index += 1) {
+        const argument = callee.parameters[index].compileTimeRecord
+          ? substituteExpression(expression.arguments[index], values)
+          : arguments_[index];
+        parameterValues.set(callee.parameters[index].text, argument);
       }
-      parameterValues.set(callee.parameters[variadicIndex].text, {
-        kind: "product",
-        productKind: "tuple",
-        values: arguments_.slice(variadicIndex),
-        span: expression.span,
-      });
+      if (variadicIndex >= 0) {
+        parameterValues.set(callee.parameters[variadicIndex].text, {
+          kind: "product",
+          productKind: "tuple",
+          values: arguments_.slice(variadicIndex),
+          span: expression.span,
+        });
+      }
       const body = substituteExpression(callee.body, parameterValues);
       const block = body.kind === "comptime" && body.expression.kind === "block"
         ? body.expression
@@ -590,15 +633,20 @@ function substituteExpression(
           substituteExpression(value, values, replaceReferences)
         ),
       };
-    case "field":
-      return {
-        ...expression,
-        product: substituteExpression(
-          expression.product,
-          values,
-          replaceReferences,
-        ),
-      };
+    case "field": {
+      const product = substituteExpression(
+        expression.product,
+        values,
+        replaceReferences,
+      );
+      if (product.kind === "record") {
+        const field = product.fields.find((candidate) =>
+          candidate.name === expression.fieldName
+        );
+        if (field !== undefined) return field.value;
+      }
+      return { ...expression, product };
+    }
     case "recordUpdate":
       return {
         ...expression,
@@ -694,15 +742,20 @@ function substituteExpression(
           ),
       };
     }
-    case "block":
+    case "block": {
+      const statements = substituteStatementList(
+        expression.statements,
+        values,
+        replaceReferences,
+      );
       return {
         ...expression,
-        statements: substituteStatementList(
-          expression.statements,
-          values,
-          replaceReferences,
+        statements: statements.filter((statement, index) =>
+          index === statements.length - 1 || statement.kind !== "expression" ||
+          statement.expression.kind !== "field"
         ),
       };
+    }
     case "comptime":
       return {
         ...expression,
@@ -896,6 +949,37 @@ function evaluateStaticValue(
       values.push(evaluated);
     }
     return { ...expression, values };
+  }
+  if (expression.kind === "record") {
+    const fields = [];
+    for (const field of expression.fields) {
+      const value = evaluateStaticValue(field.value);
+      if (value === undefined) return undefined;
+      fields.push({ ...field, value });
+    }
+    return { ...expression, fields };
+  }
+  if (expression.kind === "recordUpdate") {
+    const product = evaluateStaticValue(expression.product);
+    if (
+      product?.kind !== "record" &&
+      !(product?.kind === "integer" && product.value === 0)
+    ) {
+      return undefined;
+    }
+    const fields = product.kind === "record" ? [...product.fields] : [];
+    for (const update of expression.fields) {
+      const value = evaluateStaticValue(update.value);
+      if (value === undefined) return undefined;
+      const index = fields.findIndex((field) => field.name === update.name);
+      if (index < 0) fields.push({ ...update, value });
+      else fields[index] = { ...update, value };
+    }
+    return {
+      kind: "record",
+      fields,
+      span: expression.span,
+    };
   }
   if (expression.kind === "unionCase") {
     const value = evaluateStaticValue(expression.value);
