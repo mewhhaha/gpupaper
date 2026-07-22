@@ -120,6 +120,16 @@ Deno.test("instances must define the method declared by their class", () => {
   );
 });
 
+Deno.test("datatype fields cannot introduce hidden type variables", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule("test.hs", `data Box a = Box b\nmain = 0\n`),
+      ),
+    /datatype Box field uses undeclared type variable b/,
+  );
+});
+
 Deno.test("macro invocations cannot observe later macro declarations", async () => {
   await assertRejects(
     () =>

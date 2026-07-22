@@ -213,6 +213,74 @@ class InferenceState {
     classes: readonly ClassDeclaration[],
   ): TypeEnvironment {
     const environment = new Map<string, TypeScheme>();
+    const datatypeArities = new Map<string, number>([["Int", 0], ["Bool", 0]]);
+    for (const declaration of module.declarations) {
+      if (declaration.kind !== "datatype") continue;
+      const existingArity = datatypeArities.get(declaration.name.text);
+      if (existingArity !== undefined) {
+        throw new TypeError(
+          `${declaration.name.span.file}:${declaration.name.span.start}: duplicate datatype ${declaration.name.text}; an arity-${existingArity} type already uses that name`,
+        );
+      }
+      const uniqueParameters = new Set(declaration.parameters);
+      if (uniqueParameters.size !== declaration.parameters.length) {
+        throw new TypeError(
+          `${declaration.span.file}:${declaration.span.start}: datatype ${declaration.name.text} repeats a type parameter`,
+        );
+      }
+      datatypeArities.set(declaration.name.text, declaration.parameters.length);
+    }
+    for (const declaration of module.declarations) {
+      if (declaration.kind !== "datatype") continue;
+      const parameters = new Set(declaration.parameters);
+      const validateFieldType = (syntax: TypeSyntax): void => {
+        if (syntax.kind === "function") {
+          validateFieldType(syntax.parameter);
+          validateFieldType(syntax.result);
+          return;
+        }
+        const typeArguments: TypeSyntax[] = [];
+        let head: TypeSyntax = syntax;
+        while (head.kind === "apply") {
+          typeArguments.unshift(head.argument);
+          head = head.constructor;
+        }
+        if (head.kind !== "name") {
+          throw new TypeError(
+            `${syntax.span.file}:${syntax.span.start}: only named type constructors may be applied`,
+          );
+        }
+        const startsLowercase = head.name[0] === head.name[0].toLowerCase();
+        if (startsLowercase) {
+          if (!parameters.has(head.name)) {
+            throw new TypeError(
+              `${head.span.file}:${head.span.start}: datatype ${declaration.name.text} field uses undeclared type variable ${head.name}`,
+            );
+          }
+          if (typeArguments.length !== 0) {
+            throw new TypeError(
+              `${syntax.span.file}:${syntax.span.start}: type variable ${head.name} cannot be applied`,
+            );
+          }
+        } else {
+          const expectedArity = datatypeArities.get(head.name);
+          if (expectedArity === undefined) {
+            throw new TypeError(
+              `${head.span.file}:${head.span.start}: unknown type constructor ${head.name}`,
+            );
+          }
+          if (typeArguments.length !== expectedArity) {
+            throw new TypeError(
+              `${syntax.span.file}:${syntax.span.start}: type constructor ${head.name} expects ${expectedArity} arguments; received ${typeArguments.length}`,
+            );
+          }
+        }
+        for (const argument of typeArguments) validateFieldType(argument);
+      };
+      for (const constructor of declaration.constructors) {
+        for (const field of constructor.fields) validateFieldType(field);
+      }
+    }
     for (const declaration of module.declarations) {
       if (declaration.kind !== "datatype") continue;
       for (
