@@ -1,4 +1,4 @@
-# Binned source snapshot
+# Ducklang example snapshot
 
 This directory was copied from `../binned/examples` on 2026-07-22 while that
 working tree was based on commit `49d0bbaba01e7fef5d5390b319946f982af1ad9d`. The

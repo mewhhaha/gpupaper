@@ -148,7 +148,7 @@ const additionalPortableRules: Readonly<Record<string, string>> = {
 const [sourcePath, destinationPath] = Deno.args;
 if (sourcePath === undefined || destinationPath === undefined) {
   throw new Error(
-    "usage: deno run --allow-read --allow-write scripts/import_binned_grammar.ts SOURCE DESTINATION",
+    "usage: deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts SOURCE DESTINATION",
   );
 }
 

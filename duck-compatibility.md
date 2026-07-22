@@ -1,12 +1,12 @@
 # Ducklang grammar compatibility slice
 
-This frontend follows the production shapes in Binned's Duck grammar. The syntax
+This frontend follows the production shapes in Ducklang's grammar. The syntax
 and backend milestones are deliberately separate: Baba owns complete syntax
 acceptance, while the existing scalar bridge demonstrates that an admitted
 subset can target the shared GPU-assisted compiler pipeline.
 
-The compatibility fixtures were copied from the Binned working tree under its
-MIT license. The notice is preserved in
+The compatibility fixtures were copied from the sibling `binned` working tree
+under its MIT license. The notice is preserved in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Baba 6 syntax frontend
@@ -22,7 +22,7 @@ formerly implemented by Duck's external scanner:
 - `break` terminator whitespace;
 - extension-member newline terminators.
 
-The vendored `grammar/binned-tree-sitter-grammar.json` snapshot is translated
+The vendored `grammar/ducklang-tree-sitter-grammar.json` snapshot is translated
 into `grammar/duck.baba`. Tree-sitter precedence annotations become explicit
 effect, expression, and type layers; attributed statements are left-factored;
 and Baba metadata records deterministic LR choices. A few prefixes requiring
@@ -53,7 +53,7 @@ primary      = i32 | boolean | identifier | "(", expression, ")"
 
 Newlines and semicolons terminate statements. `//` comments are ignored. Integer
 literals may be unsuffixed or use `i32`. Operator precedence matches the
-corresponding Binned productions for the admitted operators.
+corresponding Ducklang productions for the admitted operators.
 
 ## Lowering invariants
 
@@ -94,9 +94,9 @@ reinterpreted as Haskell-like source.
 
 ## Backend result
 
-The copied programs compile to validated Wasm and return the same values as
-Binned: arithmetic/shadowing returns 42, functions/blocks returns 42, `else if`
-returns 42, and lexical capture returns 43. This demonstrates that the shared
-core is already usable as a second frontend target for pure scalar programs. It
-does not yet demonstrate that the core is sufficient for all of Ducklang; the
-rejection table is the concrete growth plan.
+The copied Ducklang programs compile to validated Wasm: arithmetic/shadowing
+returns 42, functions/blocks returns 42, `else if` returns 42, and lexical
+capture returns 43. This demonstrates that the shared core is already usable as
+a second frontend target for pure scalar programs. It does not yet demonstrate
+that the core is sufficient for all of Ducklang; the rejection table is the
+concrete growth plan.

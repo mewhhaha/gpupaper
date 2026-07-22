@@ -8,7 +8,7 @@ work through WebGPU, and emits a validated WebAssembly module whose `main`
 export returns an `i32`.
 
 An experimental Ducklang frontend has two explicit layers. A Baba-generated Wasm
-parser accepts the complete vendored Binned examples corpus. A smaller
+parser accepts the complete vendored Ducklang examples corpus. A smaller
 handwritten source-to-core bridge lowers the scalar subset into the same typed
 core, WebGPU type-equality experiment, compile-time evaluator, FCG, and Wasm
 emitter as the Haskell-like frontend.
@@ -100,10 +100,11 @@ clock, or process import.
 
 The canonical Duck syntax is [grammar/duck.baba](grammar/duck.baba). Baba 6
 generates its lexer, deterministic LR plan, and standalone Wasm runtime. The
-conformance test parses all 118 `.duck` files copied from Binned, including its
-success cases, expected compile failures, runtime-trap fixtures, and imported
-dependencies. `deno task duck:grammar` regenerates the Baba grammar and reviewed
-conflict policy from the vendored Tree-sitter grammar snapshot.
+conformance test parses all 118 `.duck` files copied from the sibling `binned`
+repository, including its success cases, expected compile failures, runtime-trap
+fixtures, and imported dependencies. `deno task duck:grammar` regenerates the
+Baba grammar and reviewed conflict policy from the vendored Tree-sitter grammar
+snapshot.
 
 Syntax acceptance is not yet semantic compilation. The current source-to-core
 bridge remains a smaller executable slice that recognizes header-free pure
@@ -120,7 +121,7 @@ a function captures the binding generation visible where it is declared while
 later assignments remain visible to later declarations. This is valid for the
 admitted pure subset; effects require a sequencing representation instead.
 
-The copied `binned` fixtures cover assignment shadowing, blocks, multi-argument
+The copied Ducklang fixtures cover assignment shadowing, blocks, multi-argument
 functions, `else if`, and lexical capture. Additional fixtures exercise
 recursion and compile-time evaluation. See
 [the Duck grammar contract](duck-compatibility.md) for admitted productions,
@@ -185,9 +186,9 @@ source never becomes WGSL.
 - `src/syntax.ts`, `lexer.ts`, `parser.ts`: Haskell-like source boundary.
 - `grammar/duck.baba`, `grammar/duck.baba.json`: complete Duck syntax and its
   deterministic Wasm conflict policy.
-- `scripts/import_binned_grammar.ts`, `update_duck_conflicts.ts`: reproducible
+- `scripts/import_ducklang_grammar.ts`, `update_duck_conflicts.ts`: reproducible
   Tree-sitter-to-Baba migration and reviewed LR policy generation.
-- `tests/binned_syntax.test.ts`: all 118 vendored Duck sources through the
+- `tests/ducklang_syntax.test.ts`: all 118 vendored Ducklang sources through the
   generated Wasm parser.
 - `src/resolution.ts`, `types.ts`: CPU reference frontend and FTCG equality
   capture.

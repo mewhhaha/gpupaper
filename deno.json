@@ -13,7 +13,7 @@
     "compile": "deno run --unstable-webgpu --allow-read --allow-write src/cli.ts compile",
     "run": "deno run --unstable-webgpu --allow-read src/cli.ts run",
     "experiments": "deno run --unstable-webgpu --allow-read src/cli.ts experiments examples/all.hs",
-    "duck:grammar": "deno run --allow-read --allow-write scripts/import_binned_grammar.ts grammar/binned-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json"
+    "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json"
   },
   "imports": {
     "@mewhhaha/baba": "jsr:@mewhhaha/baba@6.0.0"

@@ -5,7 +5,7 @@ const grammarUrl = new URL("../grammar/duck.baba", import.meta.url);
 const metadataUrl = new URL("../grammar/duck.baba.json", import.meta.url);
 const corpusUrl = new URL("../examples/binned/", import.meta.url);
 
-Deno.test("Baba generated Wasm accepts every Binned Duck source file", async () => {
+Deno.test("Baba generated Wasm accepts every Ducklang source file", async () => {
   const grammar = await Deno.readTextFile(grammarUrl);
   const metadata = parseMetadata(await Deno.readTextFile(metadataUrl));
   const bundle = generate(grammar, {
@@ -51,7 +51,7 @@ Deno.test("Baba generated Wasm accepts every Binned Duck source file", async () 
     }
     if (failures.length > 0) {
       throw new Error(
-        `Baba rejected ${failures.length} Binned Duck sources:\n${
+        `Baba rejected ${failures.length} Ducklang sources:\n${
           failures.join("\n")
         }`,
       );
