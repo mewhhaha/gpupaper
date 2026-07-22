@@ -11,6 +11,36 @@ export async function resolveDucklangLocalImports(
   return await resolveModuleImports(module, []);
 }
 
+export async function expandDucklangIncludes(
+  file: string,
+  source: string,
+): Promise<string> {
+  const matches = [...source.matchAll(/\binclude[ \t]+"([^"]+)"/g)];
+  if (matches.length === 0) return source;
+  const separator = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+  const directory = separator < 0 ? "." : file.slice(0, separator);
+  let expanded = "";
+  let offset = 0;
+  for (const match of matches) {
+    const start = match.index;
+    const path = match[1];
+    let included: string;
+    try {
+      included = await Deno.readTextFile(`${directory}/${path}`);
+    } catch (cause) {
+      throw new TypeError(
+        `${file}:${start}: cannot include Ducklang file ${
+          JSON.stringify(path)
+        }`,
+        { cause },
+      );
+    }
+    expanded += source.slice(offset, start) + JSON.stringify(included);
+    offset = start + match[0].length;
+  }
+  return expanded + source.slice(offset);
+}
+
 async function resolveModuleImports(
   module: DucklangModule,
   ancestry: readonly string[],
@@ -47,7 +77,10 @@ async function resolveModuleImports(
     const dependency = await resolveModuleImports(
       await parseDucklangModule(
         dependencyFile,
-        await Deno.readTextFile(dependencyFile),
+        await expandDucklangIncludes(
+          dependencyFile,
+          await Deno.readTextFile(dependencyFile),
+        ),
       ),
       [...ancestry, dependencyFile],
     );

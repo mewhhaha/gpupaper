@@ -453,6 +453,11 @@ class DucklangInference {
         ) {
           type = functionType([typeDescriptorType, textType], booleanType);
         } else if (
+          expression.modulePath === "duck:compiler/reflection" &&
+          expression.exportName === "length"
+        ) {
+          type = functionType([textType], i32Type);
+        } else if (
           expression.modulePath === "duck:prelude/runtime" &&
           expression.exportName === "length"
         ) {

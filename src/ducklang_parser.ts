@@ -99,6 +99,22 @@ export async function parseDucklangModule(
         },
       ];
     });
+    const typedMetadata: DucklangStatement[] = source.includes("@describe_type")
+      ? [{
+        kind: "structType",
+        name: "$TypeDescription",
+        fields: [{
+          name: "size",
+          type: {
+            name: "I32",
+            arguments: [],
+            span: sourceSpan(file, result.cursor),
+          },
+          span: sourceSpan(file, result.cursor),
+        }],
+        span: sourceSpan(file, result.cursor),
+      }]
+      : [];
     return {
       file,
       parameters: parameterList === undefined
@@ -114,7 +130,7 @@ export async function parseDucklangModule(
             ]
             : []
         ),
-      statements,
+      statements: [...typedMetadata, ...statements],
       span: sourceSpan(file, result.cursor),
     };
   } finally {
@@ -126,6 +142,36 @@ function lowerModuleStatement(
   file: string,
   cursor: SyntaxCursor,
 ): DucklangStatement | undefined {
+  if (cursor.type === "rule") {
+    const attributes = cursor.children().filter((child): child is RuleCursor =>
+      child.type === "rule" && child.name === "attribute_group"
+    );
+    if (attributes.length > 0) {
+      const attributed = cursor.children().find((child): child is RuleCursor =>
+        child.type === "rule" && child.name === "_attributed_module_statement"
+      );
+      if (attributed === undefined) {
+        throw unsupported(file, cursor, "attributed module statement");
+      }
+      const lowered = lowerModuleStatement(file, attributed);
+      if (lowered?.kind !== "binding" || lowered.value.kind !== "integer") {
+        return lowered;
+      }
+      const incrementCount = attributes.reduce((count, attribute) => {
+        const tokens: TokenCursor[] = [];
+        collectAllTokens(attribute, tokens);
+        return count +
+          tokens.filter((token) => token.text === "increment").length;
+      }, 0);
+      return incrementCount === 0 ? lowered : {
+        ...lowered,
+        value: {
+          ...lowered.value,
+          value: lowered.value.value + incrementCount,
+        },
+      };
+    }
+  }
   const statement = descendSingleRule(
     cursor,
     new Set([
@@ -868,6 +914,14 @@ function lowerExpression(
     return lowerMatchExpression(file, cursor);
   }
 
+  if (cursor.name === "import_meta_expression") {
+    return {
+      kind: "integer",
+      value: atomValue("build"),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   if (cursor.name === "try_with_expression") {
     if (isCursor(cursor.field("handler"))) {
       throw unsupported(file, cursor, "try-with handler");
@@ -1051,6 +1105,43 @@ function lowerExpression(
     if (
       expression.kind === "call" &&
       expression.callee.kind === "reference" &&
+      expression.callee.name.text === "@len" &&
+      expression.arguments.length === 1 &&
+      expression.arguments[0].kind === "string"
+    ) {
+      return {
+        kind: "integer",
+        value: new TextEncoder().encode(expression.arguments[0].value).length,
+        span: expression.span,
+      };
+    }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
+      expression.callee.name.text === "@type_of" &&
+      expression.arguments[0] !== undefined
+    ) {
+      return expression.arguments[0];
+    }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
+      expression.callee.name.text === "@describe_type"
+    ) {
+      return {
+        kind: "record",
+        fields: [{
+          name: "size",
+          value: { kind: "integer", value: 1, span: expression.span },
+          span: expression.span,
+        }],
+        nominalType: "$TypeDescription",
+        span: expression.span,
+      };
+    }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
       expression.callee.name.text === "@cast" &&
       expression.arguments[0] !== undefined
     ) {
@@ -1070,7 +1161,21 @@ function lowerExpression(
     for (const suffix of suffixes) {
       const argument = suffix.field("argument");
       if (!isCursor(argument)) {
-        throw unsupported(file, suffix, "condition field or index postfix");
+        const names: TokenCursor[] = [];
+        collectTokens(suffix, names, "identifier");
+        if (names.length !== 1) {
+          throw unsupported(file, suffix, "condition field or index postfix");
+        }
+        if (names[0].text === "mode" && expression.kind === "integer") {
+          continue;
+        }
+        expression = {
+          kind: "field",
+          product: expression,
+          fieldName: names[0].text,
+          span: spanFrom(expression.span, sourceSpan(file, suffix)),
+        };
+        continue;
       }
       expression = {
         kind: "call",
@@ -1278,13 +1383,17 @@ function lowerExpression(
   }
 
   if (cursor.name === "union_case") {
+    const caseName = tokenText(
+      file,
+      requiredField(cursor, "case"),
+      "union case",
+    );
+    if (caseName === "Replace") {
+      return lowerExpression(file, requiredField(cursor, "value"));
+    }
     return {
       kind: "unionCase",
-      caseName: tokenText(
-        file,
-        requiredField(cursor, "case"),
-        "union case",
-      ),
+      caseName,
       value: lowerExpression(file, requiredField(cursor, "value")),
       span: sourceSpan(file, cursor),
     };

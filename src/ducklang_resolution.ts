@@ -900,6 +900,11 @@ class DucklangResolver {
               modulePath: "duck:compiler/type-pattern",
               exportName: "matches",
             }
+            : expression.name.text === "@len"
+            ? {
+              modulePath: "duck:compiler/reflection",
+              exportName: "length",
+            }
             : undefined;
           if (syntheticIntrinsic !== undefined) {
             return {

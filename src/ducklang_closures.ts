@@ -603,6 +603,18 @@ function foldStaticIntrinsic(
     };
   }
   if (
+    callee.modulePath === "duck:compiler/reflection" &&
+    callee.exportName === "length" && arguments_.length === 1 &&
+    arguments_[0].kind === "string"
+  ) {
+    return {
+      kind: "integer",
+      value: new TextEncoder().encode(arguments_[0].value).length,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
     ((callee.modulePath === "duck:prelude/functional" &&
       (callee.exportName === "apply" || callee.exportName === "pipe")) ||
       (callee.modulePath === "duck:prelude/abstractions" &&
