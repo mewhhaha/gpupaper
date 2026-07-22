@@ -64,11 +64,13 @@ const supportedSuccessPaths = new Set([
   "examples/loops/11_refutable_collection_pattern.duck",
   "examples/loops/12_let_else_continue.duck",
   "examples/ownership_modules/01_linear_scalar.duck",
-  "examples/ownership_modules/04_freeze_and_share.duck",
-  "examples/ownership_modules/03_scratch_cleanup.duck",
   "examples/ownership_modules/02_borrowed_text_read.duck",
+  "examples/ownership_modules/03_scratch_cleanup.duck",
+  "examples/ownership_modules/04_freeze_and_share.duck",
+  "examples/ownership_modules/05_host_ownership_contracts.duck",
   "examples/showcases/01_numeric_toolkit.duck",
   "examples/showcases/04_result_pipeline.duck",
+  "examples/showcases/05_linear_host_session.duck",
   "examples/showcases/07_domain_abstractions.duck",
 ]);
 
