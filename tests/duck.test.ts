@@ -29,6 +29,18 @@ if rebuilt == word { 42 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang specializes static text append and byte indexing", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { length } = import "duck:prelude/runtime" ()
+let full = "Ada" <> " Lovelace"
+length(full) + full[1]
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 112);
+});
+
 Deno.test("Ducklang erases proven static ownership operations", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

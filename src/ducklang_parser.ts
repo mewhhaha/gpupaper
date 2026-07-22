@@ -400,14 +400,24 @@ function lowerExpression(
 
   if (cursor.name === "postfix_expression") {
     const children = cursor.children().filter((child) => child.type === "rule");
-    if (children.length !== 1) {
-      throw unsupported(
-        file,
-        cursor,
-        "field, index, or effect-handler postfix",
-      );
+    const [primary, ...suffixes] = children;
+    if (primary === undefined) {
+      throw unsupported(file, cursor, "postfix expression primary");
     }
-    return lowerExpression(file, children[0]);
+    let expression = lowerExpression(file, primary);
+    for (const suffix of suffixes) {
+      const index = suffix.field("index");
+      if (!isCursor(index)) {
+        throw unsupported(file, suffix, "field or effect-handler postfix");
+      }
+      expression = {
+        kind: "index",
+        collection: expression,
+        index: lowerExpression(file, index),
+        span: spanFrom(expression.span, sourceSpan(file, suffix)),
+      };
+    }
+    return expression;
   }
 
   if (cursor.name === "arrow_function") {

@@ -297,6 +297,14 @@ class DucklangFcgCompiler {
           },
         ];
       }
+      case "index":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang index reached FCG without collection lowering`,
+        );
+      case "textAppend":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang text append reached FCG without data-layout lowering`,
+        );
       case "binary":
         return [
           ...this.#compileExpression(expression.left),

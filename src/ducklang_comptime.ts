@@ -86,6 +86,14 @@ function collectComptimeExpressions(
         collectComptimeExpressions(argument, expressions);
       }
       return;
+    case "index":
+      collectComptimeExpressions(expression.collection, expressions);
+      collectComptimeExpressions(expression.index, expressions);
+      return;
+    case "textAppend":
+      collectComptimeExpressions(expression.left, expressions);
+      collectComptimeExpressions(expression.right, expressions);
+      return;
     case "binary":
       collectComptimeExpressions(expression.left, expressions);
       collectComptimeExpressions(expression.right, expressions);
@@ -222,6 +230,34 @@ function replaceComptimeExpressions(
         ),
         arguments: expression.arguments.map((argument) =>
           replaceComptimeExpressions(argument, values, nextValueIndex)
+        ),
+      };
+    case "index":
+      return {
+        ...expression,
+        collection: replaceComptimeExpressions(
+          expression.collection,
+          values,
+          nextValueIndex,
+        ),
+        index: replaceComptimeExpressions(
+          expression.index,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "textAppend":
+      return {
+        ...expression,
+        left: replaceComptimeExpressions(
+          expression.left,
+          values,
+          nextValueIndex,
+        ),
+        right: replaceComptimeExpressions(
+          expression.right,
+          values,
+          nextValueIndex,
         ),
       };
     case "binary":

@@ -60,6 +60,12 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "index";
+    readonly collection: ResolvedDucklangExpression;
+    readonly index: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: string;
     readonly left: ResolvedDucklangExpression;
@@ -383,6 +389,20 @@ class DucklangResolver {
           ),
           arguments: expression.arguments.map((argument) =>
             this.#resolveExpression(argument, environment, currentRecursive)
+          ),
+        };
+      case "index":
+        return {
+          ...expression,
+          collection: this.#resolveExpression(
+            expression.collection,
+            environment,
+            currentRecursive,
+          ),
+          index: this.#resolveExpression(
+            expression.index,
+            environment,
+            currentRecursive,
           ),
         };
       case "binary":

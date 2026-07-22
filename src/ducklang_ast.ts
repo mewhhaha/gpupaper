@@ -64,6 +64,12 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "index";
+    readonly collection: DucklangExpression;
+    readonly index: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: string;
     readonly left: DucklangExpression;

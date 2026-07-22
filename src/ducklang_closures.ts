@@ -65,6 +65,36 @@ function rewriteExpression(
       return body;
     }
   }
+  if (rewritten.kind === "textAppend") {
+    const left = staticValue(rewritten.left, values);
+    const right = staticValue(rewritten.right, values);
+    if (left.kind === "string" && right.kind === "string") {
+      return {
+        kind: "string",
+        value: left.value + right.value,
+        type: rewritten.type,
+        span: rewritten.span,
+      };
+    }
+  }
+  if (rewritten.kind === "index") {
+    const collection = staticValue(rewritten.collection, values);
+    const index = staticValue(rewritten.index, values);
+    if (collection.kind === "string" && index.kind === "integer") {
+      const bytes = new TextEncoder().encode(collection.value);
+      if (index.value < 0 || index.value >= bytes.length) {
+        throw new RangeError(
+          `${rewritten.span.file}:${rewritten.span.start}: Ducklang text index ${index.value} is outside byte length ${bytes.length}`,
+        );
+      }
+      return {
+        kind: "integer",
+        value: bytes[index.value],
+        type: rewritten.type,
+        span: rewritten.span,
+      };
+    }
+  }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
@@ -391,6 +421,18 @@ function rewriteChildren(
         ...expression,
         callee: rewrite(expression.callee),
         arguments: expression.arguments.map(rewrite),
+      };
+    case "index":
+      return {
+        ...expression,
+        collection: rewrite(expression.collection),
+        index: rewrite(expression.index),
+      };
+    case "textAppend":
+      return {
+        ...expression,
+        left: rewrite(expression.left),
+        right: rewrite(expression.right),
       };
     case "binary":
       return {

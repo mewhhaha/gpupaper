@@ -61,6 +61,20 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "index";
+    readonly collection: TypedDucklangExpression;
+    readonly index: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "textAppend";
+    readonly left: TypedDucklangExpression;
+    readonly right: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "binary";
     readonly operator: DucklangBinaryOperator;
     readonly left: TypedDucklangExpression;
@@ -372,7 +386,41 @@ class DucklangInference {
           type: result,
         };
       }
+      case "index": {
+        const collection = this.inferExpression(
+          expression.collection,
+          environment,
+        );
+        const index = this.inferExpression(expression.index, environment);
+        this.#unify(collection.type, textType, expression.collection.span);
+        this.#unify(index.type, i32Type, expression.index.span);
+        return {
+          expression: {
+            ...expression,
+            collection: collection.expression,
+            index: index.expression,
+            type: i32Type,
+          },
+          type: i32Type,
+        };
+      }
       case "binary": {
+        if (expression.operator === "<>") {
+          const left = this.inferExpression(expression.left, environment);
+          const right = this.inferExpression(expression.right, environment);
+          this.#unify(left.type, textType, expression.left.span);
+          this.#unify(right.type, textType, expression.right.span);
+          return {
+            expression: {
+              kind: "textAppend",
+              left: left.expression,
+              right: right.expression,
+              type: textType,
+              span: expression.span,
+            },
+            type: textType,
+          };
+        }
         if (!binaryOperators.has(expression.operator)) {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang operator ${expression.operator} has no typed IR operation`,
@@ -686,6 +734,20 @@ class DucklangInference {
           arguments: expression.arguments.map((argument) =>
             this.#normalizeExpression(argument)
           ),
+          type,
+        };
+      case "index":
+        return {
+          ...expression,
+          collection: this.#normalizeExpression(expression.collection),
+          index: this.#normalizeExpression(expression.index),
+          type,
+        };
+      case "textAppend":
+        return {
+          ...expression,
+          left: this.#normalizeExpression(expression.left),
+          right: this.#normalizeExpression(expression.right),
           type,
         };
       case "binary":
