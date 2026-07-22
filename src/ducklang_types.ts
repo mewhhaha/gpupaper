@@ -394,7 +394,16 @@ class DucklangInference {
             `${this.#file}:${binding.span.start}: missing type for resolved symbol ${binding.previous.text}#${binding.previous.id}`,
           );
         }
-        this.#unify(previousType, bindingType, binding.span);
+        try {
+          this.#unify(previousType, bindingType, binding.span);
+        } catch (cause) {
+          throw new TypeError(
+            `${this.#file}:${binding.span.start}: Assignment changes type for ${binding.symbol.text} from ${
+              sourceTypeName(this.#apply(previousType))
+            } to ${sourceTypeName(this.#apply(bindingType))}`,
+            { cause },
+          );
+        }
       }
       if (binding.symbol.declaredType !== undefined) {
         this.#unify(
@@ -675,7 +684,16 @@ class DucklangInference {
           expression.nominalType,
         );
         const value = this.inferExpression(expression.value, environment);
-        this.#unify(value.type, unionCase.payload, expression.value.span);
+        try {
+          this.#unify(value.type, unionCase.payload, expression.value.span);
+        } catch (cause) {
+          throw new TypeError(
+            `${this.#file}:${expression.value.span.start}: Ducklang union case ${expression.caseName} expects ${
+              sourceTypeName(this.#apply(unionCase.payload))
+            }, got ${sourceTypeName(this.#apply(value.type))}`,
+            { cause },
+          );
+        }
         return {
           expression: {
             ...expression,
@@ -701,6 +719,12 @@ class DucklangInference {
             expression.span,
           );
           if (declaration.fields.length !== values.length) {
+            const missing = declaration.fields[values.length];
+            if (missing !== undefined) {
+              throw new TypeError(
+                `${this.#file}:${expression.span.start}: Missing struct field: ${missing.name}`,
+              );
+            }
             throw new TypeError(
               `${this.#file}:${expression.span.start}: Ducklang struct ${declaration.name} expects ${declaration.fields.length} fields; received ${values.length}`,
             );
@@ -757,6 +781,18 @@ class DucklangInference {
             field.name === expression.fieldName
           ) ?? -1;
         if (declaration === undefined || index < 0) {
+          if (
+            productType.name.startsWith("$module_") &&
+            productType.name.endsWith("_exports")
+          ) {
+            const moduleName = productType.name.slice(
+              "$module_".length,
+              -"_exports".length,
+            );
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang module ${moduleName} does not export ${expression.fieldName}`,
+            );
+          }
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang struct ${productType.name} has no field ${expression.fieldName}`,
           );
@@ -1125,6 +1161,16 @@ class DucklangInference {
           this.#unify(left.type, booleanType, expression.left.span);
           this.#unify(right.type, booleanType, expression.right.span);
         } else {
+          const leftType = this.#apply(left.type);
+          const rightType = this.#apply(right.type);
+          if (
+            isIntegerType(leftType) && isIntegerType(rightType) &&
+            formatDucklangType(leftType) !== formatDucklangType(rightType)
+          ) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Mixed i32 and i64 operands`,
+            );
+          }
           this.#unify(left.type, right.type, expression.span);
           const operandType = this.#apply(left.type);
           const equalityOnNonIntegers = operator === "==" &&
@@ -1295,8 +1341,8 @@ class DucklangInference {
             (conditionType.name === "bool" || conditionType.name === "i32"));
         if (!scalarCondition) {
           throw new TypeError(
-            `${this.#file}:${expression.condition.span.start}: Ducklang condition requires bool or i32; received ${
-              formatDucklangType(conditionType)
+            `${this.#file}:${expression.condition.span.start}: If condition expects Bool, got ${
+              sourceTypeName(conditionType)
             }`,
           );
         }
@@ -2022,6 +2068,16 @@ function functionType(parameters: readonly Type[], result: Type): Type {
     }),
     result,
   );
+}
+
+function sourceTypeName(type: Type): string {
+  if (type.kind !== "constructor") return formatDucklangType(type);
+  if (type.name === "i32") return "Int";
+  if (type.name === "i64") return "I64";
+  if (type.name === "bool") return "Bool";
+  if (type.name === "text") return "Text";
+  if (type.name === "unit") return "Unit";
+  return formatDucklangType(type);
 }
 
 function isIntegerType(

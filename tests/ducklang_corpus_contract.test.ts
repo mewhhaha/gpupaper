@@ -106,10 +106,21 @@ const supportedTrapPaths = new Set([
   "examples/failures/traps/01_explicit_panic.duck",
   "examples/failures/traps/02_text_out_of_bounds.duck",
   "examples/failures/traps/03_struct_index_out_of_bounds.duck",
+  "examples/failures/traps/04_zero_range_step.duck",
 ]);
 const supportedCompileFailurePaths = new Set([
   "examples/failures/compile/01_reused_linear_value.duck",
   "examples/failures/compile/02_unused_linear_value.duck",
+  "examples/failures/compile/03_illegal_type_change.duck",
+  "examples/failures/compile/04_mixed_integer_widths.duck",
+  "examples/failures/compile/05_invalid_condition_type.duck",
+  "examples/failures/compile/06_missing_struct_field.duck",
+  "examples/failures/compile/07_invalid_union_payload.duck",
+  "examples/failures/compile/08_escaping_borrow.duck",
+  "examples/failures/compile/09_freeze_while_borrowed.duck",
+  "examples/failures/compile/10_scratch_heap_escape.duck",
+  "examples/failures/compile/11_frozen_mutation.duck",
+  "examples/failures/compile/12_missing_imported_export.duck",
 ]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {

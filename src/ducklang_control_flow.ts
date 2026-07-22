@@ -44,6 +44,7 @@ function lowerDynamicRange(
   if (statement.iterator === undefined || statement.body.kind !== "block") {
     return undefined;
   }
+  const iterator = statement.iterator;
   if (statement.body.statements.length !== 1) return undefined;
   const update = statement.body.statements[0];
   if (update.kind !== "assignment") return undefined;
@@ -59,7 +60,7 @@ function lowerDynamicRange(
         step.operand.kind === "integer"
     ? -step.operand.value
     : undefined;
-  if (staticStep === undefined || staticStep === 0) return undefined;
+  if (staticStep === 0) return undefined;
   const functionName: DucklangName = {
     text: `$range_loop_${statement.span.start}`,
     span: statement.span,
@@ -72,35 +73,56 @@ function lowerDynamicRange(
     text: `$range_step_${statement.span.start}`,
     span: step.span,
   };
-  let comparisonOperator: "<" | ">";
-  if (statement.inclusive) {
-    comparisonOperator = staticStep > 0 ? ">" : "<";
-  } else {
-    comparisonOperator = staticStep > 0 ? "<" : ">";
-  }
-  const boundaryComparison: DucklangExpression = {
-    kind: "binary",
-    operator: comparisonOperator,
-    left: {
-      kind: "reference",
-      name: statement.iterator,
-      span: statement.iterator.span,
-    },
-    right: {
-      kind: "reference",
-      name: endParameter,
-      span: endParameter.span,
-    },
-    span: statement.span,
+  const boundaryCondition = (
+    comparisonOperator: "<" | ">",
+  ): DucklangExpression => {
+    const comparison: DucklangExpression = {
+      kind: "binary",
+      operator: comparisonOperator,
+      left: {
+        kind: "reference",
+        name: iterator,
+        span: iterator.span,
+      },
+      right: {
+        kind: "reference",
+        name: endParameter,
+        span: endParameter.span,
+      },
+      span: statement.span,
+    };
+    return statement.inclusive
+      ? {
+        kind: "unary",
+        operator: "!",
+        operand: comparison,
+        span: statement.span,
+      }
+      : comparison;
   };
-  const condition: DucklangExpression = statement.inclusive
+  const positiveCondition = boundaryCondition(statement.inclusive ? ">" : "<");
+  const negativeCondition = boundaryCondition(statement.inclusive ? "<" : ">");
+  const condition: DucklangExpression = staticStep === undefined
     ? {
-      kind: "unary",
-      operator: "!",
-      operand: boundaryComparison,
+      kind: "if",
+      condition: {
+        kind: "binary",
+        operator: ">",
+        left: {
+          kind: "reference",
+          name: stepParameter,
+          span: stepParameter.span,
+        },
+        right: { kind: "integer", value: 0, span: step.span },
+        span: statement.span,
+      },
+      consequence: positiveCondition,
+      alternative: negativeCondition,
       span: statement.span,
     }
-    : boundaryComparison;
+    : staticStep > 0
+    ? positiveCondition
+    : negativeCondition;
   const nextIndex: DucklangExpression = {
     kind: "binary",
     operator: "+",
@@ -169,22 +191,47 @@ function lowerDynamicRange(
       operator: update.operator,
       name: update.name,
       value: {
-        kind: "call",
-        callee: {
-          kind: "reference",
-          name: functionName,
-          span: functionName.span,
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: "==",
+          left: step,
+          right: { kind: "integer", value: 0, span: step.span },
+          span: statement.span,
         },
-        arguments: [
-          statement.start,
-          {
+        consequence: {
+          kind: "call",
+          callee: {
             kind: "reference",
-            name: update.name,
-            span: update.name.span,
+            name: { text: "$duck_panic", span: statement.span },
+            span: statement.span,
           },
-          statement.end,
-          step,
-        ],
+          arguments: [{
+            kind: "string",
+            value: "Ducklang range step cannot be zero",
+            span: statement.span,
+          }],
+          span: statement.span,
+        },
+        alternative: {
+          kind: "call",
+          callee: {
+            kind: "reference",
+            name: functionName,
+            span: functionName.span,
+          },
+          arguments: [
+            statement.start,
+            {
+              kind: "reference",
+              name: update.name,
+              span: update.name.span,
+            },
+            statement.end,
+            step,
+          ],
+          span: statement.span,
+        },
         span: statement.span,
       },
       span: statement.span,

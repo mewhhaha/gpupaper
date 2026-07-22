@@ -906,6 +906,11 @@ class DucklangResolver {
               modulePath: "duck:compiler/reflection",
               exportName: "length",
             }
+            : expression.name.text === "$duck_panic"
+            ? {
+              modulePath: "duck:prelude/runtime",
+              exportName: "panic",
+            }
             : undefined;
           if (syntheticIntrinsic !== undefined) {
             return {

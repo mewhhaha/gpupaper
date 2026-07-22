@@ -404,7 +404,7 @@ Deno.test("Ducklang rejects arithmetic between different integer widths", async 
   await assertRejects(
     () =>
       compileModuleSource("test.duck", "40i64 + 2i32\n", { gpuMode: "off" }),
-    /cannot unify Ducklang i64 with i32|cannot unify Ducklang i32 with i64/,
+    /Mixed i32 and i64/,
   );
 });
 
@@ -449,7 +449,7 @@ Deno.test("Ducklang equals assignment preserves the preceding binding type", asy
         "let value = 1\nvalue = true\nvalue\n",
         { gpuMode: "off" },
       ),
-    /cannot unify Ducklang i32 with bool|cannot unify Ducklang bool with i32/,
+    /Assignment changes type for value/,
   );
 });
 
@@ -467,7 +467,7 @@ choose(0)
 `,
         { gpuMode: "off" },
       ),
-    /cannot unify Ducklang i32 with bool|cannot unify Ducklang bool with i32/,
+    /Assignment changes type for value/,
   );
 });
 

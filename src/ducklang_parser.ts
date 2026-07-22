@@ -563,6 +563,29 @@ function lowerModuleStatement(
     }
     const imported = lowerImportStatement(file, statement, value);
     if (imported !== undefined) return imported;
+    const namedShape = findRule(bindingPattern, "named_shape_pattern");
+    if (namedShape !== undefined) {
+      const selections = lowerImportSelections(file, namedShape);
+      const selection = selections.length === 1 ? selections[0] : undefined;
+      if (selection?.localName === undefined) {
+        throw unsupported(file, namedShape, "multi-field record binding");
+      }
+      return {
+        kind: "binding",
+        declarationKind: tokenField(statement, "kind")?.text === "const"
+          ? "const"
+          : "let",
+        recursive: false,
+        name: selection.localName,
+        value: {
+          kind: "field",
+          product: value,
+          fieldName: selection.exportName,
+          span: sourceSpan(file, statement),
+        },
+        span: sourceSpan(file, statement),
+      };
+    }
     const singlePattern = descendSingleRule(
       bindingPattern,
       new Set(["_binding_pattern", "_single_binding_pattern"]),
