@@ -556,6 +556,18 @@ Deno.test("Wasm imports cannot invalidate allocated function indices", () => {
   );
 });
 
+Deno.test("Wasm builder rejects nonexistent indices at their boundary", () => {
+  const builder = new WasmModuleBuilder();
+  assertThrows(
+    () => builder.addFunction(0, [], wasmInstruction.i32Constant(0)),
+    /function uses type index 0; 0 types are defined/,
+  );
+  assertThrows(
+    () => builder.exportFunction("missing", 0),
+    /export missing uses function index 0; 0 functions are defined/,
+  );
+});
+
 function assertEquals(actual: unknown, expected: unknown): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);

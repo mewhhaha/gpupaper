@@ -23,6 +23,11 @@ export class WasmModuleBuilder {
     fieldName: string,
     typeIndex: number,
   ): number {
+    if (!Number.isSafeInteger(typeIndex) || !this.#types[typeIndex]) {
+      throw new RangeError(
+        `function import ${moduleName}.${fieldName} uses type index ${typeIndex}; ${this.#types.length} types are defined`,
+      );
+    }
     if (this.#functions.length !== 0) {
       throw new Error(
         `function import ${moduleName}.${fieldName} must be declared before defined functions`,
@@ -43,6 +48,11 @@ export class WasmModuleBuilder {
     locals: readonly number[],
     instructions: readonly number[],
   ): number {
+    if (!Number.isSafeInteger(typeIndex) || !this.#types[typeIndex]) {
+      throw new RangeError(
+        `function uses type index ${typeIndex}; ${this.#types.length} types are defined`,
+      );
+    }
     const functionIndex = this.#imports.length + this.#functions.length;
     this.#functions.push(typeIndex);
     const localGroups = locals.map((type) => [0x01, type]).flat();
@@ -57,6 +67,15 @@ export class WasmModuleBuilder {
   }
 
   exportFunction(name: string, functionIndex: number): void {
+    const functionCount = this.#imports.length + this.#functions.length;
+    if (
+      !Number.isSafeInteger(functionIndex) || functionIndex < 0 ||
+      functionIndex >= functionCount
+    ) {
+      throw new RangeError(
+        `export ${name} uses function index ${functionIndex}; ${functionCount} functions are defined`,
+      );
+    }
     this.#exports.push([
       ...encodeName(name),
       0x00,
