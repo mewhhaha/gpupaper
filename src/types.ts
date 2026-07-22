@@ -196,6 +196,10 @@ class InferenceState {
   readonly equalities: EqualityConstraint[] = [];
   readonly #substitution = new Map<number, Type>();
   readonly #instances: readonly InstanceDeclaration[];
+  readonly #typeConstructorArities = new Map<string, number>([["Int", 0], [
+    "Bool",
+    0,
+  ]]);
   #nextVariable = 0;
 
   constructor(instances: readonly InstanceDeclaration[]) {
@@ -213,10 +217,11 @@ class InferenceState {
     classes: readonly ClassDeclaration[],
   ): TypeEnvironment {
     const environment = new Map<string, TypeScheme>();
-    const datatypeArities = new Map<string, number>([["Int", 0], ["Bool", 0]]);
     for (const declaration of module.declarations) {
       if (declaration.kind !== "datatype") continue;
-      const existingArity = datatypeArities.get(declaration.name.text);
+      const existingArity = this.#typeConstructorArities.get(
+        declaration.name.text,
+      );
       if (existingArity !== undefined) {
         throw new TypeError(
           `${declaration.name.span.file}:${declaration.name.span.start}: duplicate datatype ${declaration.name.text}; an arity-${existingArity} type already uses that name`,
@@ -228,7 +233,10 @@ class InferenceState {
           `${declaration.span.file}:${declaration.span.start}: datatype ${declaration.name.text} repeats a type parameter`,
         );
       }
-      datatypeArities.set(declaration.name.text, declaration.parameters.length);
+      this.#typeConstructorArities.set(
+        declaration.name.text,
+        declaration.parameters.length,
+      );
     }
     for (const declaration of module.declarations) {
       if (declaration.kind !== "datatype") continue;
@@ -263,7 +271,7 @@ class InferenceState {
             );
           }
         } else {
-          const expectedArity = datatypeArities.get(head.name);
+          const expectedArity = this.#typeConstructorArities.get(head.name);
           if (expectedArity === undefined) {
             throw new TypeError(
               `${head.span.file}:${head.span.start}: unknown type constructor ${head.name}`,
@@ -604,16 +612,6 @@ class InferenceState {
   }
 
   typeFromSyntax(syntax: TypeSyntax, variables: Map<string, Type>): Type {
-    if (syntax.kind === "name") {
-      if (syntax.name[0] === syntax.name[0].toLowerCase()) {
-        const existing = variables.get(syntax.name);
-        if (existing !== undefined) return existing;
-        const variable = this.freshVariable();
-        variables.set(syntax.name, variable);
-        return variable;
-      }
-      return { kind: "constructor", name: syntax.name, arguments: [] };
-    }
     if (syntax.kind === "function") {
       return {
         kind: "function",
@@ -621,14 +619,47 @@ class InferenceState {
         result: this.typeFromSyntax(syntax.result, variables),
       };
     }
-    const constructor = this.typeFromSyntax(syntax.constructor, variables);
-    const argument = this.typeFromSyntax(syntax.argument, variables);
-    if (constructor.kind !== "constructor") {
+    const typeArguments: TypeSyntax[] = [];
+    let head: TypeSyntax = syntax;
+    while (head.kind === "apply") {
+      typeArguments.unshift(head.argument);
+      head = head.constructor;
+    }
+    if (head.kind !== "name") {
       throw new TypeError(
-        `${syntax.span.file}:${syntax.span.start}: type variable cannot be applied in this subset`,
+        `${syntax.span.file}:${syntax.span.start}: only named type constructors may be applied`,
       );
     }
-    return { ...constructor, arguments: [...constructor.arguments, argument] };
+    if (head.name[0] === head.name[0].toLowerCase()) {
+      if (typeArguments.length !== 0) {
+        throw new TypeError(
+          `${syntax.span.file}:${syntax.span.start}: type variable ${head.name} cannot be applied`,
+        );
+      }
+      const existing = variables.get(head.name);
+      if (existing !== undefined) return existing;
+      const variable = this.freshVariable();
+      variables.set(head.name, variable);
+      return variable;
+    }
+    const expectedArity = this.#typeConstructorArities.get(head.name);
+    if (expectedArity === undefined) {
+      throw new TypeError(
+        `${head.span.file}:${head.span.start}: unknown type constructor ${head.name}`,
+      );
+    }
+    if (typeArguments.length !== expectedArity) {
+      throw new TypeError(
+        `${syntax.span.file}:${syntax.span.start}: type constructor ${head.name} expects ${expectedArity} arguments; received ${typeArguments.length}`,
+      );
+    }
+    return {
+      kind: "constructor",
+      name: head.name,
+      arguments: typeArguments.map((argument) =>
+        this.typeFromSyntax(argument, variables)
+      ),
+    };
   }
 
   instantiate(scheme: TypeScheme): InferredExpression {

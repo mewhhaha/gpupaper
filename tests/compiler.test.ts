@@ -130,6 +130,19 @@ Deno.test("datatype fields cannot introduce hidden type variables", () => {
   );
 });
 
+Deno.test("signatures cannot refer to unknown type constructors", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `identity :: Missing -> Missing\nidentity value = value\nmain = 0\n`,
+        ),
+      ),
+    /unknown type constructor Missing/,
+  );
+});
+
 Deno.test("macro invocations cannot observe later macro declarations", async () => {
   await assertRejects(
     () =>
