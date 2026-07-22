@@ -163,6 +163,22 @@ Deno.test("Ducklang host interfaces reject executable source", async () => {
   );
 });
 
+Deno.test("the managed runtime identifies a throwing Ducklang host operation", async () => {
+  const artifact = await compileManagedFixture("03_cli_stdin_stdout.duck");
+  await assertRejects(
+    () =>
+      runDucklangManaged(artifact, {
+        stdin: { read_line: () => "host text" },
+        stdout: {
+          write_line: () => {
+            throw new Error("closed output");
+          },
+        },
+      }),
+    /Ducklang host operation Stdout\.write_line threw/,
+  );
+});
+
 async function compileManagedFixture(
   filename: string,
   options: { readonly hostInterface?: string } = {},

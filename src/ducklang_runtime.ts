@@ -78,7 +78,15 @@ export async function runDucklangManaged(
           }`,
         )
       );
-      const result = hostOperation.apply(effectObject, arguments_);
+      let result: DucklangRuntimeValue;
+      try {
+        result = hostOperation.apply(effectObject, arguments_);
+      } catch (cause) {
+        throw new Error(
+          `Ducklang host operation ${requirement.effectName}.${requirement.operationName} threw`,
+          { cause },
+        );
+      }
       if (isPromiseLike(result)) {
         throw new TypeError(
           `Ducklang host operation ${requirement.effectName}.${requirement.operationName} must return synchronously`,
