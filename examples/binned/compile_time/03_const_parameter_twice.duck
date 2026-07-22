@@ -1,0 +1,6 @@
+let apply_twice = (x, const f) => {
+  f(f(x))
+}
+
+const bump = x => x + 1
+apply_twice(40, bump)

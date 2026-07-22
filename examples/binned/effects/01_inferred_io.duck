@@ -1,0 +1,19 @@
+module (!init: Init) where
+
+declare effect Io {
+  read: () => Text
+  print: (&Text) => Unit
+}
+
+declare Init {
+  io: Io
+}
+
+let greet = () => {
+  name <- Io.read()
+  _ <- Io.print(&name)
+  name
+}
+
+result <- greet()
+return { .result = result }

@@ -1,0 +1,5 @@
+const width = 2
+let swap: (I32; width) -> (I32; width) = (left, right) => (right, left)
+let (first, second) = swap(1, 42)
+let stored = [first, second]
+stored[0]

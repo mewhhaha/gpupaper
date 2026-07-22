@@ -1,0 +1,11 @@
+type Result = | `Ok Int | `Err Text
+
+let unwrap = (result: Result) => {
+  if let `Ok value = result {
+    value
+  } else {
+    0
+  }
+}
+
+unwrap(`Ok (42))

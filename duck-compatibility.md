@@ -1,17 +1,15 @@
 # Ducklang grammar compatibility slice
 
-This frontend follows the production shapes in
-`../binned/tree-sitter-duck/grammar.js`. It deliberately reparses the admitted
-syntax into the compiler's existing source AST instead of importing Binned's
-semantic frontend or Wasm backend. That makes the experiment answer one narrow
-question: can another general-purpose source language target the shared
-GPU-assisted compiler pipeline?
+This frontend follows the production shapes in Binned's Duck grammar. The syntax
+and backend milestones are deliberately separate: Baba owns complete syntax
+acceptance, while the existing scalar bridge demonstrates that an admitted
+subset can target the shared GPU-assisted compiler pipeline.
 
 The compatibility fixtures were copied from the Binned working tree under its
 MIT license. The notice is preserved in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Baba 6 parser migration
+## Baba 6 syntax frontend
 
 The project pins `@mewhhaha/baba` 6.0.0. Baba now supports portable trailing
 lookahead guards and parser-state promotion for contextual trivia in its
@@ -24,10 +22,16 @@ formerly implemented by Duck's external scanner:
 - `break` terminator whitespace;
 - extension-member newline terminators.
 
-The generated parser validates as standalone Wasm and passes these cases. This
-removes the parser-runtime blocker for the complete grammar port. The admitted
-grammar below still describes the transitional scalar frontend; it will be
-deleted when Baba cursor lowering covers the full Binned acceptance corpus.
+The vendored `grammar/binned-tree-sitter-grammar.json` snapshot is translated
+into `grammar/duck.baba`. Tree-sitter precedence annotations become explicit
+effect, expression, and type layers; attributed statements are left-factored;
+and Baba metadata records deterministic LR choices. A few prefixes requiring
+more than one token of lookahead use portable fused DFA tokens. Their complete
+source text remains available to cursor lowering.
+
+The generated standalone Wasm parser accepts all 118 vendored `.duck` files.
+This establishes syntax compatibility, not type checking or execution parity.
+The admitted grammar below describes the transitional scalar backend bridge.
 
 ## Admitted grammar
 
@@ -88,7 +92,7 @@ Each recognized but unsupported construct fails at the source boundary with its
 file offset and the missing representation. Unknown syntax is never silently
 reinterpreted as Haskell-like source.
 
-## Result
+## Backend result
 
 The copied programs compile to validated Wasm and return the same values as
 Binned: arithmetic/shadowing returns 42, functions/blocks returns 42, `else if`

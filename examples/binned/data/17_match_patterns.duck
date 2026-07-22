@@ -1,0 +1,13 @@
+const { length } = import "duck:prelude/runtime" ()
+
+let classify = value => match value {
+  | 1 | 2 => 40
+  | _ => 0
+}
+
+let captured_length = (value: Text) => match value {
+  | "hello ${name} why" => length(name)
+  | _ => 0
+}
+
+classify(2) + captured_length("hello ok why")

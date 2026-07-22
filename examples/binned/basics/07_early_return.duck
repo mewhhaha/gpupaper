@@ -1,0 +1,9 @@
+let choose = value => {
+  if value {
+    return 42
+  }
+
+  0
+}
+
+choose(1)

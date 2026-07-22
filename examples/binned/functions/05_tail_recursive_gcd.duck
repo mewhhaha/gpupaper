@@ -1,0 +1,9 @@
+let gcd = rec (left, right) => {
+  if right == 0 {
+    left
+  } else {
+    rec(right, left % right)
+  }
+}
+
+gcd(84, 30) * 7

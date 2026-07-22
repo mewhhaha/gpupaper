@@ -1,0 +1,3 @@
+let quotient = 100 / 5
+let remainder = 5 % 3
+quotient * 2 + remainder

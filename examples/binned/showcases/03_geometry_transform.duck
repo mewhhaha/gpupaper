@@ -1,0 +1,10 @@
+const { struct } = import "duck:prelude" ()
+
+type Point = struct { .x = Int, .y = Int }
+
+let start: Point = [10, 10]
+let end: Point = [20, 1]
+
+let moved_start = start :+ { .x = start.x + 1 }
+
+moved_start.x + start.y + end.x + end.y

@@ -1,0 +1,17 @@
+module (!init: Init) where
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+flag <- Input.flag()
+let operation = if flag {
+  (value: I64) => value + 1i64
+} else {
+  (value: I64) => value * 2i64
+}
+
+let result: I64 = operation(21i64)
+return { .result = result }

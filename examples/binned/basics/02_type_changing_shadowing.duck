@@ -1,0 +1,5 @@
+const { length } = import "duck:prelude/runtime" ()
+
+let value = 41
+value := "x"
+length(value) + 41

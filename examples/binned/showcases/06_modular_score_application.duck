@@ -1,0 +1,9 @@
+const score_module = import "../ownership_modules/multi_file/score_module.duck"
+
+const adjust = amount => value => value + amount
+const add_one = comptime adjust(1)
+
+const capabilities = [.base = 20, .bonus = 21]
+
+let application = score_module(capabilities)
+add_one(application.run)

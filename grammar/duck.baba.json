@@ -1,0 +1,137 @@
+{
+  "version": 2,
+  "parser": {
+    "resolutions": [
+      {
+        "conflict": "c_0d835356ac660530",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_1d1572b60ab45de3",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_1d9269f34af9f5fc",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_1f7f0f374fa6908c",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_20afefe5401875fb",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_223f70e53e6e5803",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_358101f7c790843e",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_4111419eea7063f5",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_45c8bfe0e58a89e9",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_47c2a307f768f99d",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_4ea1338d5e655a3e",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_5e2f9138a64b5604",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_8bd72c88e949016c",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_8d0a5dfd6c47ac10",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_8e766ee816a91e44",
+        "prefer": "reduce",
+        "reduce": "field_block = shape_field"
+      },
+      {
+        "conflict": "c_9467eb37850f6d08",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_98ba6154f5e5a0a9",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_9aa66d0dc0344bc1",
+        "prefer": "reduce",
+        "reduce": "field_block = computed_shape_field"
+      },
+      {
+        "conflict": "c_9b254e6d448e575c",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_a68076d3d8113714",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_a7b2124e997fd2b2",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_af4fff987c75f1fc",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_b09e02af466e8927",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_b15d360a49102b94",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_b5d37a6a4c7478d4",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_b84b66dc74c0b528",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_bc2085db808cb6b4",
+        "prefer": "reduce",
+        "reduce": "field_block = shape_field"
+      },
+      {
+        "conflict": "c_c1e8c88eeff0c387",
+        "prefer": "reduce",
+        "reduce": "array_expression = (array_spread (\",\" _expression)* | _expression (\",\" _expression)* (\",\" array_spread)?)?"
+      },
+      {
+        "conflict": "c_c908ec40edd635bd",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_d356452a16c417b3",
+        "prefer": "reduce",
+        "reduce": "block = (_statement)*"
+      },
+      {
+        "conflict": "c_ea81b9e97fad7291",
+        "prefer": "reduce",
+        "reduce": "field_block = computed_shape_field"
+      }
+    ]
+  }
+}

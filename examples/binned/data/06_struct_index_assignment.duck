@@ -1,0 +1,9 @@
+const { struct } = import "duck:prelude" ()
+
+type Pair = struct { .first = Int, .second = Int }
+
+let pair: Pair = [20, 0]
+let index = 1
+pair[index] = 22
+
+pair.first + pair.second

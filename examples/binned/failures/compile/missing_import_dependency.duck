@@ -1,0 +1,3 @@
+module () where
+
+return { .available = 42 }

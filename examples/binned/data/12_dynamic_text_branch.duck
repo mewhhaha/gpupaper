@@ -1,0 +1,19 @@
+module (!init: Init) where
+
+const { length } = import "duck:prelude/runtime" ()
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+flag <- Input.flag()
+let word = if flag {
+  "forty"
+} else {
+  "six"
+}
+
+let result: I32 = length(word)
+return { .result = result }

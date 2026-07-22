@@ -1,0 +1,21 @@
+module (!init: Init) where
+
+const { struct } = import "duck:prelude" ()
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+type Point = struct { .x = Int, .y = Int }
+
+flag <- Input.flag()
+let point: Point = if flag {
+  [40, 2]
+} else {
+  [20, 22]
+}
+
+let result: I32 = point.x + point.y
+return { .result = result }

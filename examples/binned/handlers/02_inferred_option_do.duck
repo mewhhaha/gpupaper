@@ -1,0 +1,13 @@
+const { option_unwrap_or } = import "duck:prelude/functional" ()
+const {} = import "duck:prelude/effects/defaults" ()
+
+type IntOption = Option I32
+
+let calculate = () => {
+  let wrapped: IntOption = `Some 40
+  value <- do wrapped
+  value + 2
+}
+
+let result: IntOption = try calculate()
+option_unwrap_or(0, result)

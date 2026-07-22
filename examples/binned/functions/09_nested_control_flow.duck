@@ -1,0 +1,22 @@
+module (!init: Init) where
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+let value = 0
+outer <- Input.flag()
+
+if outer {
+  inner <- Input.flag()
+  if inner {
+    value = 42
+  }
+} else {
+  value = 21
+}
+
+let result = value
+return { .result = result }

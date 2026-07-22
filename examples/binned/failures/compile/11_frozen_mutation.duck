@@ -1,0 +1,3 @@
+let message: Bytes = freeze @Utf8.encode("ab")
+message[0] = 65
+@len(message)

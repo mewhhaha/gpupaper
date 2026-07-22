@@ -1,0 +1,6 @@
+const score_module = import "./multi_file/score_module.duck"
+
+const capabilities = [.base = 40, .bonus = 2]
+
+let application = score_module(capabilities)
+application.run

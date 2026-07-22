@@ -1,0 +1,6 @@
+let consume = (!value) => {
+  value + 1
+}
+
+let !token = 41
+consume(!token)

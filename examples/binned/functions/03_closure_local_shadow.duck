@@ -1,0 +1,7 @@
+let adjust = value => {
+  let result = value
+  result = result + 1
+  result
+}
+
+adjust(41)

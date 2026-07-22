@@ -1,0 +1,3 @@
+const { panic } = import "duck:prelude/runtime" ()
+
+panic("deliberate example trap")

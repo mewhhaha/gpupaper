@@ -1,0 +1,13 @@
+const { patch, patch_apply, patch_compose, predicate, predicate_and, predicate_test, span, span_contains } = import "duck:prelude/abstractions" ()
+
+const positive = comptime predicate(value => value > 0)
+const below_limit = comptime predicate(value => value < 10)
+const accepted = comptime predicate_and(positive, below_limit)
+const increment = comptime patch(value => value + 1)
+const double = comptime patch(value => value * 2)
+const update = comptime patch_compose(double, increment)
+
+let source_span = span(4, 9)
+let valid = predicate_test(accepted, 7) && span_contains(source_span, 7)
+
+if valid { patch_apply(update, 20) } else { 0 }

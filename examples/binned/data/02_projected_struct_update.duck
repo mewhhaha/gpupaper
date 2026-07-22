@@ -1,0 +1,9 @@
+const { struct } = import "duck:prelude" ()
+
+type Point = struct { .x = Int, .y = Int }
+
+let point: Point = [20, 21]
+
+let updated = point :+ { .x = point.x + 1 }
+
+updated.x + point.y

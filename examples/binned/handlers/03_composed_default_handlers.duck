@@ -1,0 +1,41 @@
+const _ = import "duck:prelude/effects" ()
+
+effect Base {
+  read: () => I32
+}
+
+effect Bonus {
+  read: () => I32
+}
+
+const default_base = () => Base {
+  read: (!resume) => !resume(10),
+  return: value => value * 2,
+}
+
+extend Base {
+  type Handled = Base
+  .make = _ => default_base()
+  .output = _ => Identity
+  .order = _ => 10
+}
+
+const default_bonus = () => Bonus {
+  read: (!resume) => !resume(10),
+  return: value => value + 2,
+}
+
+extend Bonus {
+  type Handled = Bonus
+  .make = _ => default_bonus()
+  .output = _ => Identity
+  .order = _ => 20
+}
+
+let calculate: () -> <Base :| Bonus> I32 = () => {
+  base <- Base.read()
+  bonus <- Bonus.read()
+  base + bonus
+}
+
+try calculate()

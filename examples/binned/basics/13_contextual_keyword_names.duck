@@ -1,0 +1,3 @@
+let loop = value => value
+
+loop(42)

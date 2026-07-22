@@ -1,0 +1,105 @@
+const { struct } = import "duck:prelude" ()
+const { length } = import "duck:prelude/runtime" ()
+
+type Point = struct { .x = Int, .y = Int }
+type Pixels = [Int; 2]
+type Shape = | `Point Point | `Code Int
+
+const fold = rec (values, index, state, next) => {
+  if index == length(values) {
+    state
+  } else {
+    rec(values, index + 1, next(state, values[index]), next)
+  }
+}
+
+const range = rec (index, length) => {
+  if index == length {
+    []
+  } else {
+    [index, ...rec(index + 1, length)]
+  }
+}
+
+const derive_equal = rec (const target) => {
+  const description = @describe_type(target)
+
+  if description.kind == #record {
+    const add_field = (const equal, const field) => {
+      const field_equal = derive_equal(field.type)
+
+      const compare = (left, right) => {
+        if equal(left, right) {
+          field_equal(@project(left, field), @project(right, field))
+        } else {
+          false
+        }
+      }
+
+      compare
+    }
+
+    fold(@describe_fields(target), 0, (left, right) => true, add_field)
+  } else {
+    if description.kind == #array {
+      const element_equal = derive_equal(description.element)
+      const indices = range(0, description.length)
+
+      const add_index = (const equal, const index) => {
+        const compare = (left, right) => {
+          if equal(left, right) {
+            element_equal(left[index], right[index])
+          } else {
+            false
+          }
+        }
+
+        compare
+      }
+
+      fold(indices, 0, (left, right) => true, add_index)
+    } else {
+      if description.kind == #sum {
+        const add_case = (const equal, const case) => {
+          const payload_equal = derive_equal(case.type)
+
+          const compare = (left, right) => {
+            if @is_case(left, case) {
+              if @is_case(right, case) {
+                payload_equal(@project(left, case), @project(right, case))
+              } else {
+                false
+              }
+            } else {
+              equal(left, right)
+            }
+          }
+
+          compare
+        }
+
+        fold(@describe_cases(target), 0, (left, right) => false, add_case)
+      } else {
+        (left, right) => left == right
+      }
+    }
+  }
+}
+
+const equal_shape = comptime derive_equal(Shape)
+const equal_pixels = comptime derive_equal(Pixels)
+
+let left: Shape = `Point [.x = 20, .y = 22]
+let right: Shape = `Point [.x = 20, .y = 22]
+let pixel_left: Pixels = [20, 22]
+let pixel_right: Pixels = [20, 22]
+
+if equal_shape(left, right) {
+  if equal_pixels(pixel_left, pixel_right) {
+    42
+  } else {
+    0
+  }
+} else {
+  0
+}

@@ -1,0 +1,17 @@
+module (!init: Init) where
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+flag <- Input.flag()
+let score = if flag {
+  10
+} else {
+  20
+}
+
+let result = score * 2 + 1
+return { .result = result }

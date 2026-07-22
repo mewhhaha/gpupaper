@@ -1,0 +1,11 @@
+let total = 26
+
+for value in 0..8 {
+  if value % 2 == 0 {
+    continue
+  }
+
+  total = total + value
+}
+
+total

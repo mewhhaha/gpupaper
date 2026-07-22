@@ -1,0 +1,11 @@
+let total = 27
+
+for value in 0..10 {
+  if value == 6 {
+    break
+  }
+
+  total = total + value
+}
+
+total

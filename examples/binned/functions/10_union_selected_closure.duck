@@ -1,0 +1,26 @@
+module (!init: Init) where
+
+declare effect Input {
+  flag: () => Bool
+}
+
+declare Init { input: Input }
+
+type Choice = | `Add Int | `Multiply Int
+
+let _ = 0
+flag <- Input.flag()
+let choice: Choice = if flag {
+  `Add (21)
+} else {
+  `Multiply (2)
+}
+
+let operation = if let `Add amount = choice {
+  (value: Int) => value + amount
+} else {
+  (value: Int) => value * 2
+}
+
+let result: I32 = operation(21)
+return { .result = result }

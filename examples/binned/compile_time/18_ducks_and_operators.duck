@@ -1,0 +1,20 @@
+duck Add Self Other Output {
+  .add = [Self, Other] -> Output
+}
+
+extend I32 {
+  .add = [left, right] => @wasm.add_i32 [left, right]
+}
+
+duck Invert Self Output {
+  .invert = Self -> Output
+}
+
+extend Bool {
+  .invert = value => @wasm.eq_i32 [value, false]
+}
+
+infixl 60 +++ = Add.add
+prefix 80 ^^ = Invert.invert
+
+if ^^false { 20 +++ 22 } else { 0 }

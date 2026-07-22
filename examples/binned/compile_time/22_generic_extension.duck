@@ -1,0 +1,17 @@
+const { struct } = import "duck:prelude" ()
+
+type Box value = struct { .value = value }
+
+duck Read Self Value {
+  .read = Self -> Value
+}
+
+extend Box Element {
+  type Value = Element
+  .read = (box: Box Element) => box.value
+}
+
+type I32Box = Box I32
+let box: I32Box = [.value = 42] as I32Box
+
+Read.read(box)

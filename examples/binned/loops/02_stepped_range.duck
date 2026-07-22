@@ -1,0 +1,7 @@
+let total = 22
+
+for value in 0..10 by 2 {
+  total = total + value
+}
+
+total

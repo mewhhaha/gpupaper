@@ -1,0 +1,14 @@
+type Maybe = | `Some I32 | `None Unit
+
+let select = (input: Maybe) => {
+  let `Some value = input else {
+    return 7
+  }
+
+  value + 1
+}
+
+let some: Maybe = `Some 41
+let none: Maybe = `None ()
+
+select(some) + select(none)

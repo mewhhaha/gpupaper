@@ -1,0 +1,13 @@
+const { struct } = import "duck:prelude" ()
+
+type User = struct { .id = Int, .score = Int }
+type Result = | `Ok Int | `Err Text
+
+let user: User = [1, 42]
+let result: Result = `Ok (user.score)
+
+if let `Ok score = result {
+  score
+} else {
+  0
+}

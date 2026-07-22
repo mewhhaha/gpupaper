@@ -1,0 +1,17 @@
+const sum = (const ...values) => comptime {
+  let total = 0
+
+  for value in values {
+    total = total + value
+  }
+
+  total
+}
+
+const values = (2, 99)
+let first = match values {
+  | (value, ...remaining) => value
+  | _ => 0
+}
+
+sum(19, 20, 1) + first

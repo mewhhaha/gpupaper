@@ -1,0 +1,7 @@
+const make_adder = n => {
+  x => x + n
+}
+
+const add_three = comptime make_adder(3)
+let result = add_three(39)
+result

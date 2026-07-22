@@ -1,0 +1,8 @@
+let rec even = value => {
+  if value == 0 { 1 } else { odd(value - 1) }
+}
+and odd = value => {
+  if value == 0 { 0 } else { even(value - 1) }
+}
+
+even(10) + odd(9)

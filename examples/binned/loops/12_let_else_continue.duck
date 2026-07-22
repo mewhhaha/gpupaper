@@ -1,0 +1,16 @@
+type Maybe = | `Some I32 | `None Unit
+
+let some: Maybe = `Some 40
+let none: Maybe = `None ()
+let values = [none, some]
+let total = 0
+
+for option in values {
+  let `Some value = option else {
+    continue
+  }
+
+  total = total + value + 2
+}
+
+total

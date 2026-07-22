@@ -1,0 +1,13 @@
+let fold_range = (start, end, initial, const step) => {
+  let state = initial
+
+  for index in start..end {
+    state = step(state, index)
+  }
+
+  state
+}
+
+const add_index = (total, index) => total + index
+
+fold_range(0, 7, 21, add_index)

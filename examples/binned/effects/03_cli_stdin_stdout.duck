@@ -1,0 +1,23 @@
+module (!init: Init) where
+
+declare effect Stdin {
+  read_line: () => Text
+}
+
+declare effect Stdout {
+  write_line: (&Text) => Unit
+}
+
+declare Init {
+  stdin: Stdin
+  stdout: Stdout
+}
+
+let echo: () -> <Stdin :| Stdout> Text = () => {
+  input <- Stdin.read_line()
+  _ <- Stdout.write_line(&input)
+  input
+}
+
+result <- echo()
+return { .result = result }

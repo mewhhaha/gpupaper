@@ -1,0 +1,18 @@
+module () where
+
+const { test } = import "duck:prelude/attributes" ()
+const { assert, assert_false } = import "duck:prelude/testing" ()
+
+const add: [I32, I32] -> I32 = (left, right) => left + right
+
+@[test]
+const addition_returns_the_sum: () -> Unit = () => {
+  assert(add(20, 22) == 42)
+}
+
+@[test]
+const unequal_values_are_detected: () -> Unit = () => {
+  assert_false(add(1, 1) == 3)
+}
+
+return {}

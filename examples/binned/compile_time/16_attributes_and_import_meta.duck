@@ -1,0 +1,15 @@
+const keep_in_builds = (const target) => {
+  if import.meta.mode is #build {
+    `Replace target
+  } else {
+    `Replace 0
+  }
+}
+
+const increment = (const target) => `Replace (target + 1)
+
+@[keep_in_builds]
+@[increment, increment]
+const answer = 40
+
+answer

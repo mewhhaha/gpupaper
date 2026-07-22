@@ -1,0 +1,7 @@
+module () where
+
+const compose = (first, second) => value => first(second(value))
+const pipe = (value, transform) => transform(value)
+const identity = value => value
+
+return { compose, pipe, identity }

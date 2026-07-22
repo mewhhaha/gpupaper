@@ -1,0 +1,7 @@
+const { length } = import "duck:prelude/runtime" ()
+
+let first = "Ada"
+let last = " Lovelace"
+let full = first <> last
+
+length(full) + full[1]

@@ -1,0 +1,11 @@
+const { struct } = import "duck:prelude" ()
+
+type Config = struct { .length = I32 }
+
+const parse_config: Text -> Config = text => [.length = @len(text)]
+const config = comptime parse_config(include "./config.json")
+const config_type = @type_of(config)
+const config_description = @describe_type(config_type)
+const config_size = config_description.size
+
+config.length + config_size

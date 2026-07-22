@@ -1,0 +1,6 @@
+let make_adder = amount => {
+  value => value + amount
+}
+
+let add_two = make_adder(2)
+add_two(40)

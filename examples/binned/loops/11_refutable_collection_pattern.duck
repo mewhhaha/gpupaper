@@ -1,0 +1,13 @@
+type Maybe = | `Some I32 | `None Unit
+
+let one: Maybe = `Some 1
+let none: Maybe = `None ()
+let three: Maybe = `Some 3
+let values = [one, none, three]
+let total = 0
+
+for index, `Some value in values {
+  total = total + index + value
+}
+
+total

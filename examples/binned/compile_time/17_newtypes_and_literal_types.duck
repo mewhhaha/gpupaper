@@ -1,0 +1,12 @@
+const { cast, newtype, representation, seal } = import "duck:prelude" ()
+
+type Centimeter = newtype I32
+type One = 1
+type Truth = true :| false
+type Method = "GET" :| "POST"
+type Letter = 'c' :| 'C'
+
+const distance = 42 :> Centimeter
+const one: One = 1
+
+@cast(distance :< I32, I32) + @cast(one, I32) - 1

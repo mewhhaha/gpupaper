@@ -7,10 +7,11 @@ It accepts a deliberately small Haskell-like language, runs selected compiler
 work through WebGPU, and emits a validated WebAssembly module whose `main`
 export returns an `i32`.
 
-An experimental Ducklang frontend also accepts a tested slice of the grammar
-from the sibling `binned` project. It lowers into the same typed core, WebGPU
-type-equality experiment, compile-time evaluator, FCG, and Wasm emitter as the
-Haskell-like frontend.
+An experimental Ducklang frontend has two explicit layers. A Baba-generated Wasm
+parser accepts the complete vendored Binned examples corpus. A smaller
+handwritten source-to-core bridge lowers the scalar subset into the same typed
+core, WebGPU type-equality experiment, compile-time evaluator, FCG, and Wasm
+emitter as the Haskell-like frontend.
 
 This is a research artifact, not a GHC frontend. Its purpose is to make the
 architectural claims executable and falsifiable before expanding the language.
@@ -97,8 +98,16 @@ clock, or process import.
 
 ## Ducklang frontend
 
-The Duck frontend is an executable grammar slice, not a second compiler. It
-recognizes header-free pure programs with:
+The canonical Duck syntax is [grammar/duck.baba](grammar/duck.baba). Baba 6
+generates its lexer, deterministic LR plan, and standalone Wasm runtime. The
+conformance test parses all 118 `.duck` files copied from Binned, including its
+success cases, expected compile failures, runtime-trap fixtures, and imported
+dependencies. `deno task duck:grammar` regenerates the Baba grammar and reviewed
+conflict policy from the vendored Tree-sitter grammar snapshot.
+
+Syntax acceptance is not yet semantic compilation. The current source-to-core
+bridge remains a smaller executable slice that recognizes header-free pure
+programs with:
 
 - sequential `let`, `let rec`, `=` and `:=` bindings;
 - scalar `Int` and `Bool` values, `+`, `-`, `*`, and `==`;
@@ -118,10 +127,10 @@ recursion and compile-time evaluation. See
 explicit rejections, and the next backend work.
 
 `@mewhhaha/baba` 6.0.0 is pinned as the Duck parser generator and Wasm parser
-runtime. Its conformance test covers the five contextual whitespace tokens that
-previously required Binned's Tree-sitter external scanner. The existing scalar
-bridge remains in place only until the complete Baba grammar and cursor-to-core
-lowering replace it.
+runtime. Portable contextual and fused DFA tokens replace the five external
+scanner distinctions and the few LR(1)-insufficient prefixes in the source
+grammar. The next milestone is Baba cursor lowering into a Duck-specific typed
+IR; only then can the full corpus proceed beyond parsing.
 
 ## Important boundaries
 
@@ -174,8 +183,12 @@ source never becomes WGSL.
 ## Files
 
 - `src/syntax.ts`, `lexer.ts`, `parser.ts`: Haskell-like source boundary.
-- `tests/fixtures/duck_contextual.baba`, `tests/baba.test.ts`: Baba 6 Duck
-  portability gate.
+- `grammar/duck.baba`, `grammar/duck.baba.json`: complete Duck syntax and its
+  deterministic Wasm conflict policy.
+- `scripts/import_binned_grammar.ts`, `update_duck_conflicts.ts`: reproducible
+  Tree-sitter-to-Baba migration and reviewed LR policy generation.
+- `tests/binned_syntax.test.ts`: all 118 vendored Duck sources through the
+  generated Wasm parser.
 - `src/resolution.ts`, `types.ts`: CPU reference frontend and FTCG equality
   capture.
 - `src/gpu_solver.ts`: WebGPU union and occurs-check kernels.

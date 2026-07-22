@@ -1,0 +1,5 @@
+const { struct } = import "duck:prelude" ()
+
+type User = struct { .name = Text, .age = Int }
+let user: User = ["Ada"]
+user.age

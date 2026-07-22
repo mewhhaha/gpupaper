@@ -1,0 +1,5 @@
+let widen = (x: I64) => {
+  x * 2i64 + 5i64
+}
+
+widen(20i64) - 3i64
