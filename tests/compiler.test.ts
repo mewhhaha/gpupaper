@@ -120,6 +120,19 @@ Deno.test("declared class constraints remain part of the inferred scheme", () =>
   );
 });
 
+Deno.test("predicate variables must constrain the declared result type", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `class Eq a where eq :: a -> a -> Bool\nambiguous :: Eq a => Int\nambiguous = 1\nmain = ambiguous\n`,
+        ),
+      ),
+    /ambiguous predicate Eq [a-z][0-9]* does not constrain result type Int/,
+  );
+});
+
 Deno.test("instances must define the method declared by their class", () => {
   assertThrows(
     () =>

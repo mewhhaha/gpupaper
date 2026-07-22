@@ -705,17 +705,42 @@ class InferenceState {
     type: Type,
     predicates: readonly Predicate[],
   ): TypeScheme {
+    const resolvedType = this.apply(type);
+    const resolvedPredicates = predicates.map((predicate) => ({
+      ...predicate,
+      type: this.apply(predicate.type),
+    }));
+    const typeVariables = freeTypeVariables(resolvedType);
+    for (const predicate of resolvedPredicates) {
+      for (const variable of freeTypeVariables(predicate.type)) {
+        if (typeVariables.has(variable)) continue;
+        throw new TypeError(
+          `${predicate.span.file}:${predicate.span.start}: ambiguous predicate ${
+            formatPredicate(predicate)
+          } does not constrain result type ${formatType(resolvedType)}`,
+        );
+      }
+    }
     const environmentVariables = new Set<number>();
     for (const scheme of environment.values()) {
       const quantified = new Set(scheme.quantified);
       for (const id of freeTypeVariables(scheme.type)) {
         if (!quantified.has(id)) environmentVariables.add(id);
       }
+      for (const predicate of scheme.predicates) {
+        for (const id of freeTypeVariables(predicate.type)) {
+          if (!quantified.has(id)) environmentVariables.add(id);
+        }
+      }
     }
-    const quantified = [...freeTypeVariables(type)].filter((id) =>
+    const quantified = [...typeVariables].filter((id) =>
       !environmentVariables.has(id)
     ).sort((left, right) => left - right);
-    return { quantified, predicates, type };
+    return {
+      quantified,
+      predicates: resolvedPredicates,
+      type: resolvedType,
+    };
   }
 
   retainUnsolvedPredicates(
