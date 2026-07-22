@@ -95,9 +95,13 @@ type HostFunctionShape = {
   readonly name: string;
 };
 
+export type DucklangWasmArtifact = WasmArtifact & {
+  readonly textLiterals: readonly string[];
+};
+
 export function lowerDucklangToFcgAndWasm(
   module: TypedDucklangModule,
-): WasmArtifact {
+): DucklangWasmArtifact {
   const builder = new WasmModuleBuilder();
   const shapes = new Map<number, FunctionShape>();
   const orderedShapes: FunctionShape[] = [];
@@ -115,6 +119,10 @@ export function lowerDucklangToFcgAndWasm(
     ),
   );
   const hostFunctions = new Map<string, HostFunctionShape>();
+  const textLiterals = collectTextLiterals(module);
+  const textHandles = new Map(
+    textLiterals.map((literal, index) => [literal, index + 1]),
+  );
   for (const call of collectHostCalls(module)) {
     const key = hostFunctionKey(call.effectName, call.operationName);
     if (hostFunctions.has(key)) continue;
@@ -210,6 +218,7 @@ export function lowerDucklangToFcgAndWasm(
       parameters,
       unionNames,
       unionTags,
+      textHandles,
     );
     const compiled = compiler.compile(body);
     const functionIndex = builder.addFunction(
@@ -243,7 +252,27 @@ export function lowerDucklangToFcgAndWasm(
       constructorTags: new Map(),
     },
     wasm,
+    textLiterals,
   };
+}
+
+function collectTextLiterals(module: TypedDucklangModule): readonly string[] {
+  const literals = new Set<string>();
+  const pending: unknown[] = [
+    ...module.bindings.map((binding) => binding.value),
+    module.result,
+  ];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object") continue;
+    const node = value as Record<string, unknown>;
+    if (node.kind === "string" && typeof node.value === "string") {
+      literals.add(node.value);
+      continue;
+    }
+    pending.push(...Object.values(node));
+  }
+  return [...literals].sort();
 }
 
 function collectHostCalls(
@@ -368,6 +397,7 @@ class DucklangFcgCompiler {
   readonly #hostFunctions: ReadonlyMap<string, HostFunctionShape>;
   readonly #unionNames: ReadonlySet<string>;
   readonly #unionTags: ReadonlyMap<string, number>;
+  readonly #textHandles: ReadonlyMap<string, number>;
   readonly #locals = new Map<number, number>();
   readonly #localTypes: number[] = [];
   #nextLocal: number;
@@ -379,12 +409,14 @@ class DucklangFcgCompiler {
     parameters: readonly { readonly id: number }[],
     unionNames: ReadonlySet<string>,
     unionTags: ReadonlyMap<string, number>,
+    textHandles: ReadonlyMap<string, number>,
   ) {
     this.#file = file;
     this.#shapes = shapes;
     this.#hostFunctions = hostFunctions;
     this.#unionNames = unionNames;
     this.#unionTags = unionTags;
+    this.#textHandles = textHandles;
     parameters.forEach((parameter, index) =>
       this.#locals.set(parameter.id, index)
     );
@@ -437,10 +469,22 @@ class DucklangFcgCompiler {
           valueType: "i32",
           span: expression.span,
         }];
-      case "string":
-        throw new TypeError(
-          `${this.#file}:${expression.span.start}: Ducklang text reached FCG without data-layout lowering`,
-        );
+      case "string": {
+        const handle = this.#textHandles.get(expression.value);
+        if (handle === undefined) {
+          throw new Error(
+            `${this.#file}:${expression.span.start}: missing Ducklang text handle for ${
+              JSON.stringify(expression.value)
+            }`,
+          );
+        }
+        return [{
+          kind: "constant",
+          value: handle,
+          valueType: "i32",
+          span: expression.span,
+        }];
+      }
       case "intrinsic":
         throw new TypeError(
           `${this.#file}:${expression.span.start}: Ducklang intrinsic ${expression.modulePath}.${expression.exportName} reached FCG without intrinsic lowering`,
@@ -931,7 +975,10 @@ function wasmValueType(
 ): number {
   if (type.kind === "constructor" && type.arguments.length === 0) {
     if (type.name === "i64") return wasmType.i64;
-    if (type.name === "i32" || type.name === "bool" || type.name === "unit") {
+    if (
+      type.name === "i32" || type.name === "bool" || type.name === "unit" ||
+      type.name === "text" || type.name === "Init"
+    ) {
       return wasmType.i32;
     }
   }

@@ -150,6 +150,7 @@ function elaborateStatement(
         ),
       };
     case "effectDeclaration":
+    case "initDeclaration":
     case "structType":
     case "unionType":
     case "typeAlias":
@@ -539,6 +540,7 @@ function substituteExtensionStatement(
     case "expression":
       return { ...statement, expression: descend(statement.expression) };
     case "effectDeclaration":
+    case "initDeclaration":
     case "structType":
     case "unionType":
     case "typeAlias":

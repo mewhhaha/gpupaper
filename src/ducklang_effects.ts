@@ -3,7 +3,6 @@ import type {
   DucklangEffectRow,
 } from "./ducklang_ast.ts";
 import type {
-  ResolvedDucklangBinding,
   ResolvedDucklangExpression,
   ResolvedDucklangModule,
 } from "./ducklang_resolution.ts";
@@ -26,6 +25,22 @@ export function analyzeDucklangEffects(
         : []
     ),
   );
+  const functionTargets = new Map(
+    [...functionBindings.keys()].map((symbolId) => [symbolId, symbolId]),
+  );
+  for (let iteration = 0; iteration < module.bindings.length; iteration += 1) {
+    let changed = false;
+    for (const binding of module.bindings) {
+      if (binding.value.kind !== "reference") continue;
+      const target = functionTargets.get(binding.value.symbol.id);
+      if (target === undefined || functionTargets.has(binding.symbol.id)) {
+        continue;
+      }
+      functionTargets.set(binding.symbol.id, target);
+      changed = true;
+    }
+    if (!changed) break;
+  }
   const bindingEffects = new Map<
     number,
     ReadonlyMap<string, DucklangEffectReference>
@@ -39,7 +54,7 @@ export function analyzeDucklangEffects(
       if (binding.value.kind !== "function") continue;
       const effects = collectExpressionEffects(
         binding.value.body,
-        functionBindings,
+        functionTargets,
         bindingEffects,
       );
       if (sameEffects(effects, bindingEffects.get(symbolId))) continue;
@@ -77,21 +92,27 @@ export function analyzeDucklangEffects(
       moduleEffects,
       collectExpressionEffects(
         binding.value,
-        functionBindings,
+        functionTargets,
         bindingEffects,
       ),
     );
   }
   mergeEffects(
     moduleEffects,
-    collectExpressionEffects(module.result, functionBindings, bindingEffects),
+    collectExpressionEffects(module.result, functionTargets, bindingEffects),
   );
 
   return {
     bindingEffects: new Map(
       module.bindings.map((binding) => [
         binding.symbol.id,
-        [...(bindingEffects.get(binding.symbol.id)?.values() ?? [])],
+        [
+          ...(
+            bindingEffects.get(
+              functionTargets.get(binding.symbol.id) ?? binding.symbol.id,
+            )?.values() ?? []
+          ),
+        ],
       ]),
     ),
     moduleEffects: [...moduleEffects.values()],
@@ -160,7 +181,7 @@ function resolveDeclaredEffectRow(
 
 function collectExpressionEffects(
   expression: ResolvedDucklangExpression,
-  functionBindings: ReadonlyMap<number, ResolvedDucklangBinding>,
+  functionTargets: ReadonlyMap<number, number>,
   bindingEffects: ReadonlyMap<
     number,
     ReadonlyMap<string, DucklangEffectReference>
@@ -194,11 +215,14 @@ function collectExpressionEffects(
         for (const argument of current.arguments) visit(argument);
         if (
           current.callee.kind === "reference" &&
-          functionBindings.has(current.callee.symbol.id)
+          functionTargets.has(current.callee.symbol.id)
         ) {
+          const target = functionTargets.get(current.callee.symbol.id);
           mergeEffects(
             effects,
-            bindingEffects.get(current.callee.symbol.id) ?? new Map(),
+            target === undefined
+              ? new Map()
+              : bindingEffects.get(target) ?? new Map(),
           );
         } else if (current.callee.kind === "function") {
           visit(current.callee.body);

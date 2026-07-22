@@ -4,6 +4,10 @@ import {
   evaluateModuleComptime,
 } from "./comptime.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
+import {
+  createDucklangManagedAbi,
+  type DucklangManagedAbi,
+} from "./ducklang_abi.ts";
 import { lowerDucklangControlFlow } from "./ducklang_control_flow.ts";
 import { elaborateDucklangDerivations } from "./ducklang_derivations.ts";
 import { elaborateDucklangExtensions } from "./ducklang_extensions.ts";
@@ -12,7 +16,9 @@ import { validateDucklangOwnership } from "./ducklang_ownership.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
 import {
+  applyDucklangHostInterface,
   expandDucklangIncludes,
+  lowerDucklangEmptyModuleExports,
   resolveDucklangLocalImports,
 } from "./ducklang_modules.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
@@ -38,6 +44,7 @@ export type GpuMode = "auto" | "off" | "required";
 
 export type CompilationOptions = {
   readonly gpuMode?: GpuMode;
+  readonly hostInterface?: string;
 };
 
 export type CompilationTimings = {
@@ -71,6 +78,7 @@ export type HaskellCompilationArtifact = SharedCompilationArtifact & {
 export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly language: "ducklang";
   readonly inferred: TypedDucklangModule;
+  readonly abi: DucklangManagedAbi;
 };
 
 export type CompilationArtifact =
@@ -197,18 +205,22 @@ async function compileDucklangModuleSource(
 ): Promise<DucklangCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
+  const parsedSource = await parseDucklangModule(
+    file,
+    await expandDucklangIncludes(file, source),
+  );
+  const parsedWithHost = options.hostInterface === undefined
+    ? parsedSource
+    : await applyDucklangHostInterface(parsedSource, options.hostInterface);
   const parsed = lowerDucklangControlFlow(
     expandStaticDucklangLoops(
       elaborateDucklangExtensions(
         elaborateDucklangDerivations(
           elaborateDucklangHandlers(
             validateDucklangOwnership(
-              await resolveDucklangLocalImports(
-                elaborateDucklangSourceTests(
-                  await parseDucklangModule(
-                    file,
-                    await expandDucklangIncludes(file, source),
-                  ),
+              lowerDucklangEmptyModuleExports(
+                await resolveDucklangLocalImports(
+                  elaborateDucklangSourceTests(parsedWithHost),
                 ),
               ),
             ),
@@ -270,6 +282,7 @@ async function compileDucklangModuleSource(
     wasm: lowered.wasm,
     fcg: lowered.fcg,
     inferred: specialized,
+    abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
     initialTypes,
     finalTypes: initialTypes,
     gpuTypeResult,

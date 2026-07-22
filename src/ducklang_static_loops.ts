@@ -430,6 +430,7 @@ function substituteStatement(
     case "continue":
     case "import":
     case "effectDeclaration":
+    case "initDeclaration":
     case "structType":
     case "unionType":
     case "typeAlias":

@@ -2,6 +2,7 @@ import type {
   DucklangEffectOperation,
   DucklangEffectRow,
   DucklangExpression,
+  DucklangInitField,
   DucklangModule,
   DucklangName,
   DucklangStatement,
@@ -233,12 +234,15 @@ export type ResolvedDucklangStructType = {
 
 export type ResolvedDucklangModule = {
   readonly file: string;
+  readonly exportNames: readonly string[];
+  readonly parameters: readonly DucklangSymbol[];
   readonly bindings: readonly ResolvedDucklangBinding[];
   readonly result: ResolvedDucklangExpression;
   readonly symbols: readonly DucklangSymbol[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly effects: ReadonlyMap<string, readonly DucklangEffectOperation[]>;
+  readonly initFields: readonly DucklangInitField[];
   readonly structTypes: readonly ResolvedDucklangStructType[];
 };
 
@@ -253,21 +257,33 @@ export function resolveDucklangModule(
   module: DucklangModule,
 ): ResolvedDucklangModule {
   const resolver = new DucklangResolver(module.file);
+  const parameters = resolver.declareModuleParameters(module.parameters);
   const resolved = resolver.resolveStatements(
     module.statements,
-    new Map(),
+    new Map(parameters.map((parameter) => [parameter.text, parameter])),
     "module",
     module.span,
   );
   resolver.requireLinearUses();
+  const initializationSteps = resolved.steps.filter((step) =>
+    step.kind === "expression"
+  );
   return {
     file: module.file,
+    exportNames: module.exportNames,
+    parameters,
     bindings: resolved.bindings,
-    result: resolved.result,
+    result: initializationSteps.length === 0 ? resolved.result : {
+      kind: "block",
+      steps: initializationSteps,
+      result: resolved.result,
+      span: module.span,
+    },
     symbols: resolver.symbols,
     unionTypes: resolver.unionTypes,
     typeAliases: resolver.typeAliases,
     effects: resolver.effects,
+    initFields: resolver.initFields,
     structTypes: resolver.structTypes,
   };
 }
@@ -278,6 +294,7 @@ class DucklangResolver {
   readonly #unionTypes: ResolvedDucklangUnionType[] = [];
   readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
   readonly #effects = new Map<string, readonly DucklangEffectOperation[]>();
+  readonly #initFields: DucklangInitField[] = [];
   readonly #structTypes: ResolvedDucklangStructType[] = [];
   readonly #linearUseCounts = new Map<number, number>();
 
@@ -301,8 +318,27 @@ class DucklangResolver {
     return this.#effects;
   }
 
+  get initFields(): ResolvedDucklangModule["initFields"] {
+    return this.#initFields;
+  }
+
   get structTypes(): ResolvedDucklangModule["structTypes"] {
     return this.#structTypes;
+  }
+
+  declareModuleParameters(
+    parameters: readonly DucklangName[],
+  ): readonly DucklangSymbol[] {
+    const names = new Set<string>();
+    return parameters.map((parameter) => {
+      if (names.has(parameter.text)) {
+        throw new SyntaxError(
+          `${this.#file}:${parameter.span.start}: duplicate Ducklang module parameter ${parameter.text}`,
+        );
+      }
+      names.add(parameter.text);
+      return this.#declare(parameter, "parameter");
+    });
   }
 
   requireLinearUses(): void {
@@ -328,6 +364,44 @@ class DucklangResolver {
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
+      if (statement.kind === "initDeclaration") {
+        if (scope !== "module") {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang Init declarations must be module-level`,
+          );
+        }
+        if (this.#initFields.length > 0) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: duplicate Ducklang Init declaration`,
+          );
+        }
+        const names = new Set<string>();
+        for (const field of statement.fields) {
+          if (names.has(field.name)) {
+            throw new SyntaxError(
+              `${this.#file}:${field.span.start}: duplicate Ducklang Init field ${field.name}`,
+            );
+          }
+          names.add(field.name);
+          if (!this.#effects.has(field.effectName)) {
+            throw new TypeError(
+              `${this.#file}:${field.span.start}: Ducklang Init field ${field.name} references unknown effect ${field.effectName}`,
+            );
+          }
+          this.#initFields.push(field);
+        }
+        this.#structTypes.push({
+          name: "Init",
+          parameters: [],
+          fields: statement.fields.map((field) => ({
+            name: field.name,
+            type: { name: "I32", arguments: [], span: field.span },
+            span: field.span,
+          })),
+          span: statement.span,
+        });
+        continue;
+      }
       if (statement.kind === "recursiveGroup") {
         const names = new Set<string>();
         const symbols = statement.bindings.map((binding) => {
@@ -635,12 +709,8 @@ class DucklangResolver {
           currentRecursive,
         );
         if (index === statements.length - 1) result = expression;
-        else if (scope === "local") {
+        else {
           steps.push({ kind: "expression", expression });
-        } else {
-          throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: module-level Ducklang expressions require ordered module initialization`,
-          );
         }
         continue;
       }

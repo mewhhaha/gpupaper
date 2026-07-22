@@ -91,16 +91,7 @@ function rewriteExpression(
     (child) => rewriteExpression(child, values),
   );
   if (rewritten.kind === "ownership") {
-    const ownedValue = staticValue(rewritten.expression, values);
-    if (ownedValue.kind === "string") return ownedValue;
-  }
-  if (rewritten.kind === "hostCall") {
-    const runtimeArguments = rewritten.arguments.filter((argument) =>
-      staticValue(argument, values).kind !== "string"
-    );
-    if (runtimeArguments.length !== rewritten.arguments.length) {
-      return { ...rewritten, arguments: runtimeArguments };
-    }
+    return rewritten.expression;
   }
   if (rewritten.kind === "optionDo") {
     const option = staticValue(rewritten.option, values);
@@ -115,14 +106,7 @@ function rewriteExpression(
   }
   if (rewritten.kind === "scratch") {
     const body = collapseEmptyBlock(rewritten.body);
-    if (body.kind === "string") return body;
-    if (
-      rewritten.type.kind === "constructor" &&
-      rewritten.type.arguments.length === 0 &&
-      ["i32", "i64", "bool"].includes(rewritten.type.name)
-    ) {
-      return body;
-    }
+    return body;
   }
   if (rewritten.kind === "textAppend") {
     const left = staticValue(rewritten.left, values);

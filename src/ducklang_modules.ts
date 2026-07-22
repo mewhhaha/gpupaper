@@ -11,6 +11,70 @@ export async function resolveDucklangLocalImports(
   return await resolveModuleImports(module, []);
 }
 
+export function lowerDucklangEmptyModuleExports(
+  module: DucklangModule,
+): DucklangModule {
+  const result = module.statements.at(-1);
+  if (
+    result?.kind !== "expression" || result.expression.kind !== "record" ||
+    result.expression.fields.length !== 0
+  ) {
+    return module;
+  }
+  return {
+    ...module,
+    statements: [
+      ...module.statements.slice(0, -1),
+      {
+        ...result,
+        expression: { kind: "unit", span: result.expression.span },
+      },
+    ],
+  };
+}
+
+export async function applyDucklangHostInterface(
+  module: DucklangModule,
+  interfaceFile: string,
+): Promise<DucklangModule> {
+  let canonicalFile: string;
+  try {
+    canonicalFile = await Deno.realPath(interfaceFile);
+  } catch (cause) {
+    throw new TypeError(
+      `${module.file}: cannot resolve Ducklang host interface ${
+        JSON.stringify(interfaceFile)
+      }`,
+      { cause },
+    );
+  }
+  const hostModule = await parseDucklangModule(
+    canonicalFile,
+    await expandDucklangIncludes(
+      canonicalFile,
+      await Deno.readTextFile(canonicalFile),
+    ),
+  );
+  if (hostModule.parameters.length > 0) {
+    throw new TypeError(
+      `${canonicalFile}: Ducklang host interface must not take module parameters`,
+    );
+  }
+  const declarations = hostModule.statements.filter((statement) =>
+    statement.kind === "effectDeclaration" ||
+    statement.kind === "initDeclaration"
+  );
+  if (declarations.length === 0) {
+    throw new TypeError(
+      `${canonicalFile}: Ducklang host interface declares no effects or Init capabilities`,
+    );
+  }
+  return {
+    ...module,
+    statements: [...declarations, ...module.statements],
+  };
+}
+
 export async function expandDucklangIncludes(
   file: string,
   source: string,
@@ -46,8 +110,29 @@ async function resolveModuleImports(
   ancestry: readonly string[],
 ): Promise<DucklangModule> {
   const statements: DucklangStatement[] = [];
+  const specializedFunctionExports = new Map<
+    string,
+    ReadonlyMap<string, DucklangStatement & { readonly kind: "binding" }>
+  >();
   for (const statement of module.statements) {
     if (statement.kind !== "import" || !statement.path.startsWith(".")) {
+      if (statement.kind === "binding") {
+        const selected = selectSpecializedFunctionExport(
+          statement.value,
+          specializedFunctionExports,
+        );
+        if (selected !== undefined) {
+          statements.push({
+            ...statement,
+            value: {
+              kind: "reference",
+              name: selected.name,
+              span: statement.value.span,
+            },
+          });
+          continue;
+        }
+      }
       statements.push(statement);
       continue;
     }
@@ -98,6 +183,46 @@ async function resolveModuleImports(
       );
     }
     const namespace = statement.namespace;
+    const rawDependencyResult = dependency.statements.at(-1);
+    if (
+      dependency.parameters.every((parameter) =>
+        !referencesName(dependency.statements, parameter.text)
+      ) && rawDependencyResult?.kind === "expression" &&
+      rawDependencyResult.expression.kind === "record"
+    ) {
+      const dependencyBindings = new Map(
+        dependency.statements.flatMap((dependencyStatement) =>
+          dependencyStatement.kind === "binding"
+            ? [[dependencyStatement.name.text, dependencyStatement] as const]
+            : []
+        ),
+      );
+      const exportedFunctions = new Map<
+        string,
+        DucklangStatement & { readonly kind: "binding" }
+      >();
+      for (const field of rawDependencyResult.expression.fields) {
+        if (field.value.kind !== "reference") continue;
+        const binding = dependencyBindings.get(field.value.name.text);
+        if (binding?.value.kind !== "function") continue;
+        const renamed = {
+          ...binding,
+          name: {
+            ...binding.name,
+            text: `$module_${namespace.text}_${binding.name.text}`,
+          },
+        };
+        statements.push(renamed);
+        exportedFunctions.set(field.name, renamed);
+      }
+      if (
+        exportedFunctions.size > 0 &&
+        exportedFunctions.size === rawDependencyResult.expression.fields.length
+      ) {
+        specializedFunctionExports.set(namespace.text, exportedFunctions);
+        continue;
+      }
+    }
     let dependencyStatements = dependency.statements;
     const parameters = dependency.parameters.map((parameter, index) => {
       const fieldNames = collectParameterFields(dependency, parameter.text);
@@ -122,13 +247,28 @@ async function resolveModuleImports(
       dependencyResult.expression.kind === "record"
     ) {
       const typeName = `$module_${namespace.text}_exports`;
+      const dependencyBindings = new Map(
+        dependencyStatements.flatMap((dependencyStatement) =>
+          dependencyStatement.kind === "binding"
+            ? [[dependencyStatement.name.text, dependencyStatement] as const]
+            : []
+        ),
+      );
       statements.push({
         kind: "structType",
         name: typeName,
         parameters: [],
         fields: dependencyResult.expression.fields.map((field) => ({
           name: field.name,
-          type: { name: "Int", arguments: [], span: field.span },
+          type: {
+            name: field.value.kind === "reference" &&
+                dependencyBindings.get(field.value.name.text)?.value.kind ===
+                  "function"
+              ? "$module_inferred_export"
+              : "Int",
+            arguments: [],
+            span: field.span,
+          },
           span: field.span,
         })),
         span: dependencyResult.span,
@@ -162,6 +302,42 @@ async function resolveModuleImports(
     });
   }
   return { ...module, statements };
+}
+
+function selectSpecializedFunctionExport(
+  expression: DucklangExpression,
+  modules: ReadonlyMap<
+    string,
+    ReadonlyMap<string, DucklangStatement & { readonly kind: "binding" }>
+  >,
+): (DucklangStatement & { readonly kind: "binding" }) | undefined {
+  if (expression.kind !== "field") return undefined;
+  const namespace = expression.product.kind === "call" &&
+      expression.product.callee.kind === "reference"
+    ? expression.product.callee.name.text
+    : expression.product.kind === "reference"
+    ? expression.product.name.text
+    : undefined;
+  return namespace === undefined
+    ? undefined
+    : modules.get(namespace)?.get(expression.fieldName);
+}
+
+function referencesName(values: unknown, name: string): boolean {
+  const pending: unknown[] = [values];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object") continue;
+    const node = value as Record<string, unknown>;
+    const referenceName = node.name as Record<string, unknown> | undefined;
+    if (
+      node.kind === "reference" && referenceName?.text === name
+    ) {
+      return true;
+    }
+    pending.push(...Object.values(node));
+  }
+  return false;
 }
 
 function collectParameterFields(

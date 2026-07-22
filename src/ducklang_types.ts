@@ -3,6 +3,7 @@ import type { DucklangTypeReference } from "./ducklang_ast.ts";
 import type {
   DucklangEffectOperation,
   DucklangEffectReference,
+  DucklangInitField,
 } from "./ducklang_ast.ts";
 import { analyzeDucklangEffects } from "./ducklang_effects.ts";
 import type { EqualityConstraint, Type } from "./types.ts";
@@ -244,6 +245,7 @@ export type TypedDucklangBlockStep =
 
 export type TypedDucklangModule = {
   readonly file: string;
+  readonly exportNames: readonly string[];
   readonly bindings: readonly TypedDucklangBinding[];
   readonly result: TypedDucklangExpression;
   readonly resultType: Type;
@@ -254,6 +256,7 @@ export type TypedDucklangModule = {
     readonly DucklangEffectOperation[]
   >;
   readonly requiredEffects: readonly DucklangEffectReference[];
+  readonly initFields: readonly DucklangInitField[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly structTypes: readonly ResolvedDucklangStructType[];
@@ -301,8 +304,10 @@ export function inferDucklangModule(
     module.structTypes,
     module.effects,
     effectAnalysis.bindingEffects,
+    module.initFields,
+    module.exportNames,
   );
-  const environment = new Map<number, Type>();
+  const environment = inference.inferModuleParameters(module.parameters);
   const bindings = inference.inferBindings(module.bindings, environment);
   const result = inference.inferExpression(module.result, environment);
   return inference.finish(bindings, result, effectAnalysis.moduleEffects);
@@ -337,6 +342,8 @@ class DucklangInference {
     number,
     readonly DucklangEffectReference[]
   >;
+  readonly #initFields: readonly DucklangInitField[];
+  readonly #exportNames: readonly string[];
   #nextVariable = 0;
 
   constructor(
@@ -352,6 +359,8 @@ class DucklangInference {
       number,
       readonly DucklangEffectReference[]
     >,
+    initFields: readonly DucklangInitField[],
+    exportNames: readonly string[],
   ) {
     this.#file = file;
     this.#unionTypes = unionTypes;
@@ -359,6 +368,8 @@ class DucklangInference {
     this.#structTypes = structTypes;
     this.#effectDeclarations = effectDeclarations;
     this.#bindingEffects = bindingEffects;
+    this.#initFields = initFields;
+    this.#exportNames = exportNames;
     for (const declaration of unionTypes) {
       const caseNames = new Set<string>();
       for (const unionCase of declaration.cases) {
@@ -454,6 +465,20 @@ class DucklangInference {
       });
     }
     return typed;
+  }
+
+  inferModuleParameters(
+    parameters: readonly DucklangSymbol[],
+  ): Map<number, Type> {
+    const environment = new Map<number, Type>();
+    for (const parameter of parameters) {
+      const type = parameter.declaredType === undefined
+        ? this.#freshVariable()
+        : this.#declaredType(parameter.declaredType, parameter.span);
+      environment.set(parameter.id, type);
+      this.#symbolTypes.set(parameter.id, type);
+    }
+    return environment;
   }
 
   inferExpression(
@@ -1646,6 +1671,9 @@ class DucklangInference {
     parameters: ReadonlyMap<string, Type>,
     expandingAliases: readonly string[],
   ): Type {
+    if (reference.name === "$module_inferred_export") {
+      return this.#freshVariable();
+    }
     const parameter = parameters.get(reference.name);
     if (parameter !== undefined) {
       if (reference.arguments.length !== 0) {
@@ -1789,6 +1817,7 @@ class DucklangInference {
     const normalizedResult = this.#normalizeExpression(result.expression);
     return {
       file: this.#file,
+      exportNames: this.#exportNames,
       bindings: normalizedBindings,
       result: normalizedResult,
       resultType: this.#apply(result.type),
@@ -1798,6 +1827,7 @@ class DucklangInference {
       ),
       effectDeclarations: this.#effectDeclarations,
       requiredEffects,
+      initFields: this.#initFields,
       unionTypes: this.#unionTypes,
       typeAliases: this.#typeAliases,
       structTypes: this.#structTypes,

@@ -81,6 +81,12 @@ export type DucklangEffectOperation = {
   readonly span: SourceSpan;
 };
 
+export type DucklangInitField = {
+  readonly name: string;
+  readonly effectName: string;
+  readonly span: SourceSpan;
+};
+
 export type DucklangProtocolDeclaration = {
   readonly name: string;
   readonly methods: readonly string[];
@@ -283,6 +289,11 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "initDeclaration";
+    readonly fields: readonly DucklangInitField[];
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "recursiveGroup";
     readonly declarationKind: "let" | "const";
     readonly bindings: readonly DucklangRecursiveBinding[];
@@ -390,6 +401,7 @@ export type DucklangStatement =
 
 export type DucklangModule = {
   readonly file: string;
+  readonly exportNames: readonly string[];
   readonly parameters: readonly DucklangParameter[];
   readonly protocols: readonly DucklangProtocolDeclaration[];
   readonly extensions: readonly DucklangExtensionDeclaration[];

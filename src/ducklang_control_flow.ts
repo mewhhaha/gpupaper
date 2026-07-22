@@ -292,6 +292,7 @@ function lowerStatementExpressions(
         expression: lowerExpression(statement.expression),
       };
     case "effectDeclaration":
+    case "initDeclaration":
     case "structType":
     case "unionType":
     case "typeAlias":

@@ -71,6 +71,27 @@ export async function parseDucklangModule(
       return statement === undefined ? [] : [statement];
     });
     const moduleHeader = findRule(result.cursor, "module_header");
+    const moduleReturn = findRule(result.cursor, "module_return_statement");
+    const exportBlock = moduleReturn === undefined
+      ? undefined
+      : findRule(moduleReturn, "field_block");
+    const exportNames = exportBlock === undefined
+      ? []
+      : exportBlock.children().flatMap((field) => {
+        if (
+          field.type !== "rule" ||
+          (field.name !== "shape_field" && field.name !== "shorthand_field")
+        ) {
+          return [];
+        }
+        return [
+          identifierName(
+            file,
+            field.name === "shape_field" ? requiredField(field, "name") : field,
+            "module export name",
+          ).text,
+        ];
+      });
     const parameterList = moduleHeader === undefined
       ? undefined
       : findRule(moduleHeader, "parameter_list");
@@ -138,17 +159,28 @@ export async function parseDucklangModule(
       : [];
     return {
       file,
+      exportNames,
       parameters: parameterList === undefined
         ? []
         : parameterList.children().flatMap((parameter) =>
           parameter.type === "rule" && parameter.name === "parameter"
-            ? [
-              identifierName(
+            ? (() => {
+              const name = identifierName(
                 file,
                 requiredField(parameter, "name"),
                 "module parameter",
-              ),
-            ]
+              );
+              const declaredType = parameter.field("type");
+              const declaredTypeName = isCursor(declaredType)
+                ? simpleTypeName(declaredType)
+                : undefined;
+              return [{
+                ...name,
+                ...(declaredTypeName === undefined
+                  ? {}
+                  : { declaredType: declaredTypeName }),
+              }];
+            })()
             : []
         ),
       protocols,
@@ -342,7 +374,30 @@ function lowerModuleStatement(
     if (name.text !== "Init") {
       throw unsupported(file, statement, `record declaration ${name.text}`);
     }
-    return undefined;
+    const fieldBlock = findRule(statement, "type_field_block");
+    if (fieldBlock === undefined) {
+      throw unsupported(file, statement, "Init field block");
+    }
+    return {
+      kind: "initDeclaration",
+      fields: fieldBlock.children().flatMap((field) => {
+        if (field.type !== "rule" || field.name !== "type_field") return [];
+        return [{
+          name: tokenText(
+            file,
+            requiredField(field, "name"),
+            "Init field name",
+          ),
+          effectName: tokenText(
+            file,
+            requiredField(field, "type"),
+            "Init field effect",
+          ),
+          span: sourceSpan(file, field),
+        }];
+      }),
+      span: sourceSpan(file, statement),
+    };
   }
   if (
     statement.name === "declare_effect_statement" ||
