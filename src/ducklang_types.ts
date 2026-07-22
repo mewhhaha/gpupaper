@@ -476,6 +476,59 @@ class DucklangInference {
           const value = this.#freshVariable();
           type = functionType([value], value);
         } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          (expression.exportName === "patch" ||
+            expression.exportName === "predicate")
+        ) {
+          const value = this.#freshVariable();
+          const result = expression.exportName === "patch"
+            ? value
+            : booleanType;
+          const abstraction = functionType([value], result);
+          type = functionType([abstraction], abstraction);
+        } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          (expression.exportName === "patch_apply" ||
+            expression.exportName === "predicate_test")
+        ) {
+          const value = this.#freshVariable();
+          const result = expression.exportName === "patch_apply"
+            ? value
+            : booleanType;
+          type = functionType([functionType([value], result), value], result);
+        } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          expression.exportName === "patch_compose"
+        ) {
+          const value = this.#freshVariable();
+          const patch = functionType([value], value);
+          type = functionType([patch, patch], patch);
+        } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          expression.exportName === "predicate_and"
+        ) {
+          const value = this.#freshVariable();
+          const predicate = functionType([value], booleanType);
+          type = functionType([predicate, predicate], predicate);
+        } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          expression.exportName === "span"
+        ) {
+          type = functionType([i32Type, i32Type], {
+            kind: "constructor",
+            name: "tuple",
+            arguments: [i32Type, i32Type],
+          });
+        } else if (
+          expression.modulePath === "duck:prelude/abstractions" &&
+          expression.exportName === "span_contains"
+        ) {
+          type = functionType([{
+            kind: "constructor",
+            name: "tuple",
+            arguments: [i32Type, i32Type],
+          }, i32Type], booleanType);
+        } else if (
           expression.modulePath === "duck:prelude" &&
           expression.exportName === "struct"
         ) {

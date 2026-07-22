@@ -461,12 +461,16 @@ function foldStaticIntrinsic(
     staticValue(argument, values)
   );
   if (
-    callee.modulePath === "duck:prelude/functional" &&
-    (callee.exportName === "apply" || callee.exportName === "pipe") &&
+    ((callee.modulePath === "duck:prelude/functional" &&
+      (callee.exportName === "apply" || callee.exportName === "pipe")) ||
+      (callee.modulePath === "duck:prelude/abstractions" &&
+        (callee.exportName === "patch_apply" ||
+          callee.exportName === "predicate_test"))) &&
     arguments_.length === 2
   ) {
-    const functionIndex = callee.exportName === "apply" ? 0 : 1;
-    const argumentIndex = callee.exportName === "apply" ? 1 : 0;
+    const piped = callee.exportName === "pipe";
+    const functionIndex = piped ? 1 : 0;
+    const argumentIndex = piped ? 0 : 1;
     if (arguments_[functionIndex].kind !== "function") return undefined;
     return {
       kind: "call",
@@ -477,14 +481,20 @@ function foldStaticIntrinsic(
     };
   }
   if (
-    callee.modulePath === "duck:prelude/functional" &&
-    callee.exportName === "identity" && arguments_.length === 1
+    ((callee.modulePath === "duck:prelude/functional" &&
+      callee.exportName === "identity") ||
+      (callee.modulePath === "duck:prelude/abstractions" &&
+        (callee.exportName === "patch" ||
+          callee.exportName === "predicate"))) && arguments_.length === 1
   ) {
     return expression.arguments[0];
   }
   if (
-    callee.modulePath === "duck:prelude/functional" &&
-    callee.exportName === "compose" && arguments_.length === 2 &&
+    ((callee.modulePath === "duck:prelude/functional" &&
+      callee.exportName === "compose") ||
+      (callee.modulePath === "duck:prelude/abstractions" &&
+        callee.exportName === "patch_compose")) &&
+    arguments_.length === 2 &&
     arguments_[0].kind === "function" &&
     arguments_[0].type.kind === "function" &&
     arguments_[0].parameters.length === 1 &&
@@ -517,6 +527,78 @@ function foldStaticIntrinsic(
         type: arguments_[0].body.type,
         span: expression.span,
       },
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.modulePath === "duck:prelude/abstractions" &&
+    callee.exportName === "predicate_and" && arguments_.length === 2 &&
+    arguments_[0].kind === "function" &&
+    arguments_[0].type.kind === "function" &&
+    arguments_[0].parameters.length === 1 &&
+    arguments_[1].kind === "function"
+  ) {
+    const parameter = arguments_[0].parameters[0];
+    const predicateResultType = arguments_[0].body.type;
+    const parameterReference: TypedDucklangExpression = {
+      kind: "reference",
+      symbol: parameter,
+      type: arguments_[0].type.parameter,
+      span: expression.span,
+    };
+    return {
+      kind: "function",
+      recursive: false,
+      parameters: [parameter],
+      body: {
+        kind: "binary",
+        operator: "&&",
+        left: {
+          kind: "call",
+          callee: expression.arguments[0],
+          arguments: [parameterReference],
+          type: predicateResultType,
+          span: expression.span,
+        },
+        right: {
+          kind: "call",
+          callee: expression.arguments[1],
+          arguments: [parameterReference],
+          type: predicateResultType,
+          span: expression.span,
+        },
+        type: predicateResultType,
+        span: expression.span,
+      },
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.modulePath === "duck:prelude/abstractions" &&
+    callee.exportName === "span" && arguments_.length === 2
+  ) {
+    return {
+      kind: "product",
+      productKind: "tuple",
+      values: expression.arguments,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.modulePath === "duck:prelude/abstractions" &&
+    callee.exportName === "span_contains" && arguments_.length === 2 &&
+    arguments_[0].kind === "product" &&
+    arguments_[0].values[0]?.kind === "integer" &&
+    arguments_[0].values[1]?.kind === "integer" &&
+    arguments_[1].kind === "integer"
+  ) {
+    return {
+      kind: "boolean",
+      value: arguments_[0].values[0].value <= arguments_[1].value &&
+        arguments_[1].value < arguments_[0].values[1].value,
       type: expression.type,
       span: expression.span,
     };
@@ -602,7 +684,12 @@ function staticValue(
 ): TypedDucklangExpression {
   const visited = new Set<number>();
   let value = expression;
-  while (value.kind === "reference" && !visited.has(value.symbol.id)) {
+  while (true) {
+    if (value.kind === "comptime") {
+      value = value.expression;
+      continue;
+    }
+    if (value.kind !== "reference" || visited.has(value.symbol.id)) break;
     visited.add(value.symbol.id);
     const resolved = values.get(value.symbol.id);
     if (resolved === undefined) break;
