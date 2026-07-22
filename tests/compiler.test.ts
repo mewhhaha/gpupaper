@@ -155,6 +155,19 @@ Deno.test("admitted class method primitives lower to executable Wasm", async () 
   assertEquals(await runMain(artifact.wasm), 1);
 });
 
+Deno.test("instance primitives require their exact class method type", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `class Eq a where eq :: a -> Bool\ninstance Eq Int where eq = primEqInt\nmain = 0\n`,
+        ),
+      ),
+    /primEqInt method eq must have type a -> a -> Bool/,
+  );
+});
+
 Deno.test("datatype fields cannot introduce hidden type variables", () => {
   assertThrows(
     () =>

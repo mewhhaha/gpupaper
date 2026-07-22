@@ -97,6 +97,22 @@ export function inferModule(module: Module): InferredModule {
         `${instance.methodName.span.file}:${instance.methodName.span.start}: instance for ${instance.className.text} must define ${classDeclaration.methodName.text}; found ${instance.methodName.text}`,
       );
     }
+    const methodType = classDeclaration.methodType.type;
+    const methodMatchesPrimitive =
+      classDeclaration.methodType.predicates.length === 0 &&
+      methodType.kind === "function" &&
+      methodType.parameter.kind === "name" &&
+      methodType.parameter.name === classDeclaration.parameter &&
+      methodType.result.kind === "function" &&
+      methodType.result.parameter.kind === "name" &&
+      methodType.result.parameter.name === classDeclaration.parameter &&
+      methodType.result.result.kind === "name" &&
+      methodType.result.result.name === "Bool";
+    if (!methodMatchesPrimitive) {
+      throw new TypeError(
+        `${classDeclaration.methodType.span.file}:${classDeclaration.methodType.span.start}: primEqInt method ${classDeclaration.methodName.text} must have type ${classDeclaration.parameter} -> ${classDeclaration.parameter} -> Bool`,
+      );
+    }
     if (instance.type.kind !== "name" || instance.type.name !== "Int") {
       throw new TypeError(
         `${instance.type.span.file}:${instance.type.span.start}: primEqInt instance requires type Int; found ${
