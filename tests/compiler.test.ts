@@ -120,6 +120,19 @@ Deno.test("macro invocations cannot observe later macro declarations", async () 
   );
 });
 
+Deno.test("constant macros reject a missing value instead of emitting zero", async () => {
+  await assertRejects(
+    () =>
+      expandMacros(
+        parseModule(
+          "test.hs",
+          `macro makeConstant = constant\nmakeConstant!(generated)\nmain = 0\n`,
+        ),
+      ),
+    /macro makeConstant expects 2 arguments; received 1/,
+  );
+});
+
 Deno.test("WebGPU equality closure accepts compatible constructors", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };

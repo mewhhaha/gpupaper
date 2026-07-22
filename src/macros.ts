@@ -43,6 +43,7 @@ export async function expandMacros(
         `${declaration.span.file}:${declaration.span.start}: unknown macro ${declaration.name.text}`,
       );
     }
+    const numericValue = validateMacroInvocation(macro, declaration);
     const expansionScope = nextScope;
     nextScope += 1;
     const generated: ValueDeclaration[] = [];
@@ -74,9 +75,6 @@ export async function expandMacros(
         `macro ${macro.name.text} Wasm module has no expand export`,
       );
     }
-    const numericValue = typeof declaration.arguments[1] === "number"
-      ? declaration.arguments[1]
-      : 0;
     expand(0, numericValue);
     if (generated.length !== 1) {
       throw new Error(
@@ -92,6 +90,27 @@ export async function expandMacros(
     generatedCount,
     wasmByteCount,
   };
+}
+
+function validateMacroInvocation(
+  macro: MacroDeclaration,
+  invocation: MacroInvocation,
+): number {
+  const expectedArgumentCount = macro.operation === "identity" ? 1 : 2;
+  if (invocation.arguments.length !== expectedArgumentCount) {
+    throw new TypeError(
+      `${invocation.span.file}:${invocation.span.start}: macro ${invocation.name.text} expects ${expectedArgumentCount} arguments; received ${invocation.arguments.length}`,
+    );
+  }
+  requireNameArgument(invocation, 0);
+  if (macro.operation === "identity") return 0;
+  const value = invocation.arguments[1];
+  if (typeof value !== "number") {
+    throw new TypeError(
+      `${invocation.span.file}:${invocation.span.start}: macro ${invocation.name.text} argument 2 must be an integer`,
+    );
+  }
+  return value;
 }
 
 function compileMacroToWasm(macro: MacroDeclaration): Uint8Array {
