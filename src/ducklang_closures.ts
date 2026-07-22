@@ -156,14 +156,53 @@ function rewriteExpression(
   if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
   if (foldedIntrinsic !== undefined) return foldedIntrinsic;
-  if (
-    rewritten.kind !== "call" || rewritten.callee.kind !== "reference"
-  ) {
-    return collapseEmptyBlock(rewritten);
+  if (rewritten.kind !== "call") return collapseEmptyBlock(rewritten);
+  const selectedCallee = staticValue(rewritten.callee, values);
+  if (selectedCallee.kind === "if") {
+    return rewriteExpression({
+      ...selectedCallee,
+      consequence: {
+        kind: "call",
+        callee: selectedCallee.consequence,
+        arguments: rewritten.arguments,
+        type: rewritten.type,
+        span: rewritten.span,
+      },
+      alternative: {
+        kind: "call",
+        callee: selectedCallee.alternative,
+        arguments: rewritten.arguments,
+        type: rewritten.type,
+        span: rewritten.span,
+      },
+      type: rewritten.type,
+      span: rewritten.span,
+    }, values);
   }
-  const factory = values.get(rewritten.callee.symbol.id);
+  if (selectedCallee.kind === "ifUnion") {
+    return rewriteExpression({
+      ...selectedCallee,
+      consequence: {
+        kind: "call",
+        callee: selectedCallee.consequence,
+        arguments: rewritten.arguments,
+        type: rewritten.type,
+        span: rewritten.span,
+      },
+      alternative: {
+        kind: "call",
+        callee: selectedCallee.alternative,
+        arguments: rewritten.arguments,
+        type: rewritten.type,
+        span: rewritten.span,
+      },
+      type: rewritten.type,
+      span: rewritten.span,
+    }, values);
+  }
+  const factory = selectedCallee;
   if (
-    factory?.kind !== "function" || factory.recursive ||
+    factory.kind !== "function" || factory.recursive ||
     factory.parameters.length !== rewritten.arguments.length
   ) {
     return collapseEmptyBlock(rewritten);
@@ -188,9 +227,11 @@ function rewriteExpression(
       referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "unionCase",
   );
+  const inlinesFunctionLiteral = rewritten.callee.kind === "function";
   if (
-    !returnsFunction && !returnsAggregate && !specializesFunctionParameter &&
-    !specializesTextParameter && !specializesUnionParameter
+    !returnsFunction && !returnsAggregate && !inlinesFunctionLiteral &&
+    !specializesFunctionParameter && !specializesTextParameter &&
+    !specializesUnionParameter
   ) {
     return collapseEmptyBlock(rewritten);
   }
