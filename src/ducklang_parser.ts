@@ -1247,6 +1247,9 @@ function applyNominalProductType(
   if (expression.kind === "record") {
     return { ...expression, nominalType };
   }
+  if (expression.kind === "unionCase") {
+    return { ...expression, nominalType };
+  }
   if (expression.kind === "if") {
     return {
       ...expression,

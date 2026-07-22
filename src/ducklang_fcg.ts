@@ -106,7 +106,12 @@ export function lowerDucklangToFcgAndWasm(
   );
   const unionTags = new Map(
     module.unionTypes.flatMap((declaration) =>
-      declaration.cases.map((unionCase, tag) => [unionCase.name, tag] as const)
+      declaration.cases.map((unionCase, tag) =>
+        [
+          `${declaration.name}.${unionCase.name}`,
+          tag,
+        ] as const
+      )
     ),
   );
   const hostFunctions = new Map<string, HostFunctionShape>();
@@ -466,10 +471,12 @@ class DucklangFcgCompiler {
           `${this.#file}:${expression.span.start}: dynamic Ducklang do requires handler lowering`,
         );
       case "unionCase": {
-        const tag = this.#unionTags.get(expression.caseName);
+        const tag = this.#unionTags.get(
+          `${expression.unionName}.${expression.caseName}`,
+        );
         if (tag === undefined) {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang union constructor ${expression.caseName} has no layout tag`,
+            `${this.#file}:${expression.span.start}: Ducklang union constructor ${expression.unionName}.${expression.caseName} has no layout tag`,
           );
         }
         const payloadType = wasmValueType(
@@ -644,10 +651,12 @@ class DucklangFcgCompiler {
           },
         ];
       case "ifUnion": {
-        const tag = this.#unionTags.get(expression.caseName);
+        const tag = this.#unionTags.get(
+          `${expression.unionName}.${expression.caseName}`,
+        );
         if (tag === undefined) {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang union pattern ${expression.caseName} has no layout tag`,
+            `${this.#file}:${expression.span.start}: Ducklang union pattern ${expression.unionName}.${expression.caseName} has no layout tag`,
           );
         }
         const unionLocal = this.#allocateLocal(wasmType.i64);

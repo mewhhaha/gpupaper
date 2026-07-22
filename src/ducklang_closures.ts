@@ -244,12 +244,11 @@ function rewriteExpression(
   if (rewritten.kind === "ifUnion") {
     const value = staticValue(rewritten.value, values);
     if (value.kind === "unionCase") {
-      const selected = value.caseName === rewritten.caseName
-        ? rewritten.consequence
-        : rewritten.alternative;
+      const matches = value.unionName === rewritten.unionName &&
+        value.caseName === rewritten.caseName;
+      const selected = matches ? rewritten.consequence : rewritten.alternative;
       if (
-        value.caseName === rewritten.caseName &&
-        rewritten.payloadSymbol !== undefined
+        matches && rewritten.payloadSymbol !== undefined
       ) {
         return rewriteExpression(
           substitute(

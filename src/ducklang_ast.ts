@@ -98,6 +98,7 @@ export type DucklangExpression =
     readonly kind: "unionCase";
     readonly caseName: string;
     readonly value: DucklangExpression;
+    readonly nominalType?: string;
     readonly span: SourceSpan;
   }
   | {

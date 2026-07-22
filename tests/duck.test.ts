@@ -261,6 +261,20 @@ if let \`Some value = choice { value + 1 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang resolves overloaded constructors from nominal types", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { length } = import "duck:prelude/runtime" ()
+type NumberCalc = | \`Literal Int | \`Add Int
+type TextCalc = \`Literal Text
+let expression: TextCalc = \`Literal "duck"
+if let \`Literal value = expression { length(value) } else { 0 }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 4);
+});
+
 Deno.test("Ducklang lowers dynamic scalar unions to packed Wasm values", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

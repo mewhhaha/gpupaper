@@ -64,8 +64,10 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "unionCase";
+    readonly unionName: string;
     readonly caseName: string;
     readonly value: TypedDucklangExpression;
+    readonly nominalType?: string;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -177,6 +179,7 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "ifUnion";
+    readonly unionName: string;
     readonly caseName: string;
     readonly payloadSymbol: DucklangSymbol | undefined;
     readonly value: TypedDucklangExpression;
@@ -319,12 +322,12 @@ class DucklangInference {
     this.#unionTypes = unionTypes;
     this.#typeAliases = typeAliases;
     this.#structTypes = structTypes;
-    const caseNames = new Set<string>();
     for (const declaration of unionTypes) {
+      const caseNames = new Set<string>();
       for (const unionCase of declaration.cases) {
         if (caseNames.has(unionCase.name)) {
           throw new TypeError(
-            `${file}:${unionCase.span.start}: duplicate Ducklang union constructor ${unionCase.name}`,
+            `${file}:${unionCase.span.start}: duplicate Ducklang constructor ${declaration.name}.${unionCase.name}`,
           );
         }
         caseNames.add(unionCase.name);
@@ -622,12 +625,14 @@ class DucklangInference {
         const unionCase = this.#unionCaseType(
           expression.caseName,
           expression.span,
+          expression.nominalType,
         );
         const value = this.inferExpression(expression.value, environment);
         this.#unify(value.type, unionCase.payload, expression.value.span);
         return {
           expression: {
             ...expression,
+            unionName: unionCase.unionName,
             value: value.expression,
             type: unionCase.union,
           },
@@ -1258,21 +1263,30 @@ class DucklangInference {
         };
       }
       case "ifUnion": {
-        const unionCase = this.#unionCaseType(
+        const value = this.inferExpression(expression.value, environment);
+        const candidates = this.#unionCaseCandidates(
           expression.caseName,
           expression.span,
         );
-        const value = this.inferExpression(expression.value, environment);
-        this.#unify(value.type, unionCase.union, expression.value.span);
+        if (candidates.length === 1) {
+          this.#unify(
+            value.type,
+            candidates[0].union,
+            expression.value.span,
+          );
+        }
+        const payloadType = candidates.length === 1
+          ? candidates[0].payload
+          : this.#freshVariable();
         const consequenceEnvironment = new Map(environment);
         if (expression.payloadSymbol !== undefined) {
           consequenceEnvironment.set(
             expression.payloadSymbol.id,
-            unionCase.payload,
+            payloadType,
           );
           this.#symbolTypes.set(
             expression.payloadSymbol.id,
-            unionCase.payload,
+            payloadType,
           );
         }
         const consequence = this.inferExpression(
@@ -1290,10 +1304,34 @@ class DucklangInference {
             type: i32Type,
           }
           : this.inferExpression(expression.alternative, environment);
+        const compatibleCandidates = candidates.filter((candidate) =>
+          this.#typesCouldMatch(value.type, candidate.union) &&
+          this.#typesCouldMatch(payloadType, candidate.payload)
+        );
+        if (compatibleCandidates.length === 0) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} matches neither scrutinee ${
+              formatDucklangType(this.#apply(value.type))
+            } nor payload ${formatDucklangType(this.#apply(payloadType))}`,
+          );
+        }
+        if (compatibleCandidates.length > 1) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} is ambiguous among ${
+              compatibleCandidates.map((candidate) => candidate.unionName).join(
+                ", ",
+              )
+            }`,
+          );
+        }
+        const unionCase = compatibleCandidates[0];
+        this.#unify(value.type, unionCase.union, expression.value.span);
+        this.#unify(payloadType, unionCase.payload, expression.span);
         this.#unify(consequence.type, alternative.type, expression.span);
         return {
           expression: {
             ...expression,
+            unionName: unionCase.unionName,
             value: value.expression,
             consequence: consequence.expression,
             alternative: alternative.expression,
@@ -1363,29 +1401,96 @@ class DucklangInference {
   #unionCaseType(
     caseName: string,
     span: SourceSpan,
-  ): { readonly union: Type; readonly payload: Type } {
-    const declaration = this.#unionTypes.find((candidate) =>
+    expectedUnionName?: string,
+  ): {
+    readonly unionName: string;
+    readonly union: Type;
+    readonly payload: Type;
+  } {
+    const candidates = this.#unionCaseCandidates(
+      caseName,
+      span,
+      expectedUnionName,
+    );
+    if (candidates.length !== 1) {
+      throw new TypeError(
+        `${this.#file}:${span.start}: Ducklang constructor ${caseName} requires an expected union type; candidates are ${
+          candidates.map((candidate) => candidate.unionName).join(", ")
+        }`,
+      );
+    }
+    return candidates[0];
+  }
+
+  #unionCaseCandidates(
+    caseName: string,
+    span: SourceSpan,
+    expectedUnionName?: string,
+  ): readonly {
+    readonly unionName: string;
+    readonly union: Type;
+    readonly payload: Type;
+  }[] {
+    const expectedDeclarationName = expectedUnionName === undefined
+      ? undefined
+      : this.#typeAliases.find((alias) => alias.name === expectedUnionName)
+        ?.target.name ?? expectedUnionName;
+    const declarations = this.#unionTypes.filter((candidate) =>
+      (expectedDeclarationName === undefined ||
+        candidate.name === expectedDeclarationName) &&
       candidate.cases.some((unionCase) => unionCase.name === caseName)
     );
-    if (declaration === undefined) {
+    if (declarations.length === 0) {
       throw new TypeError(
         `${this.#file}:${span.start}: unknown Ducklang union constructor ${caseName}`,
       );
     }
-    const parameters = new Map(
-      declaration.parameters.map((name) => [name, this.#freshVariable()]),
+    return declarations.map((declaration) => {
+      const parameters = new Map(
+        declaration.parameters.map((name) => [name, this.#freshVariable()]),
+      );
+      const unionCase = declaration.cases.find((candidate) =>
+        candidate.name === caseName
+      )!;
+      return {
+        unionName: declaration.name,
+        union: {
+          kind: "constructor",
+          name: declaration.name,
+          arguments: declaration.parameters.map((name) =>
+            parameters.get(name)!
+          ),
+        },
+        payload: this.#typeReference(unionCase.payloadType, parameters, []),
+      };
+    });
+  }
+
+  #typesCouldMatch(left: Type, right: Type): boolean {
+    const appliedLeft = this.#apply(left);
+    const appliedRight = this.#apply(right);
+    if (appliedLeft.kind === "variable" || appliedRight.kind === "variable") {
+      return true;
+    }
+    if (appliedLeft.kind !== appliedRight.kind) return false;
+    if (appliedLeft.kind === "function" && appliedRight.kind === "function") {
+      return this.#typesCouldMatch(
+        appliedLeft.parameter,
+        appliedRight.parameter,
+      ) &&
+        this.#typesCouldMatch(appliedLeft.result, appliedRight.result);
+    }
+    if (
+      appliedLeft.kind !== "constructor" ||
+      appliedRight.kind !== "constructor" ||
+      appliedLeft.name !== appliedRight.name ||
+      appliedLeft.arguments.length !== appliedRight.arguments.length
+    ) {
+      return false;
+    }
+    return appliedLeft.arguments.every((argument, index) =>
+      this.#typesCouldMatch(argument, appliedRight.arguments[index])
     );
-    const unionCase = declaration.cases.find((candidate) =>
-      candidate.name === caseName
-    )!;
-    return {
-      union: {
-        kind: "constructor",
-        name: declaration.name,
-        arguments: declaration.parameters.map((name) => parameters.get(name)!),
-      },
-      payload: this.#typeReference(unionCase.payloadType, parameters, []),
-    };
   }
 
   #declaredType(name: string, span: SourceSpan): Type {
