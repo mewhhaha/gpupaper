@@ -48,6 +48,10 @@ function rewriteExpression(
     expression,
     (child) => rewriteExpression(child, values),
   );
+  if (rewritten.kind === "ownership") {
+    const ownedValue = staticValue(rewritten.expression, values);
+    if (ownedValue.kind === "string") return ownedValue;
+  }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
@@ -306,6 +310,8 @@ function rewriteChildren(
         left: rewrite(expression.left),
         right: rewrite(expression.right),
       };
+    case "ownership":
+      return { ...expression, expression: rewrite(expression.expression) };
     case "return":
     case "comptime":
       return { ...expression, expression: rewrite(expression.expression) };

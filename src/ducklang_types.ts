@@ -69,6 +69,13 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "ownership";
+    readonly operation: "borrow" | "freeze";
+    readonly expression: TypedDucklangExpression;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "return";
     readonly expression: TypedDucklangExpression;
     readonly type: Type;
@@ -404,6 +411,18 @@ class DucklangInference {
       }
       case "unary": {
         const operand = this.inferExpression(expression.operand, environment);
+        if (expression.operator === "&" || expression.operator === "freeze") {
+          return {
+            expression: {
+              kind: "ownership",
+              operation: expression.operator === "&" ? "borrow" : "freeze",
+              expression: operand.expression,
+              type: operand.type,
+              span: expression.span,
+            },
+            type: operand.type,
+          };
+        }
         if (expression.operator === "-") {
           let operandType = this.#apply(operand.type);
           if (operandType.kind === "variable") {
@@ -661,6 +680,12 @@ class DucklangInference {
           ...expression,
           left: this.#normalizeExpression(expression.left),
           right: this.#normalizeExpression(expression.right),
+          type,
+        };
+      case "ownership":
+        return {
+          ...expression,
+          expression: this.#normalizeExpression(expression.expression),
           type,
         };
       case "return":

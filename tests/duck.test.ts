@@ -29,6 +29,18 @@ if rebuilt == word { 42 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang erases proven static ownership operations", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { length } = import "duck:prelude/runtime" ()
+let message = freeze "shared"
+length(&message) * 7
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang multi-argument functions and local blocks return 42", async () => {
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });

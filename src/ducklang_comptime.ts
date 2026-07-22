@@ -90,6 +90,9 @@ function collectComptimeExpressions(
       collectComptimeExpressions(expression.left, expressions);
       collectComptimeExpressions(expression.right, expressions);
       return;
+    case "ownership":
+      collectComptimeExpressions(expression.expression, expressions);
+      return;
     case "return":
       collectComptimeExpressions(expression.expression, expressions);
       return;
@@ -193,6 +196,15 @@ function replaceComptimeExpressions(
         ...expression,
         body: replaceComptimeExpressions(
           expression.body,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "ownership":
+      return {
+        ...expression,
+        expression: replaceComptimeExpressions(
+          expression.expression,
           values,
           nextValueIndex,
         ),

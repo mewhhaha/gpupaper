@@ -308,6 +308,10 @@ class DucklangFcgCompiler {
             span: expression.span,
           },
         ];
+      case "ownership":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang ${expression.operation} reached FCG without ownership lowering`,
+        );
       case "return":
         return [
           ...this.#compileExpression(expression.expression),
