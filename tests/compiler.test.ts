@@ -31,6 +31,13 @@ Deno.test("CLI rejects contradictory GPU execution policies", () => {
   );
 });
 
+Deno.test("CLI cannot overwrite its Haskell input with Wasm", () => {
+  assertThrows(
+    () => parseCommandLine(["compile", "test.hs", "test.hs"]),
+    /compile output must differ from input test\.hs/,
+  );
+});
+
 Deno.test("rank-1 inference generalizes identity across integer and boolean uses", () => {
   const module = parseModule(
     "test.hs",

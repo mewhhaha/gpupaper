@@ -43,6 +43,9 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
       }`,
     );
   }
+  if (command === "compile" && positional[0] === file) {
+    throw new Error(`compile output must differ from input ${file}`);
+  }
   return {
     command: command as CliInvocation["command"],
     file,
@@ -64,6 +67,16 @@ async function main(arguments_: readonly string[]): Promise<void> {
 
   if (command === "compile") {
     const output = outputArgument ?? file.replace(/\.hs$/, "") + ".wasm";
+    const inputPath = await Deno.realPath(file);
+    let existingOutputPath: string | undefined;
+    try {
+      existingOutputPath = await Deno.realPath(output);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+    if (existingOutputPath === inputPath) {
+      throw new Error(`compile output must differ from input ${file}`);
+    }
     await Deno.writeFile(output, artifact.wasm);
     console.log(`wrote ${artifact.wasm.length} bytes to ${output}`);
     printTypes(artifact);
