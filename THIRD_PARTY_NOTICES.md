@@ -1,7 +1,8 @@
 # Third-party notices
 
 The Ducklang compatibility fixtures under `examples/duck` include source from
-the Binned project.
+the Binned project. The compiler also depends on the Baba parser generator and
+Wasm runtime. Both projects use the following license.
 
 MIT License
 

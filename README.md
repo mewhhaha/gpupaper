@@ -117,6 +117,12 @@ recursion and compile-time evaluation. See
 [the Duck grammar contract](duck-compatibility.md) for admitted productions,
 explicit rejections, and the next backend work.
 
+`@mewhhaha/baba` 6.0.0 is pinned as the Duck parser generator and Wasm parser
+runtime. Its conformance test covers the five contextual whitespace tokens that
+previously required Binned's Tree-sitter external scanner. The existing scalar
+bridge remains in place only until the complete Baba grammar and cursor-to-core
+lowering replace it.
+
 ## Important boundaries
 
 - Source evaluation is eager. This artifact does not yet implement Haskell
@@ -167,7 +173,9 @@ source never becomes WGSL.
 
 ## Files
 
-- `src/syntax.ts`, `lexer.ts`, `parser.ts`: source boundary.
+- `src/syntax.ts`, `lexer.ts`, `parser.ts`: Haskell-like source boundary.
+- `tests/fixtures/duck_contextual.baba`, `tests/baba.test.ts`: Baba 6 Duck
+  portability gate.
 - `src/resolution.ts`, `types.ts`: CPU reference frontend and FTCG equality
   capture.
 - `src/gpu_solver.ts`: WebGPU union and occurs-check kernels.
@@ -178,4 +186,5 @@ source never becomes WGSL.
 - `src/compiler.ts`, `cli.ts`: orchestration and commands.
 - `tests/compiler.test.ts`: observable regression and differential tests.
 
-No third-party runtime dependency is used.
+Baba is the only third-party dependency. It is pinned because grammar analysis
+and generation are compiler infrastructure rather than replaceable glue.

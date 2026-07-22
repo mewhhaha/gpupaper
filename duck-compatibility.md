@@ -11,6 +11,24 @@ The compatibility fixtures were copied from the Binned working tree under its
 MIT license. The notice is preserved in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+## Baba 6 parser migration
+
+The project pins `@mewhhaha/baba` 6.0.0. Baba now supports portable trailing
+lookahead guards and parser-state promotion for contextual trivia in its
+generated Wasm runtime. The integration gate exercises all five distinctions
+formerly implemented by Duck's external scanner:
+
+- application whitespace and its stop keywords;
+- type-application whitespace;
+- `break` value whitespace;
+- `break` terminator whitespace;
+- extension-member newline terminators.
+
+The generated parser validates as standalone Wasm and passes these cases. This
+removes the parser-runtime blocker for the complete grammar port. The admitted
+grammar below still describes the transitional scalar frontend; it will be
+deleted when Baba cursor lowering covers the full Binned acceptance corpus.
+
 ## Admitted grammar
 
 The implemented contract can be summarized as:
