@@ -125,6 +125,22 @@ pipe(apply(transform, 20), increment)
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang specializes invoked const function parameters", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let apply_twice = (value, const transform) => transform(transform(value))
+const increment = value => value + 1
+apply_twice(40, increment)
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(
+    artifact.fcg.functions.map((function_) => function_.name),
+    ["increment__duck3", "main"],
+  );
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

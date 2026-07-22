@@ -567,10 +567,53 @@ function lowerParameters(
   if (!isCursor(input)) throw new Error("arrow parameters are missing");
   if (input.type === "token") return [identifierName(file, input, "parameter")];
   if (input.name === "parameter_list") return arrowParameters(file, input);
+  if (input.name === "const_parameter_list") {
+    return constParameterNames(file, input);
+  }
   if (input.name === "parameter") {
     return [identifierName(file, requiredField(input, "name"), "parameter")];
   }
   throw unsupported(file, input, input.name);
+}
+
+function constParameterNames(
+  file: string,
+  cursor: RuleCursor,
+): readonly DucklangParameter[] {
+  const tokens: TokenCursor[] = [];
+  collectAllTokens(cursor, tokens);
+  const list = tokens.find((token) => token.kind === "CONST_PARAMETER_LIST");
+  if (list === undefined) {
+    throw new Error("Ducklang const parameter list has no fused token");
+  }
+  const parameters = list.text.slice(1, -1).split(",");
+  let searchStart = 1;
+  return parameters.map((parameter) => {
+    const match = parameter.trim().match(
+      /^(?:const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*(I32|I64|Bool))?$/,
+    );
+    if (match === null) {
+      throw unsupported(file, list, "const parameter list");
+    }
+    const nameOffset = list.text.indexOf(match[1], searchStart);
+    if (nameOffset < 0) {
+      throw new Error(
+        `Ducklang const parameter ${match[1]} has no source span`,
+      );
+    }
+    searchStart = nameOffset + match[1].length;
+    return {
+      text: match[1],
+      ...(match[2] === undefined ? {} : {
+        declaredType: match[2] as "I32" | "I64" | "Bool",
+      }),
+      span: {
+        file,
+        start: list.span.start + nameOffset,
+        end: list.span.start + nameOffset + match[1].length,
+      },
+    };
+  });
 }
 
 function arrowParameters(

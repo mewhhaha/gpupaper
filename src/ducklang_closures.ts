@@ -53,8 +53,7 @@ function rewriteExpression(
   const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
   if (foldedIntrinsic !== undefined) return foldedIntrinsic;
   if (
-    rewritten.kind !== "call" || rewritten.type.kind !== "function" ||
-    rewritten.callee.kind !== "reference"
+    rewritten.kind !== "call" || rewritten.callee.kind !== "reference"
   ) {
     return collapseEmptyBlock(rewritten);
   }
@@ -65,6 +64,15 @@ function rewriteExpression(
   ) {
     return collapseEmptyBlock(rewritten);
   }
+  const returnsFunction = rewritten.type.kind === "function";
+  const specializesFunctionParameter = factory.parameters.some(
+    (parameter, index) =>
+      isCalledParameter(factory.body, parameter.id) &&
+      staticValue(rewritten.arguments[index], values).kind === "function",
+  );
+  if (!returnsFunction && !specializesFunctionParameter) {
+    return collapseEmptyBlock(rewritten);
+  }
   const substitutions = new Map(
     factory.parameters.map((parameter, index) => [
       parameter.id,
@@ -72,6 +80,23 @@ function rewriteExpression(
     ]),
   );
   return rewriteExpression(substitute(factory.body, substitutions), values);
+}
+
+function isCalledParameter(
+  expression: TypedDucklangExpression,
+  parameterId: number,
+): boolean {
+  if (
+    expression.kind === "call" && expression.callee.kind === "reference" &&
+    expression.callee.symbol.id === parameterId
+  ) {
+    return true;
+  }
+  let found = false;
+  visitChildren(expression, (child) => {
+    if (!found && isCalledParameter(child, parameterId)) found = true;
+  });
+  return found;
 }
 
 function foldStaticBinary(
