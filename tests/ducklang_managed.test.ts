@@ -124,6 +124,26 @@ return { .result = result }
   );
 });
 
+Deno.test("the managed Ducklang runtime rejects host integers outside i32", async () => {
+  const artifact = await compileModuleSource(
+    "wide_host_integer.duck",
+    `module (!init: Init) where
+declare effect Input { read: () => I32 }
+declare Init { input: Input }
+result <- Input.read()
+return { .result = result }
+`,
+    { gpuMode: "off" },
+  );
+  await assertRejects(
+    () =>
+      runDucklangManaged(artifact, {
+        input: { read: () => 2_147_483_648 },
+      }),
+    /Input\.read returned I32 value outside its signed range: 2147483648/,
+  );
+});
+
 async function compileManagedFixture(
   filename: string,
   options: { readonly hostInterface?: string } = {},
