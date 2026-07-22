@@ -40,6 +40,17 @@ function expandStatements(
       }
       return { statements: expanded, control: statement.kind, values };
     }
+    if (
+      statement.kind === "binding" && statement.declarationKind === "const" &&
+      statement.value.kind === "function" &&
+      statement.value.parameters.some((parameter) => parameter.variadic)
+    ) {
+      values.set(
+        statement.name.text,
+        substituteExpression(statement.value, values),
+      );
+      continue;
+    }
     if (inLoop && statement.kind === "unionBinding") {
       const value = substituteExpression(statement.value, values);
       if (value.kind === "unionCase") {
@@ -260,6 +271,22 @@ function expandStatements(
       }
     }
     if (statement.kind === "unionBinding") values.delete(statement.name.text);
+    if (
+      statement.kind === "import" &&
+      statement.path === "duck:prelude/runtime"
+    ) {
+      for (const selection of statement.selections) {
+        if (selection.localName === undefined) continue;
+        values.set(selection.localName.text, {
+          kind: "reference",
+          name: {
+            text: `$duck_runtime_${selection.exportName}`,
+            span: selection.span,
+          },
+          span: selection.span,
+        });
+      }
+    }
     if (statement.kind === "recursiveGroup") {
       for (const binding of statement.bindings) {
         values.delete(binding.name.text);
@@ -416,10 +443,16 @@ function substituteExpression(
           replaceReferences,
         ),
       };
-    case "reference":
-      return replaceReferences
-        ? values.get(expression.name.text) ?? expression
+    case "reference": {
+      if (replaceReferences) {
+        return values.get(expression.name.text) ?? expression;
+      }
+      const staticFunction = values.get(expression.name.text);
+      return staticFunction?.kind === "function" &&
+          staticFunction.parameters.some((parameter) => parameter.variadic)
+        ? staticFunction
         : expression;
+    }
     case "function": {
       const functionValues = new Map(values);
       for (const parameter of expression.parameters) {
@@ -441,18 +474,73 @@ function substituteExpression(
           substituteExpression(argument, values, replaceReferences)
         ),
       };
-    case "call":
-      return {
-        ...expression,
-        callee: substituteExpression(
-          expression.callee,
-          values,
-          replaceReferences,
-        ),
-        arguments: expression.arguments.map((argument) =>
-          substituteExpression(argument, values, replaceReferences)
-        ),
+    case "call": {
+      const callee = substituteExpression(
+        expression.callee,
+        values,
+        replaceReferences,
+      );
+      const arguments_ = expression.arguments.map((argument) =>
+        substituteExpression(argument, values, replaceReferences)
+      );
+      if (callee.kind !== "function") {
+        return { ...expression, callee, arguments: arguments_ };
+      }
+      const variadicIndex = callee.parameters.findIndex((parameter) =>
+        parameter.variadic
+      );
+      if (variadicIndex < 0) {
+        return { ...expression, callee, arguments: arguments_ };
+      }
+      if (variadicIndex !== callee.parameters.length - 1) {
+        throw new TypeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang variadic parameter must be last`,
+        );
+      }
+      if (arguments_.length < variadicIndex) {
+        throw new TypeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang variadic call expects at least ${variadicIndex} arguments; received ${arguments_.length}`,
+        );
+      }
+      const parameterValues = new Map<string, DucklangExpression>();
+      for (let index = 0; index < variadicIndex; index += 1) {
+        parameterValues.set(callee.parameters[index].text, arguments_[index]);
+      }
+      parameterValues.set(callee.parameters[variadicIndex].text, {
+        kind: "product",
+        productKind: "tuple",
+        values: arguments_.slice(variadicIndex),
+        span: expression.span,
+      });
+      const body = substituteExpression(callee.body, parameterValues);
+      const block = body.kind === "comptime" && body.expression.kind === "block"
+        ? body.expression
+        : body.kind === "block"
+        ? body
+        : undefined;
+      if (block === undefined) return body;
+      const expanded = expandStatements(block.statements, new Map(), false);
+      if (expanded.control !== "next") {
+        throw new SyntaxError(
+          `${expression.span.file}:${expression.span.start}: Ducklang ${expanded.control} escapes variadic function specialization`,
+        );
+      }
+      const expandedBlock: DucklangExpression = {
+        ...block,
+        statements: expanded.statements,
       };
+      if (body.kind !== "comptime") return expandedBlock;
+      const resultStatement = expanded.statements.at(-1);
+      const staticResult = resultStatement?.kind === "expression"
+        ? evaluateStaticValue(
+          substituteExpression(resultStatement.expression, expanded.values),
+        )
+        : undefined;
+      return {
+        ...body,
+        expression: staticResult ?? expandedBlock,
+      };
+    }
     case "index":
       return {
         ...expression,
@@ -737,6 +825,69 @@ function evaluateStaticValue(
   if (expression.kind === "string" || expression.kind === "unit") {
     return expression;
   }
+  if (expression.kind === "function") return expression;
+  if (
+    expression.kind === "call" && expression.callee.kind === "reference" &&
+    expression.callee.name.text.startsWith("$duck_runtime_")
+  ) {
+    const arguments_: DucklangExpression[] = [];
+    for (const argument of expression.arguments) {
+      const evaluated = evaluateStaticValue(argument);
+      if (evaluated === undefined) return undefined;
+      arguments_.push(evaluated);
+    }
+    const operation = expression.callee.name.text.slice(
+      "$duck_runtime_".length,
+    );
+    if (
+      operation === "length" && arguments_.length === 1 &&
+      arguments_[0].kind === "string"
+    ) {
+      return {
+        kind: "integer",
+        value: new TextEncoder().encode(arguments_[0].value).length,
+        span: expression.span,
+      };
+    }
+    if (
+      operation === "append" && arguments_.length === 2 &&
+      arguments_[0].kind === "string" && arguments_[1].kind === "string"
+    ) {
+      return {
+        kind: "string",
+        value: arguments_[0].value + arguments_[1].value,
+        span: expression.span,
+      };
+    }
+    if (
+      operation === "slice" && arguments_.length === 3 &&
+      arguments_[0].kind === "string" && arguments_[1].kind === "integer" &&
+      arguments_[2].kind === "integer"
+    ) {
+      const bytes = new TextEncoder().encode(arguments_[0].value);
+      const start = arguments_[1].value;
+      const end = arguments_[2].value;
+      if (start < 0 || end < start || end > bytes.length) {
+        throw new RangeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang static slice range ${start}..${end} is outside text byte length ${bytes.length}`,
+        );
+      }
+      try {
+        return {
+          kind: "string",
+          value: new TextDecoder("utf-8", { fatal: true }).decode(
+            bytes.subarray(start, end),
+          ),
+          span: expression.span,
+        };
+      } catch (cause) {
+        throw new TypeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang static slice ${start}..${end} splits a UTF-8 sequence`,
+          { cause },
+        );
+      }
+    }
+  }
   if (expression.kind === "product") {
     const values: DucklangExpression[] = [];
     for (const value of expression.values) {
@@ -756,7 +907,7 @@ function evaluateStaticValue(
 function staticCollectionElements(
   collection: DucklangExpression | undefined,
 ): readonly DucklangExpression[] | undefined {
-  if (collection?.kind === "product" && collection.productKind === "array") {
+  if (collection?.kind === "product") {
     return collection.values;
   }
   if (collection?.kind !== "string") return undefined;

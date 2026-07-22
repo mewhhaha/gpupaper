@@ -1755,6 +1755,7 @@ function constParameterNames(
     searchStart = nameOffset + match[1].length;
     return {
       text: match[1],
+      ...(parameter.includes("...") ? { variadic: true } : {}),
       ...(match[2] === undefined ? {} : {
         declaredType: match[2] as "I32" | "I64" | "Bool" | "Text",
       }),

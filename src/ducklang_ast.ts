@@ -4,6 +4,7 @@ export type DucklangName = {
   readonly text: string;
   readonly declaredType?: string;
   readonly identityPolymorphic?: boolean;
+  readonly variadic?: boolean;
   readonly span: SourceSpan;
 };
 
