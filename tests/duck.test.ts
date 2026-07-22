@@ -334,6 +334,26 @@ panic("deliberate trap")
   await assertRejects(() => runMain(artifact.wasm), /unreachable/);
 });
 
+Deno.test("Ducklang static text traps when a runtime byte index is outside its bounds", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `module (!init: Init) where
+const { get } = import "duck:prelude/runtime" ()
+declare effect Input { index: () => I32 }
+declare Init { input: Input }
+index <- Input.index()
+let result = get("a", index)
+return { .result = result }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm, { input: { index: 0 } }), 97);
+  await assertRejects(
+    () => runMain(artifact.wasm, { input: { index: 1 } }),
+    /unreachable/,
+  );
+});
+
 Deno.test("Ducklang unrolls bounded ranges with break and continue", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

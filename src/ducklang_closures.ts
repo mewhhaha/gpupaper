@@ -820,6 +820,25 @@ function foldStaticIntrinsic(
     };
   }
   if (
+    callee.exportName === "get" && arguments_.length === 2 &&
+    arguments_[0].kind === "string"
+  ) {
+    return {
+      kind: "selectProductElement",
+      values: [...new TextEncoder().encode(arguments_[0].value)].map(
+        (value): TypedDucklangExpression => ({
+          kind: "integer",
+          value,
+          type: expression.type,
+          span: expression.span,
+        }),
+      ),
+      index: expression.arguments[1],
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
     callee.exportName !== "slice" || arguments_.length !== 3 ||
     arguments_[0].kind !== "string" || arguments_[1].kind !== "integer" ||
     arguments_[2].kind !== "integer"
