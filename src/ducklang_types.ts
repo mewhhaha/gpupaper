@@ -627,6 +627,83 @@ class DucklangInference {
           type,
         };
       }
+      case "record": {
+        const fields = new Map<string, ResolvedDucklangExpression>();
+        for (const field of expression.fields) {
+          if (fields.has(field.name)) {
+            throw new TypeError(
+              `${this.#file}:${field.span.start}: duplicate Ducklang record field ${field.name}`,
+            );
+          }
+          fields.set(field.name, field.value);
+        }
+        const matchingDeclarations = this.#structTypes.filter((declaration) =>
+          declaration.fields.length === fields.size &&
+          declaration.fields.every((field) => fields.has(field.name))
+        );
+        const declaration = expression.nominalType === undefined
+          ? matchingDeclarations.length === 1
+            ? matchingDeclarations[0]
+            : undefined
+          : this.#structTypes.find((candidate) =>
+            candidate.name === expression.nominalType
+          );
+        if (declaration === undefined) {
+          const requested = expression.nominalType === undefined
+            ? [...fields.keys()].join(", ")
+            : expression.nominalType;
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang record ${requested} does not identify exactly one declared struct`,
+          );
+        }
+        const receivedNames = new Set(fields.keys());
+        const missing = declaration.fields.filter((field) =>
+          !receivedNames.has(field.name)
+        );
+        const unexpected = expression.fields.filter((field) =>
+          !declaration.fields.some((candidate) => candidate.name === field.name)
+        );
+        if (missing.length > 0 || unexpected.length > 0) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang struct ${declaration.name} record fields are ${
+              declaration.fields.map((field) => field.name).join(", ")
+            }; received ${
+              expression.fields.map((field) => field.name).join(", ")
+            }`,
+          );
+        }
+        const values = declaration.fields.map((field) => {
+          const valueExpression = fields.get(field.name);
+          if (valueExpression === undefined) {
+            throw new Error(
+              `${this.#file}:${expression.span.start}: missing elaborated Ducklang record field ${field.name}`,
+            );
+          }
+          const value = this.inferExpression(valueExpression, environment);
+          this.#unify(
+            this.#typeReference(field.type, new Map(), []),
+            value.type,
+            valueExpression.span,
+          );
+          return value.expression;
+        });
+        const type: Type = {
+          kind: "constructor",
+          name: declaration.name,
+          arguments: [],
+        };
+        return {
+          expression: {
+            kind: "product",
+            productKind: "tuple",
+            values,
+            nominalType: declaration.name,
+            type,
+            span: expression.span,
+          },
+          type,
+        };
+      }
       case "recordUpdate": {
         const product = this.inferExpression(expression.product, environment);
         const productType = this.#apply(product.type);

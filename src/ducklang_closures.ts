@@ -202,6 +202,21 @@ function rewriteExpression(
       }
       return rewriteExpression(selected, values);
     }
+    if (value.kind === "if") {
+      return rewriteExpression({
+        ...value,
+        consequence: {
+          ...rewritten,
+          value: value.consequence,
+        },
+        alternative: {
+          ...rewritten,
+          value: value.alternative,
+        },
+        type: rewritten.type,
+        span: rewritten.span,
+      }, values);
+    }
   }
   if (rewritten.kind === "if") {
     const condition = staticValue(rewritten.condition, values);

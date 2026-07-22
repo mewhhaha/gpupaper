@@ -284,6 +284,14 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
           value: lowerExpression(field.value),
         })),
       };
+    case "record":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: lowerExpression(field.value),
+        })),
+      };
     case "function":
       return { ...expression, body: lowerExpression(expression.body) };
     case "recursiveCall":

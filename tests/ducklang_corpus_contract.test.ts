@@ -65,6 +65,7 @@ const supportedSuccessPaths = new Set([
   "examples/ownership_modules/04_freeze_and_share.duck",
   "examples/ownership_modules/03_scratch_cleanup.duck",
   "examples/ownership_modules/02_borrowed_text_read.duck",
+  "examples/showcases/04_result_pipeline.duck",
 ]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {

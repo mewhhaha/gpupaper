@@ -519,6 +519,18 @@ function substituteExpression(
           ),
         })),
       };
+    case "record":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: substituteExpression(
+            field.value,
+            values,
+            replaceReferences,
+          ),
+        })),
+      };
     case "binary":
       return {
         ...expression,

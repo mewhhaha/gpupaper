@@ -88,6 +88,16 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "record";
+    readonly fields: readonly {
+      readonly name: string;
+      readonly value: ResolvedDucklangExpression;
+      readonly span: SourceSpan;
+    }[];
+    readonly nominalType?: string;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "project";
     readonly product: ResolvedDucklangExpression;
     readonly index: number;
@@ -707,6 +717,18 @@ class DucklangResolver {
             environment,
             currentRecursive,
           ),
+          fields: expression.fields.map((field) => ({
+            ...field,
+            value: this.#resolveExpression(
+              field.value,
+              environment,
+              currentRecursive,
+            ),
+          })),
+        };
+      case "record":
+        return {
+          ...expression,
           fields: expression.fields.map((field) => ({
             ...field,
             value: this.#resolveExpression(

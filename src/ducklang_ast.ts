@@ -115,6 +115,12 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "record";
+    readonly fields: readonly DucklangRecordField[];
+    readonly nominalType?: string;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly name: DucklangName;
     readonly span: SourceSpan;

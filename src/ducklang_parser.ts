@@ -1083,6 +1083,25 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "named_product") {
+    return {
+      kind: "record",
+      fields: cursor.children().flatMap((child) => {
+        if (child.type !== "rule" || child.name !== "product_field") return [];
+        return [{
+          name: identifierName(
+            file,
+            requiredField(child, "name"),
+            "record field name",
+          ).text,
+          value: lowerExpression(file, requiredField(child, "value")),
+          span: sourceSpan(file, child),
+        }];
+      }),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   if (cursor.name === "array_expression") {
     return {
       kind: "product",
@@ -1138,6 +1157,9 @@ function applyNominalProductType(
 ): DucklangExpression {
   if (expression.kind === "product" && expression.productKind === "array") {
     return { ...expression, productKind: "tuple", nominalType };
+  }
+  if (expression.kind === "record") {
+    return { ...expression, nominalType };
   }
   if (expression.kind === "if") {
     return {
