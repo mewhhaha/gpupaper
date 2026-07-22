@@ -240,22 +240,25 @@ class Parser {
   }
 
   #parseTypeSignature(start: SourceSpan): TypeSignature {
-    const saved = this.#position;
     const predicates: PredicateSyntax[] = [];
-    try {
+    let lookahead = this.#position;
+    while (
+      this.#tokens[lookahead].kind !== "newline" &&
+      this.#tokens[lookahead].kind !== "eof" &&
+      this.#tokens[lookahead].text !== "=>"
+    ) lookahead += 1;
+    if (this.#tokens[lookahead].text === "=>") {
       const classToken = this.#expect(
         "constructor",
         "expected a class constraint",
       );
       const argument = this.#parseAtomicType();
-      if (!this.#match("=>")) throw new Error("not a predicate");
+      this.#expectText("=>");
       predicates.push({
         className: classToken.text,
         argument,
         span: spanFrom(classToken.span, argument.span),
       });
-    } catch {
-      this.#position = saved;
     }
     const type = this.#parseType();
     return {

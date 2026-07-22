@@ -105,6 +105,13 @@ Deno.test("source integer literals must fit the backend i32 representation", () 
   );
 });
 
+Deno.test("malformed class constraints preserve their local parse error", () => {
+  assertThrows(
+    () => parseModule("test.hs", `value :: Eq => Int\nvalue = 1\nmain = 0\n`),
+    /expected a type; found "=>"/,
+  );
+});
+
 Deno.test("a polymorphic signature cannot conceal a monomorphic definition", () => {
   assertThrows(
     () =>
