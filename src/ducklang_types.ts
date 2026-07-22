@@ -599,7 +599,11 @@ class DucklangInference {
         } else if (
           expression.modulePath === "duck:prelude" &&
           (expression.exportName === "struct" ||
-            expression.exportName === "packed")
+            expression.exportName === "packed" ||
+            expression.exportName === "cast" ||
+            expression.exportName === "newtype" ||
+            expression.exportName === "representation" ||
+            expression.exportName === "seal")
         ) {
           type = unitType;
         } else {

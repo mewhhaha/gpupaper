@@ -443,6 +443,27 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
+    const positionalProduct = findRule(definition, "positional_type_product");
+    if (positionalProduct !== undefined) {
+      return {
+        kind: "structType",
+        name: identifierName(
+          file,
+          requiredField(statement, "name"),
+          "product type name",
+        ).text,
+        fields: positionalProduct.children().flatMap((child, index) =>
+          child.type === "rule" && child.name === "type_reference"
+            ? [{
+              name: `$${index}`,
+              type: lowerTypeReference(file, child),
+              span: sourceSpan(file, child),
+            }]
+            : []
+        ),
+        span: sourceSpan(file, statement),
+      };
+    }
     const typeSum = findRule(definition, "type_sum");
     if (typeSum === undefined) {
       return {
@@ -662,6 +683,47 @@ function lowerTypeReference(
   file: string,
   input: SyntaxCursor,
 ): DucklangTypeReference {
+  const newtype = findRule(input, "newtype_type");
+  if (newtype !== undefined) {
+    const representation = findRule(newtype, "type_reference");
+    if (representation === undefined) {
+      throw unsupported(file, newtype, "newtype representation");
+    }
+    return lowerTypeReference(file, representation);
+  }
+  const frozen = findRule(input, "frozen_type");
+  if (frozen !== undefined) {
+    const tokens: TokenCursor[] = [];
+    collectAllTokens(frozen, tokens);
+    const name = tokens.find((token) =>
+      token.kind === "identifier" || token.kind === "effect_identifier"
+    );
+    if (name === undefined) throw unsupported(file, frozen, "frozen type");
+    return { name: name.text, arguments: [], span: sourceSpan(file, input) };
+  }
+  if (findRule(input, "atom_type") !== undefined) {
+    return { name: "I32", arguments: [], span: sourceSpan(file, input) };
+  }
+  const literal = findRule(input, "type_literal");
+  if (literal !== undefined) {
+    const tokens: TokenCursor[] = [];
+    collectAllTokens(literal, tokens);
+    const carrier = tokens.some((token) => token.kind === "string")
+      ? "Text"
+      : "I32";
+    return { name: carrier, arguments: [], span: sourceSpan(file, input) };
+  }
+  const tokens: TokenCursor[] = [];
+  collectAllTokens(input, tokens);
+  const identifiers = tokens.filter((token) => token.kind === "identifier");
+  if (tokens.some((token) => token.text === ":&") && identifiers.length > 0) {
+    const name = identifiers.at(-1)!;
+    return { name: name.text, arguments: [], span: sourceSpan(file, input) };
+  }
+  if (tokens.some((token) => token.text === ":|") && identifiers.length > 0) {
+    const name = identifiers[0];
+    return { name: name.text, arguments: [], span: sourceSpan(file, input) };
+  }
   const application = findRule(input, "type_application");
   if (application === undefined) {
     const name = identifierName(file, input, "type reference");
@@ -763,7 +825,6 @@ function lowerExpression(
       "is_expression",
       "as_expression",
       "condition_expression",
-      "condition_is_expression",
       "condition_parenthesized_expression",
       "_condition_primary",
       "_primary_expression",
@@ -772,6 +833,36 @@ function lowerExpression(
     ]),
   );
   if (cursor.type === "token") return lowerTokenExpression(file, cursor);
+
+  if (cursor.name === "condition_is_expression") {
+    const [valueInput, typeInput] = cursor.children().filter(
+      (child): child is RuleCursor => child.type === "rule",
+    );
+    if (valueInput === undefined) throw unsupported(file, cursor, "type test");
+    if (typeInput === undefined) return lowerExpression(file, valueInput);
+    const value = lowerExpression(file, valueInput);
+    const atom = findRule(typeInput, "atom_type");
+    if (atom === undefined) {
+      return { kind: "boolean", value: true, span: sourceSpan(file, cursor) };
+    }
+    const tokens: TokenCursor[] = [];
+    collectAllTokens(atom, tokens);
+    const name = tokens.find((token) =>
+      token.kind === "row_variable" || token.kind === "effect_identifier"
+    );
+    if (name === undefined) throw unsupported(file, atom, "atom type test");
+    return {
+      kind: "binary",
+      operator: "==",
+      left: value,
+      right: {
+        kind: "integer",
+        value: atomValue(name.text),
+        span: sourceSpan(file, atom),
+      },
+      span: sourceSpan(file, cursor),
+    };
+  }
 
   if (cursor.name === "match_expression") {
     return lowerMatchExpression(file, cursor);
@@ -956,6 +1047,14 @@ function lowerExpression(
         body: expression.arguments[0],
         span: sourceSpan(file, cursor),
       };
+    }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
+      expression.callee.name.text === "@cast" &&
+      expression.arguments[0] !== undefined
+    ) {
+      return expression.arguments[0];
     }
     return expression;
   }
@@ -1187,6 +1286,18 @@ function lowerExpression(
         "union case",
       ),
       value: lowerExpression(file, requiredField(cursor, "value")),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
+  if (cursor.name === "atom_expression") {
+    const tokens: TokenCursor[] = [];
+    collectAllTokens(cursor, tokens);
+    const name = tokens.find((token) => token.kind === "row_variable");
+    if (name === undefined) throw unsupported(file, cursor, "atom expression");
+    return {
+      kind: "integer",
+      value: atomValue(name.text),
       span: sourceSpan(file, cursor),
     };
   }
@@ -1615,6 +1726,7 @@ function lowerBinaryExpression(
   if (operator === "|>") {
     return { kind: "call", callee: right, arguments: [left], span };
   }
+  if (operator === ":>" || operator === ":<") return left;
   if (operator === "=>" && left.kind === "reference") {
     return {
       kind: "function",
@@ -1632,6 +1744,14 @@ function lowerBinaryExpression(
     };
   }
   return { kind: "binary", operator, left, right, span };
+}
+
+function atomValue(name: string): number {
+  let value = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(name)) {
+    value = Math.imul(value ^ byte, 0x01000193);
+  }
+  return value & 0x7fff_ffff;
 }
 
 function lowerRecordFields(
@@ -1749,7 +1869,10 @@ function lowerTokenExpression(
     const value = decodeCharacterLiteral(file, cursor);
     return { kind: "integer", value, span };
   }
-  if (cursor.kind === "identifier" || cursor.text === "loop") {
+  if (
+    cursor.kind === "identifier" || cursor.kind === "intrinsic_identifier" ||
+    cursor.text === "loop"
+  ) {
     const name = { text: cursor.text, span };
     return { kind: "reference", name, span };
   }
