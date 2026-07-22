@@ -29,6 +29,10 @@ type FlatConstraints = {
   readonly sourceStarts: readonly number[];
 };
 
+type DeviceRequest =
+  | { readonly status: "available"; readonly device: GPUDevice }
+  | { readonly status: "unavailable"; readonly reason: string };
+
 const unionShader = `
 @group(0) @binding(0) var<storage, read_write> parents: array<atomic<u32>>;
 @group(0) @binding(1) var<storage, read> equality_words: array<u32>;
@@ -86,15 +90,14 @@ fn close_reachability(@builtin(global_invocation_id) invocation: vec3<u32>) {
 }
 `;
 
-let devicePromise: Promise<GPUDevice | undefined> | undefined;
+let devicePromise: Promise<DeviceRequest> | undefined;
 
 export async function solveTypeEqualitiesOnGpu(
   equalities: readonly EqualityConstraint[],
 ): Promise<GpuSolveResult> {
-  const device = await requestDevice();
-  if (device === undefined) {
-    return { status: "unavailable", reason: "WebGPU adapter is unavailable" };
-  }
+  const deviceRequest = await requestDevice();
+  if (deviceRequest.status === "unavailable") return deviceRequest;
+  const device = deviceRequest.device;
   const flat = flattenEqualities(equalities);
   if (flat.terms.length === 0) {
     return {
@@ -198,8 +201,9 @@ export async function unionPairsOnGpu(
   termCount: number,
   equalities: readonly [number, number][],
 ): Promise<readonly number[] | undefined> {
-  const device = await requestDevice();
-  if (device === undefined) return undefined;
+  const deviceRequest = await requestDevice();
+  if (deviceRequest.status === "unavailable") return undefined;
+  const device = deviceRequest.device;
   const initialRepresentatives = Array.from(
     { length: termCount },
     (_, index) => index,
@@ -208,12 +212,32 @@ export async function unionPairsOnGpu(
     .representatives;
 }
 
-async function requestDevice(): Promise<GPUDevice | undefined> {
+async function requestDevice(): Promise<DeviceRequest> {
   if (devicePromise !== undefined) return await devicePromise;
   devicePromise = (async () => {
-    if (navigator.gpu === undefined) return undefined;
-    const adapter = await navigator.gpu.requestAdapter();
-    return await adapter?.requestDevice();
+    if (navigator.gpu === undefined) {
+      return {
+        status: "unavailable",
+        reason: "WebGPU is unavailable in this runtime",
+      };
+    }
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter === null) {
+        return {
+          status: "unavailable",
+          reason: "WebGPU adapter is unavailable",
+        };
+      }
+      return { status: "available", device: await adapter.requestDevice() };
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason: `WebGPU device request failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
   })();
   return await devicePromise;
 }

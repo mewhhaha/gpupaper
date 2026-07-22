@@ -218,15 +218,33 @@ export async function evaluateBytecodeOnGpu(
   if (programs.length === 0) {
     return { status: "completed", values: [], backend: "gpu" };
   }
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (adapter === null || adapter === undefined) {
+  if (navigator.gpu === undefined) {
     return {
       status: "unavailable",
-      reason: "WebGPU adapter is unavailable",
+      reason: "WebGPU is unavailable in this runtime",
       backend: "gpu",
     };
   }
-  const device = await adapter.requestDevice();
+  let device: GPUDevice;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (adapter === null) {
+      return {
+        status: "unavailable",
+        reason: "WebGPU adapter is unavailable",
+        backend: "gpu",
+      };
+    }
+    device = await adapter.requestDevice();
+  } catch (error) {
+    return {
+      status: "unavailable",
+      reason: `WebGPU device request failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      backend: "gpu",
+    };
+  }
   const starts: number[] = [];
   const combinedOpcodes: number[] = [];
   const combinedOperands: number[] = [];
