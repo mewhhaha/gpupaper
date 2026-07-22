@@ -168,6 +168,15 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "unionBinding";
+    readonly declarationKind: "let" | "const";
+    readonly caseName: string;
+    readonly name: DucklangName;
+    readonly value: DucklangExpression;
+    readonly alternative: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "assignment";
     readonly operator: "=" | ":=";
     readonly name: DucklangName;

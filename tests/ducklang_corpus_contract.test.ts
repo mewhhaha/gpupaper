@@ -32,6 +32,7 @@ const supportedSuccessPaths = new Set([
   "examples/functions/03_closure_local_shadow.duck",
   "examples/functions/04_recursive_fibonacci.duck",
   "examples/functions/05_tail_recursive_gcd.duck",
+  "examples/functions/12_let_else_return.duck",
   "examples/ownership_modules/04_freeze_and_share.duck",
   "examples/ownership_modules/03_scratch_cleanup.duck",
   "examples/ownership_modules/02_borrowed_text_read.duck",

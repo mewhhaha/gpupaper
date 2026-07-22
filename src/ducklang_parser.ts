@@ -73,6 +73,32 @@ function lowerModuleStatement(
   }
   if (statement.name === "binding_statement") {
     const value = lowerExpression(file, requiredField(statement, "value"));
+    const bindingPattern = requiredField(statement, "name");
+    const unionPattern = findRule(bindingPattern, "union_pattern");
+    if (unionPattern !== undefined) {
+      const alternative = statement.field("alternative");
+      if (!isCursor(alternative)) {
+        throw new SyntaxError(
+          `${file}:${statement.span.start}: refutable Ducklang binding requires an else block`,
+        );
+      }
+      const payload = requiredField(unionPattern, "value");
+      return {
+        kind: "unionBinding",
+        declarationKind: tokenField(statement, "kind")?.text === "const"
+          ? "const"
+          : "let",
+        caseName: tokenText(
+          file,
+          requiredField(unionPattern, "case"),
+          "union binding case",
+        ),
+        name: identifierName(file, payload, "union payload binding"),
+        value,
+        alternative: lowerExpression(file, alternative),
+        span: sourceSpan(file, statement),
+      };
+    }
     const imported = lowerImportStatement(file, statement, value);
     if (imported !== undefined) return imported;
     const name = identifierName(

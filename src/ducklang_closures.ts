@@ -140,7 +140,8 @@ function rewriteExpression(
   const factory = values.get(rewritten.callee.symbol.id);
   if (
     factory?.kind !== "function" || factory.recursive ||
-    factory.parameters.length !== rewritten.arguments.length
+    factory.parameters.length !== rewritten.arguments.length ||
+    containsReturn(factory.body)
   ) {
     return collapseEmptyBlock(rewritten);
   }
@@ -173,6 +174,15 @@ function rewriteExpression(
     ]),
   );
   return rewriteExpression(substitute(factory.body, substitutions), values);
+}
+
+function containsReturn(expression: TypedDucklangExpression): boolean {
+  if (expression.kind === "return") return true;
+  let found = false;
+  visitChildren(expression, (child) => {
+    if (!found && containsReturn(child)) found = true;
+  });
+  return found;
 }
 
 function referencesSymbol(

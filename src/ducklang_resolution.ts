@@ -294,6 +294,44 @@ class DucklangResolver {
         }
         continue;
       }
+      if (statement.kind === "unionBinding") {
+        const symbol = this.#declare(statement.name, scope);
+        const value: ResolvedDucklangExpression = {
+          kind: "ifUnion",
+          caseName: statement.caseName,
+          payloadSymbol: symbol,
+          value: this.#resolveExpression(
+            statement.value,
+            environment,
+            currentRecursive,
+          ),
+          consequence: {
+            kind: "reference",
+            symbol,
+            span: statement.name.span,
+          },
+          alternative: this.#resolveExpression(
+            statement.alternative,
+            environment,
+            currentRecursive,
+          ),
+          span: statement.span,
+        };
+        environment.set(symbol.text, symbol);
+        const binding = {
+          symbol,
+          previous: undefined,
+          recursive: false,
+          stage: statement.declarationKind === "const"
+            ? "compileTime"
+            : "runtime",
+          value,
+          span: statement.span,
+        } satisfies ResolvedDucklangBinding;
+        bindings.push(binding);
+        steps.push({ kind: "binding", binding });
+        continue;
+      }
       if (statement.kind === "expression") {
         const expression = this.#resolveExpression(
           statement.expression,
