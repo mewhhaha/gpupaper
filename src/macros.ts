@@ -29,6 +29,12 @@ export async function expandMacros(
 
   for (const declaration of module.declarations) {
     if (declaration.kind === "macro") {
+      const previous = macros.get(declaration.name.text);
+      if (previous !== undefined) {
+        throw new TypeError(
+          `${declaration.span.file}:${declaration.span.start}: duplicate macro ${declaration.name.text}; first declared at ${previous.span.file}:${previous.span.start}`,
+        );
+      }
       macros.set(declaration.name.text, declaration);
       continue;
     }

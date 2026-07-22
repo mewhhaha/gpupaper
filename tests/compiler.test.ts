@@ -133,6 +133,19 @@ Deno.test("constant macros reject a missing value instead of emitting zero", asy
   );
 });
 
+Deno.test("duplicate macro declarations cannot silently replace each other", async () => {
+  await assertRejects(
+    () =>
+      expandMacros(
+        parseModule(
+          "test.hs",
+          `macro generate = identity\nmacro generate = constant\nmain = 0\n`,
+        ),
+      ),
+    /duplicate macro generate; first declared at test\.hs:0/,
+  );
+});
+
 Deno.test("WebGPU equality closure accepts compatible constructors", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
