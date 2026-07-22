@@ -205,9 +205,11 @@ export function evaluateBytecodeOnCpu(
         stack.push(Math.imul(left, right));
       } else if (operation === opcode.equal) {
         stack.push(left === right ? 1 : 0);
-      } else {throw new Error(
+      } else {
+        throw new Error(
           `comptime program at ${program.sourceStart} has unknown opcode ${operation}`,
-        );}
+        );
+      }
     }
     throw new Error(
       `comptime program at ${program.sourceStart} exceeded fuel ${fuel}`,
