@@ -144,6 +144,25 @@ return { .result = result }
   );
 });
 
+Deno.test("Ducklang host interfaces reject executable source", async () => {
+  const executableInterface = new URL(
+    "fixtures/executable_host_interface.duck",
+    import.meta.url,
+  );
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "host_interface_consumer.duck",
+        "42\n",
+        {
+          gpuMode: "off",
+          hostInterface: executableInterface.pathname,
+        },
+      ),
+    /host interface must contain declarations only; found binding/,
+  );
+});
+
 async function compileManagedFixture(
   filename: string,
   options: { readonly hostInterface?: string } = {},

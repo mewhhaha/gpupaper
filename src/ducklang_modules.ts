@@ -69,6 +69,23 @@ export async function applyDucklangHostInterface(
       `${canonicalFile}: Ducklang host interface declares no effects or Init capabilities`,
     );
   }
+  const executableStatement = hostModule.statements.find((statement, index) => {
+    if (
+      statement.kind === "effectDeclaration" ||
+      statement.kind === "initDeclaration"
+    ) {
+      return false;
+    }
+    return !(index === hostModule.statements.length - 1 &&
+      statement.kind === "expression" &&
+      statement.expression.kind === "record" &&
+      statement.expression.fields.length === 0);
+  });
+  if (executableStatement !== undefined) {
+    throw new TypeError(
+      `${canonicalFile}:${executableStatement.span.start}: Ducklang host interface must contain declarations only; found ${executableStatement.kind}`,
+    );
+  }
   return {
     ...module,
     statements: [...declarations, ...module.statements],
