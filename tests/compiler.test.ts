@@ -64,6 +64,13 @@ Deno.test("CPU inference reports the conflicting source types", () => {
   );
 });
 
+Deno.test("source integer literals must fit the backend i32 representation", () => {
+  assertThrows(
+    () => parseModule("test.hs", `main = 2147483648\n`),
+    /integer literal 2147483648 exceeds the supported i32 range/,
+  );
+});
+
 Deno.test("a polymorphic signature cannot conceal a monomorphic definition", () => {
   assertThrows(
     () =>

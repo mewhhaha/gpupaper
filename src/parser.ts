@@ -25,6 +25,8 @@ type PendingSignature = {
   readonly signature: TypeSignature;
 };
 
+const maximumIntegerLiteral = 2_147_483_647;
+
 export function parseModule(file: string, source: string): Module {
   const parser = new Parser(file, tokenize(file, source));
   return parser.parseModule();
@@ -217,7 +219,7 @@ class Parser {
       const argument = this.#peek();
       if (argument.kind === "integer") {
         this.#position += 1;
-        macroArguments.push(Number(argument.text));
+        macroArguments.push(this.#parseIntegerLiteral(argument));
       } else {
         const name = this.#expectName("expected a macro argument");
         macroArguments.push(unscopedName(name.text, name.span));
@@ -343,7 +345,11 @@ class Parser {
     const token = this.#peek();
     if (token.kind === "integer") {
       this.#position += 1;
-      return { kind: "integer", value: Number(token.text), span: token.span };
+      return {
+        kind: "integer",
+        value: this.#parseIntegerLiteral(token),
+        span: token.span,
+      };
     }
     if (token.text === "True" || token.text === "False") {
       this.#position += 1;
@@ -437,7 +443,7 @@ class Parser {
         this.#position += 1;
         pattern = {
           kind: "integer",
-          value: Number(patternStart.text),
+          value: this.#parseIntegerLiteral(patternStart),
           span: patternStart.span,
         };
       } else {
@@ -542,6 +548,17 @@ class Parser {
     if (token.text !== text) this.#fail(token, `expected ${text}`);
     this.#position += 1;
     return token;
+  }
+
+  #parseIntegerLiteral(token: Token): number {
+    const value = Number(token.text);
+    if (!Number.isSafeInteger(value) || value > maximumIntegerLiteral) {
+      this.#fail(
+        token,
+        `integer literal ${token.text} exceeds the supported i32 range`,
+      );
+    }
+    return value;
   }
 
   #fail(token: Token, message: string): never {
