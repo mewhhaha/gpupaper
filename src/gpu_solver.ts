@@ -201,6 +201,24 @@ export async function unionPairsOnGpu(
   termCount: number,
   equalities: readonly [number, number][],
 ): Promise<readonly number[] | undefined> {
+  if (!Number.isSafeInteger(termCount) || termCount < 0 || termCount > 512) {
+    throw new RangeError(
+      `GPU union term count must be an integer from 0 through 512; received ${termCount}`,
+    );
+  }
+  for (const [equalityIndex, equality] of equalities.entries()) {
+    for (const endpoint of equality) {
+      if (
+        !Number.isSafeInteger(endpoint) || endpoint < 0 ||
+        endpoint >= termCount
+      ) {
+        throw new RangeError(
+          `GPU union equality ${equalityIndex} endpoint ${endpoint} is outside term count ${termCount}`,
+        );
+      }
+    }
+  }
+  if (termCount === 0) return [];
   const deviceRequest = await requestDevice();
   if (deviceRequest.status === "unavailable") return undefined;
   const device = deviceRequest.device;

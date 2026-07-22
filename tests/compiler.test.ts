@@ -4,7 +4,10 @@ import {
   evaluateBytecodeOnGpu,
 } from "../src/comptime.ts";
 import { compileModuleSource, runMain } from "../src/compiler.ts";
-import { solveTypeEqualitiesOnGpu } from "../src/gpu_solver.ts";
+import {
+  solveTypeEqualitiesOnGpu,
+  unionPairsOnGpu,
+} from "../src/gpu_solver.ts";
 import { evaluateWithInteractionCalculus } from "../src/interaction.ts";
 import { expandMacros } from "../src/macros.ts";
 import { parseModule } from "../src/parser.ts";
@@ -269,6 +272,13 @@ Deno.test("WebGPU quotient reachability reports infinite types", async () => {
   }]);
   if (result.status === "unavailable") return;
   assertEquals(result.status, "infiniteType");
+});
+
+Deno.test("WebGPU union rejects equality endpoints outside its term graph", async () => {
+  await assertRejects(
+    () => unionPairsOnGpu(2, [[0, 2]]),
+    /GPU union equality 0 endpoint 2 is outside term count 2/,
+  );
 });
 
 Deno.test("CPU and WebGPU compile-time evaluators return the same batch", async () => {
