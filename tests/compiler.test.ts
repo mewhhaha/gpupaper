@@ -424,6 +424,18 @@ Deno.test("packed ADTs reject constructor tags wider than eight bits", async () 
   );
 });
 
+Deno.test("packed ADTs reject multi-field constructors even when unused", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.hs",
+        `data Pair a b = Pair a b\nmain = 0\n`,
+        { gpuMode: "off" },
+      ),
+    /packed ADT proof of concept supports at most one field; Pair declares 2/,
+  );
+});
+
 Deno.test("packed ADTs trap instead of truncating wide payloads", async () => {
   const artifact = await compileModuleSource(
     "test.hs",

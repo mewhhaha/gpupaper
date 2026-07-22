@@ -464,6 +464,11 @@ function collectConstructorShapes(
   for (const declaration of module.declarations) {
     if (declaration.kind !== "datatype") continue;
     for (const constructor of declaration.constructors) {
+      if (constructor.fields.length > 1) {
+        throw new TypeError(
+          `${constructor.span.file}:${constructor.span.start}: packed ADT proof of concept supports at most one field; ${constructor.name.text} declares ${constructor.fields.length}`,
+        );
+      }
       if (nextTag > 255) {
         throw new TypeError(
           `${constructor.span.file}:${constructor.span.start}: packed ADT representation supports 256 constructor tags; ${constructor.name.text} would require tag ${nextTag}`,
