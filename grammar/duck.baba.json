@@ -3,16 +3,22 @@
   "parser": {
     "resolutions": [
       {
-        "conflict": "c_0d835356ac660530",
+        "conflict": "c_0024b4f84a7112a0",
         "prefer": "shift"
       },
       {
-        "conflict": "c_1d1572b60ab45de3",
+        "conflict": "c_0b7a027d0b121048",
+        "prefer": "reduce",
+        "reduce": "field_block = computed_shape_field"
+      },
+      {
+        "conflict": "c_0e9b47738270e9ac",
         "prefer": "shift"
       },
       {
-        "conflict": "c_1d9269f34af9f5fc",
-        "prefer": "shift"
+        "conflict": "c_169c4c8ae1e96e38",
+        "prefer": "reduce",
+        "reduce": "field_block = computed_shape_field"
       },
       {
         "conflict": "c_1f7f0f374fa6908c",
@@ -27,19 +33,19 @@
         "prefer": "shift"
       },
       {
+        "conflict": "c_27810f6be96fa69d",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_282a210902628c27",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_334e3c40df966fcc",
+        "prefer": "shift"
+      },
+      {
         "conflict": "c_358101f7c790843e",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_4111419eea7063f5",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_45c8bfe0e58a89e9",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_47c2a307f768f99d",
         "prefer": "shift"
       },
       {
@@ -47,24 +53,20 @@
         "prefer": "shift"
       },
       {
-        "conflict": "c_5e2f9138a64b5604",
+        "conflict": "c_543ae8a31e8e1821",
         "prefer": "shift"
       },
       {
-        "conflict": "c_8bd72c88e949016c",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_8d0a5dfd6c47ac10",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_8e766ee816a91e44",
+        "conflict": "c_5a24b0a39664a4e0",
         "prefer": "reduce",
         "reduce": "field_block = shape_field"
       },
       {
-        "conflict": "c_9467eb37850f6d08",
+        "conflict": "c_5e2f9138a64b5604",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_88339288c50e6809",
         "prefer": "shift"
       },
       {
@@ -72,12 +74,15 @@
         "prefer": "shift"
       },
       {
-        "conflict": "c_9aa66d0dc0344bc1",
-        "prefer": "reduce",
-        "reduce": "field_block = computed_shape_field"
+        "conflict": "c_99b25bc5d242d3ca",
+        "prefer": "shift"
       },
       {
         "conflict": "c_9b254e6d448e575c",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_a05f035c3a955ccc",
         "prefer": "shift"
       },
       {
@@ -85,15 +90,7 @@
         "prefer": "shift"
       },
       {
-        "conflict": "c_a7b2124e997fd2b2",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_af4fff987c75f1fc",
-        "prefer": "shift"
-      },
-      {
-        "conflict": "c_b09e02af466e8927",
+        "conflict": "c_ab3d771dc0fa02d8",
         "prefer": "shift"
       },
       {
@@ -101,15 +98,11 @@
         "prefer": "shift"
       },
       {
-        "conflict": "c_b5d37a6a4c7478d4",
-        "prefer": "shift"
-      },
-      {
         "conflict": "c_b84b66dc74c0b528",
         "prefer": "shift"
       },
       {
-        "conflict": "c_bc2085db808cb6b4",
+        "conflict": "c_bc463c0ba21fe4f0",
         "prefer": "reduce",
         "reduce": "field_block = shape_field"
       },
@@ -119,7 +112,15 @@
         "reduce": "array_expression = (array_spread (\",\" _expression)* | _expression (\",\" _expression)* (\",\" array_spread)?)?"
       },
       {
+        "conflict": "c_c577154cd5aa59c8",
+        "prefer": "shift"
+      },
+      {
         "conflict": "c_c908ec40edd635bd",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_cbac02b59d0e1d17",
         "prefer": "shift"
       },
       {
@@ -128,9 +129,8 @@
         "reduce": "block = (_statement)*"
       },
       {
-        "conflict": "c_ea81b9e97fad7291",
-        "prefer": "reduce",
-        "reduce": "field_block = computed_shape_field"
+        "conflict": "c_d8297cb6e9adf1ff",
+        "prefer": "shift"
       }
     ]
   }

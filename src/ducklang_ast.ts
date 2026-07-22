@@ -31,8 +31,14 @@ export type DucklangExpression =
   }
   | {
     readonly kind: "function";
+    readonly recursive: boolean;
     readonly parameters: readonly DucklangParameter[];
     readonly body: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recursiveCall";
+    readonly arguments: readonly DucklangExpression[];
     readonly span: SourceSpan;
   }
   | {

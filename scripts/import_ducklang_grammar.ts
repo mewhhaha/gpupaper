@@ -65,7 +65,7 @@ const portableRules: Readonly<Record<string, string>> = {
   effect_difference_expression:
     '_effect_row_primary (":-" _effect_row_primary)*',
   _expression:
-    "try_with_expression | arrow_function | recursive_function | recursive_call_expression | if_expression | loop_expression | binary_expression",
+    "try_with_expression | arrow_function | recursive_expression | if_expression | loop_expression | binary_expression",
   arrow_function:
     '(parameters:effect_identifier) "=>" (body:_expression) | (parameters:(parameter | parameter_list | const_parameter_list | bracket_parameter_list | number | string | character | boolean | grouped_value_alternative_pattern)) "=>" (body:_expression)',
   recursive_function:
@@ -123,6 +123,8 @@ const portableRules: Readonly<Record<string, string>> = {
 };
 
 const additionalPortableRules: Readonly<Record<string, string>> = {
+  recursive_expression:
+    '"rec" (operand:(identifier | wildcard | positional_product | const_parameter_list | bracket_parameter_list)) (("=>" (body:_expression))?)',
   _attributed_module_statement:
     "declare_effect_statement | effect_statement | declare_record_statement | type_declaration_statement | duck_declaration_statement | extension_declaration_statement | fixity_declaration_statement | module_binding_statement | binding_statement",
   _plain_module_statement:

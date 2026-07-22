@@ -37,6 +37,7 @@ export type ResolvedDucklangExpression =
   }
   | {
     readonly kind: "function";
+    readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
     readonly body: ResolvedDucklangExpression;
     readonly span: SourceSpan;
@@ -149,6 +150,7 @@ class DucklangResolver {
     initialEnvironment: ReadonlyMap<string, DucklangSymbol>,
     scope: "module" | "local",
     span: SourceSpan,
+    currentRecursive: DucklangSymbol | undefined = undefined,
   ): ResolvedStatements {
     const environment = new Map(initialEnvironment);
     const bindings: ResolvedDucklangBinding[] = [];
@@ -160,6 +162,7 @@ class DucklangResolver {
         const expression = this.#resolveExpression(
           statement.expression,
           environment,
+          currentRecursive,
         );
         if (index === statements.length - 1) result = expression;
         else if (scope === "local") {
@@ -178,6 +181,7 @@ class DucklangResolver {
           expression: this.#resolveExpression(
             statement.expression,
             environment,
+            currentRecursive,
           ),
           span: statement.span,
         };
@@ -194,13 +198,19 @@ class DucklangResolver {
 
       if (statement.kind === "binding") {
         const symbol = this.#declare(statement.name, scope);
-        if (statement.recursive) environment.set(symbol.text, symbol);
-        const value = this.#resolveExpression(statement.value, environment);
+        const recursive = statement.recursive ||
+          (statement.value.kind === "function" && statement.value.recursive);
+        if (recursive) environment.set(symbol.text, symbol);
+        const value = this.#resolveExpression(
+          statement.value,
+          environment,
+          recursive ? symbol : currentRecursive,
+        );
         environment.set(symbol.text, symbol);
         const binding = {
           symbol,
           previous: undefined,
-          recursive: statement.recursive,
+          recursive,
           stage: statement.declarationKind === "const"
             ? "compileTime"
             : "runtime",
@@ -218,7 +228,11 @@ class DucklangResolver {
           `${this.#file}:${statement.name.span.start}: assignment to ${statement.name.text} has no visible Ducklang binding`,
         );
       }
-      const value = this.#resolveExpression(statement.value, environment);
+      const value = this.#resolveExpression(
+        statement.value,
+        environment,
+        currentRecursive,
+      );
       const symbol = this.#declare(statement.name, scope);
       environment.set(symbol.text, symbol);
       const binding = {
@@ -244,6 +258,7 @@ class DucklangResolver {
   #resolveExpression(
     expression: DucklangExpression,
     environment: ReadonlyMap<string, DucklangSymbol>,
+    currentRecursive: DucklangSymbol | undefined,
   ): ResolvedDucklangExpression {
     switch (expression.kind) {
       case "integer":
@@ -276,41 +291,94 @@ class DucklangResolver {
         }
         return {
           kind: "function",
+          recursive: expression.recursive,
           parameters,
-          body: this.#resolveExpression(expression.body, functionEnvironment),
+          body: this.#resolveExpression(
+            expression.body,
+            functionEnvironment,
+            expression.recursive ? currentRecursive : undefined,
+          ),
+          span: expression.span,
+        };
+      }
+      case "recursiveCall": {
+        if (currentRecursive === undefined) {
+          throw new ReferenceError(
+            `${this.#file}:${expression.span.start}: recursive call has no enclosing recursive function`,
+          );
+        }
+        return {
+          kind: "call",
+          callee: {
+            kind: "reference",
+            symbol: currentRecursive,
+            span: expression.span,
+          },
+          arguments: expression.arguments.map((argument) =>
+            this.#resolveExpression(
+              argument,
+              environment,
+              currentRecursive,
+            )
+          ),
           span: expression.span,
         };
       }
       case "call":
         return {
           ...expression,
-          callee: this.#resolveExpression(expression.callee, environment),
+          callee: this.#resolveExpression(
+            expression.callee,
+            environment,
+            currentRecursive,
+          ),
           arguments: expression.arguments.map((argument) =>
-            this.#resolveExpression(argument, environment)
+            this.#resolveExpression(argument, environment, currentRecursive)
           ),
         };
       case "binary":
         return {
           ...expression,
-          left: this.#resolveExpression(expression.left, environment),
-          right: this.#resolveExpression(expression.right, environment),
+          left: this.#resolveExpression(
+            expression.left,
+            environment,
+            currentRecursive,
+          ),
+          right: this.#resolveExpression(
+            expression.right,
+            environment,
+            currentRecursive,
+          ),
         };
       case "unary":
         return {
           ...expression,
-          operand: this.#resolveExpression(expression.operand, environment),
+          operand: this.#resolveExpression(
+            expression.operand,
+            environment,
+            currentRecursive,
+          ),
         };
       case "if":
         return {
           ...expression,
-          condition: this.#resolveExpression(expression.condition, environment),
+          condition: this.#resolveExpression(
+            expression.condition,
+            environment,
+            currentRecursive,
+          ),
           consequence: this.#resolveExpression(
             expression.consequence,
             environment,
+            currentRecursive,
           ),
           alternative: expression.alternative === undefined
             ? undefined
-            : this.#resolveExpression(expression.alternative, environment),
+            : this.#resolveExpression(
+              expression.alternative,
+              environment,
+              currentRecursive,
+            ),
         };
       case "block": {
         const resolved = this.resolveStatements(
@@ -318,6 +386,7 @@ class DucklangResolver {
           environment,
           "local",
           expression.span,
+          currentRecursive,
         );
         return {
           kind: "block",
@@ -332,6 +401,7 @@ class DucklangResolver {
           expression: this.#resolveExpression(
             expression.expression,
             environment,
+            currentRecursive,
           ),
         };
     }

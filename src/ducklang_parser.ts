@@ -191,6 +191,7 @@ function lowerExpression(
       if (leadingOperator === "=>") {
         return {
           kind: "function",
+          recursive: false,
           parameters: arrowParameters(file, leftCursor),
           body: right,
           span: sourceSpan(file, cursor),
@@ -327,8 +328,38 @@ function lowerExpression(
     const body = lowerExpression(file, requiredField(cursor, "body"));
     return {
       kind: "function",
+      recursive: false,
       parameters,
       body,
+      span: sourceSpan(file, cursor),
+    };
+  }
+
+  if (cursor.name === "recursive_expression") {
+    const operand = requiredField(cursor, "operand");
+    const bodyField = cursor.field("body");
+    if (isCursor(bodyField)) {
+      return {
+        kind: "function",
+        recursive: true,
+        parameters: arrowParameters(file, operand),
+        body: lowerExpression(file, bodyField),
+        span: sourceSpan(file, cursor),
+      };
+    }
+    const recursiveArguments = descendSingleRule(
+      operand,
+      new Set(["parenthesized_or_product"]),
+    );
+    if (
+      recursiveArguments.type !== "rule" ||
+      recursiveArguments.name !== "positional_product"
+    ) {
+      throw unsupported(file, operand, "recursive call arguments");
+    }
+    return {
+      kind: "recursiveCall",
+      arguments: lowerCallArguments(file, recursiveArguments),
       span: sourceSpan(file, cursor),
     };
   }

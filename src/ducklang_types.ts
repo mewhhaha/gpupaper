@@ -34,6 +34,7 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "function";
+    readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
     readonly body: TypedDucklangExpression;
     readonly type: Type;
