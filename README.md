@@ -39,6 +39,29 @@ deno task run examples/duck/06_functions_and_blocks.duck
 Pass `--cpu` after the filename to disable WebGPU. Pass `--require-gpu` to fail
 instead of reporting that an adapter is unavailable.
 
+The managed runtime adapter uses only WebAssembly and standard JavaScript, so a
+compiled artifact can be hosted from Deno or a browser. This Deno example also
+shows the source-compilation step:
+
+```ts
+import { compileModuleSource } from "./src/compiler.ts";
+import { runDucklangManaged } from "./src/ducklang_runtime.ts";
+
+const file = "examples/binned/effects/03_cli_stdin_stdout.duck";
+const artifact = await compileModuleSource(
+  file,
+  await Deno.readTextFile(file),
+);
+const exports = await runDucklangManaged(artifact, {
+  stdin: { read_line: () => "hello" },
+  stdout: { write_line: (text) => console.log(text) },
+});
+```
+
+For a program such as `effects/multi_file/main.duck`, pass its declaration-only
+`host.duck` path as `hostInterface` during compilation. The resulting artifact
+contains the complete runtime ABI; the host never needs to parse Duck source.
+
 `deno task experiments` prints one JSON object containing the observable result
 of Experiments A–F. The combined example returns `42` and exercises algebraic
 data, a class instance, two hygienic Wasm macros, CPU/GPU compile-time
