@@ -433,6 +433,18 @@ async function findInfiniteTypeOnGpu(
   let readbackMapped = false;
   try {
     const shader = device.createShaderModule({ code: reachabilityShader });
+    const compilation = await shader.getCompilationInfo();
+    const shaderErrors = compilation.messages.filter((message) =>
+      message.type === "error"
+    );
+    if (shaderErrors.length > 0) {
+      throw new Error(
+        `WebGPU reachability shader failed: ${
+          shaderErrors.map((message) => message.message).join("; ")
+        }`,
+      );
+    }
+    device.pushErrorScope("validation");
     const pipeline = device.createComputePipeline({
       layout: "auto",
       compute: { module: shader, entryPoint: "close_reachability" },
@@ -463,6 +475,12 @@ async function findInfiniteTypeOnGpu(
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
     readbackMapped = true;
+    const validationError = await device.popErrorScope();
+    if (validationError !== null) {
+      throw new Error(
+        `WebGPU reachability validation failed: ${validationError.message}`,
+      );
+    }
     const closure = new Uint32Array(readback.getMappedRange());
     for (let index = 0; index < count; index += 1) {
       if (closure[index * count + index] !== 0) return roots[index];
