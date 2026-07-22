@@ -275,96 +275,101 @@ async function unionOnGpu(
     size: parentBytes.byteLength,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
-  const shader = device.createShaderModule({ code: unionShader });
-  const compilation = await shader.getCompilationInfo();
-  const shaderErrors = compilation.messages.filter((message) =>
-    message.type === "error"
-  );
-  if (shaderErrors.length > 0) {
-    throw new Error(
-      `WebGPU union shader failed: ${
-        shaderErrors.map((message) => message.message).join("; ")
-      }`,
+  let readbackMapped = false;
+  try {
+    const shader = device.createShaderModule({ code: unionShader });
+    const compilation = await shader.getCompilationInfo();
+    const shaderErrors = compilation.messages.filter((message) =>
+      message.type === "error"
     );
-  }
-  device.pushErrorScope("validation");
-  const bindGroupLayout = device.createBindGroupLayout({
-    entries: [
-      {
-        binding: 0,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "storage" },
-      },
-      {
-        binding: 1,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" },
-      },
-    ],
-  });
-  const pipelineLayout = device.createPipelineLayout({
-    bindGroupLayouts: [bindGroupLayout],
-  });
-  const unionPipeline = device.createComputePipeline({
-    layout: pipelineLayout,
-    compute: { module: shader, entryPoint: "union_equalities" },
-  });
-  const compressionPipeline = device.createComputePipeline({
-    layout: pipelineLayout,
-    compute: { module: shader, entryPoint: "compress_paths" },
-  });
-  const bindGroup = device.createBindGroup({
-    layout: bindGroupLayout,
-    entries: [
-      { binding: 0, resource: { buffer: parentBuffer } },
-      {
-        binding: 1,
-        resource: {
-          buffer: equalityBuffer,
-          size: Math.max(8, equalityWords.byteLength),
+    if (shaderErrors.length > 0) {
+      throw new Error(
+        `WebGPU union shader failed: ${
+          shaderErrors.map((message) => message.message).join("; ")
+        }`,
+      );
+    }
+    device.pushErrorScope("validation");
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" },
         },
-      },
-    ],
-  });
-  const encoder = device.createCommandEncoder();
-  const rounds = Math.max(1, Math.min(parentBytes.length, 512));
-  for (let round = 0; round < rounds; round += 1) {
-    const unionPass = encoder.beginComputePass();
-    unionPass.setPipeline(unionPipeline);
-    unionPass.setBindGroup(0, bindGroup);
-    unionPass.dispatchWorkgroups(
-      Math.max(1, Math.ceil(equalities.length / 64)),
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
+        },
+      ],
+    });
+    const pipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    });
+    const unionPipeline = device.createComputePipeline({
+      layout: pipelineLayout,
+      compute: { module: shader, entryPoint: "union_equalities" },
+    });
+    const compressionPipeline = device.createComputePipeline({
+      layout: pipelineLayout,
+      compute: { module: shader, entryPoint: "compress_paths" },
+    });
+    const bindGroup = device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: parentBuffer } },
+        {
+          binding: 1,
+          resource: {
+            buffer: equalityBuffer,
+            size: Math.max(8, equalityWords.byteLength),
+          },
+        },
+      ],
+    });
+    const encoder = device.createCommandEncoder();
+    const rounds = Math.max(1, Math.min(parentBytes.length, 512));
+    for (let round = 0; round < rounds; round += 1) {
+      const unionPass = encoder.beginComputePass();
+      unionPass.setPipeline(unionPipeline);
+      unionPass.setBindGroup(0, bindGroup);
+      unionPass.dispatchWorkgroups(
+        Math.max(1, Math.ceil(equalities.length / 64)),
+      );
+      unionPass.end();
+      const compressionPass = encoder.beginComputePass();
+      compressionPass.setPipeline(compressionPipeline);
+      compressionPass.setBindGroup(0, bindGroup);
+      compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
+      compressionPass.end();
+    }
+    encoder.copyBufferToBuffer(
+      parentBuffer,
+      0,
+      readback,
+      0,
+      parentBytes.byteLength,
     );
-    unionPass.end();
-    const compressionPass = encoder.beginComputePass();
-    compressionPass.setPipeline(compressionPipeline);
-    compressionPass.setBindGroup(0, bindGroup);
-    compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
-    compressionPass.end();
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    readbackMapped = true;
+    const validationError = await device.popErrorScope();
+    if (validationError !== null) {
+      throw new Error(
+        `WebGPU union validation failed: ${validationError.message}`,
+      );
+    }
+    const representatives = [
+      ...new Uint32Array(readback.getMappedRange().slice(0)),
+    ];
+    return { representatives, rounds };
+  } finally {
+    if (readbackMapped) readback.unmap();
+    parentBuffer.destroy();
+    equalityBuffer.destroy();
+    readback.destroy();
   }
-  encoder.copyBufferToBuffer(
-    parentBuffer,
-    0,
-    readback,
-    0,
-    parentBytes.byteLength,
-  );
-  device.queue.submit([encoder.finish()]);
-  await readback.mapAsync(GPUMapMode.READ);
-  const validationError = await device.popErrorScope();
-  if (validationError !== null) {
-    throw new Error(
-      `WebGPU union validation failed: ${validationError.message}`,
-    );
-  }
-  const representatives = [
-    ...new Uint32Array(readback.getMappedRange().slice(0)),
-  ];
-  readback.unmap();
-  parentBuffer.destroy();
-  equalityBuffer.destroy();
-  readback.destroy();
-  return { representatives, rounds };
 }
 
 async function findInfiniteTypeOnGpu(
@@ -401,49 +406,50 @@ async function findInfiniteTypeOnGpu(
     size: matrix.byteLength,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
-  const shader = device.createShaderModule({ code: reachabilityShader });
-  const pipeline = device.createComputePipeline({
-    layout: "auto",
-    compute: { module: shader, entryPoint: "close_reachability" },
-  });
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: matrixBuffer } }, {
-      binding: 1,
-      resource: { buffer: parameterBuffer },
-    }],
-  });
-  for (let pivot = 0; pivot < count; pivot += 1) {
-    device.queue.writeBuffer(
-      parameterBuffer,
-      0,
-      new Uint32Array([count, pivot]),
-    );
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(matrix.length / 64));
-    pass.end();
-    device.queue.submit([encoder.finish()]);
-  }
-  const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
-  device.queue.submit([encoder.finish()]);
-  await readback.mapAsync(GPUMapMode.READ);
-  const closure = new Uint32Array(readback.getMappedRange());
-  let cycle: number | undefined;
-  for (let index = 0; index < count; index += 1) {
-    if (closure[index * count + index] !== 0) {
-      cycle = roots[index];
-      break;
+  let readbackMapped = false;
+  try {
+    const shader = device.createShaderModule({ code: reachabilityShader });
+    const pipeline = device.createComputePipeline({
+      layout: "auto",
+      compute: { module: shader, entryPoint: "close_reachability" },
+    });
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: matrixBuffer } }, {
+        binding: 1,
+        resource: { buffer: parameterBuffer },
+      }],
+    });
+    for (let pivot = 0; pivot < count; pivot += 1) {
+      device.queue.writeBuffer(
+        parameterBuffer,
+        0,
+        new Uint32Array([count, pivot]),
+      );
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(Math.ceil(matrix.length / 64));
+      pass.end();
+      device.queue.submit([encoder.finish()]);
     }
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    readbackMapped = true;
+    const closure = new Uint32Array(readback.getMappedRange());
+    for (let index = 0; index < count; index += 1) {
+      if (closure[index * count + index] !== 0) return roots[index];
+    }
+    return undefined;
+  } finally {
+    if (readbackMapped) readback.unmap();
+    matrixBuffer.destroy();
+    parameterBuffer.destroy();
+    readback.destroy();
   }
-  readback.unmap();
-  matrixBuffer.destroy();
-  parameterBuffer.destroy();
-  readback.destroy();
-  return cycle;
 }
 
 function createBuffer(
