@@ -288,9 +288,24 @@ class FunctionCompiler {
       );
     }
     const field = this.#compileExpression(callArguments[0]);
+    const payloadLocal = this.#allocateLocal(`$payload${span.start}`);
     this.#record("constructor.pack", [constructor.tag], span);
     return [
       ...field,
+      ...wasmInstruction.localSet(payloadLocal),
+      ...wasmInstruction.localGet(payloadLocal),
+      ...wasmInstruction.i32Constant(-8_388_608),
+      ...wasmInstruction.i32LessThanSigned,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(payloadLocal),
+      ...wasmInstruction.i32Constant(8_388_607),
+      ...wasmInstruction.i32GreaterThanSigned,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(payloadLocal),
       ...wasmInstruction.i32Constant(8),
       ...wasmInstruction.i32ShiftLeft,
       ...wasmInstruction.i32Constant(constructor.tag),

@@ -366,6 +366,15 @@ Deno.test("packed ADTs reject constructor tags wider than eight bits", async () 
   );
 });
 
+Deno.test("packed ADTs trap instead of truncating wide payloads", async () => {
+  const artifact = await compileModuleSource(
+    "test.hs",
+    `data Box a = Box a\nwrap value = Box value\nunbox boxed = case boxed of { Box value -> value }\nmain = unbox (wrap 16777216)\n`,
+    { gpuMode: "off" },
+  );
+  await assertRejects(() => runMain(artifact.wasm), /unreachable/);
+});
+
 Deno.test("repeated CPU compilation emits byte-identical Wasm", async () => {
   const source = `identity x = x\nmain = identity 42\n`;
   const first = await compileModuleSource("test.hs", source, {

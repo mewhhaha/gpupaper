@@ -100,7 +100,8 @@ clock, or process import.
   representations. Nested runtime lambdas are inferred but rejected by lowering
   because closure conversion is not implemented yet.
 - The packed ADT representation supports nullary and unary constructors. It
-  stores the tag in the low eight bits and the scalar payload above it; it is an
+  stores the tag in the low eight bits and a signed 24-bit scalar payload above
+  it. Boxing a wider payload traps instead of truncating it; this is an
   experiment, not the final FCG heap ABI.
 - `comptime` accepts closed scalar expressions. Its WGSL evaluator has a 64-word
   stack and explicit fuel.

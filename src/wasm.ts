@@ -103,12 +103,16 @@ export const wasmInstruction = {
   i32Subtract: [0x6b],
   i32Multiply: [0x6c],
   i32Equal: [0x46],
+  i32LessThanSigned: [0x48],
+  i32GreaterThanSigned: [0x4a],
   i32And: [0x71],
   i32ShiftLeft: [0x74],
   i32ShiftRightSigned: [0x75],
   ifI32: [0x04, 0x7f],
+  ifVoid: [0x04, 0x40],
   else: [0x05],
   end: [0x0b],
+  unreachable: [0x00],
 } as const;
 
 export function encodeUnsigned(value: number): number[] {
