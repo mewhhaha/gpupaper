@@ -1,0 +1,5 @@
+let factor = 2
+let scale = x => x * factor
+factor = 3
+
+scale(20) + factor

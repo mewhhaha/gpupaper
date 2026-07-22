@@ -1,0 +1,9 @@
+let rec countdown = value => {
+  if value == 0 {
+    42
+  } else {
+    countdown(value - 1)
+  }
+}
+
+countdown(5)

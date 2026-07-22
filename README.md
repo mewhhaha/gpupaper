@@ -1,4 +1,4 @@
-# GPU-hosted Haskell-to-Wasm proof of concept
+# GPU-hosted functional-language-to-Wasm proof of concept
 
 This repository contains the papers and an executable proof-of-concept vertical
 slice through Experiments A–F proposed in
@@ -6,6 +6,11 @@ slice through Experiments A–F proposed in
 It accepts a deliberately small Haskell-like language, runs selected compiler
 work through WebGPU, and emits a validated WebAssembly module whose `main`
 export returns an `i32`.
+
+An experimental Ducklang frontend also accepts a tested slice of the grammar
+from the sibling `binned` project. It lowers into the same typed core, WebGPU
+type-equality experiment, compile-time evaluator, FCG, and Wasm emitter as the
+Haskell-like frontend.
 
 This is a research artifact, not a GHC frontend. Its purpose is to make the
 architectural claims executable and falsifiable before expanding the language.
@@ -20,6 +25,7 @@ deno task test
 deno task experiments
 deno task run examples/all.hs
 deno task compile examples/all.hs output.wasm
+deno task run examples/duck/06_functions_and_blocks.duck
 ```
 
 Pass `--cpu` after the filename to disable WebGPU. Pass `--require-gpu` to fail
@@ -89,6 +95,28 @@ are the only macro operations in this artifact. The host exposes only
 `emit_identity` or `emit_constant`; there is no ambient filesystem, network,
 clock, or process import.
 
+## Ducklang frontend
+
+The Duck frontend is an executable grammar slice, not a second compiler. It
+recognizes header-free pure programs with:
+
+- sequential `let`, `let rec`, `=` and `:=` bindings;
+- scalar `Int` and `Bool` values, `+`, `-`, `*`, and `==`;
+- single- and multi-argument arrow functions and parenthesized direct calls;
+- result-bearing blocks, `if`/`else if`/`else`, lexical capture, and explicit
+  `comptime` expressions.
+
+Top-level rebinding is alpha-renamed into immutable declarations. Consequently,
+a function captures the binding generation visible where it is declared while
+later assignments remain visible to later declarations. This is valid for the
+admitted pure subset; effects require a sequencing representation instead.
+
+The copied `binned` fixtures cover assignment shadowing, blocks, multi-argument
+functions, `else if`, and lexical capture. Additional fixtures exercise
+recursion and compile-time evaluation. See
+[the Duck grammar contract](duck-compatibility.md) for admitted productions,
+explicit rejections, and the next backend work.
+
 ## Important boundaries
 
 - Source evaluation is eager. This artifact does not yet implement Haskell
@@ -112,7 +140,8 @@ clock, or process import.
 - The WebGPU type solver caps the flat graph at 512 terms so its quadratic
   reachability matrix remains an honest proof-of-concept cost.
 - Parsing is line-oriented. Multi-line layout, imports, modules, and the
-  complete Haskell grammar are not implemented.
+  complete Haskell grammar are not implemented. The Duck parser preserves
+  newlines as statement boundaries while admitting multi-line blocks.
 
 These boundaries are rejected with evidence-bearing errors rather than accepted
 with altered semantics.
@@ -120,7 +149,7 @@ with altered semantics.
 ## Architecture
 
 ```text
-source
+Haskell-like or Duck source
   -> lexer/parser
   -> Wasm macro expansion with scope sets
   -> name resolution and dependency SCCs

@@ -10,6 +10,7 @@ import {
   type InteractionResult,
 } from "./interaction.ts";
 import { expandMacros, type MacroExpansionReport } from "./macros.ts";
+import { parseDuckModule } from "./duck_parser.ts";
 import { parseModule } from "./parser.ts";
 import { formatScheme, inferModule, type InferredModule } from "./types.ts";
 
@@ -50,7 +51,9 @@ export async function compileModuleSource(
 ): Promise<CompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
-  const parsed = parseModule(file, source);
+  const parsed = file.endsWith(".duck")
+    ? parseDuckModule(file, source)
+    : parseModule(file, source);
   const parseMilliseconds = performance.now() - parseStart;
 
   const macroStart = performance.now();

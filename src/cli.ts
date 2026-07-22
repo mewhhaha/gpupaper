@@ -21,7 +21,7 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     !["compile", "run", "experiments"].includes(command)
   ) {
     throw new Error(
-      "usage: cli.ts <compile|run|experiments> <file.hs> [output.wasm] [--cpu|--require-gpu]",
+      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--require-gpu]",
     );
   }
   const unknownOption = rest.find((argument) =>
@@ -66,7 +66,8 @@ async function main(arguments_: readonly string[]): Promise<void> {
   const artifact = await compileModuleSource(file, source, { gpuMode });
 
   if (command === "compile") {
-    const output = outputArgument ?? file.replace(/\.hs$/, "") + ".wasm";
+    const output = outputArgument ?? file.replace(/\.(?:hs|duck)$/, "") +
+        ".wasm";
     const inputPath = await Deno.realPath(file);
     const inputFile = await Deno.stat(inputPath);
     let existingOutputPath: string | undefined;
