@@ -382,10 +382,15 @@ export async function evaluateBytecodeOnGpu(
     const completed: ComptimeValue[] = [];
     for (let index = 0; index < programs.length; index += 1) {
       if (statuses[index] !== 1) {
+        const failure = statuses[index] === 2
+          ? "executed malformed bytecode"
+          : statuses[index] === 3
+          ? `exceeded stack capacity ${comptimeStackCapacity}`
+          : statuses[index] === 4
+          ? `exceeded fuel ${fuel}`
+          : `returned unknown status ${statuses[index]}`;
         throw new Error(
-          `GPU comptime program at ${
-            programs[index].sourceStart
-          } failed with status ${statuses[index]}`,
+          `GPU comptime program at ${programs[index].sourceStart} ${failure}`,
         );
       }
       completed.push(
