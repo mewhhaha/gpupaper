@@ -14,7 +14,46 @@ export function specializeStaticDucklangClosures(
     values.set(binding.symbol.id, value);
     return { ...binding, value };
   });
-  const result = rewriteExpression(module.result, values);
+  let result = rewriteExpression(module.result, values);
+  if (result.kind === "block") {
+    const retainedSteps: TypedDucklangBlockStep[] = [];
+    for (const step of result.steps) {
+      if (
+        step.kind !== "binding" ||
+        !step.binding.symbol.text.startsWith("$range_loop_") ||
+        step.binding.value.kind !== "function"
+      ) {
+        retainedSteps.push(step);
+        continue;
+      }
+      const permittedSymbols = new Set([
+        step.binding.symbol.id,
+        ...step.binding.value.parameters.map((parameter) => parameter.id),
+      ]);
+      const pending = [step.binding.value.body];
+      let capturedSymbol: string | undefined;
+      while (pending.length > 0 && capturedSymbol === undefined) {
+        const expression = pending.pop();
+        if (expression === undefined) break;
+        if (
+          expression.kind === "reference" &&
+          expression.symbol.scope !== "module" &&
+          !permittedSymbols.has(expression.symbol.id)
+        ) {
+          capturedSymbol = expression.symbol.text;
+          break;
+        }
+        visitChildren(expression, (child) => pending.push(child));
+      }
+      if (capturedSymbol !== undefined) {
+        throw new TypeError(
+          `${module.file}:${step.binding.span.start}: generated Ducklang range function ${step.binding.symbol.text} captures ${capturedSymbol}`,
+        );
+      }
+      bindings.push(step.binding);
+    }
+    result = { ...result, steps: retainedSteps };
+  }
 
   const bindingsBySymbol = new Map(
     bindings.map((binding) => [binding.symbol.id, binding]),
