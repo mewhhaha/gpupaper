@@ -251,28 +251,13 @@ async function resolveModuleImports(
       dependencyResult.expression.kind === "record"
     ) {
       const typeName = `$module_${namespace.text}_exports`;
-      const dependencyBindings = new Map(
-        dependencyStatements.flatMap((dependencyStatement) =>
-          dependencyStatement.kind === "binding"
-            ? [[dependencyStatement.name.text, dependencyStatement] as const]
-            : []
-        ),
-      );
       statements.push({
         kind: "structType",
         name: typeName,
         parameters: [],
         fields: dependencyResult.expression.fields.map((field) => ({
           name: field.name,
-          type: {
-            name: field.value.kind === "reference" &&
-                dependencyBindings.get(field.value.name.text)?.value.kind ===
-                  "function"
-              ? "$module_inferred_export"
-              : "Int",
-            arguments: [],
-            span: field.span,
-          },
+          type: { name: "Int", arguments: [], span: field.span },
           span: field.span,
         })),
         span: dependencyResult.span,

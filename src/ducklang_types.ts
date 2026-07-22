@@ -1671,9 +1671,6 @@ class DucklangInference {
     parameters: ReadonlyMap<string, Type>,
     expandingAliases: readonly string[],
   ): Type {
-    if (reference.name === "$module_inferred_export") {
-      return this.#freshVariable();
-    }
     const parameter = parameters.get(reference.name);
     if (parameter !== undefined) {
       if (reference.arguments.length !== 0) {
