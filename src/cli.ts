@@ -84,7 +84,34 @@ async function main(arguments_: readonly string[]): Promise<void> {
     if (existingOutputPath === inputPath || aliasesInput) {
       throw new Error(`compile output must differ from input ${file}`);
     }
-    await Deno.writeFile(output, artifact.wasm);
+    const lastSeparator = Math.max(
+      output.lastIndexOf("/"),
+      output.lastIndexOf("\\"),
+    );
+    const outputDirectory = lastSeparator === -1
+      ? "."
+      : output.slice(0, lastSeparator) || "/";
+    const temporaryOutput = await Deno.makeTempFile({
+      dir: outputDirectory,
+      prefix: ".gpu-compiler-",
+      suffix: ".wasm",
+    });
+    try {
+      await Deno.writeFile(temporaryOutput, artifact.wasm);
+      await Deno.rename(temporaryOutput, output);
+    } catch (writeError) {
+      try {
+        await Deno.remove(temporaryOutput);
+      } catch (cleanupError) {
+        if (!(cleanupError instanceof Deno.errors.NotFound)) {
+          throw new AggregateError(
+            [writeError, cleanupError],
+            `failed to write ${output} and remove temporary output ${temporaryOutput}`,
+          );
+        }
+      }
+      throw writeError;
+    }
     console.log(`wrote ${artifact.wasm.length} bytes to ${output}`);
     printTypes(artifact);
     return;
