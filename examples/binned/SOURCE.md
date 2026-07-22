@@ -7,3 +7,8 @@ changes because those are the programs this compatibility work targets.
 
 The corpus contains 118 Duck source files. Its original MIT license is recorded
 in the repository's `THIRD_PARTY_NOTICES.md`.
+
+`contract.json` snapshots the source repository's executable manifest: expected
+results, intentional compile failures, traps, source tests, runtime inputs, and
+dependency modules. Regenerate it from a sibling checkout with
+`deno task duck:contract`.

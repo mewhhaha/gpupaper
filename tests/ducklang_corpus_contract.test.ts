@@ -1,0 +1,106 @@
+import { compileModuleSource, runMain } from "../src/compiler.ts";
+import {
+  type DucklangSuccessContract,
+  parseDucklangCorpusContract,
+} from "../src/ducklang_corpus_contract.ts";
+
+const corpusDirectory = new URL("../examples/binned/", import.meta.url);
+const contractUrl = new URL("contract.json", corpusDirectory);
+const supportedSuccessPaths = new Set([
+  "examples/basics/01_arithmetic_and_shadowing.duck",
+  "examples/basics/06_functions_and_blocks.duck",
+  "examples/basics/10_else_if.duck",
+  "examples/compile_time/04_const_capture_snapshot.duck",
+  "examples/functions/01_closure_capture.duck",
+  "examples/functions/03_closure_local_shadow.duck",
+]);
+
+Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {
+  const contract = parseDucklangCorpusContract(
+    await Deno.readTextFile(contractUrl),
+  );
+  assertEquals(contract.success.length, 92, "success contract count");
+  assertEquals(
+    contract.compileFailures.length,
+    12,
+    "compile-failure contract count",
+  );
+  assertEquals(contract.traps.length, 4, "trap contract count");
+  assertEquals(contract.sourceTests.length, 1, "source-test contract count");
+  assertEquals(contract.dependencies.length, 9, "dependency count");
+
+  const contractedPaths = new Set([
+    ...contract.success.map((example) => example.path),
+    ...contract.compileFailures.map((example) => example.path),
+    ...contract.traps.map((example) => example.path),
+    ...contract.sourceTests,
+    ...contract.dependencies,
+  ]);
+  assertEquals(contractedPaths.size, 118, "distinct contracted source count");
+});
+
+Deno.test("the implemented Ducklang corpus baseline produces its declared results", async () => {
+  const contract = parseDucklangCorpusContract(
+    await Deno.readTextFile(contractUrl),
+  );
+  const supported = contract.success.filter((example) =>
+    supportedSuccessPaths.has(example.path)
+  );
+  assertEquals(
+    supported.length,
+    supportedSuccessPaths.size,
+    "supported success fixture count",
+  );
+
+  for (const example of supported) {
+    await assertSuccessContract(example);
+  }
+});
+
+async function assertSuccessContract(
+  example: DucklangSuccessContract,
+): Promise<void> {
+  const sourceUrl = contractSourceUrl(example.path);
+  const source = await Deno.readTextFile(sourceUrl);
+  const artifact = await compileModuleSource(sourceUrl.pathname, source, {
+    gpuMode: "off",
+  });
+  for (const run of example.runs) {
+    if (run.inputs !== undefined) {
+      throw new Error(
+        `${example.path} entered the executable baseline before runtime inputs were implemented`,
+      );
+    }
+    const actual = await runMain(artifact.wasm);
+    const expected = run.expected.type === "i32"
+      ? run.expected.value
+      : BigInt(run.expected.value);
+    if (actual !== expected) {
+      throw new Error(
+        `${example.path}${
+          run.name === undefined ? "" : ` run ${run.name}`
+        } expected ${expected}, received ${actual}`,
+      );
+    }
+  }
+}
+
+function contractSourceUrl(path: string): URL {
+  const prefix = "examples/";
+  if (!path.startsWith(prefix)) {
+    throw new Error(
+      `Ducklang contract path must start with ${prefix}: ${path}`,
+    );
+  }
+  return new URL(path.slice(prefix.length), corpusDirectory);
+}
+
+function assertEquals(
+  actual: number,
+  expected: number,
+  subject: string,
+): void {
+  if (actual !== expected) {
+    throw new Error(`${subject}: expected ${expected}, received ${actual}`);
+  }
+}
