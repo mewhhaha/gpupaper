@@ -69,7 +69,7 @@ export class WasmModuleBuilder {
     }
     if (this.#functions.length > 0) {
       bytes.push(
-        ...section(3, encodeVector(this.#functions.flatMap(encodeUnsigned))),
+        ...section(3, encodeEntries(this.#functions.map(encodeUnsigned))),
       );
     }
     if (this.#exports.length > 0) {

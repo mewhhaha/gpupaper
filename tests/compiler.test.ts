@@ -14,7 +14,13 @@ import { expandMacros } from "../src/macros.ts";
 import { parseModule } from "../src/parser.ts";
 import type { EqualityConstraint, Type } from "../src/types.ts";
 import { formatScheme, inferModule } from "../src/types.ts";
-import { encodeSigned, encodeUnsigned } from "../src/wasm.ts";
+import {
+  encodeSigned,
+  encodeUnsigned,
+  wasmInstruction,
+  WasmModuleBuilder,
+  wasmType,
+} from "../src/wasm.ts";
 
 const testSpan = { file: "test.hs", start: 0, end: 1 };
 
@@ -463,6 +469,19 @@ Deno.test("LEB128 encoders cover signed and unsigned boundaries", () => {
   assertEquals(encodeSigned(-1), [127]);
   assertEquals(encodeSigned(63), [63]);
   assertEquals(encodeSigned(64), [192, 0]);
+});
+
+Deno.test("Wasm function vectors count entries across LEB128 boundaries", () => {
+  const builder = new WasmModuleBuilder();
+  for (let index = 0; index < 129; index += 1) {
+    const typeIndex = builder.addFunctionType([], [wasmType.i32]);
+    builder.addFunction(typeIndex, [], wasmInstruction.i32Constant(index));
+  }
+  const wasm = builder.finish();
+  assertEquals(
+    WebAssembly.validate(new Uint8Array(wasm).buffer as ArrayBuffer),
+    true,
+  );
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {
