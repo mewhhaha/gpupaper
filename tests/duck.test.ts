@@ -323,6 +323,17 @@ return { .result = pair[index] }
   );
 });
 
+Deno.test("Ducklang explicit panic lowers to a Wasm trap", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { panic } = import "duck:prelude/runtime" ()
+panic("deliberate trap")
+`,
+    { gpuMode: "off" },
+  );
+  await assertRejects(() => runMain(artifact.wasm), /unreachable/);
+});
+
 Deno.test("Ducklang unrolls bounded ranges with break and continue", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

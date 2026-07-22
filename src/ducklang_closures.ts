@@ -529,6 +529,13 @@ function foldStaticIntrinsic(
     staticValue(argument, values)
   );
   if (
+    callee.modulePath === "duck:prelude/runtime" &&
+    callee.exportName === "panic" && arguments_.length === 1 &&
+    arguments_[0].kind === "string"
+  ) {
+    return { ...expression, callee, arguments: [] };
+  }
+  if (
     callee.modulePath === "duck:compiler/string-pattern" &&
     arguments_.length === 3 && arguments_[0].kind === "string" &&
     arguments_[1].kind === "string" && arguments_[2].kind === "string"

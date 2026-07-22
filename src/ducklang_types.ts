@@ -473,6 +473,11 @@ class DucklangInference {
         ) {
           type = functionType([textType, i32Type], i32Type);
         } else if (
+          expression.modulePath === "duck:prelude/runtime" &&
+          expression.exportName === "panic"
+        ) {
+          type = functionType([textType], i32Type);
+        } else if (
           expression.modulePath === "duck:prelude/functional" &&
           expression.exportName === "option_unwrap_or"
         ) {

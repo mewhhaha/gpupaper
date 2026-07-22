@@ -530,6 +530,14 @@ class DucklangFcgCompiler {
           `${this.#file}:${expression.span.start}: nested Ducklang function requires closure conversion`,
         );
       case "call": {
+        if (
+          expression.callee.kind === "intrinsic" &&
+          expression.callee.modulePath === "duck:prelude/runtime" &&
+          expression.callee.exportName === "panic" &&
+          expression.arguments.length === 0
+        ) {
+          return [{ kind: "trap", span: expression.span }];
+        }
         if (expression.callee.kind !== "reference") {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang FCG supports direct calls only`,
