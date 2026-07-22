@@ -26,6 +26,9 @@ const parserPlanUrl = new URL(
   import.meta.url,
 );
 const maximumIntegerLiteral = 2_147_483_647;
+const stringPatternMatchesName = "$duck_string_pattern_matches";
+const stringPatternCaptureName = "$duck_string_pattern_capture";
+const typePatternMatchesName = "$duck_type_pattern_matches";
 
 export async function parseDucklangModule(
   file: string,
@@ -712,6 +715,10 @@ function lowerExpression(
   );
   if (cursor.type === "token") return lowerTokenExpression(file, cursor);
 
+  if (cursor.name === "match_expression") {
+    return lowerMatchExpression(file, cursor);
+  }
+
   if (cursor.name === "try_with_expression") {
     if (isCursor(cursor.field("handler"))) {
       throw unsupported(file, cursor, "try-with handler");
@@ -1199,6 +1206,349 @@ function lowerExpression(
   }
 
   throw unsupported(file, cursor, cursor.name);
+}
+
+type MatchArm = {
+  readonly patterns: readonly SyntaxCursor[];
+  readonly body: SyntaxCursor;
+  readonly span: SourceSpan;
+};
+
+function lowerMatchExpression(
+  file: string,
+  cursor: RuleCursor,
+): DucklangExpression {
+  const start = cursor.children().find((child): child is TokenCursor =>
+    child.type === "token" && child.kind === "MATCH_START"
+  );
+  if (start === undefined) {
+    throw unsupported(file, cursor, "match target");
+  }
+  const targetMatch = start.text.match(
+    /^match[ \t]+([A-Za-z][A-Za-z0-9_]*)[ \t]*\{[ \t\r\n]*\|$/,
+  );
+  if (targetMatch === null) {
+    throw unsupported(file, start, "match target token");
+  }
+  const targetSpan = {
+    file,
+    start: start.span.start + start.text.indexOf(targetMatch[1]),
+    end: start.span.start + start.text.indexOf(targetMatch[1]) +
+      targetMatch[1].length,
+  };
+  const target: DucklangExpression = {
+    kind: "reference",
+    name: { text: targetMatch[1], span: targetSpan },
+    span: targetSpan,
+  };
+  const caseRules = cursor.children().filter((child): child is RuleCursor =>
+    child.type === "rule" &&
+    (child.name === "match_case_tail" || child.name === "match_case")
+  );
+  const arms = caseRules.map((caseRule): MatchArm => {
+    const guard = caseRule.field("guard");
+    if (isCursor(guard)) {
+      throw unsupported(file, guard, "guarded match case");
+    }
+    return {
+      patterns: cursorFields(caseRule, "pattern"),
+      body: requiredField(caseRule, "body"),
+      span: sourceSpan(file, caseRule),
+    };
+  });
+  if (arms.length === 0) {
+    throw new SyntaxError(
+      `${file}:${cursor.span.start}: Ducklang match expression has no cases`,
+    );
+  }
+
+  let alternative: DucklangExpression | undefined;
+  for (const arm of arms.toReversed()) {
+    alternative = lowerMatchArm(file, target, arm, alternative);
+  }
+  if (alternative === undefined) {
+    throw new TypeError(
+      `${file}:${cursor.span.start}: Ducklang match expression is not exhaustive`,
+    );
+  }
+  return { ...alternative, span: sourceSpan(file, cursor) };
+}
+
+function lowerMatchArm(
+  file: string,
+  target: DucklangExpression,
+  arm: MatchArm,
+  alternative: DucklangExpression | undefined,
+): DucklangExpression {
+  const body = lowerExpression(file, arm.body);
+  const patterns = arm.patterns.map((pattern) =>
+    descendSingleRule(
+      pattern,
+      new Set(["_match_pattern", "_single_match_pattern"]),
+    )
+  );
+  if (patterns.some((pattern) => findRule(pattern, "wildcard") !== undefined)) {
+    return body;
+  }
+  const productPattern = patterns.length === 1 &&
+      patterns[0].type === "rule" &&
+      patterns[0].name === "positional_product_pattern"
+    ? patterns[0]
+    : undefined;
+  if (productPattern !== undefined) {
+    return lowerProductMatchArm(file, target, productPattern, body, arm.span);
+  }
+  const stringPattern = patterns.length === 1 && patterns[0].type === "token" &&
+      patterns[0].kind === "string"
+    ? patterns[0]
+    : undefined;
+  if (stringPattern !== undefined) {
+    const interpolated = lowerStringMatchArm(
+      file,
+      target,
+      stringPattern,
+      body,
+      alternative,
+      arm.span,
+    );
+    if (interpolated !== undefined) return interpolated;
+  }
+  const typePattern = patterns.length === 1 &&
+      patterns[0].type === "rule" && patterns[0].name === "type_pattern"
+    ? patterns[0]
+    : undefined;
+  if (typePattern !== undefined) {
+    return lowerTypeMatchArm(
+      file,
+      target,
+      typePattern,
+      body,
+      alternative,
+      arm.span,
+    );
+  }
+  if (alternative === undefined) {
+    throw new TypeError(
+      `${file}:${arm.span.start}: Ducklang match expression is not exhaustive`,
+    );
+  }
+  const conditions = patterns.map((pattern) =>
+    lowerValuePatternCondition(file, target, pattern, arm.span)
+  );
+  return conditions.toReversed().reduce<DucklangExpression>(
+    (next, condition) => ({
+      kind: "if",
+      condition,
+      consequence: body,
+      alternative: next,
+      span: arm.span,
+    }),
+    alternative,
+  );
+}
+
+function lowerStringMatchArm(
+  file: string,
+  target: DucklangExpression,
+  pattern: TokenCursor,
+  body: DucklangExpression,
+  alternative: DucklangExpression | undefined,
+  span: SourceSpan,
+): DucklangExpression | undefined {
+  const value = decodeStringLiteral(file, pattern);
+  const capture = value.match(/^(.*?)\$\{([A-Za-z][A-Za-z0-9_]*)\}(.*)$/s);
+  if (capture === null) return undefined;
+  if (alternative === undefined) {
+    throw new TypeError(
+      `${file}:${span.start}: Ducklang string match expression is not exhaustive`,
+    );
+  }
+  const secondCapture = capture[3].match(/\$\{[A-Za-z][A-Za-z0-9_]*\}/);
+  if (secondCapture !== null) {
+    throw unsupported(file, pattern, "string pattern with multiple captures");
+  }
+  const prefix = stringExpression(capture[1], sourceSpan(file, pattern));
+  const suffix = stringExpression(capture[3], sourceSpan(file, pattern));
+  const captureOffset = pattern.text.indexOf(capture[2]);
+  const captureName: DucklangName = {
+    text: capture[2],
+    span: {
+      file,
+      start: pattern.span.start + captureOffset,
+      end: pattern.span.start + captureOffset + capture[2].length,
+    },
+  };
+  return {
+    kind: "block",
+    statements: [
+      {
+        kind: "binding",
+        declarationKind: "const",
+        recursive: false,
+        name: captureName,
+        value: syntheticCall(
+          stringPatternCaptureName,
+          [target, prefix, suffix],
+          span,
+        ),
+        span,
+      },
+      {
+        kind: "expression",
+        expression: {
+          kind: "if",
+          condition: syntheticCall(
+            stringPatternMatchesName,
+            [target, prefix, suffix],
+            span,
+          ),
+          consequence: body,
+          alternative,
+          span,
+        },
+        span,
+      },
+    ],
+    span,
+  };
+}
+
+function lowerValuePatternCondition(
+  file: string,
+  target: DucklangExpression,
+  pattern: SyntaxCursor,
+  span: SourceSpan,
+): DucklangExpression {
+  if (pattern.type === "token" && pattern.kind === "string") {
+    const value = decodeStringLiteral(file, pattern);
+    const capture = value.match(/^(.*?)\$\{([A-Za-z][A-Za-z0-9_]*)\}(.*)$/s);
+    if (capture !== null) {
+      throw new SyntaxError(
+        `${file}:${pattern.span.start}: Ducklang interpolated string pattern ${pattern.text} must be the only pattern in its case`,
+      );
+    }
+  }
+  if (pattern.type !== "token") {
+    throw unsupported(file, pattern, "match value pattern");
+  }
+  const literal = lowerTokenExpression(file, pattern);
+  if (literal.kind === "reference") {
+    throw unsupported(file, pattern, "match binding pattern");
+  }
+  return {
+    kind: "binary",
+    operator: "==",
+    left: target,
+    right: literal,
+    span,
+  };
+}
+
+function lowerProductMatchArm(
+  file: string,
+  target: DucklangExpression,
+  pattern: RuleCursor,
+  body: DucklangExpression,
+  span: SourceSpan,
+): DucklangExpression {
+  const firstPattern = pattern.children().find((child): child is RuleCursor =>
+    child.type === "rule" && child.name === "_match_pattern"
+  );
+  if (firstPattern === undefined) {
+    throw unsupported(file, pattern, "product match pattern");
+  }
+  const first = descendSingleRule(
+    firstPattern,
+    new Set(["_match_pattern", "_single_match_pattern"]),
+  );
+  const firstName = first.type === "token" && first.kind === "identifier"
+    ? identifierName(file, first, "product match binding")
+    : undefined;
+  if (firstName === undefined && findRule(first, "wildcard") === undefined) {
+    throw unsupported(file, first, "product match element");
+  }
+  return {
+    kind: "block",
+    statements: [
+      {
+        kind: "productBinding",
+        declarationKind: "const",
+        productKind: "tuple",
+        names: [firstName],
+        value: target,
+        span,
+      },
+      { kind: "expression", expression: body, span: body.span },
+    ],
+    span,
+  };
+}
+
+function lowerTypeMatchArm(
+  file: string,
+  target: DucklangExpression,
+  pattern: RuleCursor,
+  body: DucklangExpression,
+  alternative: DucklangExpression | undefined,
+  span: SourceSpan,
+): DucklangExpression {
+  if (alternative === undefined) {
+    throw new TypeError(
+      `${file}:${span.start}: Ducklang type match expression is not exhaustive`,
+    );
+  }
+  const kind = tokenText(file, requiredField(pattern, "kind"), "type pattern");
+  const fields = pattern.children().flatMap((child) => {
+    if (child.type !== "rule" || child.name !== "type_pattern_field") {
+      return [];
+    }
+    const type = lowerTypeReference(file, requiredField(child, "type"));
+    return [{
+      name: tokenText(
+        file,
+        requiredField(child, "name"),
+        "type pattern field",
+      ),
+      type: type.name,
+    }];
+  });
+  const descriptor = JSON.stringify({
+    kind,
+    fields,
+    open: tokenField(pattern, "open") !== undefined,
+  });
+  return {
+    kind: "if",
+    condition: syntheticCall(
+      typePatternMatchesName,
+      [target, stringExpression(descriptor, span)],
+      span,
+    ),
+    consequence: body,
+    alternative,
+    span,
+  };
+}
+
+function syntheticCall(
+  name: string,
+  arguments_: readonly DucklangExpression[],
+  span: SourceSpan,
+): DucklangExpression {
+  return {
+    kind: "call",
+    callee: {
+      kind: "reference",
+      name: { text: name, span },
+      span,
+    },
+    arguments: arguments_,
+    span,
+  };
+}
+
+function stringExpression(value: string, span: SourceSpan): DucklangExpression {
+  return { kind: "string", value, span };
 }
 
 function lowerBinaryExpression(

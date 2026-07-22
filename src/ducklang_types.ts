@@ -262,6 +262,11 @@ const booleanType: Type = {
 };
 const textType: Type = { kind: "constructor", name: "text", arguments: [] };
 const unitType: Type = { kind: "constructor", name: "unit", arguments: [] };
+const typeDescriptorType: Type = {
+  kind: "constructor",
+  name: "typeDescriptor",
+  arguments: [],
+};
 const binaryOperators = new Set([
   "+",
   "-",
@@ -427,7 +432,27 @@ class DucklangInference {
         };
       case "intrinsic": {
         let type: Type;
-        if (
+        if (expression.modulePath.startsWith("duck:type/")) {
+          type = typeDescriptorType;
+        } else if (
+          expression.modulePath === "duck:compiler/string-pattern" &&
+          expression.exportName === "matches"
+        ) {
+          type = functionType(
+            [textType, textType, textType],
+            booleanType,
+          );
+        } else if (
+          expression.modulePath === "duck:compiler/string-pattern" &&
+          expression.exportName === "capture"
+        ) {
+          type = functionType([textType, textType, textType], textType);
+        } else if (
+          expression.modulePath === "duck:compiler/type-pattern" &&
+          expression.exportName === "matches"
+        ) {
+          type = functionType([typeDescriptorType, textType], booleanType);
+        } else if (
           expression.modulePath === "duck:prelude/runtime" &&
           expression.exportName === "length"
         ) {

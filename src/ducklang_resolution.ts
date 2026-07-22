@@ -871,6 +871,64 @@ class DucklangResolver {
       case "reference": {
         const symbol = environment.get(expression.name.text);
         if (symbol === undefined) {
+          const syntheticIntrinsic = expression.name.text ===
+              "$duck_string_pattern_matches"
+            ? {
+              modulePath: "duck:compiler/string-pattern",
+              exportName: "matches",
+            }
+            : expression.name.text === "$duck_string_pattern_capture"
+            ? {
+              modulePath: "duck:compiler/string-pattern",
+              exportName: "capture",
+            }
+            : expression.name.text === "$duck_type_pattern_matches"
+            ? {
+              modulePath: "duck:compiler/type-pattern",
+              exportName: "matches",
+            }
+            : undefined;
+          if (syntheticIntrinsic !== undefined) {
+            return {
+              kind: "intrinsic",
+              ...syntheticIntrinsic,
+              span: expression.span,
+            };
+          }
+          const structDeclaration = this.#structTypes.find((declaration) =>
+            declaration.name === expression.name.text
+          );
+          if (structDeclaration !== undefined) {
+            return {
+              kind: "intrinsic",
+              modulePath: "duck:type/struct",
+              exportName: JSON.stringify({
+                name: structDeclaration.name,
+                fields: structDeclaration.fields.map((field) => ({
+                  name: field.name,
+                  type: field.type.name,
+                })),
+              }),
+              span: expression.span,
+            };
+          }
+          const unionDeclaration = this.#unionTypes.find((declaration) =>
+            declaration.name === expression.name.text
+          );
+          if (unionDeclaration !== undefined) {
+            return {
+              kind: "intrinsic",
+              modulePath: "duck:type/union",
+              exportName: JSON.stringify({
+                name: unionDeclaration.name,
+                cases: unionDeclaration.cases.map((unionCase) => ({
+                  name: unionCase.name,
+                  type: unionCase.payloadType.name,
+                })),
+              }),
+              span: expression.span,
+            };
+          }
           throw new ReferenceError(
             `${this.#file}:${expression.span.start}: unknown Ducklang name ${expression.name.text}`,
           );

@@ -369,9 +369,13 @@ function rewriteExpression(
       staticValue(rewritten.arguments[index], values).kind === "product",
   );
   const specializesIntrinsicParameter = factory.parameters.some(
-    (parameter, index) =>
-      isCalledParameter(factoryBody, parameter.id) &&
-      staticValue(rewritten.arguments[index], values).kind === "intrinsic",
+    (parameter, index) => {
+      const argument = staticValue(rewritten.arguments[index], values);
+      return argument.kind === "intrinsic" &&
+        (isCalledParameter(factoryBody, parameter.id) ||
+          (argument.modulePath.startsWith("duck:type/") &&
+            referencesSymbol(factoryBody, parameter.id)));
+    },
   );
   const inlinesFunctionLiteral = rewritten.callee.kind === "function";
   if (
@@ -524,6 +528,73 @@ function foldStaticIntrinsic(
   const arguments_ = expression.arguments.map((argument) =>
     staticValue(argument, values)
   );
+  if (
+    callee.modulePath === "duck:compiler/string-pattern" &&
+    arguments_.length === 3 && arguments_[0].kind === "string" &&
+    arguments_[1].kind === "string" && arguments_[2].kind === "string"
+  ) {
+    const value = arguments_[0].value;
+    const prefix = arguments_[1].value;
+    const suffix = arguments_[2].value;
+    const matches = value.length >= prefix.length + suffix.length &&
+      value.startsWith(prefix) && value.endsWith(suffix);
+    if (callee.exportName === "matches") {
+      return {
+        kind: "boolean",
+        value: matches,
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (callee.exportName === "capture") {
+      return {
+        kind: "string",
+        value: matches
+          ? value.slice(prefix.length, value.length - suffix.length)
+          : "",
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+  }
+  if (
+    callee.modulePath === "duck:compiler/type-pattern" &&
+    callee.exportName === "matches" && arguments_.length === 2 &&
+    arguments_[0].kind === "intrinsic" &&
+    arguments_[0].modulePath.startsWith("duck:type/") &&
+    arguments_[1].kind === "string"
+  ) {
+    const declaration = JSON.parse(arguments_[0].exportName) as {
+      readonly fields?: readonly {
+        readonly name: string;
+        readonly type: string;
+      }[];
+    };
+    const pattern = JSON.parse(arguments_[1].value) as {
+      readonly kind: string;
+      readonly fields: readonly {
+        readonly name: string;
+        readonly type: string;
+      }[];
+      readonly open: boolean;
+    };
+    const declarationKind = arguments_[0].modulePath.slice(
+      "duck:type/".length,
+    );
+    const declarationFields = declaration.fields ?? [];
+    const fieldsMatch = pattern.fields.every((expected) =>
+      declarationFields.some((field) =>
+        field.name === expected.name && field.type === expected.type
+      )
+    );
+    return {
+      kind: "boolean",
+      value: declarationKind === pattern.kind && fieldsMatch &&
+        (pattern.open || declarationFields.length === pattern.fields.length),
+      type: expression.type,
+      span: expression.span,
+    };
+  }
   if (
     ((callee.modulePath === "duck:prelude/functional" &&
       (callee.exportName === "apply" || callee.exportName === "pipe")) ||
