@@ -134,6 +134,15 @@ if positive(1) { 42 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang same-line block applications remain function calls", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    "let run = () => { value => value + 1 }(41) + 0\nrun()\n",
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang host effects import scalar runtime inputs", async () => {
   const artifact = await compileModuleSource(
     "test.duck",

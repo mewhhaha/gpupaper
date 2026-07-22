@@ -43,9 +43,54 @@ export async function parseDucklangModule(
         `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
       );
     }
-    const statements = result.cursor.children().flatMap((cursor) => {
+    const loweredStatements = result.cursor.children().flatMap((cursor) => {
       const statement = lowerModuleStatement(file, cursor);
       return statement === undefined ? [] : [statement];
+    });
+    const statements = loweredStatements.flatMap((statement) => {
+      if (
+        statement.kind !== "binding" ||
+        statement.value.kind !== "function" ||
+        statement.value.body.kind !== "binary" ||
+        statement.value.body.left.kind !== "call" ||
+        statement.value.body.left.callee.kind !== "block" ||
+        statement.value.body.left.arguments.length !== 1
+      ) {
+        return [statement];
+      }
+      const body = statement.value.body.left.callee;
+      const trailingExpression = statement.value.body.left.arguments[0];
+      if (
+        !source.slice(body.span.end, trailingExpression.span.start).includes(
+          "\n",
+        )
+      ) {
+        return [statement];
+      }
+      const resultExpression: DucklangExpression = {
+        ...statement.value.body,
+        left: trailingExpression,
+        span: spanFrom(
+          trailingExpression.span,
+          statement.value.body.right.span,
+        ),
+      };
+      return [
+        {
+          ...statement,
+          value: {
+            ...statement.value,
+            body,
+            span: { ...statement.value.span, end: body.span.end },
+          },
+          span: { ...statement.span, end: body.span.end },
+        },
+        {
+          kind: "expression" as const,
+          expression: resultExpression,
+          span: resultExpression.span,
+        },
+      ];
     });
     return {
       file,
