@@ -39,6 +39,18 @@ Deno.test("CLI cannot overwrite its Haskell input with Wasm", () => {
   );
 });
 
+Deno.test("host interfaces are rejected for non-Ducklang compilation", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.hs",
+        "main = 42\n",
+        { hostInterface: "host.duck" },
+      ),
+    /hostInterface is available only for Ducklang compilation; received test\.hs/,
+  );
+});
+
 Deno.test("rank-1 inference generalizes identity across integer and boolean uses", () => {
   const module = parseModule(
     "test.hs",

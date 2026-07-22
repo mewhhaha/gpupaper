@@ -108,6 +108,11 @@ export async function compileModuleSource(
   if (file.endsWith(".duck")) {
     return await compileDucklangModuleSource(file, source, options);
   }
+  if (options.hostInterface !== undefined) {
+    throw new TypeError(
+      `hostInterface is available only for Ducklang compilation; received ${file}`,
+    );
+  }
   return await compileHaskellModuleSource(file, source, options);
 }
 
