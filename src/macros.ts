@@ -81,7 +81,8 @@ export async function expandMacros(
         `macro ${macro.name.text} Wasm module has no expand export`,
       );
     }
-    expand(0, numericValue);
+    if (macro.operation === "identity") expand(0);
+    else expand(0, numericValue);
     if (generated.length !== 1) {
       throw new Error(
         `macro ${macro.name.text} generated ${generated.length} declarations; expected exactly 1`,
@@ -121,9 +122,10 @@ function validateMacroInvocation(
 
 function compileMacroToWasm(macro: MacroDeclaration): Uint8Array {
   const builder = new WasmModuleBuilder();
-  const signature = builder.addFunctionType([wasmType.i32, wasmType.i32], [
-    wasmType.i32,
-  ]);
+  const parameters = macro.operation === "identity"
+    ? [wasmType.i32]
+    : [wasmType.i32, wasmType.i32];
+  const signature = builder.addFunctionType(parameters, [wasmType.i32]);
   const importName = macro.operation === "identity"
     ? "emit_identity"
     : "emit_constant";
@@ -132,9 +134,11 @@ function compileMacroToWasm(macro: MacroDeclaration): Uint8Array {
     importName,
     signature,
   );
+  const arguments_ = parameters.flatMap((_, index) =>
+    wasmInstruction.localGet(index)
+  );
   const functionIndex = builder.addFunction(signature, [], [
-    ...wasmInstruction.localGet(0),
-    ...wasmInstruction.localGet(1),
+    ...arguments_,
     ...wasmInstruction.call(importedFunction),
   ]);
   builder.exportFunction("expand", functionIndex);
