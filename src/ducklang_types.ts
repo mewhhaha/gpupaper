@@ -249,18 +249,53 @@ class DucklangInference {
           type: textType,
         };
       case "intrinsic": {
-        if (expression.modulePath !== "duck:prelude/runtime") {
-          throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
-          );
-        }
         let type: Type;
-        if (expression.exportName === "length") {
+        if (
+          expression.modulePath === "duck:prelude/runtime" &&
+          expression.exportName === "length"
+        ) {
           type = functionType([textType], i32Type);
-        } else if (expression.exportName === "append") {
+        } else if (
+          expression.modulePath === "duck:prelude/runtime" &&
+          expression.exportName === "append"
+        ) {
           type = functionType([textType, textType], textType);
-        } else if (expression.exportName === "slice") {
+        } else if (
+          expression.modulePath === "duck:prelude/runtime" &&
+          expression.exportName === "slice"
+        ) {
           type = functionType([textType, i32Type, i32Type], textType);
+        } else if (
+          expression.modulePath === "duck:prelude/functional" &&
+          expression.exportName === "apply"
+        ) {
+          const parameter = this.#freshVariable();
+          const result = this.#freshVariable();
+          type = functionType([
+            functionType([parameter], result),
+            parameter,
+          ], result);
+        } else if (
+          expression.modulePath === "duck:prelude/functional" &&
+          expression.exportName === "pipe"
+        ) {
+          const parameter = this.#freshVariable();
+          const result = this.#freshVariable();
+          type = functionType([
+            parameter,
+            functionType([parameter], result),
+          ], result);
+        } else if (
+          expression.modulePath === "duck:prelude/functional" &&
+          expression.exportName === "compose"
+        ) {
+          const parameter = this.#freshVariable();
+          const intermediate = this.#freshVariable();
+          const result = this.#freshVariable();
+          type = functionType([
+            functionType([intermediate], result),
+            functionType([parameter], intermediate),
+          ], functionType([parameter], result));
         } else {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,

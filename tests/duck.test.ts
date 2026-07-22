@@ -111,6 +111,20 @@ add_three(39)
   }
 });
 
+Deno.test("Ducklang functional imports specialize composition and pipelines", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `const { apply, compose, pipe } = import "duck:prelude/functional" ()
+const increment = value => value + 1
+const double = value => value * 2
+const transform = comptime compose(increment, double)
+pipe(apply(transform, 20), increment)
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

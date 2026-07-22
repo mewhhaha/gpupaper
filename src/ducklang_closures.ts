@@ -99,14 +99,69 @@ function foldStaticIntrinsic(
   if (expression.kind !== "call") return undefined;
   const callee = staticValue(expression.callee, values);
   if (
-    callee.kind !== "intrinsic" ||
-    callee.modulePath !== "duck:prelude/runtime"
+    callee.kind !== "intrinsic"
   ) {
     return undefined;
   }
   const arguments_ = expression.arguments.map((argument) =>
     staticValue(argument, values)
   );
+  if (
+    callee.modulePath === "duck:prelude/functional" &&
+    (callee.exportName === "apply" || callee.exportName === "pipe") &&
+    arguments_.length === 2
+  ) {
+    const functionIndex = callee.exportName === "apply" ? 0 : 1;
+    const argumentIndex = callee.exportName === "apply" ? 1 : 0;
+    if (arguments_[functionIndex].kind !== "function") return undefined;
+    return {
+      kind: "call",
+      callee: expression.arguments[functionIndex],
+      arguments: [expression.arguments[argumentIndex]],
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    callee.modulePath === "duck:prelude/functional" &&
+    callee.exportName === "compose" && arguments_.length === 2 &&
+    arguments_[0].kind === "function" &&
+    arguments_[0].type.kind === "function" &&
+    arguments_[0].parameters.length === 1 &&
+    arguments_[1].kind === "function" &&
+    arguments_[1].type.kind === "function" &&
+    arguments_[1].parameters.length === 1
+  ) {
+    const parameter = arguments_[1].parameters[0];
+    const parameterReference: TypedDucklangExpression = {
+      kind: "reference",
+      symbol: parameter,
+      type: arguments_[1].type.parameter,
+      span: expression.span,
+    };
+    const intermediate: TypedDucklangExpression = {
+      kind: "call",
+      callee: expression.arguments[1],
+      arguments: [parameterReference],
+      type: arguments_[1].body.type,
+      span: expression.span,
+    };
+    return {
+      kind: "function",
+      recursive: false,
+      parameters: [parameter],
+      body: {
+        kind: "call",
+        callee: expression.arguments[0],
+        arguments: [intermediate],
+        type: arguments_[0].body.type,
+        span: expression.span,
+      },
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (callee.modulePath !== "duck:prelude/runtime") return undefined;
   if (
     callee.exportName === "length" && arguments_.length === 1 &&
     arguments_[0].kind === "string"

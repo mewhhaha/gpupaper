@@ -295,15 +295,10 @@ function lowerExpression(
           `rule ${cursor.name} has an invalid binary operator sequence`,
         );
       }
-      expressionStack.push({
-        kind: "binary",
-        operator: operator.text,
-        left,
-        right,
-        span: spanFrom(left.span, right.span),
-      });
+      expressionStack.push(lowerBinaryExpression(operator.text, left, right));
     };
     const precedence = (operator: string): number => {
+      if (operator === "$" || operator === "|>") return 10;
       if (operator === "||") return 20;
       if (operator === "&&") return 30;
       if (["==", "!=", "<", ">", "<=", ">="].includes(operator)) {
@@ -486,6 +481,21 @@ function lowerExpression(
   }
 
   throw unsupported(file, cursor, cursor.name);
+}
+
+function lowerBinaryExpression(
+  operator: string,
+  left: DucklangExpression,
+  right: DucklangExpression,
+): DucklangExpression {
+  const span = spanFrom(left.span, right.span);
+  if (operator === "$") {
+    return { kind: "call", callee: left, arguments: [right], span };
+  }
+  if (operator === "|>") {
+    return { kind: "call", callee: right, arguments: [left], span };
+  }
+  return { kind: "binary", operator, left, right, span };
 }
 
 function lowerTokenExpression(
