@@ -606,6 +606,24 @@ function foldStaticIntrinsic(
   if (callee.modulePath !== "duck:prelude/runtime") return undefined;
   if (
     callee.exportName === "length" && arguments_.length === 1 &&
+    arguments_[0].kind === "if"
+  ) {
+    return rewriteExpression({
+      ...arguments_[0],
+      consequence: {
+        ...expression,
+        arguments: [arguments_[0].consequence],
+      },
+      alternative: {
+        ...expression,
+        arguments: [arguments_[0].alternative],
+      },
+      type: expression.type,
+      span: expression.span,
+    }, values);
+  }
+  if (
+    callee.exportName === "length" && arguments_.length === 1 &&
     arguments_[0].kind === "string"
   ) {
     return {

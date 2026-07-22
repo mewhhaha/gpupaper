@@ -39,6 +39,7 @@ const supportedSuccessPaths = new Set([
   "examples/data/09_union_struct_payload.duck",
   "examples/data/10_text_append_and_bytes.duck",
   "examples/data/11_text_slices_and_equality.duck",
+  "examples/data/12_dynamic_text_branch.duck",
   "examples/functions/01_closure_capture.duck",
   "examples/functions/02_returned_closure.duck",
   "examples/functions/03_closure_local_shadow.duck",
