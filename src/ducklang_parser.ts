@@ -283,16 +283,34 @@ function lowerModuleStatement(
         throw unsupported(file, cursor, "attributed module statement");
       }
       const lowered = lowerModuleStatement(file, attributed);
-      if (lowered?.kind !== "binding" || lowered.value.kind !== "integer") {
-        return lowered;
-      }
-      const incrementCount = attributes.reduce((count, attribute) => {
+      const attributeNames = attributes.flatMap((attribute) => {
         const tokens: TokenCursor[] = [];
         collectAllTokens(attribute, tokens);
-        return count +
-          tokens.filter((token) => token.text === "increment").length;
-      }, 0);
-      return incrementCount === 0 ? lowered : {
+        return tokens.map((token) => token.text);
+      });
+      if (attributeNames.includes("test")) {
+        if (lowered?.kind !== "binding" || lowered.value.kind !== "function") {
+          throw new TypeError(
+            `${file}:${
+              sourceSpan(file, cursor).start
+            }: Ducklang test attribute requires a function binding`,
+          );
+        }
+        return {
+          ...lowered,
+          name: { ...lowered.name, sourceTest: true },
+        };
+      }
+      const incrementCount = attributeNames.filter((name) =>
+        name === "increment"
+      ).length;
+      if (
+        incrementCount === 0 || lowered?.kind !== "binding" ||
+        lowered.value.kind !== "integer"
+      ) {
+        return lowered;
+      }
+      return {
         ...lowered,
         value: {
           ...lowered.value,

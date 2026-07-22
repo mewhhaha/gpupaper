@@ -529,6 +529,44 @@ function foldStaticIntrinsic(
     staticValue(argument, values)
   );
   if (
+    callee.modulePath === "duck:prelude/testing" &&
+    (callee.exportName === "assert" ||
+      callee.exportName === "assert_false") &&
+    expression.arguments.length === 1
+  ) {
+    const unit: TypedDucklangExpression = {
+      kind: "unit",
+      type: expression.type,
+      span: expression.span,
+    };
+    const panic: TypedDucklangExpression = {
+      kind: "call",
+      callee: {
+        kind: "intrinsic",
+        modulePath: "duck:prelude/runtime",
+        exportName: "panic",
+        type: {
+          kind: "function",
+          parameter: { kind: "constructor", name: "text", arguments: [] },
+          result: expression.type,
+        },
+        span: expression.span,
+      },
+      arguments: [],
+      type: expression.type,
+      span: expression.span,
+    };
+    const assertsTruth = callee.exportName === "assert";
+    return rewriteExpression({
+      kind: "if",
+      condition: expression.arguments[0],
+      consequence: assertsTruth ? unit : panic,
+      alternative: assertsTruth ? panic : unit,
+      type: expression.type,
+      span: expression.span,
+    }, values);
+  }
+  if (
     callee.modulePath === "duck:prelude/runtime" &&
     callee.exportName === "panic" && arguments_.length === 1 &&
     arguments_[0].kind === "string"

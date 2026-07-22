@@ -165,6 +165,51 @@ Deno.test("the implemented Ducklang corpus baseline produces its declared result
   }
 });
 
+Deno.test("the vendored Ducklang source tests pass", async () => {
+  const contract = parseDucklangCorpusContract(
+    await Deno.readTextFile(contractUrl),
+  );
+  for (const path of contract.sourceTests) {
+    const sourceUrl = contractSourceUrl(path);
+    const artifact = await compileModuleSource(
+      sourceUrl.pathname,
+      await Deno.readTextFile(sourceUrl),
+      { gpuMode: "off" },
+    );
+    const actual = await runMain(artifact.wasm);
+    if (actual !== 0) {
+      throw new Error(
+        `${path} expected source tests to return 0, received ${actual}`,
+      );
+    }
+  }
+});
+
+Deno.test("a failing inline Ducklang assertion traps", async () => {
+  const source = `module () where
+const { test } = import "duck:prelude/attributes" ()
+const { assert } = import "duck:prelude/testing" ()
+@[test]
+const failing_test: () -> Unit = () => {
+  assert(false)
+}
+return {}`;
+  const artifact = await compileModuleSource(
+    "/inline_assertion_failure.duck",
+    source,
+    { gpuMode: "off" },
+  );
+  try {
+    await runMain(artifact.wasm);
+  } catch (error) {
+    if (error instanceof WebAssembly.RuntimeError) return;
+    throw error;
+  }
+  throw new Error(
+    "a failing inline Ducklang assertion returned instead of trapping",
+  );
+});
+
 Deno.test("the implemented Ducklang trap baseline rejects its declared runs", async () => {
   const contract = parseDucklangCorpusContract(
     await Deno.readTextFile(contractUrl),

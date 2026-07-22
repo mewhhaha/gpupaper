@@ -17,6 +17,7 @@ import {
 } from "./ducklang_modules.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
+import { elaborateDucklangSourceTests } from "./ducklang_tests.ts";
 import { expandStaticDucklangLoops } from "./ducklang_static_loops.ts";
 import {
   formatDucklangType,
@@ -203,9 +204,11 @@ async function compileDucklangModuleSource(
           elaborateDucklangHandlers(
             validateDucklangOwnership(
               await resolveDucklangLocalImports(
-                await parseDucklangModule(
-                  file,
-                  await expandDucklangIncludes(file, source),
+                elaborateDucklangSourceTests(
+                  await parseDucklangModule(
+                    file,
+                    await expandDucklangIncludes(file, source),
+                  ),
                 ),
               ),
             ),

@@ -500,6 +500,17 @@ class DucklangInference {
         ) {
           type = functionType([textType], i32Type);
         } else if (
+          expression.modulePath === "duck:prelude/attributes" &&
+          expression.exportName === "test"
+        ) {
+          type = unitType;
+        } else if (
+          expression.modulePath === "duck:prelude/testing" &&
+          (expression.exportName === "assert" ||
+            expression.exportName === "assert_false")
+        ) {
+          type = functionType([booleanType], unitType);
+        } else if (
           expression.modulePath === "duck:prelude/functional" &&
           expression.exportName === "option_unwrap_or"
         ) {
