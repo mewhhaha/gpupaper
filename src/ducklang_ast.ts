@@ -3,6 +3,7 @@ import type { SourceSpan } from "./syntax.ts";
 export type DucklangName = {
   readonly text: string;
   readonly declaredType?: string;
+  readonly identityPolymorphic?: boolean;
   readonly span: SourceSpan;
 };
 

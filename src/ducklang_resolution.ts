@@ -14,6 +14,7 @@ export type DucklangSymbol = {
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
   readonly declaredType?: string;
+  readonly identityPolymorphic?: boolean;
   readonly span: SourceSpan;
 };
 
@@ -852,6 +853,9 @@ class DucklangResolver {
       ...(name.declaredType === undefined
         ? {}
         : { declaredType: name.declaredType }),
+      ...(name.identityPolymorphic === undefined
+        ? {}
+        : { identityPolymorphic: name.identityPolymorphic }),
       span: name.span,
     } satisfies DucklangSymbol;
     this.#symbols.push(symbol);

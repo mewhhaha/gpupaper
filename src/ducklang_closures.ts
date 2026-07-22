@@ -227,11 +227,16 @@ function rewriteExpression(
       referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "unionCase",
   );
+  const specializesIntrinsicParameter = factory.parameters.some(
+    (parameter, index) =>
+      isCalledParameter(factoryBody, parameter.id) &&
+      staticValue(rewritten.arguments[index], values).kind === "intrinsic",
+  );
   const inlinesFunctionLiteral = rewritten.callee.kind === "function";
   if (
     !returnsFunction && !returnsAggregate && !inlinesFunctionLiteral &&
     !specializesFunctionParameter && !specializesTextParameter &&
-    !specializesUnionParameter
+    !specializesUnionParameter && !specializesIntrinsicParameter
   ) {
     return collapseEmptyBlock(rewritten);
   }
@@ -392,6 +397,12 @@ function foldStaticIntrinsic(
       type: expression.type,
       span: expression.span,
     };
+  }
+  if (
+    callee.modulePath === "duck:prelude/functional" &&
+    callee.exportName === "identity" && arguments_.length === 1
+  ) {
+    return expression.arguments[0];
   }
   if (
     callee.modulePath === "duck:prelude/functional" &&

@@ -27,6 +27,7 @@ const supportedSuccessPaths = new Set([
   "examples/compile_time/05_static_recursion_factorial.duck",
   "examples/compile_time/06_generic_type_constructor.duck",
   "examples/compile_time/08_union_fact_checker.duck",
+  "examples/compile_time/14_rank_n_identity.duck",
   "examples/data/07_generic_option.duck",
   "examples/data/08_dynamic_union_result.duck",
   "examples/data/11_text_slices_and_equality.duck",

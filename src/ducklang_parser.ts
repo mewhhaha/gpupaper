@@ -162,7 +162,21 @@ function lowerModuleStatement(
     };
   }
   if (statement.name === "binding_statement") {
-    const value = lowerExpression(file, requiredField(statement, "value"));
+    let value = lowerExpression(file, requiredField(statement, "value"));
+    const declaredType = statement.field("type");
+    if (
+      value.kind === "function" && isCursor(declaredType) &&
+      hasIdentityForallParameter(declaredType) &&
+      value.parameters[0] !== undefined
+    ) {
+      value = {
+        ...value,
+        parameters: [
+          { ...value.parameters[0], identityPolymorphic: true },
+          ...value.parameters.slice(1),
+        ],
+      };
+    }
     const bindingPattern = requiredField(statement, "name");
     const children = statement.children();
     const conjunctionIndices = children.flatMap((child, index) =>
@@ -1198,6 +1212,24 @@ function findRule(cursor: SyntaxCursor, name: string): RuleCursor | undefined {
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+function hasIdentityForallParameter(cursor: SyntaxCursor): boolean {
+  const functionType = findRule(cursor, "function_type");
+  const parameterType = functionType?.children().find((child) =>
+    child.type === "rule" && child.name === "type_union"
+  );
+  const forall = parameterType === undefined
+    ? undefined
+    : findRule(parameterType, "forall_type");
+  if (forall === undefined) return false;
+  const tokens: TokenCursor[] = [];
+  collectAllTokens(forall, tokens);
+  const identifiers = tokens.filter((token) => token.kind === "identifier");
+  return identifiers.length === 3 &&
+    identifiers[0].text === identifiers[1].text &&
+    identifiers[1].text === identifiers[2].text &&
+    tokens.some((token) => token.text === "->");
 }
 
 function decodeStringLiteral(file: string, token: TokenCursor): string {

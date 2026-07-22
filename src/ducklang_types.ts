@@ -428,6 +428,12 @@ class DucklangInference {
             functionType([intermediate], result),
             functionType([parameter], intermediate),
           ], functionType([parameter], result));
+        } else if (
+          expression.modulePath === "duck:prelude/functional" &&
+          expression.exportName === "identity"
+        ) {
+          const value = this.#freshVariable();
+          type = functionType([value], value);
         } else {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
@@ -530,6 +536,11 @@ class DucklangInference {
         };
       }
       case "reference": {
+        if (expression.symbol.identityPolymorphic) {
+          const value = this.#freshVariable();
+          const type = functionType([value], value);
+          return { expression: { ...expression, type }, type };
+        }
         const type = environment.get(expression.symbol.id);
         if (type === undefined) {
           throw new Error(
