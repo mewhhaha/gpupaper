@@ -380,21 +380,18 @@ async function unionOnGpu(
       ],
     });
     const encoder = device.createCommandEncoder();
-    const rounds = Math.max(1, Math.min(parentBytes.length, 512));
-    for (let round = 0; round < rounds; round += 1) {
-      const unionPass = encoder.beginComputePass();
-      unionPass.setPipeline(unionPipeline);
-      unionPass.setBindGroup(0, bindGroup);
-      unionPass.dispatchWorkgroups(
-        Math.max(1, Math.ceil(equalities.length / 64)),
-      );
-      unionPass.end();
-      const compressionPass = encoder.beginComputePass();
-      compressionPass.setPipeline(compressionPipeline);
-      compressionPass.setBindGroup(0, bindGroup);
-      compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
-      compressionPass.end();
-    }
+    const unionPass = encoder.beginComputePass();
+    unionPass.setPipeline(unionPipeline);
+    unionPass.setBindGroup(0, bindGroup);
+    unionPass.dispatchWorkgroups(
+      Math.max(1, Math.ceil(equalities.length / 64)),
+    );
+    unionPass.end();
+    const compressionPass = encoder.beginComputePass();
+    compressionPass.setPipeline(compressionPipeline);
+    compressionPass.setBindGroup(0, bindGroup);
+    compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
+    compressionPass.end();
     encoder.copyBufferToBuffer(
       parentBuffer,
       0,
@@ -428,7 +425,7 @@ async function unionOnGpu(
         );
       }
     }
-    return { representatives, rounds };
+    return { representatives, rounds: 1 };
   } finally {
     if (readbackMapped) readback.unmap();
     parentBuffer.destroy();

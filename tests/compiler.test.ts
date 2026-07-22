@@ -315,6 +315,16 @@ Deno.test("WebGPU union rejects equality endpoints outside its term graph", asyn
   );
 });
 
+Deno.test("one WebGPU union pass closes a maximum-length equality chain", async () => {
+  const equalities: [number, number][] = Array.from(
+    { length: 511 },
+    (_, index) => [index, index + 1],
+  );
+  const representatives = await unionPairsOnGpu(512, equalities);
+  if (representatives === undefined) return;
+  assertEquals(representatives, new Array(512).fill(0));
+});
+
 Deno.test("CPU and WebGPU compile-time evaluators return the same batch", async () => {
   const module = parseModule(
     "test.hs",
