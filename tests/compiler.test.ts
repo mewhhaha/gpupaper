@@ -107,6 +107,19 @@ Deno.test("a polymorphic signature cannot conceal a monomorphic definition", () 
   );
 });
 
+Deno.test("instances must define the method declared by their class", () => {
+  assertThrows(
+    () =>
+      inferModule(
+        parseModule(
+          "test.hs",
+          `class Eq a where eq :: a -> a -> Bool\ninstance Eq Int where wrong = primEqInt\nmain = 0\n`,
+        ),
+      ),
+    /instance for Eq must define eq; found wrong/,
+  );
+});
+
 Deno.test("macro invocations cannot observe later macro declarations", async () => {
   await assertRejects(
     () =>

@@ -74,6 +74,47 @@ export function inferModule(module: Module): InferredModule {
   const instances = module.declarations.filter((
     declaration,
   ): declaration is InstanceDeclaration => declaration.kind === "instance");
+  const classByName = new Map<string, ClassDeclaration>();
+  for (const declaration of classes) {
+    const previous = classByName.get(declaration.name.text);
+    if (previous !== undefined) {
+      throw new TypeError(
+        `${declaration.span.file}:${declaration.span.start}: duplicate class ${declaration.name.text}; first declared at ${previous.span.file}:${previous.span.start}`,
+      );
+    }
+    classByName.set(declaration.name.text, declaration);
+  }
+  const instanceOrigins = new Map<string, InstanceDeclaration>();
+  for (const instance of instances) {
+    const classDeclaration = classByName.get(instance.className.text);
+    if (classDeclaration === undefined) {
+      throw new TypeError(
+        `${instance.span.file}:${instance.span.start}: instance refers to unknown class ${instance.className.text}`,
+      );
+    }
+    if (instance.methodName.text !== classDeclaration.methodName.text) {
+      throw new TypeError(
+        `${instance.methodName.span.file}:${instance.methodName.span.start}: instance for ${instance.className.text} must define ${classDeclaration.methodName.text}; found ${instance.methodName.text}`,
+      );
+    }
+    if (instance.type.kind !== "name" || instance.type.name !== "Int") {
+      throw new TypeError(
+        `${instance.type.span.file}:${instance.type.span.start}: primEqInt instance requires type Int; found ${
+          instance.type.kind === "name"
+            ? instance.type.name
+            : instance.type.kind
+        }`,
+      );
+    }
+    const instanceKey = `${instance.className.text}:${instance.type.name}`;
+    const previous = instanceOrigins.get(instanceKey);
+    if (previous !== undefined) {
+      throw new TypeError(
+        `${instance.span.file}:${instance.span.start}: duplicate instance ${instance.className.text} ${instance.type.name}; first declared at ${previous.span.file}:${previous.span.start}`,
+      );
+    }
+    instanceOrigins.set(instanceKey, instance);
+  }
   const state = new InferenceState(instances);
   let environment = state.initialEnvironment(module, classes);
   const typedByName = new Map<string, TypedDeclaration>();

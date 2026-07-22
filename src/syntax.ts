@@ -156,6 +156,7 @@ export type InstanceDeclaration = {
   readonly kind: "instance";
   readonly className: Name;
   readonly type: TypeSyntax;
+  readonly methodName: Name;
   readonly primitive: "integerEquality";
   readonly span: SourceSpan;
 };

@@ -178,7 +178,10 @@ class Parser {
     const className = this.#expect("constructor", "expected a class name");
     const type = this.#parseAtomicType();
     this.#expectText("where");
-    this.#expect("identifier", "expected an instance method");
+    const methodName = this.#expect(
+      "identifier",
+      "expected an instance method",
+    );
     this.#expectText("=");
     const primitive = this.#expect("identifier", "expected primEqInt");
     if (primitive.text !== "primEqInt") {
@@ -188,6 +191,7 @@ class Parser {
       kind: "instance",
       className: unscopedName(className.text, className.span),
       type,
+      methodName: unscopedName(methodName.text, methodName.span),
       primitive: "integerEquality",
       span: spanFrom(start.span, primitive.span),
     };
