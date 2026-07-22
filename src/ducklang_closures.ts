@@ -94,6 +94,30 @@ function rewriteExpression(
         span: rewritten.span,
       };
     }
+    if (
+      collection.kind === "product" &&
+      collection.productKind === "array" && index.kind === "integer"
+    ) {
+      const value = collection.values[index.value];
+      if (value === undefined) {
+        throw new RangeError(
+          `${rewritten.span.file}:${rewritten.span.start}: Ducklang array index ${index.value} is outside length ${collection.values.length}`,
+        );
+      }
+      return value;
+    }
+  }
+  if (rewritten.kind === "project") {
+    const product = staticValue(rewritten.product, values);
+    if (product.kind === "product") {
+      const value = product.values[rewritten.index];
+      if (value === undefined) {
+        throw new RangeError(
+          `${rewritten.span.file}:${rewritten.span.start}: Ducklang tuple projection ${rewritten.index} is outside arity ${product.values.length}`,
+        );
+      }
+      return value;
+    }
   }
   if (rewritten.kind === "ifUnion") {
     const value = staticValue(rewritten.value, values);
@@ -146,6 +170,8 @@ function rewriteExpression(
     return collapseEmptyBlock(rewritten);
   }
   const returnsFunction = rewritten.type.kind === "function";
+  const returnsAggregate = rewritten.type.kind === "constructor" &&
+    (rewritten.type.name === "tuple" || rewritten.type.name === "array");
   const specializesFunctionParameter = factory.parameters.some(
     (parameter, index) =>
       isCalledParameter(factory.body, parameter.id) &&
@@ -162,7 +188,7 @@ function rewriteExpression(
       staticValue(rewritten.arguments[index], values).kind === "unionCase",
   );
   if (
-    !returnsFunction && !specializesFunctionParameter &&
+    !returnsFunction && !returnsAggregate && !specializesFunctionParameter &&
     !specializesTextParameter && !specializesUnionParameter
   ) {
     return collapseEmptyBlock(rewritten);
@@ -465,6 +491,10 @@ function rewriteChildren(
       return expression;
     case "unionCase":
       return { ...expression, value: rewrite(expression.value) };
+    case "product":
+      return { ...expression, values: expression.values.map(rewrite) };
+    case "project":
+      return { ...expression, product: rewrite(expression.product) };
     case "function":
       return { ...expression, body: rewrite(expression.body) };
     case "call":

@@ -55,6 +55,20 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "product";
+    readonly productKind: "tuple" | "array";
+    readonly values: readonly TypedDucklangExpression[];
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "project";
+    readonly product: TypedDucklangExpression;
+    readonly index: number;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
     readonly type: Type;
@@ -416,6 +430,55 @@ class DucklangInference {
           type: unionCase.union,
         };
       }
+      case "product": {
+        const values = expression.values.map((value) =>
+          this.inferExpression(value, environment)
+        );
+        let type: Type;
+        if (expression.productKind === "tuple") {
+          type = {
+            kind: "constructor",
+            name: "tuple",
+            arguments: values.map((value) => value.type),
+          };
+        } else {
+          const elementType = values[0]?.type ?? this.#freshVariable();
+          for (const value of values.slice(1)) {
+            this.#unify(elementType, value.type, expression.span);
+          }
+          type = {
+            kind: "constructor",
+            name: "array",
+            arguments: [elementType],
+          };
+        }
+        return {
+          expression: {
+            ...expression,
+            values: values.map((value) => value.expression),
+            type,
+          },
+          type,
+        };
+      }
+      case "project": {
+        const product = this.inferExpression(expression.product, environment);
+        const productType = this.#apply(product.type);
+        if (
+          productType.kind !== "constructor" ||
+          productType.name !== "tuple" ||
+          expression.index >= productType.arguments.length
+        ) {
+          throw new TypeError(
+            `${this.#file}:${expression.span.start}: Ducklang product projection ${expression.index} requires a tuple with that element`,
+          );
+        }
+        const type = productType.arguments[expression.index];
+        return {
+          expression: { ...expression, product: product.expression, type },
+          type,
+        };
+      }
       case "reference": {
         const type = environment.get(expression.symbol.id);
         if (type === undefined) {
@@ -478,16 +541,35 @@ class DucklangInference {
           environment,
         );
         const index = this.inferExpression(expression.index, environment);
-        this.#unify(collection.type, textType, expression.collection.span);
         this.#unify(index.type, i32Type, expression.index.span);
+        const collectionType = this.#apply(collection.type);
+        let type: Type;
+        if (
+          collectionType.kind === "constructor" &&
+          collectionType.name === "text"
+        ) {
+          type = i32Type;
+        } else if (
+          collectionType.kind === "constructor" &&
+          collectionType.name === "array" &&
+          collectionType.arguments.length === 1
+        ) {
+          type = collectionType.arguments[0];
+        } else {
+          throw new TypeError(
+            `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text or an array; received ${
+              formatDucklangType(collectionType)
+            }`,
+          );
+        }
         return {
           expression: {
             ...expression,
             collection: collection.expression,
             index: index.expression,
-            type: i32Type,
+            type,
           },
-          type: i32Type,
+          type,
         };
       }
       case "binary": {
@@ -957,6 +1039,20 @@ class DucklangInference {
         return {
           ...expression,
           value: this.#normalizeExpression(expression.value),
+          type,
+        };
+      case "product":
+        return {
+          ...expression,
+          values: expression.values.map((value) =>
+            this.#normalizeExpression(value)
+          ),
+          type,
+        };
+      case "project":
+        return {
+          ...expression,
+          product: this.#normalizeExpression(expression.product),
           type,
         };
       case "function":

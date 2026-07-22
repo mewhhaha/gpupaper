@@ -81,6 +81,14 @@ function collectComptimeExpressions(
     case "unionCase":
       collectComptimeExpressions(expression.value, expressions);
       return;
+    case "product":
+      for (const value of expression.values) {
+        collectComptimeExpressions(value, expressions);
+      }
+      return;
+    case "project":
+      collectComptimeExpressions(expression.product, expressions);
+      return;
     case "function":
       collectComptimeExpressions(expression.body, expressions);
       return;
@@ -217,6 +225,22 @@ function replaceComptimeExpressions(
         ...expression,
         value: replaceComptimeExpressions(
           expression.value,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "product":
+      return {
+        ...expression,
+        values: expression.values.map((value) =>
+          replaceComptimeExpressions(value, values, nextValueIndex)
+        ),
+      };
+    case "project":
+      return {
+        ...expression,
+        product: replaceComptimeExpressions(
+          expression.product,
           values,
           nextValueIndex,
         ),

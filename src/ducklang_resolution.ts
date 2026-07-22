@@ -54,6 +54,18 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "product";
+    readonly productKind: "tuple" | "array";
+    readonly values: readonly ResolvedDucklangExpression[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "project";
+    readonly product: ResolvedDucklangExpression;
+    readonly index: number;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
     readonly span: SourceSpan;
@@ -332,6 +344,54 @@ class DucklangResolver {
         steps.push({ kind: "binding", binding });
         continue;
       }
+      if (statement.kind === "productBinding") {
+        const stage = statement.declarationKind === "const"
+          ? "compileTime"
+          : "runtime";
+        const productSymbol = this.#declare({
+          text: "destructuredProduct",
+          span: statement.span,
+        }, scope);
+        const productBinding = {
+          symbol: productSymbol,
+          previous: undefined,
+          recursive: false,
+          stage,
+          value: this.#resolveExpression(
+            statement.value,
+            environment,
+            currentRecursive,
+          ),
+          span: statement.span,
+        } satisfies ResolvedDucklangBinding;
+        bindings.push(productBinding);
+        steps.push({ kind: "binding", binding: productBinding });
+        for (const [elementIndex, name] of statement.names.entries()) {
+          if (name === undefined) continue;
+          const symbol = this.#declare(name, scope);
+          environment.set(symbol.text, symbol);
+          const binding = {
+            symbol,
+            previous: undefined,
+            recursive: false,
+            stage,
+            value: {
+              kind: "project",
+              product: {
+                kind: "reference",
+                symbol: productSymbol,
+                span: statement.span,
+              },
+              index: elementIndex,
+              span: name.span,
+            },
+            span: name.span,
+          } satisfies ResolvedDucklangBinding;
+          bindings.push(binding);
+          steps.push({ kind: "binding", binding });
+        }
+        continue;
+      }
       if (statement.kind === "expression") {
         const expression = this.#resolveExpression(
           statement.expression,
@@ -448,6 +508,13 @@ class DucklangResolver {
             expression.value,
             environment,
             currentRecursive,
+          ),
+        };
+      case "product":
+        return {
+          ...expression,
+          values: expression.values.map((value) =>
+            this.#resolveExpression(value, environment, currentRecursive)
           ),
         };
       case "moduleImport":

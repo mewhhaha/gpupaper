@@ -63,6 +63,12 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "product";
+    readonly productKind: "tuple" | "array";
+    readonly values: readonly DucklangExpression[];
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "reference";
     readonly name: DucklangName;
     readonly span: SourceSpan;
@@ -174,6 +180,13 @@ export type DucklangStatement =
     readonly name: DucklangName;
     readonly value: DucklangExpression;
     readonly alternative: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "productBinding";
+    readonly declarationKind: "let" | "const";
+    readonly names: readonly (DucklangName | undefined)[];
+    readonly value: DucklangExpression;
     readonly span: SourceSpan;
   }
   | {

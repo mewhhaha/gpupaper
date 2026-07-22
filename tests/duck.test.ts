@@ -245,6 +245,19 @@ if choose(1) == 42 && choose(0) == 7 { 42 } else { 0 }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang specializes tuple destructuring and array indexing", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `let swap = (left, right) => (right, left)
+let (first, second) = swap(1, 42)
+let stored = [first, second]
+stored[0]
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

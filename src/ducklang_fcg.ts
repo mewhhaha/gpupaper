@@ -308,6 +308,11 @@ class DucklangFcgCompiler {
           { kind: "unionPack", tag, span: expression.span },
         ];
       }
+      case "product":
+      case "project":
+        throw new TypeError(
+          `${this.#file}:${expression.span.start}: Ducklang ${expression.kind} reached FCG without aggregate layout lowering`,
+        );
       case "reference": {
         const local = this.#locals.get(expression.symbol.id);
         if (local !== undefined) {

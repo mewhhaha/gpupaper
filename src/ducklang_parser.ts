@@ -99,6 +99,27 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
+    const productPattern = findRule(bindingPattern, "binding_product_pattern");
+    if (productPattern !== undefined) {
+      const tokens: TokenCursor[] = [];
+      collectAllTokens(productPattern, tokens);
+      const names = tokens.flatMap((token) => {
+        if (token.kind === "identifier") {
+          return [identifierName(file, token, "product binding")];
+        }
+        if (token.text === "_") return [undefined];
+        return [];
+      });
+      return {
+        kind: "productBinding",
+        declarationKind: tokenField(statement, "kind")?.text === "const"
+          ? "const"
+          : "let",
+        names,
+        value,
+        span: sourceSpan(file, statement),
+      };
+    }
     const imported = lowerImportStatement(file, statement, value);
     if (imported !== undefined) return imported;
     const name = identifierName(
@@ -658,6 +679,32 @@ function lowerExpression(
 
   if (cursor.name === "unit_pattern") {
     return { kind: "unit", span: sourceSpan(file, cursor) };
+  }
+
+  if (cursor.name === "positional_product") {
+    return {
+      kind: "product",
+      productKind: "tuple",
+      values: cursor.children().flatMap((child) =>
+        child.type === "rule" && child.name === "_expression"
+          ? [lowerExpression(file, child)]
+          : []
+      ),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
+  if (cursor.name === "array_expression") {
+    return {
+      kind: "product",
+      productKind: "array",
+      values: cursor.children().flatMap((child) =>
+        child.type === "rule" && child.name === "_expression"
+          ? [lowerExpression(file, child)]
+          : []
+      ),
+      span: sourceSpan(file, cursor),
+    };
   }
 
   throw unsupported(file, cursor, cursor.name);

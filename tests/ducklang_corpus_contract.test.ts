@@ -15,6 +15,7 @@ const supportedSuccessPaths = new Set([
   "examples/basics/06_functions_and_blocks.duck",
   "examples/basics/07_early_return.duck",
   "examples/basics/10_else_if.duck",
+  "examples/basics/12_value_packs_and_tuples.duck",
   "examples/basics/13_contextual_keyword_names.duck",
   "examples/compile_time/01_comptime_adder.duck",
   "examples/compile_time/02_higher_order_compose.duck",
