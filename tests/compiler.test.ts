@@ -208,6 +208,26 @@ Deno.test("CPU and WebGPU compile-time evaluators return the same batch", async 
   assertEquals(gpu.values, cpu.status === "completed" ? cpu.values : []);
 });
 
+Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {
+  let sourceExpression = "1";
+  for (let depth = 1; depth < 65; depth += 1) {
+    sourceExpression = `1 + (${sourceExpression})`;
+  }
+  const module = parseModule(
+    "test.hs",
+    `main = comptime (${sourceExpression})\n`,
+  );
+  const declaration = module.declarations[0];
+  if (
+    declaration.kind !== "value" || declaration.expression.kind !== "comptime"
+  ) throw new Error("test fixture did not parse as comptime");
+  const program = compileComptimeExpression(declaration.expression.expression);
+  assertThrows(
+    () => evaluateBytecodeOnCpu([program]),
+    /exceeded stack capacity 64/,
+  );
+});
+
 Deno.test("Wasm macro expansion keeps generated identity parameters hygienic", async () => {
   const module = parseModule(
     "test.hs",

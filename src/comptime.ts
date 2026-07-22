@@ -33,6 +33,8 @@ const opcode = {
   select: 6,
 } as const;
 
+const comptimeStackCapacity = 64;
+
 const evaluatorShader = `
 struct Parameters { job_count: u32, max_program_length: u32, stack_capacity: u32, fuel: u32 }
 @group(0) @binding(0) var<storage, read> opcodes: array<u32>;
@@ -165,6 +167,11 @@ export function evaluateBytecodeOnCpu(
           : { kind: "integer", value: stack[0] };
       }
       if (operation === opcode.constant) {
+        if (stack.length >= comptimeStackCapacity) {
+          throw new Error(
+            `comptime program at ${program.sourceStart} exceeded stack capacity ${comptimeStackCapacity}`,
+          );
+        }
         stack.push(program.operands[pc]);
         continue;
       }
@@ -228,7 +235,7 @@ export async function evaluateBytecodeOnGpu(
     combinedOpcodes.push(...program.opcodes);
     combinedOperands.push(...program.operands);
   }
-  const stackCapacity = 64;
+  const stackCapacity = comptimeStackCapacity;
   const opcodeBuffer = createGpuBuffer(
     device,
     new Uint32Array(combinedOpcodes),
