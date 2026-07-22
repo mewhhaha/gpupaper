@@ -62,6 +62,7 @@ const supportedSuccessPaths = new Set([
   "examples/loops/09_loop_expression_syntax.duck",
   "examples/loops/11_refutable_collection_pattern.duck",
   "examples/loops/12_let_else_continue.duck",
+  "examples/ownership_modules/01_linear_scalar.duck",
   "examples/ownership_modules/04_freeze_and_share.duck",
   "examples/ownership_modules/03_scratch_cleanup.duck",
   "examples/ownership_modules/02_borrowed_text_read.duck",

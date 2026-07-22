@@ -1111,6 +1111,15 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "linear_reference") {
+    const name = identifierName(
+      file,
+      requiredField(cursor, "name"),
+      "linear reference",
+    );
+    return { kind: "reference", name, span: sourceSpan(file, cursor) };
+  }
+
   if (cursor.name === "unit_pattern") {
     return { kind: "unit", span: sourceSpan(file, cursor) };
   }
@@ -1388,21 +1397,24 @@ function arrowParameters(
       };
     }
     const plain = group.length === 1 && name?.kind === "identifier";
+    const linear = group.length === 2 && name?.text === "!" &&
+      separator?.kind === "identifier";
     const annotated = group.length === 3 && name?.kind === "identifier" &&
       separator?.text === ":" && annotation?.kind === "identifier";
-    if (!plain && !annotated) {
+    if (!plain && !linear && !annotated) {
       throw unsupported(
         file,
         group[0] ?? cursor,
         "patterned parameter or unsupported type annotation",
       );
     }
+    const parameterName = linear ? separator : name;
     return {
-      text: name.text,
+      text: parameterName.text,
       ...(annotation === undefined ? {} : {
         declaredType: annotation.text,
       }),
-      span: sourceSpan(file, name),
+      span: sourceSpan(file, parameterName),
     };
   });
 }
