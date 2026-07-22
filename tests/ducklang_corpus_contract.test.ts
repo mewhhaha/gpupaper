@@ -1,6 +1,7 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
   type DucklangSuccessContract,
+  type DucklangTrapContract,
   parseDucklangCorpusContract,
 } from "../src/ducklang_corpus_contract.ts";
 
@@ -85,6 +86,11 @@ const supportedSuccessPaths = new Set([
   "examples/showcases/05_linear_host_session.duck",
   "examples/showcases/07_domain_abstractions.duck",
 ]);
+const supportedTrapPaths = new Set([
+  "examples/failures/traps/01_explicit_panic.duck",
+  "examples/failures/traps/02_text_out_of_bounds.duck",
+  "examples/failures/traps/03_struct_index_out_of_bounds.duck",
+]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {
   const contract = parseDucklangCorpusContract(
@@ -128,6 +134,21 @@ Deno.test("the implemented Ducklang corpus baseline produces its declared result
   }
 });
 
+Deno.test("the implemented Ducklang trap baseline rejects its declared runs", async () => {
+  const contract = parseDucklangCorpusContract(
+    await Deno.readTextFile(contractUrl),
+  );
+  const supported = contract.traps.filter((example) =>
+    supportedTrapPaths.has(example.path)
+  );
+  assertEquals(
+    supported.length,
+    supportedTrapPaths.size,
+    "supported trap fixture count",
+  );
+  for (const example of supported) await assertTrapContract(example);
+});
+
 async function assertSuccessContract(
   example: DucklangSuccessContract,
 ): Promise<void> {
@@ -149,6 +170,23 @@ async function assertSuccessContract(
       );
     }
   }
+}
+
+async function assertTrapContract(
+  example: DucklangTrapContract,
+): Promise<void> {
+  const sourceUrl = contractSourceUrl(example.path);
+  const artifact = await compileModuleSource(
+    sourceUrl.pathname,
+    await Deno.readTextFile(sourceUrl),
+    { gpuMode: "off" },
+  );
+  try {
+    await runMain(artifact.wasm, example.inputs);
+  } catch {
+    return;
+  }
+  throw new Error(`${example.path} returned instead of trapping`);
 }
 
 function contractSourceUrl(path: string): URL {
