@@ -34,6 +34,7 @@ const opcode = {
 } as const;
 
 const comptimeStackCapacity = 64;
+const maximumComptimeFuel = 1_000_000;
 
 const evaluatorShader = `
 struct Parameters { job_count: u32, max_program_length: u32, stack_capacity: u32, fuel: u32 }
@@ -152,9 +153,9 @@ export function evaluateBytecodeOnCpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
 ): ComptimeBatchResult {
-  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > 0xffff_ffff) {
+  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > maximumComptimeFuel) {
     throw new RangeError(
-      `comptime fuel must be an integer from 1 through 4294967295; received ${fuel}`,
+      `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
     );
   }
   const values: ComptimeValue[] = programs.map((program): ComptimeValue => {
@@ -222,9 +223,9 @@ export async function evaluateBytecodeOnGpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
 ): Promise<ComptimeBatchResult> {
-  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > 0xffff_ffff) {
+  if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > maximumComptimeFuel) {
     throw new RangeError(
-      `comptime fuel must be an integer from 1 through 4294967295; received ${fuel}`,
+      `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
     );
   }
   if (programs.length === 0) {
