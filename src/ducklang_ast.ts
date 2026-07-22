@@ -14,9 +14,15 @@ export type DucklangImportSelection = {
   readonly span: SourceSpan;
 };
 
+export type DucklangTypeReference = {
+  readonly name: string;
+  readonly arguments: readonly DucklangTypeReference[];
+  readonly span: SourceSpan;
+};
+
 export type DucklangUnionCase = {
   readonly name: string;
-  readonly payloadType: string;
+  readonly payloadType: DucklangTypeReference;
   readonly span: SourceSpan;
 };
 
@@ -132,6 +138,13 @@ export type DucklangStatement =
     readonly name: string;
     readonly parameters: readonly string[];
     readonly cases: readonly DucklangUnionCase[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "typeAlias";
+    readonly name: string;
+    readonly parameters: readonly string[];
+    readonly target: DucklangTypeReference;
     readonly span: SourceSpan;
   }
   | {

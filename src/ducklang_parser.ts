@@ -12,6 +12,7 @@ import type {
   DucklangName,
   DucklangParameter,
   DucklangStatement,
+  DucklangTypeReference,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
 
@@ -93,7 +94,19 @@ function lowerModuleStatement(
     const definition = requiredField(statement, "definition");
     const typeSum = findRule(definition, "type_sum");
     if (typeSum === undefined) {
-      throw unsupported(file, definition, "non-union type declaration");
+      return {
+        kind: "typeAlias",
+        name: identifierName(
+          file,
+          requiredField(statement, "name"),
+          "type alias name",
+        ).text,
+        parameters: tokenFields(statement, "parameter").map((token) =>
+          token.text
+        ),
+        target: lowerTypeReference(file, definition),
+        span: sourceSpan(file, statement),
+      };
     }
     return {
       kind: "unionType",
@@ -110,11 +123,7 @@ function lowerModuleStatement(
         const name = requiredField(child, "name");
         return [{
           name: tokenText(file, name, "union case name"),
-          payloadType: identifierName(
-            file,
-            requiredField(child, "payload"),
-            "union payload type",
-          ).text,
+          payloadType: lowerTypeReference(file, child),
           span: sourceSpan(file, child),
         }];
       }),
@@ -168,6 +177,31 @@ function lowerModuleStatement(
     };
   }
   throw unsupported(file, statement, statement.name);
+}
+
+function lowerTypeReference(
+  file: string,
+  input: SyntaxCursor,
+): DucklangTypeReference {
+  const application = findRule(input, "type_application");
+  if (application === undefined) {
+    const name = identifierName(file, input, "type reference");
+    return { name: name.text, arguments: [], span: sourceSpan(file, input) };
+  }
+  const arguments_ = cursorFields(application, "argument");
+  const argumentSet = new Set(arguments_);
+  const base = application.children().find((child) =>
+    child.type === "rule" && !argumentSet.has(child)
+  );
+  if (base === undefined) {
+    throw unsupported(file, application, "type application base");
+  }
+  const name = identifierName(file, base, "type reference");
+  return {
+    name: name.text,
+    arguments: arguments_.map((argument) => lowerTypeReference(file, argument)),
+    span: sourceSpan(file, application),
+  };
 }
 
 function lowerImportStatement(

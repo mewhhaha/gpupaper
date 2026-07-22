@@ -1,10 +1,12 @@
 import type { SourceSpan } from "./syntax.ts";
+import type { DucklangTypeReference } from "./ducklang_ast.ts";
 import type { EqualityConstraint, Type } from "./types.ts";
 import type {
   DucklangSymbol,
   ResolvedDucklangBinding,
   ResolvedDucklangExpression,
   ResolvedDucklangModule,
+  ResolvedDucklangTypeAlias,
   ResolvedDucklangUnionType,
 } from "./ducklang_resolution.ts";
 
@@ -177,6 +179,7 @@ export type TypedDucklangModule = {
   readonly equalities: readonly EqualityConstraint[];
   readonly symbolTypes: ReadonlyMap<number, Type>;
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
+  readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
 };
 
 type InferredExpression = {
@@ -207,7 +210,11 @@ const binaryOperators = new Set([
 export function inferDucklangModule(
   module: ResolvedDucklangModule,
 ): TypedDucklangModule {
-  const inference = new DucklangInference(module.file, module.unionTypes);
+  const inference = new DucklangInference(
+    module.file,
+    module.unionTypes,
+    module.typeAliases,
+  );
   const environment = new Map<number, Type>();
   const bindings = inference.inferBindings(module.bindings, environment);
   const result = inference.inferExpression(module.result, environment);
@@ -233,11 +240,17 @@ class DucklangInference {
   readonly #symbolTypes = new Map<number, Type>();
   readonly #numericVariables = new Set<number>();
   readonly #unionTypes: readonly ResolvedDucklangUnionType[];
+  readonly #typeAliases: readonly ResolvedDucklangTypeAlias[];
   #nextVariable = 0;
 
-  constructor(file: string, unionTypes: readonly ResolvedDucklangUnionType[]) {
+  constructor(
+    file: string,
+    unionTypes: readonly ResolvedDucklangUnionType[],
+    typeAliases: readonly ResolvedDucklangTypeAlias[],
+  ) {
     this.#file = file;
     this.#unionTypes = unionTypes;
+    this.#typeAliases = typeAliases;
     const caseNames = new Set<string>();
     for (const declaration of unionTypes) {
       for (const unionCase of declaration.cases) {
@@ -248,6 +261,20 @@ class DucklangInference {
         }
         caseNames.add(unionCase.name);
       }
+    }
+    for (const declaration of unionTypes) {
+      const parameters = new Map(
+        declaration.parameters.map((name) => [name, this.#freshVariable()]),
+      );
+      for (const unionCase of declaration.cases) {
+        this.#typeReference(unionCase.payloadType, parameters, []);
+      }
+    }
+    for (const alias of typeAliases) {
+      const parameters = new Map(
+        alias.parameters.map((name) => [name, this.#freshVariable()]),
+      );
+      this.#typeReference(alias.target, parameters, [alias.name]);
     }
   }
 
@@ -799,31 +826,79 @@ class DucklangInference {
         name: declaration.name,
         arguments: declaration.parameters.map((name) => parameters.get(name)!),
       },
-      payload: parameters.get(unionCase.payloadType) ??
-        this.#declaredType(unionCase.payloadType, unionCase.span),
+      payload: this.#typeReference(unionCase.payloadType, parameters, []),
     };
   }
 
   #declaredType(name: string, span: SourceSpan): Type {
-    if (name === "Int" || name === "I32") return i32Type;
-    if (name === "I64") return i64Type;
-    if (name === "Bool") return booleanType;
-    if (name === "Text") return textType;
-    if (name === "Unit") {
+    return this.#typeReference({ name, arguments: [], span }, new Map(), []);
+  }
+
+  #typeReference(
+    reference: DucklangTypeReference,
+    parameters: ReadonlyMap<string, Type>,
+    expandingAliases: readonly string[],
+  ): Type {
+    const parameter = parameters.get(reference.name);
+    if (parameter !== undefined) {
+      if (reference.arguments.length !== 0) {
+        throw new TypeError(
+          `${this.#file}:${reference.span.start}: Ducklang type parameter ${reference.name} cannot take arguments`,
+        );
+      }
+      return parameter;
+    }
+    if (reference.name === "Int" || reference.name === "I32") return i32Type;
+    if (reference.name === "I64") return i64Type;
+    if (reference.name === "Bool") return booleanType;
+    if (reference.name === "Text") return textType;
+    if (reference.name === "Unit") {
       return { kind: "constructor", name: "unit", arguments: [] };
     }
+    const arguments_ = reference.arguments.map((argument) =>
+      this.#typeReference(argument, parameters, expandingAliases)
+    );
+    const alias = this.#typeAliases.find((candidate) =>
+      candidate.name === reference.name
+    );
+    if (alias !== undefined) {
+      if (alias.parameters.length !== arguments_.length) {
+        throw new TypeError(
+          `${this.#file}:${reference.span.start}: Ducklang type alias ${alias.name} expects ${alias.parameters.length} arguments; received ${arguments_.length}`,
+        );
+      }
+      if (expandingAliases.includes(alias.name)) {
+        throw new TypeError(
+          `${this.#file}:${reference.span.start}: recursive Ducklang type alias ${
+            [...expandingAliases, alias.name].join(" -> ")
+          }`,
+        );
+      }
+      return this.#typeReference(
+        alias.target,
+        new Map(
+          alias.parameters.map((name, index) => [name, arguments_[index]]),
+        ),
+        [...expandingAliases, alias.name],
+      );
+    }
     const declaration = this.#unionTypes.find((candidate) =>
-      candidate.name === name
+      candidate.name === reference.name
     );
     if (declaration === undefined) {
       throw new TypeError(
-        `${this.#file}:${span.start}: unknown Ducklang type ${name}`,
+        `${this.#file}:${reference.span.start}: unknown Ducklang type ${reference.name}`,
+      );
+    }
+    if (declaration.parameters.length !== arguments_.length) {
+      throw new TypeError(
+        `${this.#file}:${reference.span.start}: Ducklang type ${declaration.name} expects ${declaration.parameters.length} arguments; received ${arguments_.length}`,
       );
     }
     return {
       kind: "constructor",
-      name,
-      arguments: declaration.parameters.map(() => this.#freshVariable()),
+      name: declaration.name,
+      arguments: arguments_,
     };
   }
 
@@ -852,6 +927,7 @@ class DucklangInference {
         [...this.#symbolTypes].map(([id, type]) => [id, this.#apply(type)]),
       ),
       unionTypes: this.#unionTypes,
+      typeAliases: this.#typeAliases,
     };
   }
 

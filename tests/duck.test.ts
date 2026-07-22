@@ -217,6 +217,19 @@ unwrap(\`Ok (21)) + unwrap(\`Err ("no"))
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+Deno.test("Ducklang resolves parameterized union aliases", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    `type Option value = | \`Some value | \`None Unit
+type IntOption = Option Int
+let choice = \`Some (41)
+if let \`Some value = choice { value + 1 } else { 0 }
+`,
+    { gpuMode: "off" },
+  );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
 Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });

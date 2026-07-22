@@ -3,6 +3,7 @@ import type {
   DucklangModule,
   DucklangName,
   DucklangStatement,
+  DucklangTypeReference,
   DucklangUnionCase,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
@@ -146,12 +147,20 @@ export type ResolvedDucklangUnionType = {
   readonly span: SourceSpan;
 };
 
+export type ResolvedDucklangTypeAlias = {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly target: DucklangTypeReference;
+  readonly span: SourceSpan;
+};
+
 export type ResolvedDucklangModule = {
   readonly file: string;
   readonly bindings: readonly ResolvedDucklangBinding[];
   readonly result: ResolvedDucklangExpression;
   readonly symbols: readonly DucklangSymbol[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
+  readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
 };
 
 type ResolvedStatements = {
@@ -177,6 +186,7 @@ export function resolveDucklangModule(
     result: resolved.result,
     symbols: resolver.symbols,
     unionTypes: resolver.unionTypes,
+    typeAliases: resolver.typeAliases,
   };
 }
 
@@ -184,6 +194,7 @@ class DucklangResolver {
   readonly #file: string;
   readonly #symbols: DucklangSymbol[] = [];
   readonly #unionTypes: ResolvedDucklangUnionType[] = [];
+  readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
 
   constructor(file: string) {
     this.#file = file;
@@ -195,6 +206,10 @@ class DucklangResolver {
 
   get unionTypes(): ResolvedDucklangModule["unionTypes"] {
     return this.#unionTypes;
+  }
+
+  get typeAliases(): ResolvedDucklangModule["typeAliases"] {
+    return this.#typeAliases;
   }
 
   resolveStatements(
@@ -219,13 +234,32 @@ class DucklangResolver {
         if (
           this.#unionTypes.some((declaration) =>
             declaration.name === statement.name
-          )
+          ) || this.#typeAliases.some((alias) => alias.name === statement.name)
         ) {
           throw new SyntaxError(
             `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
           );
         }
         this.#unionTypes.push(statement);
+        continue;
+      }
+      if (statement.kind === "typeAlias") {
+        if (scope !== "module") {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: Ducklang type aliases must be module-level`,
+          );
+        }
+        const duplicate = this.#typeAliases.some((alias) =>
+          alias.name === statement.name
+        ) || this.#unionTypes.some((declaration) =>
+          declaration.name === statement.name
+        );
+        if (duplicate) {
+          throw new SyntaxError(
+            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+          );
+        }
+        this.#typeAliases.push(statement);
         continue;
       }
       if (statement.kind === "import") {
