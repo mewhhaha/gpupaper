@@ -549,7 +549,8 @@ class DucklangInference {
           type = functionType([structType], structType);
         } else if (
           expression.modulePath === "duck:prelude" &&
-          expression.exportName === "struct"
+          (expression.exportName === "struct" ||
+            expression.exportName === "packed")
         ) {
           type = unitType;
         } else {
@@ -1381,6 +1382,7 @@ class DucklangInference {
     if (reference.name === "Bool") return booleanType;
     if (reference.name === "Text") return textType;
     if (reference.name === "Unit") return unitType;
+    if (/^U(?:[1-9]|[12][0-9]|3[01])$/.test(reference.name)) return i32Type;
     if (
       this.#structTypes.some((declaration) =>
         declaration.name === reference.name

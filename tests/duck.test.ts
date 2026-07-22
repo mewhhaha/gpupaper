@@ -372,6 +372,13 @@ Deno.test("Ducklang preserves the largest signed i64 literal through Wasm", asyn
   assertEquals(await runMain(artifact.wasm), 9_223_372_036_854_775_807n);
 });
 
+Deno.test("Ducklang packed integer literals must fit their declared width", async () => {
+  await assertRejects(
+    () => compileModuleSource("test.duck", "let value = 8u3\nvalue\n"),
+    /packed integer literal 8u3 does not fit an unsigned 3-bit i32 carrier/,
+  );
+});
+
 Deno.test("unsupported Ducklang operators fail during typed IR elaboration", async () => {
   await assertRejects(
     () => compileModuleSource("test.duck", "40 || 2\n", { gpuMode: "off" }),

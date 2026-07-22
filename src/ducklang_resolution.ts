@@ -881,7 +881,74 @@ class DucklangResolver {
           span: expression.span,
         };
       }
-      case "call":
+      case "call": {
+        if (
+          expression.callee.kind === "field" &&
+          expression.callee.product.kind === "reference"
+        ) {
+          const structName = expression.callee.product.name.text;
+          const memberName = expression.callee.fieldName;
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === structName
+          );
+          const argument = expression.arguments[0];
+          if (declaration !== undefined && argument !== undefined) {
+            if (
+              memberName === "pack" &&
+              expression.arguments.length === 1 && argument.kind === "product"
+            ) {
+              return {
+                ...argument,
+                productKind: "tuple",
+                nominalType: structName,
+                values: argument.values.map((value) =>
+                  this.#resolveExpression(value, environment, currentRecursive)
+                ),
+              };
+            }
+            const updatedField = memberName.startsWith("with_")
+              ? memberName.slice("with_".length)
+              : undefined;
+            if (
+              updatedField !== undefined && expression.arguments.length === 1 &&
+              argument.kind === "product" && argument.values.length === 2
+            ) {
+              return {
+                kind: "recordUpdate",
+                product: this.#resolveExpression(
+                  argument.values[0],
+                  environment,
+                  currentRecursive,
+                ),
+                fields: [{
+                  name: updatedField,
+                  value: this.#resolveExpression(
+                    argument.values[1],
+                    environment,
+                    currentRecursive,
+                  ),
+                  span: expression.span,
+                }],
+                span: expression.span,
+              };
+            }
+            if (
+              expression.arguments.length === 1 &&
+              declaration.fields.some((field) => field.name === memberName)
+            ) {
+              return {
+                kind: "field",
+                product: this.#resolveExpression(
+                  argument,
+                  environment,
+                  currentRecursive,
+                ),
+                fieldName: memberName,
+                span: expression.span,
+              };
+            }
+          }
+        }
         return {
           ...expression,
           callee: this.#resolveExpression(
@@ -893,6 +960,7 @@ class DucklangResolver {
             this.#resolveExpression(argument, environment, currentRecursive)
           ),
         };
+      }
       case "index":
         return {
           ...expression,

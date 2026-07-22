@@ -1272,6 +1272,20 @@ function lowerTokenExpression(
       }
       return { kind: "integer64", value, span };
     }
+    const packedInteger = cursor.text.match(/^([0-9]+)u([1-9][0-9]*)$/);
+    if (packedInteger !== null) {
+      const value = Number.parseInt(packedInteger[1], 10);
+      const width = Number.parseInt(packedInteger[2], 10);
+      if (
+        !Number.isSafeInteger(value) || width > 31 ||
+        value >= 2 ** width
+      ) {
+        throw new SyntaxError(
+          `${file}:${cursor.span.start}: packed integer literal ${cursor.text} does not fit an unsigned ${width}-bit i32 carrier`,
+        );
+      }
+      return { kind: "integer", value, span };
+    }
     if (!/^[0-9]+(?:i32)?$/.test(cursor.text)) {
       throw unsupported(file, cursor, `numeric literal ${cursor.text}`);
     }
