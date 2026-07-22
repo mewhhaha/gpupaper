@@ -7,11 +7,10 @@ It accepts a deliberately small Haskell-like language, runs selected compiler
 work through WebGPU, and emits a validated WebAssembly module whose `main`
 export returns an `i32`.
 
-An experimental Ducklang frontend has two explicit layers. A Baba-generated Wasm
-parser accepts the complete vendored Ducklang examples corpus. A smaller
-handwritten source-to-core bridge lowers the scalar subset into the same typed
-core, WebGPU type-equality experiment, compile-time evaluator, FCG, and Wasm
-emitter as the Haskell-like frontend.
+The Ducklang frontend uses a Baba-generated Wasm parser for the complete
+vendored examples corpus. Its executable scalar slice follows an independent
+Ducklang pipeline: Baba cursor, source AST, symbol resolution, typed IR,
+GPU-assisted equality checking, compile-time evaluation, FCG, and Wasm.
 
 This is a research artifact, not a GHC frontend. Its purpose is to make the
 architectural claims executable and falsifiable before expanding the language.
@@ -106,9 +105,8 @@ fixtures, and imported dependencies. `deno task duck:grammar` regenerates the
 Baba grammar and reviewed conflict policy from the vendored Tree-sitter grammar
 snapshot.
 
-Syntax acceptance is not yet semantic compilation. The current source-to-core
-bridge remains a smaller executable slice that recognizes header-free pure
-programs with:
+Syntax acceptance is not yet complete semantic compilation. The typed IR and FCG
+currently lower a smaller executable slice of header-free pure programs with:
 
 - sequential `let`, `let rec`, `=` and `:=` bindings;
 - scalar `Int` and `Bool` values, `+`, `-`, `*`, and `==`;
@@ -116,10 +114,10 @@ programs with:
 - result-bearing blocks, `if`/`else if`/`else`, lexical capture, and explicit
   `comptime` expressions.
 
-Top-level rebinding is alpha-renamed into immutable declarations. Consequently,
-a function captures the binding generation visible where it is declared while
-later assignments remain visible to later declarations. This is valid for the
-admitted pure subset; effects require a sequencing representation instead.
+Every declaration, parameter, and rebinding receives a stable Ducklang symbol
+ID. Consequently, a function captures the binding visible where it is declared
+while later assignments remain visible to later declarations. This is valid for
+the admitted pure subset; effects require a sequencing representation instead.
 
 The copied Ducklang fixtures cover assignment shadowing, blocks, multi-argument
 functions, `else if`, and lexical capture. Additional fixtures exercise
@@ -130,8 +128,8 @@ explicit rejections, and the next backend work.
 `@mewhhaha/baba` 6.0.0 is pinned as the Duck parser generator and Wasm parser
 runtime. Portable contextual and fused DFA tokens replace the five external
 scanner distinctions and the few LR(1)-insufficient prefixes in the source
-grammar. The next milestone is Baba cursor lowering into a Duck-specific typed
-IR; only then can the full corpus proceed beyond parsing.
+grammar. Generated parser artifacts are checked in so ordinary compilation does
+not regenerate a five-megabyte parser plan.
 
 ## Important boundaries
 
@@ -184,10 +182,16 @@ source never becomes WGSL.
 ## Files
 
 - `src/syntax.ts`, `lexer.ts`, `parser.ts`: Haskell-like source boundary.
+- `src/ducklang_ast.ts`, `ducklang_parser.ts`: Baba cursor to Ducklang AST.
+- `src/ducklang_resolution.ts`, `ducklang_types.ts`: Ducklang symbols and typed
+  IR.
+- `src/ducklang_comptime.ts`, `ducklang_fcg.ts`: staged evaluation and FCG/Wasm
+  lowering without passing through the Haskell AST.
 - `grammar/duck.baba`, `grammar/duck.baba.json`: complete Duck syntax and its
   deterministic Wasm conflict policy.
-- `scripts/import_ducklang_grammar.ts`, `update_duck_conflicts.ts`: reproducible
-  Tree-sitter-to-Baba migration and reviewed LR policy generation.
+- `scripts/import_ducklang_grammar.ts`, `update_duck_conflicts.ts`,
+  `generate_ducklang_parser.ts`: reproducible grammar migration, LR policy, and
+  parser artifacts.
 - `tests/ducklang_syntax.test.ts`: all 118 vendored Ducklang sources through the
   generated Wasm parser.
 - `src/resolution.ts`, `types.ts`: CPU reference frontend and FTCG equality

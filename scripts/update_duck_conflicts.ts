@@ -20,6 +20,15 @@ const initial = compile(grammar, {
   targets: ["wasm"],
   wasm: { parserStateLimit: 100_000 },
 });
+const initialError = initial.diagnostics.find((diagnostic) =>
+  diagnostic.severity !== "warning" &&
+  diagnostic.severity !== "information" &&
+  diagnostic.code !== "RUNTIME_PARSER_SHIFT_REDUCE_CONFLICT" &&
+  diagnostic.code !== "RUNTIME_PARSER_REDUCE_REDUCE_CONFLICT"
+);
+if (initialError !== undefined) {
+  throw new Error(`${initialError.code}: ${initialError.message}`);
+}
 const resolutions = new Map<string, Resolution>();
 addConflictResolutions(initial.diagnostics, resolutions);
 
@@ -30,6 +39,16 @@ while (true) {
     metadata,
     wasm: { parserStateLimit: 100_000 },
   });
+  const compileError = result.diagnostics.find((diagnostic) =>
+    diagnostic.severity !== "warning" &&
+    diagnostic.severity !== "information" &&
+    diagnostic.code !== "RUNTIME_PARSER_CONFLICT_METADATA" &&
+    diagnostic.code !== "RUNTIME_PARSER_SHIFT_REDUCE_CONFLICT" &&
+    diagnostic.code !== "RUNTIME_PARSER_REDUCE_REDUCE_CONFLICT"
+  );
+  if (compileError !== undefined) {
+    throw new Error(`${compileError.code}: ${compileError.message}`);
+  }
   let changed = false;
   for (const diagnostic of result.diagnostics) {
     if (diagnostic.code !== "RUNTIME_PARSER_CONFLICT_METADATA") continue;

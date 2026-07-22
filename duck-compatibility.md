@@ -2,8 +2,8 @@
 
 This frontend follows the production shapes in Ducklang's grammar. The syntax
 and backend milestones are deliberately separate: Baba owns complete syntax
-acceptance, while the existing scalar bridge demonstrates that an admitted
-subset can target the shared GPU-assisted compiler pipeline.
+acceptance, while an independent Ducklang typed IR demonstrates that an admitted
+subset can target the GPU-assisted compiler pipeline.
 
 The compatibility fixtures were copied from the sibling `binned` working tree
 under its MIT license. The notice is preserved in
@@ -31,7 +31,7 @@ source text remains available to cursor lowering.
 
 The generated standalone Wasm parser accepts all 118 vendored `.duck` files.
 This establishes syntax compatibility, not type checking or execution parity.
-The admitted grammar below describes the transitional scalar backend bridge.
+The admitted grammar below describes the executable typed-IR slice.
 
 ## Admitted grammar
 
@@ -55,29 +55,27 @@ Newlines and semicolons terminate statements. `//` comments are ignored. Integer
 literals may be unsuffixed or use `i32`. Operator precedence matches the
 corresponding Ducklang productions for the admitted operators.
 
-## Lowering invariants
+## Pipeline invariants
 
-- Every top-level Duck binding becomes a pure core value declaration.
-- Rebindings receive deterministic internal generations such as `factor__duck2`;
-  uses are rewritten to the generation visible at that source position.
-- `=` emits a pure, unreachable-branch type witness that unifies the previous
-  and new generations; `:=` omits that witness so its generation may have a
-  different type.
-- A top-level arrow becomes a direct core function. Captured top-level values
-  become dependency edges, so no runtime closure is needed for this case.
-- Local scalar bindings become nested core `let` expressions.
-- Multi-argument calls become curried applications in the source AST and are
-  recovered as saturated direct calls by FCG lowering.
-- Duck `==` admits the existing integer equality primitive during inference;
-  generated Wasm still contains the ordinary `i32.eq` instruction.
-- Explicit `comptime` uses the same bounded CPU/WebGPU bytecode evaluation as
-  the Haskell-like frontend.
+- Baba cursor spans are preserved on every Ducklang AST and typed-IR node.
+- Every module binding, parameter, and local binding receives a stable numeric
+  symbol; references retain that identity instead of relying on rewritten text.
+- `=` adds an equality between the preceding and replacement symbol types; `:=`
+  deliberately permits a new type.
+- Ducklang type inference remains the CPU oracle and records every equality in
+  the term format independently checked by the WebGPU solver.
+- A top-level arrow becomes a direct Ducklang FCG function. Captured module
+  scalars become zero-argument direct calls, so this case needs no closure.
+- Multi-argument calls remain multi-argument operations through the AST, typed
+  IR, and FCG.
+- Explicit `comptime` uses the same bounded CPU/WebGPU bytecode evaluator as the
+  Haskell-like frontend, without passing through its AST.
 
 ## Explicitly rejected grammar families
 
 | Duck grammar family                                    | Required compiler representation                            |
 | ------------------------------------------------------ | ----------------------------------------------------------- |
-| `const` and compile-time functions                     | dependency-aware staged environment and specialization      |
+| `const` parameters and compile-time functions          | dependency-aware staged environment and specialization      |
 | numeric widths other than signed i32                   | typed scalar FCG operations and additional Wasm value types |
 | `/`, `%`, comparisons, logic, custom fixity            | corresponding typed primitive operations                    |
 | strings, characters, arrays, products, structs, unions | memory layout and aggregate FCG values                      |
@@ -96,7 +94,6 @@ reinterpreted as Haskell-like source.
 
 The copied Ducklang programs compile to validated Wasm: arithmetic/shadowing
 returns 42, functions/blocks returns 42, `else if` returns 42, and lexical
-capture returns 43. This demonstrates that the shared core is already usable as
-a second frontend target for pure scalar programs. It does not yet demonstrate
-that the core is sufficient for all of Ducklang; the rejection table is the
-concrete growth plan.
+capture returns 43. They reach Wasm through Ducklang's own AST, symbol resolver,
+typed IR, and FCG. The rejection table is the concrete growth plan for the
+remaining language families.

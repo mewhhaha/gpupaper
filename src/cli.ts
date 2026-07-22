@@ -150,9 +150,13 @@ function experimentReport(
     experimentA_cpuOracle: {
       types: artifact.finalTypes,
       equalityConstraints: artifact.inferred.equalities.length,
-      dependencyStrata: artifact.inferred.resolution.strata.map((stratum) =>
-        stratum.map((declaration) => declaration.name.text)
-      ),
+      dependencyStrata: artifact.language === "haskell"
+        ? artifact.inferred.resolution.strata.map((stratum) =>
+          stratum.map((declaration) => declaration.name.text)
+        )
+        : artifact.inferred.bindings.map((binding) => [
+          `${binding.symbol.text}#${binding.symbol.id}`,
+        ]),
     },
     experimentB_webGpuEquality: artifact.gpuTypeResult ??
       { status: "disabled" },
@@ -168,7 +172,8 @@ function experimentReport(
       interactions: result.interactions,
       rules: Object.fromEntries(result.rules),
     })),
-    experimentF_haskellToWasm: {
+    experimentF_languageToWasm: {
+      language: artifact.language,
       functions: artifact.fcg.functions.map((function_) => ({
         name: function_.name,
         operations: function_.operations.length,

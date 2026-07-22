@@ -1,51 +1,49 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 
-Deno.test("Duck arithmetic and assignment shadowing returns 42", async () => {
+Deno.test("Ducklang arithmetic and assignment shadowing returns 42", async () => {
   await assertDuckFixture("01_arithmetic_and_shadowing.duck", 42);
 });
 
-Deno.test("Duck multi-argument functions and local blocks return 42", async () => {
+Deno.test("Ducklang multi-argument functions and local blocks return 42", async () => {
   await assertDuckFixture("06_functions_and_blocks.duck", 42);
 });
 
-Deno.test("Duck else-if chains return 42", async () => {
+Deno.test("Ducklang else-if chains return 42", async () => {
   await assertDuckFixture("10_else_if.duck", 42);
 });
 
-Deno.test("Duck closures capture the binding generation at declaration", async () => {
+Deno.test("Ducklang functions capture the module symbol visible at declaration", async () => {
   await assertDuckFixture("closure_capture.duck", 43);
 });
 
-Deno.test("Duck top-level recursive functions call their own core declaration", async () => {
+Deno.test("Ducklang recursive functions resolve calls to their own symbol", async () => {
   await assertDuckFixture("recursion.duck", 42);
 });
 
-Deno.test("Duck comptime expressions are evaluated before Wasm lowering", async () => {
+Deno.test("Ducklang comptime expressions are evaluated before FCG lowering", async () => {
   const artifact = await compileDuckFixture("comptime.duck");
   assertEquals(await runMain(artifact.wasm), 42);
   assertEquals(artifact.comptimeCpuValues, [{ kind: "integer", value: 42 }]);
 });
 
-Deno.test("unsupported Duck operators fail before type inference", async () => {
+Deno.test("unsupported Ducklang operators fail during typed IR elaboration", async () => {
   await assertRejects(
     () => compileModuleSource("test.duck", "40 / 2\n", { gpuMode: "off" }),
-    /Duck operator \/ is not yet represented by the shared scalar core/,
+    /Ducklang operator \/ has no typed IR operation/,
   );
 });
 
-Deno.test("Duck const reports its missing compile-time dependency semantics", async () => {
-  await assertRejects(
-    () =>
-      compileModuleSource(
-        "test.duck",
-        "const answer = 42\nanswer\n",
-        { gpuMode: "off" },
-      ),
-    /Duck const bindings require compile-time dependency evaluation/,
+Deno.test("Ducklang const bindings retain their compile-time stage", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    "const answer = 42\nanswer\n",
+    { gpuMode: "off" },
   );
+  assertEquals(artifact.inferred.bindings[0].stage, "compileTime");
+  assertEquals(await runMain(artifact.wasm), 42);
 });
 
-Deno.test("Duck equals assignment preserves the preceding binding type", async () => {
+Deno.test("Ducklang equals assignment preserves the preceding binding type", async () => {
   await assertRejects(
     () =>
       compileModuleSource(
@@ -53,11 +51,11 @@ Deno.test("Duck equals assignment preserves the preceding binding type", async (
         "let value = 1\nvalue = true\nvalue\n",
         { gpuMode: "off" },
       ),
-    /cannot unify Int with Bool|cannot unify Bool with Int/,
+    /cannot unify Ducklang i32 with bool|cannot unify Ducklang bool with i32/,
   );
 });
 
-Deno.test("Duck local equals assignment preserves the preceding binding type", async () => {
+Deno.test("Ducklang local equals assignment preserves the preceding binding type", async () => {
   await assertRejects(
     () =>
       compileModuleSource(
@@ -71,16 +69,41 @@ choose(0)
 `,
         { gpuMode: "off" },
       ),
-    /cannot unify Int with Bool|cannot unify Bool with Int/,
+    /cannot unify Ducklang i32 with bool|cannot unify Ducklang bool with i32/,
   );
 });
 
-Deno.test("Duck colon-equals assignment permits a new binding type", async () => {
+Deno.test("Ducklang colon-equals assignment permits a new binding type", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let value = 1\nvalue := true\nif value { 42 } else { 0 }\n",
     { gpuMode: "off" },
   );
+  assertEquals(await runMain(artifact.wasm), 42);
+});
+
+Deno.test("Ducklang compilation exposes typed IR and FCG stages", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    "let add = (left, right) => left + right\nadd(20, 22)\n",
+    { gpuMode: "off" },
+  );
+  assertEquals(artifact.language, "ducklang");
+  assertEquals(artifact.finalTypes, ["add#0 :: i32 -> i32 -> i32"]);
+  assertEquals(artifact.inferred.equalities.length > 0, true);
+  assertEquals(
+    artifact.fcg.functions.map((function_) => function_.name),
+    ["add__duck0", "main"],
+  );
+});
+
+Deno.test("Ducklang type and comptime jobs reach the GPU differential passes", async () => {
+  const artifact = await compileModuleSource(
+    "test.duck",
+    "let answer = comptime 6 * 7\nanswer\n",
+  );
+  assertEquals(artifact.gpuTypeResult === undefined, false);
+  assertEquals(artifact.comptimeGpuResult === undefined, false);
   assertEquals(await runMain(artifact.wasm), 42);
 });
 

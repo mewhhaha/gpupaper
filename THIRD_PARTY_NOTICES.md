@@ -2,9 +2,9 @@
 
 The Ducklang compatibility fixtures under `examples/duck` and the corpus
 snapshot under `examples/binned`, together with
-`grammar/ducklang-tree-sitter-grammar.json`, include source copied from the sibling
-`binned` repository. The compiler also depends on the Baba parser generator and
-Wasm runtime. Both repositories use the following license.
+`grammar/ducklang-tree-sitter-grammar.json`, include source copied from the
+sibling `binned` repository. The compiler also depends on the Baba parser
+generator and Wasm runtime. Both repositories use the following license.
 
 MIT License
 

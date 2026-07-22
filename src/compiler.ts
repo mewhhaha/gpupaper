@@ -3,6 +3,15 @@ import {
   type ComptimeValue,
   evaluateModuleComptime,
 } from "./comptime.ts";
+import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
+import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
+import { parseDucklangModule } from "./ducklang_parser.ts";
+import { resolveDucklangModule } from "./ducklang_resolution.ts";
+import {
+  formatDucklangType,
+  inferDucklangModule,
+  type TypedDucklangModule,
+} from "./ducklang_types.ts";
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
 import { type GpuSolveResult, solveTypeEqualitiesOnGpu } from "./gpu_solver.ts";
 import {
@@ -10,7 +19,6 @@ import {
   type InteractionResult,
 } from "./interaction.ts";
 import { expandMacros, type MacroExpansionReport } from "./macros.ts";
-import { parseDuckModule } from "./duck_parser.ts";
 import { parseModule } from "./parser.ts";
 import { formatScheme, inferModule, type InferredModule } from "./types.ts";
 
@@ -30,10 +38,9 @@ export type CompilationTimings = {
   readonly wasmMilliseconds: number;
 };
 
-export type CompilationArtifact = {
+type SharedCompilationArtifact = {
   readonly wasm: Uint8Array;
   readonly fcg: FcgModule;
-  readonly inferred: InferredModule;
   readonly initialTypes: readonly string[];
   readonly finalTypes: readonly string[];
   readonly gpuTypeResult: GpuSolveResult | undefined;
@@ -44,16 +51,54 @@ export type CompilationArtifact = {
   readonly timings: CompilationTimings;
 };
 
+export type HaskellCompilationArtifact = SharedCompilationArtifact & {
+  readonly language: "haskell";
+  readonly inferred: InferredModule;
+};
+
+export type DucklangCompilationArtifact = SharedCompilationArtifact & {
+  readonly language: "ducklang";
+  readonly inferred: TypedDucklangModule;
+};
+
+export type CompilationArtifact =
+  | HaskellCompilationArtifact
+  | DucklangCompilationArtifact;
+
+export function compileModuleSource(
+  file: `${string}.hs`,
+  source: string,
+  options?: CompilationOptions,
+): Promise<HaskellCompilationArtifact>;
+export function compileModuleSource(
+  file: `${string}.duck`,
+  source: string,
+  options?: CompilationOptions,
+): Promise<DucklangCompilationArtifact>;
+export function compileModuleSource(
+  file: string,
+  source: string,
+  options?: CompilationOptions,
+): Promise<CompilationArtifact>;
 export async function compileModuleSource(
   file: string,
   source: string,
   options: CompilationOptions = {},
 ): Promise<CompilationArtifact> {
+  if (file.endsWith(".duck")) {
+    return await compileDucklangModuleSource(file, source, options);
+  }
+  return await compileHaskellModuleSource(file, source, options);
+}
+
+async function compileHaskellModuleSource(
+  file: string,
+  source: string,
+  options: CompilationOptions,
+): Promise<HaskellCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
-  const parsed = file.endsWith(".duck")
-    ? parseDuckModule(file, source)
-    : parseModule(file, source);
+  const parsed = parseModule(file, source);
   const parseMilliseconds = performance.now() - parseStart;
 
   const macroStart = performance.now();
@@ -102,6 +147,7 @@ export async function compileModuleSource(
   const lowered = lowerToFcgAndWasm(finalInference);
   const wasmMilliseconds = performance.now() - wasmStart;
   return {
+    language: "haskell",
     wasm: lowered.wasm,
     fcg: lowered.fcg,
     inferred: finalInference,
@@ -127,6 +173,86 @@ export async function compileModuleSource(
       gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds,
+      wasmMilliseconds,
+    },
+  };
+}
+
+async function compileDucklangModuleSource(
+  file: string,
+  source: string,
+  options: CompilationOptions,
+): Promise<DucklangCompilationArtifact> {
+  const gpuMode = options.gpuMode ?? "auto";
+  const parseStart = performance.now();
+  const parsed = await parseDucklangModule(file, source);
+  const parseMilliseconds = performance.now() - parseStart;
+
+  const initialTypeStart = performance.now();
+  const resolved = resolveDucklangModule(parsed);
+  const initialInference = inferDucklangModule(resolved);
+  const initialTypeMilliseconds = performance.now() - initialTypeStart;
+  const initialTypes = initialInference.bindings.map((binding) =>
+    `${binding.symbol.text}#${binding.symbol.id} :: ${
+      formatDucklangType(binding.type)
+    }`
+  );
+
+  const gpuTypeStart = performance.now();
+  const gpuTypeResult = gpuMode === "off"
+    ? undefined
+    : await solveTypeEqualitiesOnGpu(initialInference.equalities);
+  const gpuTypeMilliseconds = performance.now() - gpuTypeStart;
+  if (gpuTypeResult?.status === "constructorClash") {
+    throw new TypeError(
+      `${file}:${gpuTypeResult.sourceStart}: GPU solver found constructor clash ${gpuTypeResult.left} versus ${gpuTypeResult.right}`,
+    );
+  }
+  if (gpuTypeResult?.status === "infiniteType") {
+    throw new TypeError(
+      `${file}: GPU solver found infinite type class ${gpuTypeResult.representative}`,
+    );
+  }
+  if (gpuTypeResult?.status === "unavailable" && gpuMode === "required") {
+    throw new Error(gpuTypeResult.reason);
+  }
+
+  const comptimeStart = performance.now();
+  const comptime = await evaluateDucklangComptime(
+    initialInference,
+    gpuMode !== "off",
+  );
+  if (comptime.gpu?.status === "unavailable" && gpuMode === "required") {
+    throw new Error(comptime.gpu.reason);
+  }
+  const comptimeMilliseconds = performance.now() - comptimeStart;
+
+  const wasmStart = performance.now();
+  const lowered = lowerDucklangToFcgAndWasm(comptime.module);
+  const wasmMilliseconds = performance.now() - wasmStart;
+  return {
+    language: "ducklang",
+    wasm: lowered.wasm,
+    fcg: lowered.fcg,
+    inferred: comptime.module,
+    initialTypes,
+    finalTypes: initialTypes,
+    gpuTypeResult,
+    comptimeCpuValues: comptime.cpuValues,
+    comptimeGpuResult: comptime.gpu,
+    interactionResults: [],
+    macros: {
+      invocationCount: 0,
+      generatedCount: 0,
+      wasmByteCount: 0,
+    },
+    timings: {
+      parseMilliseconds,
+      macroMilliseconds: 0,
+      initialTypeMilliseconds,
+      gpuTypeMilliseconds,
+      comptimeMilliseconds,
+      finalTypeMilliseconds: 0,
       wasmMilliseconds,
     },
   };

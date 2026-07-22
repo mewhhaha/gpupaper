@@ -1,4 +1,9 @@
-import type { Expression, Module, ValueDeclaration } from "./syntax.ts";
+import type {
+  Expression,
+  Module,
+  SourceSpan,
+  ValueDeclaration,
+} from "./syntax.ts";
 
 export type ComptimeValue =
   | { readonly kind: "integer"; readonly value: number }
@@ -21,6 +26,32 @@ export type ComptimeBatchResult =
     readonly status: "unavailable";
     readonly reason: string;
     readonly backend: "gpu";
+  };
+
+export type ScalarComptimeExpression =
+  | {
+    readonly kind: "integer";
+    readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "boolean";
+    readonly value: boolean;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "binary";
+    readonly operator: "+" | "-" | "*" | "==";
+    readonly left: ScalarComptimeExpression;
+    readonly right: ScalarComptimeExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "if";
+    readonly condition: ScalarComptimeExpression;
+    readonly thenBranch: ScalarComptimeExpression;
+    readonly elseBranch: ScalarComptimeExpression;
+    readonly span: SourceSpan;
   };
 
 const opcode = {
@@ -96,9 +127,17 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
 export function compileComptimeExpression(
   expression: Expression,
 ): BytecodeProgram {
+  return compileScalarComptimeExpression(
+    toScalarComptimeExpression(expression),
+  );
+}
+
+export function compileScalarComptimeExpression(
+  expression: ScalarComptimeExpression,
+): BytecodeProgram {
   const opcodes: number[] = [];
   const operands: number[] = [];
-  const emit = (node: Expression): ComptimeValue["kind"] => {
+  const emit = (node: ScalarComptimeExpression): ComptimeValue["kind"] => {
     switch (node.kind) {
       case "integer":
         opcodes.push(opcode.constant);
@@ -135,18 +174,42 @@ export function compileComptimeExpression(
         operands.push(0);
         return thenKind;
       }
-      case "comptime":
-        return emit(node.expression);
-      default:
-        throw new TypeError(
-          `${node.span.file}:${node.span.start}: compile-time bytecode requires a closed first-order expression; found ${node.kind}`,
-        );
     }
   };
   const resultKind = emit(expression);
   opcodes.push(opcode.halt);
   operands.push(0);
   return { opcodes, operands, resultKind, sourceStart: expression.span.start };
+}
+
+function toScalarComptimeExpression(
+  expression: Expression,
+): ScalarComptimeExpression {
+  switch (expression.kind) {
+    case "integer":
+    case "boolean":
+      return expression;
+    case "binary":
+      return {
+        ...expression,
+        left: toScalarComptimeExpression(expression.left),
+        right: toScalarComptimeExpression(expression.right),
+      };
+    case "if":
+      return {
+        kind: "if",
+        condition: toScalarComptimeExpression(expression.condition),
+        thenBranch: toScalarComptimeExpression(expression.thenBranch),
+        elseBranch: toScalarComptimeExpression(expression.elseBranch),
+        span: expression.span,
+      };
+    case "comptime":
+      return toScalarComptimeExpression(expression.expression);
+    default:
+      throw new TypeError(
+        `${expression.span.file}:${expression.span.start}: compile-time bytecode requires a closed first-order expression; found ${expression.kind}`,
+      );
+  }
 }
 
 export function evaluateBytecodeOnCpu(

@@ -1,21 +1,19 @@
-import { generate, type GeneratedBundle, parseMetadata } from "@mewhhaha/baba";
 import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 
-const grammarUrl = new URL("../grammar/duck.baba", import.meta.url);
-const metadataUrl = new URL("../grammar/duck.baba.json", import.meta.url);
+const parserWasmUrl = new URL(
+  "../grammar/generated/parser.wasm",
+  import.meta.url,
+);
+const parserPlanUrl = new URL(
+  "../grammar/generated/parser.plan",
+  import.meta.url,
+);
 const corpusUrl = new URL("../examples/binned/", import.meta.url);
 
 Deno.test("Baba generated Wasm accepts every Ducklang source file", async () => {
-  const grammar = await Deno.readTextFile(grammarUrl);
-  const metadata = parseMetadata(await Deno.readTextFile(metadataUrl));
-  const bundle = generate(grammar, {
-    name: "duck",
-    metadata,
-    wasm: { parserStateLimit: 100_000 },
-  });
   const parser = createParser({
-    bytes: binaryFile(bundle, "wasm/parser.wasm"),
-    plan: binaryFile(bundle, "wasm/parser.plan"),
+    bytes: await Deno.readFile(parserWasmUrl),
+    plan: await Deno.readFile(parserPlanUrl),
   });
 
   try {
@@ -77,15 +75,6 @@ async function collectDuckSources(directory: URL): Promise<URL[]> {
   return sources.sort((left, right) =>
     left.pathname.localeCompare(right.pathname)
   );
-}
-
-function binaryFile(bundle: GeneratedBundle, path: string): Uint8Array {
-  const file = bundle.files.find((candidate) => candidate.path === path);
-  if (file === undefined) throw new Error(`Baba bundle is missing ${path}`);
-  if (file.encoding !== "binary") {
-    throw new Error(`Baba bundle ${path} is ${file.encoding}; expected binary`);
-  }
-  return file.content;
 }
 
 function assertEquals(actual: number, expected: number, subject: string): void {
