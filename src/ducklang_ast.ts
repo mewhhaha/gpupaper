@@ -33,6 +33,12 @@ export type DucklangEffectOperation = {
   readonly span: SourceSpan;
 };
 
+export type DucklangRecursiveBinding = {
+  readonly name: DucklangName;
+  readonly value: DucklangExpression;
+  readonly span: SourceSpan;
+};
+
 export type DucklangExpression =
   | {
     readonly kind: "integer";
@@ -166,6 +172,12 @@ export type DucklangStatement =
     readonly kind: "effectDeclaration";
     readonly name: string;
     readonly operations: readonly DucklangEffectOperation[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recursiveGroup";
+    readonly declarationKind: "let" | "const";
+    readonly bindings: readonly DucklangRecursiveBinding[];
     readonly span: SourceSpan;
   }
   | {

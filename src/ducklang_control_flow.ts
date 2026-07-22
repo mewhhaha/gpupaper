@@ -47,6 +47,14 @@ function lowerStatementExpressions(
         value: lowerExpression(statement.value),
         alternative: lowerExpression(statement.alternative),
       };
+    case "recursiveGroup":
+      return {
+        ...statement,
+        bindings: statement.bindings.map((binding) => ({
+          ...binding,
+          value: lowerExpression(binding.value),
+        })),
+      };
     case "productBinding":
       return { ...statement, value: lowerExpression(statement.value) };
     case "forRange":

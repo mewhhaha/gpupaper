@@ -41,6 +41,7 @@ const supportedSuccessPaths = new Set([
   "examples/functions/08_no_else_fallthrough.duck",
   "examples/functions/09_nested_control_flow.duck",
   "examples/functions/10_union_selected_closure.duck",
+  "examples/functions/11_mutual_recursion.duck",
   "examples/functions/12_let_else_return.duck",
   "examples/loops/01_range_sum.duck",
   "examples/loops/02_stepped_range.duck",

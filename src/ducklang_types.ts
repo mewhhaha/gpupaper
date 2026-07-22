@@ -312,11 +312,19 @@ class DucklangInference {
   ): readonly TypedDucklangBinding[] {
     const typed: TypedDucklangBinding[] = [];
     for (const binding of bindings) {
+      if (!binding.recursive) continue;
+      const type = this.#freshVariable();
+      environment.set(binding.symbol.id, type);
+      this.#symbolTypes.set(binding.symbol.id, type);
+    }
+    for (const binding of bindings) {
       const recursiveType = binding.recursive
-        ? this.#freshVariable()
+        ? environment.get(binding.symbol.id)
         : undefined;
-      if (recursiveType !== undefined) {
-        environment.set(binding.symbol.id, recursiveType);
+      if (binding.recursive && recursiveType === undefined) {
+        throw new Error(
+          `${this.#file}:${binding.span.start}: missing type for recursive Ducklang binding ${binding.symbol.text}#${binding.symbol.id}`,
+        );
       }
       const inferred = this.inferExpression(binding.value, environment);
       const bindingType = recursiveType ?? inferred.type;

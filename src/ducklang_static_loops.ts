@@ -143,6 +143,11 @@ function expandStatements(
       }
     }
     if (statement.kind === "unionBinding") values.delete(statement.name.text);
+    if (statement.kind === "recursiveGroup") {
+      for (const binding of statement.bindings) {
+        values.delete(binding.name.text);
+      }
+    }
     if (statement.kind === "productBinding") {
       for (const name of statement.names) {
         if (name !== undefined) values.delete(name.text);
@@ -174,6 +179,23 @@ function substituteStatement(
           replaceReferences,
         ),
       };
+    case "recursiveGroup": {
+      const groupValues = new Map(values);
+      for (const binding of statement.bindings) {
+        groupValues.delete(binding.name.text);
+      }
+      return {
+        ...statement,
+        bindings: statement.bindings.map((binding) => ({
+          ...binding,
+          value: substituteExpression(
+            binding.value,
+            groupValues,
+            replaceReferences,
+          ),
+        })),
+      };
+    }
     case "productBinding":
       return {
         ...statement,
@@ -465,6 +487,11 @@ function substituteStatementList(
       statement.kind === "unionBinding"
     ) {
       values.delete(statement.name.text);
+    }
+    if (statement.kind === "recursiveGroup") {
+      for (const binding of statement.bindings) {
+        values.delete(binding.name.text);
+      }
     }
     return substituted;
   });

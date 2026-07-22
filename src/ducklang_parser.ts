@@ -164,6 +164,41 @@ function lowerModuleStatement(
   if (statement.name === "binding_statement") {
     const value = lowerExpression(file, requiredField(statement, "value"));
     const bindingPattern = requiredField(statement, "name");
+    const children = statement.children();
+    const conjunctionIndices = children.flatMap((child, index) =>
+      child.type === "token" && child.text === "and" ? [index] : []
+    );
+    if (conjunctionIndices.length > 0) {
+      const bindings = [{
+        name: identifierName(file, bindingPattern, "recursive binding name"),
+        value,
+        span: spanFrom(sourceSpan(file, bindingPattern), value.span),
+      }];
+      for (const conjunctionIndex of conjunctionIndices) {
+        const name = children[conjunctionIndex + 1];
+        const groupedValue = children[conjunctionIndex + 3];
+        if (
+          name?.type !== "token" || name.kind !== "identifier" ||
+          groupedValue?.type !== "rule" || groupedValue.name !== "_expression"
+        ) {
+          throw unsupported(file, statement, "recursive binding group");
+        }
+        const loweredValue = lowerExpression(file, groupedValue);
+        bindings.push({
+          name: identifierName(file, name, "recursive binding name"),
+          value: loweredValue,
+          span: spanFrom(sourceSpan(file, name), loweredValue.span),
+        });
+      }
+      return {
+        kind: "recursiveGroup",
+        declarationKind: tokenField(statement, "kind")?.text === "const"
+          ? "const"
+          : "let",
+        bindings,
+        span: sourceSpan(file, statement),
+      };
+    }
     const unionPattern = findRule(bindingPattern, "union_pattern");
     if (unionPattern !== undefined) {
       const alternative = statement.field("alternative");

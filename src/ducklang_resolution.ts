@@ -257,6 +257,41 @@ class DucklangResolver {
     let result: ResolvedDucklangExpression | undefined;
 
     for (const [index, statement] of statements.entries()) {
+      if (statement.kind === "recursiveGroup") {
+        const names = new Set<string>();
+        const symbols = statement.bindings.map((binding) => {
+          if (names.has(binding.name.text)) {
+            throw new SyntaxError(
+              `${this.#file}:${binding.name.span.start}: duplicate Ducklang recursive binding ${binding.name.text}`,
+            );
+          }
+          names.add(binding.name.text);
+          return this.#declare(binding.name, scope);
+        });
+        for (const symbol of symbols) environment.set(symbol.text, symbol);
+        for (
+          const [bindingIndex, sourceBinding] of statement.bindings.entries()
+        ) {
+          const symbol = symbols[bindingIndex];
+          const binding = {
+            symbol,
+            previous: undefined,
+            recursive: true,
+            stage: statement.declarationKind === "const"
+              ? "compileTime"
+              : "runtime",
+            value: this.#resolveExpression(
+              sourceBinding.value,
+              environment,
+              symbol,
+            ),
+            span: sourceBinding.span,
+          } satisfies ResolvedDucklangBinding;
+          bindings.push(binding);
+          steps.push({ kind: "binding", binding });
+        }
+        continue;
+      }
       if (statement.kind === "effectDeclaration") {
         if (scope !== "module") {
           throw new SyntaxError(
