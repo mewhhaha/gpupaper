@@ -50,6 +50,10 @@ export async function parseDucklangModule(
       const statement = lowerModuleStatement(file, cursor);
       return statement === undefined ? [] : [statement];
     });
+    const moduleHeader = findRule(result.cursor, "module_header");
+    const parameterList = moduleHeader === undefined
+      ? undefined
+      : findRule(moduleHeader, "parameter_list");
     const statements = loweredStatements.flatMap((statement) => {
       if (
         statement.kind !== "binding" ||
@@ -97,6 +101,19 @@ export async function parseDucklangModule(
     });
     return {
       file,
+      parameters: parameterList === undefined
+        ? []
+        : parameterList.children().flatMap((parameter) =>
+          parameter.type === "rule" && parameter.name === "parameter"
+            ? [
+              identifierName(
+                file,
+                requiredField(parameter, "name"),
+                "module parameter",
+              ),
+            ]
+            : []
+        ),
       statements,
       span: sourceSpan(file, result.cursor),
     };
@@ -199,23 +216,58 @@ function lowerModuleStatement(
   }
   if (statement.name === "module_return_statement") {
     const fieldBlock = findRule(statement, "field_block");
-    const fields = fieldBlock?.children().filter((child): child is RuleCursor =>
+    if (fieldBlock === undefined) {
+      throw unsupported(file, statement, "module return object");
+    }
+    const fields = fieldBlock.children().filter((child): child is RuleCursor =>
       child.type === "rule" && child.name === "shape_field"
-    ) ?? [];
+    );
     const field = fields.length === 1 ? fields[0] : undefined;
     if (
-      field === undefined ||
+      field !== undefined &&
       identifierName(
           file,
           requiredField(field, "name"),
           "module return field",
-        ).text !== "result"
+        ).text === "result"
     ) {
-      throw unsupported(file, statement, "module result return");
+      return {
+        kind: "expression",
+        expression: lowerExpression(file, requiredField(field, "value")),
+        span: sourceSpan(file, statement),
+      };
     }
     return {
       kind: "expression",
-      expression: lowerExpression(file, requiredField(field, "value")),
+      expression: {
+        kind: "record",
+        fields: fieldBlock.children().flatMap((child) => {
+          if (child.type !== "rule") {
+            return [];
+          }
+          if (child.name === "shape_field") {
+            return [{
+              name: identifierName(
+                file,
+                requiredField(child, "name"),
+                "module return field",
+              ).text,
+              value: lowerExpression(file, requiredField(child, "value")),
+              span: sourceSpan(file, child),
+            }];
+          }
+          if (child.name !== "shorthand_field") {
+            return [];
+          }
+          const name = identifierName(file, child, "module return field");
+          return [{
+            name: name.text,
+            value: { kind: "reference" as const, name, span: name.span },
+            span: sourceSpan(file, child),
+          }];
+        }),
+        span: sourceSpan(file, fieldBlock),
+      },
       span: sourceSpan(file, statement),
     };
   }
@@ -761,13 +813,7 @@ function lowerExpression(
           file,
           rightOperands[index],
         );
-        right = {
-          kind: "binary",
-          operator: operators[index].text,
-          left: right,
-          right: next,
-          span: spanFrom(right.span, next.span),
-        };
+        right = lowerBinaryExpression(operators[index].text, right, next);
       }
       if (leadingOperator === "=>") {
         return {
@@ -1568,6 +1614,22 @@ function lowerBinaryExpression(
   }
   if (operator === "|>") {
     return { kind: "call", callee: right, arguments: [left], span };
+  }
+  if (operator === "=>" && left.kind === "reference") {
+    return {
+      kind: "function",
+      recursive: false,
+      parameters: [left.name],
+      body: right,
+      span,
+    };
+  }
+  if (left.kind === "function") {
+    return {
+      ...left,
+      body: lowerBinaryExpression(operator, left.body, right),
+      span,
+    };
   }
   return { kind: "binary", operator, left, right, span };
 }

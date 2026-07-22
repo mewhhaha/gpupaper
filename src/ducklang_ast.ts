@@ -328,6 +328,7 @@ export type DucklangStatement =
 
 export type DucklangModule = {
   readonly file: string;
+  readonly parameters: readonly DucklangParameter[];
   readonly statements: readonly DucklangStatement[];
   readonly span: SourceSpan;
 };
