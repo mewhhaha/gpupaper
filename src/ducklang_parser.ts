@@ -340,9 +340,15 @@ function lowerModuleStatement(
       requiredField(statement, "name"),
       "binding pattern",
     );
-    const name = declaredTypeName === undefined
-      ? parsedName
-      : { ...parsedName, declaredType: declaredTypeName };
+    const name = {
+      ...parsedName,
+      ...(declaredTypeName === undefined
+        ? {}
+        : { declaredType: declaredTypeName }),
+      ...(tokenField(statement, "linear") !== undefined
+        ? { linear: true }
+        : {}),
+    };
     const kind = tokenField(statement, "kind");
     return {
       kind: "binding",
@@ -1811,6 +1817,7 @@ function arrowParameters(
     const parameterName = linear ? separator : name;
     return {
       text: parameterName.text,
+      ...(linear ? { linear: true } : {}),
       ...(annotation === undefined ? {} : {
         declaredType: annotation.text,
       }),

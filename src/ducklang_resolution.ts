@@ -16,6 +16,7 @@ export type DucklangSymbol = {
   readonly scope: "module" | "parameter" | "local";
   readonly declaredType?: string;
   readonly identityPolymorphic?: boolean;
+  readonly linear?: boolean;
   readonly span: SourceSpan;
 };
 
@@ -255,6 +256,7 @@ export function resolveDucklangModule(
     "module",
     module.span,
   );
+  resolver.requireLinearUses();
   return {
     file: module.file,
     bindings: resolved.bindings,
@@ -274,6 +276,7 @@ class DucklangResolver {
   readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
   readonly #effects = new Map<string, readonly DucklangEffectOperation[]>();
   readonly #structTypes: ResolvedDucklangStructType[] = [];
+  readonly #linearUseCounts = new Map<number, number>();
 
   constructor(file: string) {
     this.#file = file;
@@ -297,6 +300,16 @@ class DucklangResolver {
 
   get structTypes(): ResolvedDucklangModule["structTypes"] {
     return this.#structTypes;
+  }
+
+  requireLinearUses(): void {
+    for (const symbol of this.#symbols) {
+      if (!symbol.linear) continue;
+      if ((this.#linearUseCounts.get(symbol.id) ?? 0) > 0) continue;
+      throw new TypeError(
+        `${this.#file}:${symbol.span.start}: linear Ducklang value ${symbol.text} was not consumed`,
+      );
+    }
   }
 
   resolveStatements(
@@ -933,6 +946,15 @@ class DucklangResolver {
             `${this.#file}:${expression.span.start}: unknown Ducklang name ${expression.name.text}`,
           );
         }
+        if (symbol.linear) {
+          const uses = (this.#linearUseCounts.get(symbol.id) ?? 0) + 1;
+          if (uses > 1) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: linear Ducklang value ${symbol.text} was already consumed`,
+            );
+          }
+          this.#linearUseCounts.set(symbol.id, uses);
+        }
         return { kind: "reference", symbol, span: expression.span };
       }
       case "function": {
@@ -1228,6 +1250,7 @@ class DucklangResolver {
       ...(name.identityPolymorphic === undefined
         ? {}
         : { identityPolymorphic: name.identityPolymorphic }),
+      ...(name.linear === undefined ? {} : { linear: name.linear }),
       span: name.span,
     } satisfies DucklangSymbol;
     this.#symbols.push(symbol);

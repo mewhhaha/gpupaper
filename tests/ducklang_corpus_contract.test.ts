@@ -1,5 +1,6 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
+  type DucklangCompileFailureContract,
   type DucklangSuccessContract,
   type DucklangTrapContract,
   parseDucklangCorpusContract,
@@ -91,6 +92,10 @@ const supportedTrapPaths = new Set([
   "examples/failures/traps/02_text_out_of_bounds.duck",
   "examples/failures/traps/03_struct_index_out_of_bounds.duck",
 ]);
+const supportedCompileFailurePaths = new Set([
+  "examples/failures/compile/01_reused_linear_value.duck",
+  "examples/failures/compile/02_unused_linear_value.duck",
+]);
 
 Deno.test("the vendored Ducklang contract accounts for the complete corpus", async () => {
   const contract = parseDucklangCorpusContract(
@@ -149,6 +154,21 @@ Deno.test("the implemented Ducklang trap baseline rejects its declared runs", as
   for (const example of supported) await assertTrapContract(example);
 });
 
+Deno.test("the implemented Ducklang compile-failure baseline reports its declared errors", async () => {
+  const contract = parseDucklangCorpusContract(
+    await Deno.readTextFile(contractUrl),
+  );
+  const supported = contract.compileFailures.filter((example) =>
+    supportedCompileFailurePaths.has(example.path)
+  );
+  assertEquals(
+    supported.length,
+    supportedCompileFailurePaths.size,
+    "supported compile-failure fixture count",
+  );
+  for (const example of supported) await assertCompileFailureContract(example);
+});
+
 async function assertSuccessContract(
   example: DucklangSuccessContract,
 ): Promise<void> {
@@ -187,6 +207,28 @@ async function assertTrapContract(
     return;
   }
   throw new Error(`${example.path} returned instead of trapping`);
+}
+
+async function assertCompileFailureContract(
+  example: DucklangCompileFailureContract,
+): Promise<void> {
+  const sourceUrl = contractSourceUrl(example.path);
+  try {
+    await compileModuleSource(
+      sourceUrl.pathname,
+      await Deno.readTextFile(sourceUrl),
+      { gpuMode: "off" },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes(example.message)) return;
+    throw new Error(
+      `${example.path} expected ${JSON.stringify(example.message)}, received ${
+        JSON.stringify(message)
+      }`,
+    );
+  }
+  throw new Error(`${example.path} compiled instead of failing`);
 }
 
 function contractSourceUrl(path: string): URL {
