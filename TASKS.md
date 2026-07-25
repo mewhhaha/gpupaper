@@ -725,7 +725,20 @@ operation reaches flat Core without an assigned layout strategy.
       rather than counting them, since a count passes just as well when the
       analysis reports the wrong symbol.
 
-- [ ] Lift nested functions to top-level code identities.
+- [x] Lift nested functions to top-level code identities. Lifting already
+      existed but was gated by name to loop-lowering artifacts, `$loop_` and
+      `$range_loop_`, so a user-written nested function was left in place and
+      the backend refused it with "local Ducklang function inner requires
+      closure conversion". The gate is now a property rather than a prefix: a
+      nested function is lifted when it is only ever called, never used as a
+      value. `inner` becomes its own top-level binding with its capture appended
+      to its parameters and supplied at each call site, so a function called
+      twice answers 85 rather than losing a capture at one site.
+
+      A nested function used as a value is deliberately not lifted, because appending
+      captures would leave an arity its uses do not match. Such a function stays where it
+      is and the backend refuses it with "cannot represent i32 -> i32", which is what the
+      closure-environment item below is for.
 - [ ] Build typed closure environments from captured values.
 - [ ] Preserve direct calls when the callee is statically known.
 - [ ] Lower first-class calls to a code-table index plus environment pointer.

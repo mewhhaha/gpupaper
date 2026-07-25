@@ -117,8 +117,9 @@ function liftGeneratedFunctions(
   for (const step of expression.steps) {
     if (
       step.kind !== "binding" ||
-      !isGeneratedControlFunction(step.binding) ||
-      step.binding.value.kind !== "function"
+      step.binding.value.kind !== "function" ||
+      (!isGeneratedControlFunction(step.binding) &&
+        !isOnlyDirectlyCalled(expression, step.binding.symbol.id))
     ) {
       continue;
     }
@@ -244,6 +245,46 @@ function renameSymbolReferences(
     expression,
     (child) => renameSymbolReferences(child, symbolId, replacement),
   );
+}
+
+/**
+ * Whether a nested function is only ever called, never used as a value.
+ *
+ * Lifting appends a function's captures to its parameter list and adds matching
+ * arguments at each call site. That is sound for a symbol that only appears as a
+ * callee. A symbol also used as a value would need a closure carrying the captures,
+ * which is a later item, so such a function is left where it is rather than lifted
+ * into something whose arity no longer matches its uses.
+ *
+ * Loop-lowering artifacts skip this check because they are generated as call-only by
+ * construction.
+ */
+function isOnlyDirectlyCalled(
+  scope: TypedDucklangExpression,
+  symbolId: number,
+): boolean {
+  let onlyCalled = true;
+  const visit = (expression: TypedDucklangExpression): void => {
+    if (!onlyCalled) return;
+    if (expression.kind === "call") {
+      // The callee position is fine; anything else in the call is not.
+      if (
+        !(expression.callee.kind === "reference" &&
+          expression.callee.symbol.id === symbolId)
+      ) {
+        visit(expression.callee);
+      }
+      for (const argument of expression.arguments) visit(argument);
+      return;
+    }
+    if (expression.kind === "reference" && expression.symbol.id === symbolId) {
+      onlyCalled = false;
+      return;
+    }
+    visitChildren(expression, visit);
+  };
+  visitChildren(scope, visit);
+  return onlyCalled;
 }
 
 function isGeneratedControlFunction(binding: TypedDucklangBinding): boolean {

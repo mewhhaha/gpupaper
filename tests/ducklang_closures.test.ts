@@ -47,30 +47,48 @@ Deno.test("Ducklang specialization removes a higher-order function", async () =>
   assertEquals(await run("apply.duck", source), 42);
 });
 
-Deno.test("Ducklang specialization leaves a nested capturing function unhandled", async () => {
+Deno.test("Ducklang lifts a call-only nested capturing function", async () => {
   const source =
     "let outer = base => {\n  let inner = value => base + value\n  inner(2)\n}\nouter(40)\n";
   const { before, after } = await specialize(source);
 
-  // The nested function is not lifted to a top-level binding, because lifting is
-  // closure conversion's job and this pass does not do it.
+  // Lifting is directly observable: `inner` becomes its own top-level binding, with
+  // its capture appended to its parameters and supplied at the call site.
   assertEquals(before, ["outer#0:function"]);
-  assertEquals(after, ["outer#0:function"]);
+  assertEquals(after, ["outer#0:function", "inner#2:function"]);
 
-  // So the program does not compile at all: the backend asks for the closure
-  // conversion that Phase 6 has yet to implement. Recorded here as the current
-  // boundary rather than as a passing program.
+  // It used to fail with "local Ducklang function inner requires closure conversion".
+  assertEquals(await run("nested.duck", source), 42);
+});
+
+Deno.test("Ducklang lifts a nested function called more than once", async () => {
+  // Both calls must receive the capture, so a lift that appended arguments at only one
+  // site would give a different answer rather than failing.
+  assertEquals(
+    await run(
+      "twice.duck",
+      "let outer = base => {\n  let inner = value => base + value\n  inner(2) + inner(3)\n}\nouter(40)\n",
+    ),
+    85,
+  );
+});
+
+Deno.test("Ducklang does not lift a nested function used as a value", async () => {
+  // Lifting appends captures to the parameter list, so a symbol also used as a value
+  // would end up with an arity its uses do not match. Such a function is left in place
+  // and the backend refuses it, which is what the closure-environment item is for.
   let message = "";
   try {
-    await run("nested.duck", source);
+    await run(
+      "value.duck",
+      "let outer = base => {\n  let inner = value => base + value\n  inner\n}\nlet f = outer(40)\nf(2)\n",
+    );
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
   }
-  if (
-    !/local Ducklang function inner requires closure conversion/.test(message)
-  ) {
+  if (!/cannot represent i32 -> i32/.test(message)) {
     throw new Error(
-      `expected a closure-conversion diagnostic, received ${
+      `expected a first-class function rejection, received ${
         JSON.stringify(message)
       }`,
     );
