@@ -403,6 +403,19 @@ behavior no longer depends on statement concatenation order.
       `deno task duck:contract`, because regeneration rewrites the whole file and the
       local copy has drifted broadly from upstream (352 insertions, 188 deletions).
 
+      Nesting and generic application are resolved, which the first attempt at this
+      item did not do and which measurement caught before the claim was made. A field
+      whose type is another struct records only the bare name `Inner`, and a generic
+      field records the parameter name `a`, so neither can be laid out from the
+      payload alone and both were refused. `reflectDucklangTypes` now resolves the
+      layout against the declaration table with the type arguments substituted in, and
+      carries the result in the payload, because that context exists there and nowhere
+      downstream. A written struct name is enriched the same way, so `@describe_type(Outer)`
+      and `@describe_type(@type_of(o))` agree; they disagreed at first, with only the
+      reflected path carrying a layout. A recursive struct is left unenriched rather
+      than rejected during the pass, since type pattern matching over one is legitimate
+      and never asks for a size; asking for its size still refuses.
+
       The old note also blamed the wrong cause for the `I64` case. It said an `I64`
       field failed "because the size is compared against the value's own type".
       Measurement says otherwise: `let c: C = [.x = 1]` fails to unify i64 with i32

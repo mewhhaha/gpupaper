@@ -68,6 +68,66 @@ Deno.test("Ducklang reflection sees a buffer field as its handle", async () => {
   );
 });
 
+Deno.test("Ducklang reflection resolves nested and generic fields", async () => {
+  // A struct field whose type is another struct records only the bare name `Inner`,
+  // and a generic field records the parameter name `a`. Neither can be laid out from
+  // the payload alone, so both were refused until the layout was resolved against the
+  // declaration table with the arguments substituted in.
+  assertEquals(
+    await run(
+      `${prelude}type Inner = struct { .x = I32 }\ntype Outer = struct { .i = Inner, .y = I32 }\nlet o: Outer = [.i = [.x = 1], .y = 2]\nlet d = @describe_type(@type_of(o))\nd.size\n`,
+    ),
+    8,
+  );
+  // Two nested structs, so the nested size is multiplied rather than counted once.
+  assertEquals(
+    await run(
+      `${prelude}type Inner = struct { .x = I32, .y = I32 }\ntype Outer = struct { .a = Inner, .b = Inner }\nlet o: Outer = [.a = [.x = 1, .y = 2], .b = [.x = 3, .y = 4]]\nlet d = @describe_type(@type_of(o))\nd.size\n`,
+    ),
+    16,
+  );
+  // The type argument decides the size, so the same constructor answers differently.
+  assertEquals(
+    await run(
+      `${prelude}type Box a = struct { .value = a }\nlet b: Box I32 = [.value = 1]\nlet d = @describe_type(@type_of(b))\nd.size\n`,
+    ),
+    4,
+  );
+  assertEquals(
+    await run(
+      `${prelude}type Inner = struct { .x = I32, .y = I32 }\ntype Box a = struct { .value = a }\nlet b: Box Inner = [.value = [.x = 1, .y = 2]]\nlet d = @describe_type(@type_of(b))\nd.size\n`,
+    ),
+    8,
+  );
+});
+
+Deno.test("Ducklang reflection answers a written name like a reflected type", async () => {
+  // Describing `Outer` directly and describing the type of an `Outer` value have to
+  // agree. They did not at first: only the reflected path carried a resolved layout,
+  // so the same struct answered through one and was refused through the other.
+  assertEquals(
+    await run(
+      `${prelude}type Inner = struct { .x = I32 }\ntype Outer = struct { .i = Inner, .y = I32 }\nlet d = @describe_type(Outer)\nd.size\n`,
+    ),
+    8,
+  );
+});
+
+Deno.test("Ducklang reflection refuses a recursive struct's size", async () => {
+  // A struct that reaches itself has no finite layout, and Core layout planning
+  // rejects the same shape. Refusing matters more than the wording: answering any
+  // number here would be the stub's mistake again.
+  let message = "";
+  try {
+    await run(
+      `${prelude}type Loop = struct { .self = Loop }\nlet d = @describe_type(Loop)\nd.size\n`,
+    );
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  assertEquals(/no reflected layout|has no direct layout/.test(message), true);
+});
+
 Deno.test("Ducklang reflected layouts pad and align like Core", () => {
   assertEquals(ducklangReflectedLayout({ kind: "builtin", name: "I32" }), {
     size: 4,

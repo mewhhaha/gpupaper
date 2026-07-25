@@ -921,6 +921,32 @@ function foldStaticBinary(
   };
 }
 
+/**
+ * The `$TypeDescription` value `@describe_type` answers with.
+ *
+ * The struct is synthesised by the parser whenever a source mentions
+ * `@describe_type`, and inference types the call as that struct, so this builds the
+ * product that matches rather than introducing a shape of its own.
+ */
+function typeDescription(
+  size: number,
+  expression: TypedDucklangExpression,
+): TypedDucklangExpression {
+  return {
+    kind: "product",
+    productKind: "tuple",
+    values: [{
+      kind: "integer",
+      value: size,
+      type: { kind: "constructor", name: "i32", arguments: [] },
+      span: expression.span,
+    }],
+    nominalType: "$TypeDescription",
+    type: expression.type,
+    span: expression.span,
+  };
+}
+
 function foldStaticIntrinsic(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
@@ -1196,15 +1222,30 @@ function foldStaticIntrinsic(
     // the same layout rules Core uses rather than from arithmetic invented here.
     // A builtin carries its bare source name while a struct carries a JSON payload,
     // so the shape has to be decided before parsing rather than after.
-    const reflected: DucklangReflectedType = arguments_[0].modulePath ===
-        "duck:type/builtin"
-      ? { kind: "builtin", name: arguments_[0].exportName }
-      : {
-        kind: "struct",
-        fields: (JSON.parse(arguments_[0].exportName) as {
-          readonly fields?: readonly { readonly type: string }[];
-        }).fields ?? [],
-      };
+    if (arguments_[0].modulePath === "duck:type/builtin") {
+      return typeDescription(
+        ducklangReflectedLayout({
+          kind: "builtin",
+          name: arguments_[0].exportName,
+        }).size,
+        expression,
+      );
+    }
+    const payload = JSON.parse(arguments_[0].exportName) as {
+      readonly fields?: readonly { readonly type: string }[];
+      readonly layout?: { readonly size: number };
+    };
+    // `reflectDucklangTypes` precomputes the layout when it has the declaration table,
+    // which is the only way a nested or generic field can be answered. A bare struct
+    // name resolved straight to an intrinsic carries no layout, so scalar fields are
+    // laid out from the payload and anything else is refused rather than guessed.
+    if (payload.layout !== undefined) {
+      return typeDescription(payload.layout.size, expression);
+    }
+    const reflected: DucklangReflectedType = {
+      kind: "struct",
+      fields: payload.fields ?? [],
+    };
     return {
       kind: "product",
       productKind: "tuple",
