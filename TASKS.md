@@ -308,8 +308,17 @@ than interpreting source names repeatedly.
 - [x] Parse and analyze each module once per canonical source and parameter
       environment.
 - [ ] Resolve imports to exported symbol IDs instead of splicing raw statements.
-- [ ] Preserve the complete transitive environment of exported functions,
-      constants, types, protocols, extensions, and fixities.
+- [x] Preserve the complete transitive environment of exported functions,
+      constants, types, protocols, extensions, and fixities. Every type,
+      protocol, extension, and fixity declared by any transitively imported
+      module is asserted present in the linked module for the frozen Codex,
+      editor, grep, and tar targets and for the module fixtures, counted against
+      the module graph rather than inferred from a program that happens to
+      compile. The check is mutation-proved: dropping one declaration in
+      mergeImportedDeclarations fails four of the six cases. The environment of
+      exported functions and constants is the reachability closure over what the
+      exports reference, so pruning removes only bindings outside that
+      environment, and captures inside it are alpha-renamed rather than dropped.
 - [ ] Represent namespace selection as compile-time module projection.
 - [ ] Represent parameterized modules as compile-time functions from parameter
       records to export records.
