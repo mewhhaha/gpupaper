@@ -825,7 +825,15 @@ operation reaches flat Core without an assigned layout strategy.
       a runtime value so the call cannot fold away, which would leave nothing to
       inspect.
 - [ ] Lower first-class calls to a code-table index plus environment pointer.
-- [ ] Add `call_indirect` signature validation.
+- [ ] Add `call_indirect` signature validation. Measured scope: none of the
+      machinery exists yet. `src/wasm.ts` has no table section, no element
+      section, and no `call_indirect` instruction, so there is nothing to
+      validate against — a signature check needs the table's element type and
+      the declared type index, and neither is emitted. Nor is anything asking
+      for it: `tests/ducklang_direct_calls.test.ts` asserts the graph contains
+      no indirect dispatch at all. So this follows the two items above it rather
+      than being independent, and writing the validation first would mean
+      testing it against hand-built modules no Ducklang program can produce.
 - [x] Preserve recursive and mutually recursive closure groups. A self-recursive
       function survives as its own code identity and calls itself rather than
       being unrolled. A mutually recursive `even`/`odd` pair keeps both members
