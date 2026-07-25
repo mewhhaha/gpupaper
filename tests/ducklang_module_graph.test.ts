@@ -42,6 +42,17 @@ Deno.test("Ducklang open imports do not leak private bindings", async () => {
   );
 });
 
+/**
+ * A struct field offset must come from the declaration the annotation names, not
+ * from whichever same-named declaration happens to be emitted first. The
+ * application declares `Point = struct { .b, .a }`, so `.a` is index 1 and
+ * `[1, 2]` must project 2. Importing a module that declares its own unrelated
+ * `Point = struct { .a, .b }` must not change that offset.
+ */
+Deno.test("Ducklang imports do not change a struct field offset", async () => {
+  assertEquals(await runFixture("point_layout_app.duck"), 2);
+});
+
 Deno.test("Ducklang module graph shares a transitive dependency", async () => {
   const sources = new Map([
     [
