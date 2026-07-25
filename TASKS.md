@@ -367,7 +367,14 @@ behavior no longer depends on statement concatenation order.
 - [ ] Evaluate type constructors and canonicalize applications to `TypeId`s.
 - [ ] Implement structural type reflection over canonical type values.
 - [ ] Specialize `const` parameters and `forall` type parameters.
-- [ ] Represent protocol evidence as a compile-time dictionary.
+- [x] Represent protocol evidence as a compile-time dictionary. Evidence is
+      resolved during elaboration and nothing survives to dispatch. With runtime
+      parameters, so nothing can be folded, `Add.add` on `I32` lowers to the
+      `i32.+` instruction itself and `Invert.invert` on `Bool` to `i32.==`,
+      neither as a call. No indirect-call or table machinery appears in the
+      graph, and no protocol or method name reaches it. A first version of this
+      test used literals, which constant-folded to a single `const` and would
+      have proved nothing about dispatch.
 - [ ] Select extension implementations using canonical receiver types. Works
       within one file: an alias selects the same implementation as its
       underlying type, and two structurally identical but nominally distinct
