@@ -76,7 +76,7 @@ function validateStatements(statements: readonly DucklangStatement[]): void {
 function validateExpression(expression: DucklangExpression): void {
   if (expression.kind === "scratch") {
     const result = blockResult(expression.body);
-    if (result !== undefined && allocatesText(result)) {
+    if (result !== undefined && escapesScratch(result, expression.body)) {
       throw new TypeError(
         `${expression.span.file}:${expression.span.start}: allocated value cannot leave scratch region`,
       );
@@ -92,6 +92,68 @@ function validateExpression(expression: DucklangExpression): void {
       validateExpression(value);
     }
   }
+}
+
+/**
+ * Whether a scratch block's result carries a value allocated inside the region.
+ *
+ * Checking only whether the result is itself an allocation caught
+ * `scratch { "a" <> "b" }` and missed every indirection: binding the allocation
+ * first and returning the name escaped, and so did returning it inside an
+ * aggregate. Both leave the region with a pointer into it.
+ *
+ * So the result is searched for an allocation anywhere within it, and a reference
+ * to a name the block bound to an allocation counts as one.
+ */
+function escapesScratch(
+  result: DucklangExpression,
+  body: DucklangExpression,
+): boolean {
+  const allocatedNames = new Set<string>();
+  if (body.kind === "block") {
+    for (const statement of body.statements) {
+      if (statement.kind !== "binding") continue;
+      if (containsAllocation(statement.value, allocatedNames)) {
+        allocatedNames.add(statement.name.text);
+      }
+    }
+  }
+  return containsAllocation(result, allocatedNames);
+}
+
+function containsAllocation(
+  expression: DucklangExpression,
+  allocatedNames: ReadonlySet<string>,
+): boolean {
+  if (allocatesText(expression)) return true;
+  if (
+    expression.kind === "reference" && allocatedNames.has(expression.name.text)
+  ) {
+    return true;
+  }
+  // A nested scratch owns its own region, so its result cannot carry this one's
+  // allocations outward.
+  if (expression.kind === "scratch") return false;
+  // Freezing is the sanctioned way out: a frozen value is immutable and no longer
+  // tied to the region's lifetime, which is how
+  // examples/showcases/05_linear_host_session.duck exports a scratch allocation.
+  if (expression.kind === "unary" && expression.operator === "freeze") {
+    return false;
+  }
+  for (const value of Object.values(expression)) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (isExpression(child) && containsAllocation(child, allocatedNames)) {
+          return true;
+        }
+      }
+      continue;
+    }
+    if (isExpression(value) && containsAllocation(value, allocatedNames)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function returnedBorrow(expression: DucklangExpression): string | undefined {

@@ -641,7 +641,18 @@ nested source functions.
       today, is what this checkbox needs.
 - [ ] Prove freeze transitions and erase or lower them according to layout.
 - [ ] Lower scratch blocks to region enter, allocate, cleanup, and exit edges.
-- [ ] Prevent region-backed values from escaping their region.
+- [x] Prevent region-backed values from escaping their region. The rule existed
+      and the corpus tested it, but it only asked whether a scratch block's
+      result was itself an allocation, so every indirection slipped past:
+      binding the allocation and returning the name escaped, and so did
+      returning it inside an aggregate. Both hand out a pointer into a region
+      that is about to go away. The result is now searched for an allocation
+      anywhere within it, and a reference to a name the block bound to an
+      allocation counts as one. Freezing remains the sanctioned way out, since a
+      frozen value is detached from the region's lifetime, which is how
+      `examples/showcases/05_linear_host_session.duck` exports one. A nested
+      scratch owns its own region and does not carry the outer one's
+      allocations.
 - [ ] Elaborate source-defined handlers through handler passing or CPS.
 - [ ] Enforce affine or linear use of resumptions.
 - [ ] Lower unresolved module-boundary effects to typed host calls.

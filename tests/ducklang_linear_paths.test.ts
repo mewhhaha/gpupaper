@@ -108,6 +108,60 @@ Deno.test("Ducklang still allows two shared borrows of one owner", async () => {
   );
 });
 
+/**
+ * Scratch region escapes.
+ *
+ * The rule existed and the corpus tested it, but it only asked whether the scratch
+ * block's result was *itself* an allocation. Every indirection slipped past:
+ * binding the allocation and returning the name escaped, and so did returning it
+ * inside an aggregate. Both hand out a pointer into a region that is about to go
+ * away.
+ *
+ * Freezing is the sanctioned way out, which is how
+ * examples/showcases/05_linear_host_session.duck exports a scratch allocation, so
+ * that case is pinned alongside the rejections.
+ */
+Deno.test("Ducklang rejects a scratch allocation returned directly", async () => {
+  await assertRejects(
+    'let escaped = scratch {\n  "a" <> "b"\n}\n@len(escaped)\n',
+    /allocated value cannot leave scratch region/,
+  );
+});
+
+Deno.test("Ducklang rejects a scratch allocation returned through a binding", async () => {
+  await assertRejects(
+    'let escaped = scratch {\n  let inner = "a" <> "b"\n  inner\n}\n@len(escaped)\n',
+    /allocated value cannot leave scratch region/,
+  );
+});
+
+Deno.test("Ducklang rejects a scratch allocation returned inside an aggregate", async () => {
+  await assertRejects(
+    'let escaped = scratch {\n  ("a" <> "b", 1)\n}\n1\n',
+    /allocated value cannot leave scratch region/,
+  );
+});
+
+Deno.test("Ducklang allows a frozen scratch allocation to leave", async () => {
+  // Freezing detaches the value from the region's lifetime. Without this the rule
+  // would reject the corpus session example.
+  assertEquals(
+    await run(
+      'let message = scratch {\n  let temporary: Text = "hel" <> "lo"\n  freeze temporary\n}\n@len(message)\n',
+    ),
+    5,
+  );
+});
+
+Deno.test("Ducklang allows a scratch block returning a scalar", async () => {
+  assertEquals(
+    await run(
+      "let value = scratch {\n  let inner = 1 + 2\n  inner\n}\nvalue\n",
+    ),
+    3,
+  );
+});
+
 async function run(source: string): Promise<number | bigint> {
   const artifact = await compileModuleSource("linear.duck", source, {
     gpuMode: "off",
