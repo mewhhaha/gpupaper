@@ -878,7 +878,20 @@ host-boundary plans before flattening.
 - [ ] Structure reducible CFGs into Wasm regions and diagnose or dispatch-lower
       irreducible CFGs.
 - [ ] Stackify values, assign locals, and calculate branch signatures.
-- [ ] Calculate binary sizes and offsets with count-scan-write passes.
+- [x] Calculate binary sizes and offsets with count-scan-write passes. The plan
+      carries `length` atoms with a dependency level, and `emitWasmPlanOnCpu`
+      resolves them level by level before writing any byte, so a nested length
+      is settled before the length containing it. A code section nests a body
+      length inside a section length, which is why the plan reports more than
+      one dependency level, and emitting the same plan twice gives identical
+      bytes.
+
+      `WebAssembly.validate` is what checks a length is right, chosen by measurement. A
+      hand-written walk over declared section sizes looked like the obvious verifier, but
+      corrupting a section length by one byte still walked cleanly in one direction even
+      after adding section-id checks, so it would have given false confidence; the engine
+      rejects the same module in both directions. The pre-existing plan test compares CPU
+      against GPU emission and returns early with no adapter, so it asserted nothing here.
 - [ ] Emit byte-identical CPU and GPU Wasm for every admitted target.
 
 Exit criterion: the GPU consumes only validated flat Core and performs no source
