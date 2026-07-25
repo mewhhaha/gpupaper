@@ -474,7 +474,14 @@ terminators, and edge arguments.
       primitives with equivalent validation.
 - [ ] Lower generic source `List` through ordinary sum/product layout; do not
       add list opcodes.
-- [ ] Add deterministic out-of-bounds traps for buffer and aggregate indexing.
+- [x] Add deterministic out-of-bounds traps for buffer and aggregate indexing.
+      Pinned from both sides rather than only asserting failure: a `Text` index
+      of 0 and 2 into `"abc"` return, 3 and 99 trap; a struct index of 0 and 1
+      return 20 and 22, 2 and 7 trap. The trap must carry a Wasm trap message,
+      so a host-side failure does not count, and the same index reports the same
+      trap on repeated runs. The corpus contract also covers the two fixtures
+      but accepts any thrown error, so it cannot separate a bounds trap from an
+      unrelated failure.
 - [ ] Replace opaque managed text handles where a linear-memory representation
       is required, while retaining an adapter for host strings.
 
