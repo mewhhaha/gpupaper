@@ -600,7 +600,19 @@ protocol search, extension search, or compile-time closures.
       `examples/failures/traps/04_zero_range_step.duck`, whose recorded input is
       step 0; the static half now has its own test.
 - [ ] Lower collection loops after protocol specialization, without a
-      collection-specific backend loop.
+      collection-specific backend loop. Measured: the collection-specific loop
+      is still load-bearing, and only for `Bytes`. `lowerIndexedBufferLoop` in
+      `src/ducklang_control_flow.ts` special-cases a collection whose declared
+      type is `Bytes` or `Text`. Stubbing it to return `undefined` leaves a
+      `Text` loop and a loop over a source-defined collection working through
+      the protocol, both giving the same answers, but a `Bytes` loop then fails
+      with "dynamic Ducklang forCollection requires loop IR lowering" even with
+      `duck:prelude/iterators` imported so `IntoIterator` is in scope.
+
+      So the asymmetry is the finding: `Text` already goes through protocol
+      specialization and `Bytes` does not. Closing this item means making the `Bytes`
+      route match `Text`'s, after which the special case can be deleted, rather than
+      writing a new loop lowering.
 - [ ] Replace recursive-function loop lowering after Core covers its tests.
 
 Milestones:
