@@ -386,13 +386,24 @@ behavior no longer depends on statement concatenation order.
       fails with "cannot unify Ducklang i64 with i32" because the size is
       compared against the value's own type.
 
-      The corpus depends on the constant. `examples/compile_time/19_include_and_type_of.duck`
-      records 18, which is a 17-byte include plus this 1; real reflection over
-      `struct { .length = I32 }` makes it 21. So implementing this must change that
-      recorded expectation, and anyone who instead adjusts the implementation to keep
-      18 passing will have entrenched the stub. `tests/ducklang_type_reflection.test.ts`
-      pins the stub deliberately so a correct pass breaks it and the replacement is
-      visible.
+      Correcting an earlier note here: this is **not** blocked on changing a vendored
+      expectation, which was the stated reason it stayed unclaimed. The local copies
+      `examples/binned/manifest.ts`, `examples/binned/contract.json`, and
+      `examples/binned/README.md` all record 18, but the upstream source of truth
+      `../binned/examples/manifest.ts:189` records `run(21)`. `config.json` is 17 bytes
+      and `struct { .length = I32 }` is 4, so 21 is the correct answer and the local 18
+      is the stub's wrong size 1 frozen into a stale vendored copy. Implementing real
+      reflection therefore *converges* with the contract rather than diverging from it,
+      and `deno task duck:contract` regenerates 18 to 21 on its own.
+
+      That regeneration is not a free action: it rewrites the whole file, and the local
+      copy has drifted broadly from upstream (352 insertions, 188 deletions), so adopting
+      it wholesale pulls in unrelated changes. Updating the single entry by hand is the
+      contained move, and it is a correction rather than an accommodation.
+
+      Anyone who instead adjusts the implementation to keep 18 passing will have
+      entrenched the stub. `tests/ducklang_type_reflection.test.ts` pins the stub
+      deliberately so a correct pass breaks it and the replacement is visible.
 
       `planDucklangCoreLayouts` already computes real sizes, alignments, and offsets,
       but over Core types, so this needs reflection moved out of the parser into a
