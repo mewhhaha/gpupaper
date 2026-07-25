@@ -759,6 +759,17 @@ The real fix is to compute such a binding once, which means lowering it to a
 local or a global instead of a thunk, and that is the change to make before the
 Phase 7 host-boundary items.
 
+Two attempts failed and are recorded so they are not repeated. Rejecting an
+effectful binding read more than once fires on correct corpus programs, so it
+trades a silent miscompile for a false rejection. Hoisting the effectful
+bindings into `main` as a block, which is what fixed the equivalent problem in
+Core lowering, makes this worse rather than better: `main` then performs the
+effect once in the block while every reference still calls the zero-argument
+shape, so a two-read program went from two host calls to three and from 101
+to 200. The block lowering does register a local and `case "reference"` checks
+locals before shapes, so those references are not matching the block binding's
+symbol. Establishing why is the prerequisite for a third attempt.
+
 Recorded by the failing tests in `tests/ducklang_effect_binding.test.ts`, which
 must not be made green by weakening their assertions.
 
