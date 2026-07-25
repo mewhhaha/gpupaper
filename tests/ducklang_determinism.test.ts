@@ -144,6 +144,37 @@ for (const [target, host, expected] of recordedWasmBytes) {
   );
 }
 
+/**
+ * A range step of zero never terminates, so it must never reach the backend. A
+ * literal zero is rejected statically; a step known only at runtime becomes a
+ * trap edge instead. The dynamic half is covered by the corpus contract trap for
+ * examples/failures/traps/04_zero_range_step.duck, whose recorded input is
+ * step 0. This asserts the static half, which had no test.
+ *
+ * It runs through compileModuleSource rather than Core directly, because the
+ * rejection lives in expandStaticDucklangLoops, which only the full elaboration
+ * chain invokes.
+ */
+Deno.test("Ducklang rejects a static zero range step", async () => {
+  let message = "";
+  try {
+    await compileModuleSource(
+      "zero_step.duck",
+      "let total = 0\nfor value in 0..10 by 0 {\n  total = total + value\n}\ntotal\n",
+      { gpuMode: "off" },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (!/Ducklang static range step cannot be zero/.test(message)) {
+    throw new Error(
+      `expected a static zero-step rejection, received ${
+        JSON.stringify(message)
+      }`,
+    );
+  }
+});
+
 async function compile(
   target: string,
   host: string | undefined,

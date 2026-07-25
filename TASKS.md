@@ -420,7 +420,13 @@ protocol search, extension search, or compile-time closures.
       the fall-through path uses.
 - [ ] Preserve nested loop and match control boundaries.
 - [ ] Lower dynamic ranges after evaluating start, end, and step once.
-- [ ] Reject a static zero range step and emit a dynamic zero-step trap edge.
+- [x] Reject a static zero range step and emit a dynamic zero-step trap edge. A
+      literal zero step is rejected by `expandStaticDucklangLoops` with
+      "Ducklang static range step cannot be zero"; a step known only at runtime
+      lowers to a trap edge carrying "Ducklang range step cannot be zero". The
+      dynamic half is covered by the corpus trap for
+      `examples/failures/traps/04_zero_range_step.duck`, whose recorded input is
+      step 0; the static half now has its own test.
 - [ ] Lower collection loops after protocol specialization, without a
       collection-specific backend loop.
 - [ ] Replace recursive-function loop lowering after Core covers its tests.

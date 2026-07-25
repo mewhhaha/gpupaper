@@ -126,6 +126,13 @@ Deno.test("Core preserves a nested branch boundary", async () => {
   );
 });
 
+/**
+ * A range step of zero never terminates, so it must never reach the backend. A
+ * literal zero is a static error; a step that is only known at runtime becomes a
+ * trap edge instead. The dynamic half is covered by the corpus contract trap for
+ * examples/failures/traps/04_zero_range_step.duck; this asserts the static half,
+ * which had no test.
+ */
 async function lower(
   source: string,
   functionName: string,
