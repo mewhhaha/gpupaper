@@ -112,3 +112,122 @@ function assertThrows(action: () => unknown, pattern: RegExp): void {
   }
   throw new Error(`expected action to throw ${pattern}`);
 }
+
+/**
+ * Every cross-reference is an integer ID, and every range is validated.
+ *
+ * The overlapping-range case above covers one of the validator's checks. These cover the
+ * rest, each by breaking exactly one field of a package the validator accepts: a string ID
+ * past the table, columns of unequal length, a value too wide for a u32 word, and a range
+ * that starts where the previous one did not end.
+ *
+ * Without them a validator that only checked overlap would pass, which is most of the
+ * reason to have this item at all.
+ */
+
+function acceptedPackage() {
+  return flattenFcgModule({
+    functions: [{
+      name: "main",
+      parameters: ["a"],
+      localCount: 1,
+      operations: [
+        { opcode: "const", operands: [1], sourceStart: 0, regionId: 0 },
+        { opcode: "drop", operands: [], sourceStart: 1, regionId: 0 },
+      ],
+    }],
+    constructorTags: new Map(),
+  });
+}
+
+Deno.test("flat FCG validation accepts a well-formed package", () => {
+  validateFlatFcgPackage(acceptedPackage());
+});
+
+Deno.test("flat FCG validation rejects a string ID past the table", () => {
+  const flat = acceptedPackage();
+  assertRejects(
+    () =>
+      validateFlatFcgPackage({
+        ...flat,
+        functionNameIds: Uint32Array.from([flat.stringStarts.length + 5]),
+      }),
+    /uses string ID \d+; package contains \d+ strings/,
+  );
+});
+
+Deno.test("flat FCG validation rejects columns of unequal length", () => {
+  const flat = acceptedPackage();
+  assertRejects(
+    () =>
+      validateFlatFcgPackage({
+        ...flat,
+        operationSourceStarts: flat.operationSourceStarts.slice(0, 1),
+      }),
+    /columns must have equal lengths/,
+  );
+});
+
+Deno.test("flat FCG flattening rejects a value too wide for a word", () => {
+  // The width guard runs while flattening, not while validating: the columns are
+  // Uint32Array, so a package that exists already holds coerced values and cannot carry
+  // an out-of-range one. What it protects is the FcgModule going in.
+  assertRejects(
+    () =>
+      flattenFcgModule({
+        functions: [{
+          name: "main",
+          parameters: [],
+          localCount: 2 ** 32,
+          operations: [],
+        }],
+        constructorTags: new Map(),
+      }),
+    /local count must fit a u32 word/,
+  );
+  assertRejects(
+    () =>
+      flattenFcgModule({
+        functions: [{
+          name: "main",
+          parameters: [],
+          localCount: 0,
+          operations: [{
+            opcode: "const",
+            operands: [1],
+            sourceStart: -1,
+            regionId: 0,
+          }],
+        }],
+        constructorTags: new Map(),
+      }),
+    /operation source start must fit a u32 word/,
+  );
+});
+
+Deno.test("flat FCG validation rejects a non-contiguous range start", () => {
+  const flat = acceptedPackage();
+  assertRejects(
+    () =>
+      validateFlatFcgPackage({
+        ...flat,
+        functionOperationStarts: Uint32Array.from([1]),
+      }),
+    /starts at 1; expected contiguous start 0/,
+  );
+});
+
+function assertRejects(operation: () => unknown, expected: RegExp): void {
+  let message = "";
+  try {
+    operation();
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (message === "") throw new Error("expected a rejection");
+  if (!expected.test(message)) {
+    throw new Error(
+      `expected ${expected}, received ${JSON.stringify(message)}`,
+    );
+  }
+}

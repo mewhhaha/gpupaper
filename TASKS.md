@@ -858,7 +858,19 @@ host-boundary plans before flattening.
 - [ ] Version a new flat schema with structure-of-arrays columns for functions,
       signatures, blocks, block parameters, values, operations, operands,
       terminators, edges, layouts, and source locations.
-- [ ] Use integer IDs for every cross-reference and validate every range.
+- [x] Use integer IDs for every cross-reference and validate every range. Every
+      cross-reference in a flat package is a `Uint32Array` index, and
+      `validateFlatFcgPackage` checks the schema version, that every column in a
+      group has the same length, that a string ID lies inside the string table,
+      that each range starts where the previous ended, and that no range runs
+      past its column. The width guard runs at flatten time instead, because the
+      columns are `Uint32Array` and a package that exists already holds coerced
+      values; what it protects is the `FcgModule` going in, rejecting an
+      out-of-range local count or a negative source start.
+
+      Only the overlapping-range case had a test, so a validator that checked overlap alone
+      would have passed. Each remaining check now has one, made by breaking exactly one
+      field of a package the validator accepts, with the accepting case asserted alongside.
 - [ ] Preserve deterministic source order for initial IDs.
 - [ ] Represent successor arguments explicitly rather than through region IDs.
 - [ ] Round-trip structured Core to flat Core and back in tests.
