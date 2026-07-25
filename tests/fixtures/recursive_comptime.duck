@@ -1,0 +1,3 @@
+let rec down = value => if value == 0 { 0 } else { down(value - 1) }
+
+comptime down(3)

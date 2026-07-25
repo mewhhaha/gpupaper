@@ -366,24 +366,19 @@ behavior no longer depends on statement concatenation order.
 - [ ] Reject missing, ambiguous, and incoherent implementations before Core.
 - [ ] Preserve binding-time environments across type aliases and extension
       layers.
-- [ ] Add explicit fuel and recursion diagnostics for non-terminating
-      compile-time evaluation. Fuel is done and tested: `evaluateDucklangConst`
-      rejects a non-positive fuel budget and reports exhaustion at the source
-      span. Recursion is not, and the current behavior is worse than missing.
-      Recursive compile-time evaluation is unsupported, and a program that asks
-      for it gets an internal-sounding `ReferenceError` naming a symbol ID
-      rather than a diagnostic. Reproduced with:
+- [x] Add explicit fuel and recursion diagnostics for non-terminating
+      compile-time evaluation. Fuel rejects a non-positive budget and reports
+      exhaustion at the source span. Recursion is reported at the reference:
+      `Ducklang compile-time evaluation cannot use the recursive binding <name>`.
+      Recursive compile-time evaluation is still unsupported, because references
+      to module bindings are substituted away before evaluation and that
+      substitution cannot terminate for a recursive binding; supporting it needs
+      the compile-time environment work in this phase. Until then the case is
+      rejected by name instead of surfacing
+      `missing compile-time value for
+      down#0`, which named an internal
+      symbol ID and never mentioned recursion.
 
-      ```text
-      let rec down = value => if value == 0 { 0 } else { down(value - 1) }
-
-      comptime down(3)
-      ```
-
-      which reports `missing compile-time value for down#0`. The compile-time
-      environment never binds a recursive binding to its own closure, so the
-      fix is to either support recursive compile-time closures with a depth
-      diagnostic, or reject the case with a diagnostic that names recursion.
 - [ ] Erase all compile-time-only bindings and values before Core construction.
 - [ ] Replace scalar-only comptime evaluation and ad hoc static closure
       substitution after equivalent behavior is covered.

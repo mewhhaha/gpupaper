@@ -1,3 +1,4 @@
+import { compileModuleSource } from "../src/compiler.ts";
 import {
   canonicalDucklangTypeId,
   type DucklangConstProduct,
@@ -133,3 +134,37 @@ function assertEquals(actual: unknown, expected: unknown): void {
     );
   }
 }
+
+/**
+ * Recursive compile-time evaluation is not supported: references to module
+ * bindings are substituted away before evaluation, and that substitution cannot
+ * terminate for a recursive binding. The diagnostic must say so in terms of the
+ * source program. Before this was checked, the leftover reference surfaced as
+ * "missing compile-time value for down#0", which names an internal symbol ID and
+ * never mentions recursion.
+ */
+Deno.test("Ducklang comptime rejects a recursive binding by name", async () => {
+  const file = await Deno.realPath("tests/fixtures/recursive_comptime.duck");
+  let message = "";
+  try {
+    await compileModuleSource(
+      file as `${string}.duck`,
+      await Deno.readTextFile(file),
+      { gpuMode: "off" },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (
+    !/Ducklang compile-time evaluation cannot use the recursive binding down/
+      .test(message)
+  ) {
+    throw new Error(
+      `expected a recursion diagnostic, received ${JSON.stringify(message)}`,
+    );
+  }
+  // The old internal-sounding failure must not be what a user sees.
+  if (/missing compile-time value/.test(message)) {
+    throw new Error("diagnostic still exposes the compile-time environment");
+  }
+});
