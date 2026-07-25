@@ -54,6 +54,19 @@ function validateStatements(statements: readonly DucklangStatement[]): void {
         `${statement.span.file}:${statement.span.start}: cannot mutate frozen Ducklang value ${statement.value.product.name.text}`,
       );
     }
+    // Freezing a borrowed owner is already refused because it changes the owner's
+    // state while a borrow observes it. Mutating one changes its contents under
+    // the borrow, which is the same hazard and a stronger one.
+    if (
+      statement.kind === "assignment" &&
+      statement.value.kind === "indexUpdate" &&
+      statement.value.product.kind === "reference" &&
+      borrowedOwners.has(statement.value.product.name.text)
+    ) {
+      throw new TypeError(
+        `${statement.span.file}:${statement.span.start}: cannot mutate borrowed Ducklang value ${statement.value.product.name.text}`,
+      );
+    }
     if (statement.kind === "expression") {
       validateExpression(statement.expression);
     }

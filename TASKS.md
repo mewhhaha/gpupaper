@@ -627,7 +627,18 @@ nested source functions.
       into a join-disagreement test and a both-arms-consume test that still
       proves consumption carries out of a branch.
 - [ ] Insert explicit drops on every owning exit edge.
-- [ ] Lower borrow lifetimes to checked regions.
+- [ ] Lower borrow lifetimes to checked regions. Regions do not exist yet, but
+      two borrow hazards were probed against the recorded failures and one was a
+      real gap, now closed: mutating a borrowed owner was permitted although
+      freezing one was already refused, and mutation is the same hazard through
+      the same borrow only stronger. Reading through a borrow and taking two
+      shared borrows both still work.
+
+      Still open and unchecked by anything: a borrow read after its owner is
+      consumed. `take(!message)` followed by `@len(view)` on a borrow of `message`
+      compiles and returns a value, because the managed runtime keeps the handle
+      alive. A real lifetime check, not just the owner-state rules the validator has
+      today, is what this checkbox needs.
 - [ ] Prove freeze transitions and erase or lower them according to layout.
 - [ ] Lower scratch blocks to region enter, allocate, cleanup, and exit edges.
 - [ ] Prevent region-backed values from escaping their region.

@@ -66,6 +66,48 @@ Deno.test("Ducklang still rejects two consumptions inside one arm", async () => 
   );
 });
 
+/**
+ * Borrow hazards.
+ *
+ * The validator already refuses to freeze a borrowed owner, because that changes
+ * the owner's state while a borrow observes it. Mutating a borrowed owner changes
+ * its contents under the borrow, which is the same hazard and a stronger one, and
+ * was permitted.
+ */
+Deno.test("Ducklang rejects mutating a borrowed value", async () => {
+  await assertRejects(
+    'let message: Bytes = @Utf8.encode("ab")\nlet view = &message\nmessage[0] = 65\n@len(view)\n',
+    /cannot mutate borrowed Ducklang value message/,
+  );
+});
+
+Deno.test("Ducklang still rejects freezing a borrowed value", async () => {
+  // The neighbouring rule this one was modelled on, kept so both stay together.
+  await assertRejects(
+    'let message: Text = "a" <> "b"\nlet view = &message\nlet frozen = freeze message\n@len(view) + @len(frozen)\n',
+    /Cannot freeze borrowed owner message/,
+  );
+});
+
+Deno.test("Ducklang still allows reading through a borrow", async () => {
+  // The accepting side, so the new rule cannot pass by refusing all borrows.
+  assertEquals(
+    await run(
+      'let message: Text = "a" <> "b"\nlet view = &message\n@len(view)\n',
+    ),
+    2,
+  );
+});
+
+Deno.test("Ducklang still allows two shared borrows of one owner", async () => {
+  assertEquals(
+    await run(
+      'let message: Text = "a" <> "b"\nlet a = &message\nlet b = &message\n@len(a) + @len(b)\n',
+    ),
+    4,
+  );
+});
+
 async function run(source: string): Promise<number | bigint> {
   const artifact = await compileModuleSource("linear.duck", source, {
     gpuMode: "off",
