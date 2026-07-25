@@ -471,7 +471,24 @@ protocol search, extension search, or compile-time closures.
       function with a `return` terminator instead of edging into the join that
       the fall-through path uses.
 - [ ] Preserve nested loop and match control boundaries.
-- [ ] Lower dynamic ranges after evaluating start, end, and step once.
+- [ ] Lower dynamic ranges after evaluating start, end, and step once. Confirmed
+      defect, reproduced by counting host calls. `start` and `end` are evaluated
+      once, but the step is evaluated twice, and the loop then uses the second
+      result. With `step <- Input.step()` returning 1 then 100,
+      `for value in
+      0..bound by step` performed the effect twice and ran
+      with step 100, giving 0 where a single evaluation gives 10. A host effect
+      in a step position is therefore performed twice and its first result
+      discarded.
+
+      Cause: in `lowerDynamicLoop` the step expression is placed in three spots
+      that each evaluate it -- the `step == 0` guard, the initial call's argument
+      list, and `parameterTypeSources`. Hoisting it into one `let` binding and
+      referencing that fixes the guard and the argument but not
+      `parameterTypeSources`, which needs a source expression carrying a declared
+      type rather than a plain reference and fails to type check. So the fix needs
+      the parameter-type-source mechanism understood first, and the attempt was
+      reverted rather than left half-applied.
 - [x] Reject a static zero range step and emit a dynamic zero-step trap edge. A
       literal zero step is rejected by `expandStaticDucklangLoops` with
       "Ducklang static range step cannot be zero"; a step known only at runtime
