@@ -367,7 +367,23 @@ behavior no longer depends on statement concatenation order.
 - [ ] Preserve binding-time environments across type aliases and extension
       layers.
 - [ ] Add explicit fuel and recursion diagnostics for non-terminating
-      compile-time evaluation.
+      compile-time evaluation. Fuel is done and tested: `evaluateDucklangConst`
+      rejects a non-positive fuel budget and reports exhaustion at the source
+      span. Recursion is not, and the current behavior is worse than missing.
+      Recursive compile-time evaluation is unsupported, and a program that asks
+      for it gets an internal-sounding `ReferenceError` naming a symbol ID
+      rather than a diagnostic. Reproduced with:
+
+      ```text
+      let rec down = value => if value == 0 { 0 } else { down(value - 1) }
+
+      comptime down(3)
+      ```
+
+      which reports `missing compile-time value for down#0`. The compile-time
+      environment never binds a recursive binding to its own closure, so the
+      fix is to either support recursive compile-time closures with a depth
+      diagnostic, or reject the case with a diagnostic that names recursion.
 - [ ] Erase all compile-time-only bindings and values before Core construction.
 - [ ] Replace scalar-only comptime evaluation and ad hoc static closure
       substitution after equivalent behavior is covered.
