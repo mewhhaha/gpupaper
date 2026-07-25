@@ -399,15 +399,25 @@ protocol search, extension search, or compile-time closures.
       entry function, signature, and branch target, undefined values, and a real
       iterative dominator computation rather than a use-before-definition scan.
       Terminator presence is structural: the field is not optional.
-- [ ] Lower lexical shadowing to fresh `ValueId`s.
-- [ ] Lower statement-only blocks and branches to `Unit` plus continuation
-      edges.
-- [ ] Lower expression `if` and `match` to join blocks with result parameters.
+- [x] Lower lexical shadowing to fresh `ValueId`s. Three bindings named `x` in
+      one block lower to distinct value identities with none reused, and the
+      function returns the last shadowed version.
+- [x] Lower statement-only blocks and branches to `Unit` plus continuation
+      edges. A branch used as a statement lowers to a join block whose single
+      parameter is the `unit` scalar, reached by a continuation edge from each
+      arm.
+- [x] Lower expression `if` and `match` to join blocks with result parameters.
+      An expression `if` lowers to a `conditional_branch` whose arms both edge
+      into a join block carrying one `i32` parameter; a union match lowers the
+      same way and projects its payload with `sum.payload` rather than
+      re-deriving it from the scrutinee.
 - [ ] Lower unbounded loops to header and exit blocks.
 - [ ] Pass every carried binding on loop back-edges and exits.
 - [ ] Lower bare and valued `break` without mixing their result signatures.
 - [ ] Lower `continue` to the nearest loop header.
-- [ ] Lower early `return` to a function terminator.
+- [x] Lower early `return` to a function terminator. The early arm ends the
+      function with a `return` terminator instead of edging into the join that
+      the fall-through path uses.
 - [ ] Preserve nested loop and match control boundaries.
 - [ ] Lower dynamic ranges after evaluating start, end, and step once.
 - [ ] Reject a static zero range step and emit a dynamic zero-step trap edge.

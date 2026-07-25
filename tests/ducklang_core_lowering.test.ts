@@ -1,0 +1,169 @@
+import type {
+  DucklangCoreFunction,
+  DucklangCoreModule,
+} from "../src/ducklang_core.ts";
+import {
+  lowerDucklangToCore,
+  validateDucklangCore,
+} from "../src/ducklang_core.ts";
+import { parseDucklangModule } from "../src/ducklang_parser.ts";
+import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
+import { inferDucklangModule } from "../src/ducklang_types.ts";
+
+/**
+ * What Core lowering does with each source control-flow construct.
+ *
+ * Every case asserts the resulting block structure, not just that lowering
+ * succeeded, because a lowering that collapsed a branch into straight-line code
+ * would still produce a module the validator accepts. Each result is also fed to
+ * validateDucklangCore, so the shape assertions and the structural invariants
+ * are checked against each other.
+ */
+
+Deno.test("Core lowers an expression if to a join block with a result parameter", async () => {
+  const { module, function_ } = await lower(
+    "let pick = flag => if flag { 1 } else { 2 }\npick(true)\n",
+    "pick",
+  );
+
+  assertEquals(function_.blocks[0].terminator.kind, "conditional_branch");
+  const join = function_.blocks.at(-1)!;
+  assertEquals(join.parameters.length, 1);
+  // The join carries the branch result, so it is the value returned.
+  assertEquals(join.terminator.kind, "return");
+  assertEquals(
+    scalarOf(module, join.parameters[0].type),
+    "i32",
+  );
+  // Both arms must reach the join by an edge supplying that parameter.
+  const edges = function_.blocks.filter((block) =>
+    block.terminator.kind === "branch" && block.terminator.target === join.id
+  );
+  assertEquals(edges.length, 2);
+});
+
+Deno.test("Core lowers a statement-only branch to Unit plus a continuation edge", async () => {
+  const { module, function_ } = await lower(
+    "let f = flag => {\n  let total = 0\n  if flag {\n    total = 1\n  }\n  total\n}\nf(true)\n",
+    "f",
+  );
+
+  assertEquals(function_.blocks[0].terminator.kind, "conditional_branch");
+  const join = function_.blocks.at(-1)!;
+  assertEquals(join.parameters.length, 1);
+  // A branch used as a statement produces no value, so its join parameter is
+  // Unit and the continuation carries it.
+  assertEquals(scalarOf(module, join.parameters[0].type), "unit");
+});
+
+Deno.test("Core lowers a union match to a join block with a result parameter", async () => {
+  const { module, function_ } = await lower(
+    "type Result = | `Ok Int | `Err Text\n\nlet unwrap = (result: Result) => {\n  if let `Ok value = result {\n    value + 1\n  } else {\n    0\n  }\n}\n\nunwrap(`Ok (41))\n",
+    "unwrap",
+  );
+
+  assertEquals(function_.blocks[0].terminator.kind, "conditional_branch");
+  const join = function_.blocks.at(-1)!;
+  assertEquals(join.parameters.length, 1);
+  assertEquals(scalarOf(module, join.parameters[0].type), "i32");
+  // The matched payload must be projected, not re-derived from the scrutinee.
+  assertEquals(
+    function_.blocks.some((block) =>
+      block.operations.some((operation) => operation.kind === "sum.payload")
+    ),
+    true,
+  );
+});
+
+Deno.test("Core lowers an early return to a function terminator", async () => {
+  const { function_ } = await lower(
+    "let f = value => {\n  if value == 0 {\n    return 9\n  }\n  value + 1\n}\nf(0)\n",
+    "f",
+  );
+
+  assertEquals(function_.blocks[0].terminator.kind, "conditional_branch");
+  // The early arm ends the function outright rather than branching to a join.
+  const returning = function_.blocks.filter((block) =>
+    block.terminator.kind === "return"
+  );
+  assertEquals(returning.length >= 2, true);
+  assertEquals(
+    function_.blocks[1].terminator.kind,
+    "return",
+  );
+});
+
+Deno.test("Core lowers lexical shadowing to distinct value identities", async () => {
+  const { function_ } = await lower(
+    "let f = value => {\n  let x = value\n  let x = x + 1\n  let x = x + 1\n  x\n}\nf(1)\n",
+    "f",
+  );
+
+  const results = function_.blocks.flatMap((block) =>
+    block.operations.map((operation) => operation.result)
+  );
+  // Three bindings named x, and no value identity is reused for two of them.
+  assertEquals(new Set(results).size, results.length);
+  const returned = function_.blocks.at(-1)!.terminator;
+  if (returned.kind !== "return") throw new Error("expected a return");
+  // The result is the last shadowed version, not the first.
+  assertEquals(returned.values.length, 1);
+  assertEquals(returned.values[0], Math.max(...results));
+});
+
+Deno.test("Core preserves a nested branch boundary", async () => {
+  const { function_ } = await lower(
+    "let f = (a, b) => {\n  let outer = if a {\n    let inner = if b { 1 } else { 2 }\n    inner\n  } else {\n    3\n  }\n  outer\n}\nf(true, false)\n",
+    "f",
+  );
+
+  // Two conditionals means two distinct branch boundaries survive lowering.
+  assertEquals(
+    function_.blocks.filter((block) =>
+      block.terminator.kind === "conditional_branch"
+    ).length,
+    2,
+  );
+});
+
+async function lower(
+  source: string,
+  functionName: string,
+): Promise<
+  {
+    readonly module: DucklangCoreModule;
+    readonly function_: DucklangCoreFunction;
+  }
+> {
+  const parsed = await parseDucklangModule("core_lowering.duck", source);
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  validateDucklangCore(module);
+  const function_ = module.functions.find((candidate) =>
+    candidate.name === functionName
+  );
+  if (function_ === undefined) {
+    throw new Error(
+      `no Core function ${functionName}; found ${
+        module.functions.map((candidate) => candidate.name).join(", ")
+      }`,
+    );
+  }
+  return { module, function_ };
+}
+
+function scalarOf(module: DucklangCoreModule, type: number): string {
+  const entry = module.types[type];
+  return entry.kind === "scalar" ? entry.scalar : entry.kind;
+}
+
+function assertEquals(actual: unknown, expected: unknown): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `expected ${JSON.stringify(expected)}, received ${
+        JSON.stringify(actual)
+      }`,
+    );
+  }
+}
