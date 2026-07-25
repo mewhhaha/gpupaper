@@ -553,7 +553,18 @@ Milestones:
       `prelude_runtime.duck:15193: assignment to digit has no visible Ducklang
       binding`
       (reached from `prelude_functional.duck`),
-      `prelude_list.duck:3644: unknown Ducklang type value_type`, and
+      `prelude_list.duck:3644: unknown Ducklang type value_type`, whose cause is
+      located:
+      `const list = (const value_type) => { ... let values: List value_type
+      = ... }`
+      passes a type as a `const` parameter and then uses that parameter in type
+      position. A `const` parameter is a value binding, so the type namespace
+      cannot see it. This is a boundary on the "Specialize `const` parameters
+      and `forall` type parameters" item above, which is checked: that covers
+      `const` parameters holding values and `forall` type parameters, but not a
+      `const` parameter _holding a type_ and used as one, which needs the type
+      resolver to consult const bindings and specialization to substitute the
+      argument type per call site. And
       `prelude_iterators.duck:4338: Ducklang field source_next does not uniquely
       identify a struct`.
       None of the three is a loop IR error, so they are not blocked behind
