@@ -386,7 +386,18 @@ behavior no longer depends on statement concatenation order.
       `planDucklangCoreLayouts` already computes real sizes, alignments, and offsets,
       but over Core types, so this needs reflection moved out of the parser into a
       staged pass with type information rather than new size arithmetic.
-- [ ] Specialize `const` parameters and `forall` type parameters.
+- [x] Specialize `const` parameters and `forall` type parameters. One
+      `forall`-typed `const` parameter is applied at two different types in the
+      same body: `identity(true)` supplies an `if` condition and `identity(41)`
+      is added to an integer. A single monomorphic instantiation cannot satisfy
+      both, so the program compiling is itself the evidence that two were
+      produced, and running it shows the right one at each site. A variant that
+      returns through the other branch answers 7, so the two instantiations stay
+      distinct rather than one serving both. Covered at runtime as well as under
+      `comptime`, because specialization that worked only inside `comptime`
+      would satisfy the corpus example and still leave runtime polymorphism
+      broken. The grammar requires `const` on a `forall` parameter, so a runtime
+      value cannot reach two instantiations in the first place.
 - [x] Represent protocol evidence as a compile-time dictionary. Evidence is
       resolved during elaboration and nothing survives to dispatch. With runtime
       parameters, so nothing can be folded, `Add.add` on `I32` lowers to the
