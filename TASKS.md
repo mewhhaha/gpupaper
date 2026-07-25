@@ -444,8 +444,19 @@ behavior no longer depends on statement concatenation order.
       because `extend I32 { ... }` extends a type rather than claiming to implement a
       protocol. Whether that should be required is a language question, not a gap in
       this checkbox.
-- [ ] Preserve binding-time environments across type aliases and extension
-      layers.
+- [x] Preserve binding-time environments across type aliases and extension
+      layers. An extension method body is inlined into whichever module calls
+      the method, so its free names have to survive the trip. Within one module
+      a `const`, a `comptime`-folded `const`, and selection through a type alias
+      all stay visible.
+
+      Across modules it failed with "unknown Ducklang name offset": the body referred
+      to a `const` in the module that declared the extension, and hygienic renaming
+      covered that module's statements but not its extensions, which the module holds
+      separately. Extension method bodies are renamed with their declaring module now,
+      which is what makes a library extension able to use a module-level helper at
+      all. The same-module cases are pinned alongside, so a fix that renamed
+      everything into oblivion would fail rather than pass quietly.
 - [x] Add explicit fuel and recursion diagnostics for non-terminating
       compile-time evaluation. Fuel rejects a non-positive budget and reports
       exhaustion at the source span. Recursion is reported at the reference:

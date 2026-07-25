@@ -32,6 +32,22 @@ export function renameDucklangValues(
 }
 
 /**
+ * Renames references inside an expression that is not part of a statement list.
+ *
+ * An extension method body is inlined into whichever module calls the method, so its
+ * free names have to be renamed with the module that declared it. Those bodies live
+ * on `DucklangModule.extensions` rather than in `statements`, so renaming statements
+ * alone left them referring to names that no longer exist.
+ */
+export function renameDucklangValuesInExpression(
+  expression: DucklangExpression,
+  renames: DucklangValueRenames,
+): DucklangExpression {
+  if (renames.size === 0) return expression;
+  return rewriteExpression(expression, renames, new Set());
+}
+
+/**
  * A stable marker-separated name for a module-level binding, derived from the
  * declaring module's canonical source so the result does not depend on splice
  * order.

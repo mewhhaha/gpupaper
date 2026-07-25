@@ -18,6 +18,7 @@ import {
 import {
   hygienicDucklangName,
   renameDucklangValues,
+  renameDucklangValuesInExpression,
 } from "./ducklang_hygiene.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveImportedPrimitive } from "./ducklang_primitives.ts";
@@ -950,6 +951,17 @@ function hygieniseDucklangDependency(
   return {
     ...dependency,
     statements: renameDucklangValues(dependency.statements, renames),
+    // An extension method body is inlined into whichever module calls the method,
+    // so its free names travel with it and must be renamed alongside the bindings
+    // they refer to. These bodies are not in `statements`, so renaming statements
+    // alone left them pointing at names that no longer existed.
+    extensions: dependency.extensions.map((extension) => ({
+      ...extension,
+      methods: extension.methods.map((method) => ({
+        ...method,
+        value: renameDucklangValuesInExpression(method.value, renames),
+      })),
+    })),
   };
 }
 
