@@ -445,7 +445,11 @@ protocol search, extension search, or compile-time closures.
       working until Core is wired in. It cannot be landed as one green
       increment, so it needs its own design pass rather than an incremental
       attempt.
-- [ ] Pass every carried binding on loop back-edges and exits.
+- [x] Pass every carried binding on loop back-edges and exits. An accumulator
+      summed over `0..5` reaches 10, and one summed inside a nested loop reaches
+      6, so a binding lost on a back-edge or an exit changes the answer rather
+      than rearranging work. Pins the current pipeline; Core-level header and
+      exit blocks remain open, because Core never sees a loop.
 - [x] Lower bare and valued `break` without mixing their result signatures. A
       loop whose value is taken must supply one on every exit, and mixing is now
       rejected with "Ducklang loop mixes a valued break with a bare break". It
@@ -457,7 +461,12 @@ protocol search, extension search, or compile-time closures.
       loop was already folded to the fabricated zero. A loop whose every exit is
       valued, and a bare break in a `for` statement, both still compile.
       Core-level header and exit block lowering is separate and still open.
-- [ ] Lower `continue` to the nearest loop header.
+- [x] Lower `continue` to the nearest loop header. A `continue` inside a nested
+      loop skips only the inner iteration: two outer passes over an inner `0..3`
+      that skips `1` total 4, which a `continue` targeting the outer header
+      would not produce. A bare `break` likewise exits only the loop it is in,
+      leaving the outer loop to finish. Pins the current pipeline; Core-level
+      lowering remains open.
 - [x] Lower early `return` to a function terminator. The early arm ends the
       function with a `return` terminator instead of edging into the join that
       the fall-through path uses.
@@ -648,11 +657,12 @@ policy.
 - [x] Compile and execute grep and tar, including dynamic control flow. grep
       streams a file to `Eof` and returns exit code 0; tar accepts an empty
       archive. Both genuinely exercise dynamic control flow: grep has an
-      unbounded `loop`, a dynamic range `line_start..length pending`, a
-      multi-level `break 2`, and a valued `break code`; tar has computed dynamic
-      ranges such as `start..start + block_size`. This is the current pipeline,
-      not the Core path; the Phase 4 milestones for grep's valued loop exits and
-      tar's dynamic ranges reaching Core remain open.
+      unbounded `loop`, a dynamic range `line_start..length pending`, a two
+      valued breaks, `break 2` and `break code`, returning exit codes from its
+      outer loop; tar has computed dynamic ranges such as
+      `start..start + block_size`. This is the current pipeline, not the Core
+      path; the Phase 4 milestones for grep's valued loop exits and tar's
+      dynamic ranges reaching Core remain open.
 - [x] Compile and execute wav after hexadecimal and bitwise coverage. wav emits
       a complete RIFF buffer, and its source does exercise both: hexadecimal
       literals such as `0x46464952` and `0xff`, and `>>` and `&`.

@@ -64,6 +64,54 @@ Deno.test("Ducklang still accepts a bare break in a statement loop", async () =>
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
+/**
+ * Nested loop control and carried bindings.
+ *
+ * Each expected value is chosen so a wrong target or a lost accumulator changes
+ * the answer rather than merely rearranging work. Ducklang has no multi-level
+ * break: the AST break node carries a value, not a level, so `break 2` is a
+ * valued break returning 2, which is how grep returns its exit codes.
+ *
+ * These pin the semantics the current pipeline produces. Core-level header and
+ * exit block lowering is separate and still open, because Core never sees a loop.
+ */
+const nestedCases: readonly (readonly [string, string, number])[] = [
+  [
+    "continue targets the nearest loop header",
+    // Outer 0..2 times inner 0..3 skipping i == 1: each outer pass adds 0 + 2.
+    "let total = 0\nfor o in 0..2 {\n  for i in 0..3 {\n    if i == 1 {\n      continue\n    }\n    total = total + i\n  }\n}\ntotal\n",
+    4,
+  ],
+  [
+    "a bare break exits only the loop it is in",
+    // The inner loop stops at i == 1, but the outer loop still runs twice.
+    "let count = 0\nfor o in 0..2 {\n  for i in 0..3 {\n    if i == 1 {\n      break\n    }\n    count = count + 1\n  }\n}\ncount\n",
+    2,
+  ],
+  [
+    "a carried binding survives every back-edge",
+    "let acc = 0\nfor v in 0..5 {\n  acc = acc + v\n}\nacc\n",
+    10,
+  ],
+  [
+    "a carried binding survives a nested loop's exits",
+    // Two outer passes over an inner 0 + 1 + 2.
+    "let acc = 0\nfor o in 0..2 {\n  for i in 0..3 {\n    acc = acc + i\n  }\n}\nacc\n",
+    6,
+  ],
+];
+
+for (const [description, source, expected] of nestedCases) {
+  Deno.test(`Ducklang loop lowering keeps ${description}`, async () => {
+    const artifact = await compileModuleSource(
+      "nested_loops.duck",
+      source,
+      { gpuMode: "off" },
+    );
+    assertEquals(await runMain(artifact.wasm), expected);
+  });
+}
+
 async function assertRejects(
   source: string,
   expected: RegExp,
