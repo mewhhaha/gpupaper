@@ -5,6 +5,10 @@ import type {
   TypedDucklangModule,
 } from "./ducklang_types.ts";
 import { PrimitiveId } from "./ducklang_primitives.ts";
+import {
+  ducklangReflectedLayout,
+  type DucklangReflectedType,
+} from "./ducklang_layout.ts";
 import type { DucklangSymbol } from "./ducklang_resolution.ts";
 import type { SourceSpan } from "./syntax.ts";
 
@@ -1183,6 +1187,39 @@ function foldStaticIntrinsic(
     }
   }
   if (
+    callee.modulePath === "duck:compiler/reflect" &&
+    callee.exportName === "describe_type" && arguments_.length === 1 &&
+    arguments_[0].kind === "intrinsic" &&
+    arguments_[0].modulePath.startsWith("duck:type/")
+  ) {
+    // The descriptor payload already carries the field types, so the size comes from
+    // the same layout rules Core uses rather than from arithmetic invented here.
+    // A builtin carries its bare source name while a struct carries a JSON payload,
+    // so the shape has to be decided before parsing rather than after.
+    const reflected: DucklangReflectedType = arguments_[0].modulePath ===
+        "duck:type/builtin"
+      ? { kind: "builtin", name: arguments_[0].exportName }
+      : {
+        kind: "struct",
+        fields: (JSON.parse(arguments_[0].exportName) as {
+          readonly fields?: readonly { readonly type: string }[];
+        }).fields ?? [],
+      };
+    return {
+      kind: "product",
+      productKind: "tuple",
+      values: [{
+        kind: "integer",
+        value: ducklangReflectedLayout(reflected).size,
+        type: { kind: "constructor", name: "i32", arguments: [] },
+        span: expression.span,
+      }],
+      nominalType: "$TypeDescription",
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
     callee.modulePath === "duck:compiler/type-pattern" &&
     callee.exportName === "matches" && arguments_.length === 2 &&
     arguments_[0].kind === "intrinsic" &&
@@ -1452,7 +1489,7 @@ function collapseEmptyBlock(
   return expression;
 }
 
-function rewriteChildren(
+export function rewriteChildren(
   expression: TypedDucklangExpression,
   rewrite: (child: TypedDucklangExpression) => TypedDucklangExpression,
 ): TypedDucklangExpression {

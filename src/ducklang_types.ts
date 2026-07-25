@@ -819,6 +819,22 @@ class DucklangInference {
           };
           type = functionType([structType], structType);
         } else if (
+          expression.modulePath === "duck:compiler/reflect" &&
+          expression.exportName === "type_of"
+        ) {
+          // Reflection turns a value into a type descriptor, so the argument is
+          // unconstrained and the result is the same descriptor kind every
+          // `duck:type/*` intrinsic already carries.
+          type = functionType([this.#freshVariable()], typeDescriptorType);
+        } else if (
+          expression.modulePath === "duck:compiler/reflect" &&
+          expression.exportName === "describe_type"
+        ) {
+          type = functionType(
+            [typeDescriptorType],
+            this.#declaredType("$TypeDescription", expression.span),
+          );
+        } else if (
           (expression.modulePath === "duck:prelude" ||
             expression.modulePath === "duck:prelude/types") &&
           expression.exportName === "cast"

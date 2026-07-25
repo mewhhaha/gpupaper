@@ -269,3 +269,71 @@ function align(offset: number, alignment: number): number {
   const remainder = offset % alignment;
   return remainder === 0 ? offset : offset + (alignment - remainder);
 }
+
+/**
+ * A type as reflection sees it: the payload a `duck:type/*` intrinsic carries.
+ *
+ * Source type names rather than Core scalars, because reflection answers questions
+ * about types written in the source and never reaches Core. The names are the ones
+ * resolution puts in the intrinsic's `exportName`.
+ */
+export type DucklangReflectedType =
+  | { readonly kind: "builtin"; readonly name: string }
+  | {
+    readonly kind: "struct";
+    readonly fields: readonly { readonly type: string }[];
+  };
+
+/**
+ * Size and alignment for a reflected type, by the same rules as Core layout.
+ *
+ * This exists because `planDucklangCoreLayouts` computes layouts over Core types,
+ * and reflection has to answer before Core exists. The scalar table and the product
+ * padding rule are deliberately delegated to `scalarLayout` and `align` rather than
+ * restated, so a change to how Core lays a value out cannot silently disagree with
+ * what a program is told when it asks.
+ */
+export function ducklangReflectedLayout(
+  type: DucklangReflectedType,
+): { readonly size: number; readonly alignment: number } {
+  if (type.kind === "builtin") return builtinScalarLayout(type.name);
+  const fields = type.fields.map((field) => builtinScalarLayout(field.type));
+  const alignment = Math.max(1, ...fields.map((field) => field.alignment));
+  let size = 0;
+  for (const field of fields) {
+    size = align(size, field.alignment);
+    size += field.size;
+  }
+  return { size: align(size, alignment), alignment };
+}
+
+function builtinScalarLayout(
+  name: string,
+): { readonly size: number; readonly alignment: number } {
+  switch (name) {
+    case "Int":
+    case "I32":
+    // A character is a scalar code point in a word, which is why Core maps char
+    // and i32 to the same layout.
+    case "Char":
+    case "Bool":
+      return scalarLayout("i32");
+    case "I64":
+      return scalarLayout("i64");
+    case "F32":
+      return scalarLayout("f32");
+    case "F64":
+      return scalarLayout("f64");
+    case "Unit":
+      return scalarLayout("unit");
+    case "Text":
+    case "Bytes":
+      // Buffers are managed handles today. `ducklangBufferRepresentation` owns that
+      // decision, so reflection asks it rather than assuming a width.
+      return ducklangBufferRepresentation("owned");
+    default:
+      throw new TypeError(
+        `Ducklang type ${name} has no reflected layout`,
+      );
+  }
+}

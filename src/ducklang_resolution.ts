@@ -1204,6 +1204,16 @@ class DucklangResolver {
               modulePath: "duck:compiler/type-pattern",
               exportName: "matches",
             }
+            : expression.name.text === "@type_of"
+            ? {
+              modulePath: "duck:compiler/reflect",
+              exportName: "type_of",
+            }
+            : expression.name.text === "@describe_type"
+            ? {
+              modulePath: "duck:compiler/reflect",
+              exportName: "describe_type",
+            }
             : [
                 "Int",
                 "I32",

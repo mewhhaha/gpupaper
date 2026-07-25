@@ -202,7 +202,7 @@ export const success_examples: SuccessExample[] = [
   {
     path: "examples/compile_time/19_include_and_type_of.duck",
     route: "core",
-    runs: run(18),
+    runs: run(21),
   },
   {
     path: "examples/compile_time/20_variadic_value_packs.duck",

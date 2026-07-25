@@ -73,7 +73,7 @@ just duck test examples/testing/01_inline_tests.duck
 | `16_attributes_and_import_meta.duck` | stacked source attributes and host metadata    | Core  | `42`   |
 | `17_newtypes_and_literal_types.duck` | newtypes, exact literal types, and widening    | Core  | `42`   |
 | `18_ducks_and_operators.duck`        | source ducks, extensions, and custom operators | Core  | `42`   |
-| `19_include_and_type_of.duck`        | included text and exact compile-time type      | Core  | `18`   |
+| `19_include_and_type_of.duck`        | included text and exact compile-time type      | Core  | `21`   |
 | `20_variadic_value_packs.duck`       | variadic pack iteration and rest matching      | Core  | `42`   |
 | `21_type_patterns.duck`              | structural compile-time type matching          | Core  | `42`   |
 | `22_generic_extension.duck`          | generic extension parameter declaration        | Core  | `42`   |

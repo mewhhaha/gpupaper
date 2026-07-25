@@ -2436,30 +2436,10 @@ function lowerExpression(
         span: expression.span,
       };
     }
-    if (
-      expression.kind === "call" &&
-      expression.callee.kind === "reference" &&
-      expression.callee.name.text === "@type_of" &&
-      expression.arguments[0] !== undefined
-    ) {
-      return expression.arguments[0];
-    }
-    if (
-      expression.kind === "call" &&
-      expression.callee.kind === "reference" &&
-      expression.callee.name.text === "@describe_type"
-    ) {
-      return {
-        kind: "record",
-        fields: [{
-          name: "size",
-          value: { kind: "integer", value: 1, span: expression.span },
-          span: expression.span,
-        }],
-        nominalType: "$TypeDescription",
-        span: expression.span,
-      };
-    }
+    // `@type_of` and `@describe_type` are deliberately not rewritten here. The parser
+    // has no type information, so answering them at this point can only mean inventing
+    // a constant. They resolve to `duck:compiler/reflect` intrinsics and are folded by
+    // `reflectDucklangTypes` and `foldStaticIntrinsic` once inference has run.
     if (
       expression.kind === "call" &&
       expression.callee.kind === "reference" &&

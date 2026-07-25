@@ -376,38 +376,40 @@ behavior no longer depends on statement concatenation order.
       with payload bindings, and `extendDucklangConstProduct` leaves its base
       untouched.
 - [ ] Evaluate type constructors and canonicalize applications to `TypeId`s.
-- [ ] Implement structural type reflection over canonical type values. Not
-      merely absent: it is stubbed with a wrong constant that programs can read.
-      `@type_of` and `@describe_type` are rewritten in the parser, before any
-      type information exists. `@type_of(x)` returns `x` unchanged, so the
-      reflected "type" is the value itself, and `@describe_type(t)` returns a
-      hardcoded `{ size: 1 }`. A one-field struct and a four-field struct both
-      report size 1, where a real pass would report 4 and 16, and an `I64` field
-      fails with "cannot unify Ducklang i64 with i32" because the size is
-      compared against the value's own type.
+- [x] Implement structural type reflection over canonical type values. This
+      replaced a stub that was worse than absence: `@type_of` and
+      `@describe_type` were rewritten in the parser, before any type information
+      existed, so `@type_of(x)` became `x` and `@describe_type` became a
+      hardcoded `{ size: 1 }`. Every type reported size 1, which programs could
+      read as a wrong answer rather than hit as a missing feature.
 
-      Correcting an earlier note here: this is **not** blocked on changing a vendored
-      expectation, which was the stated reason it stayed unclaimed. The local copies
-      `examples/binned/manifest.ts`, `examples/binned/contract.json`, and
-      `examples/binned/README.md` all record 18, but the upstream source of truth
-      `../binned/examples/manifest.ts:189` records `run(21)`. `config.json` is 17 bytes
-      and `struct { .length = I32 }` is 4, so 21 is the correct answer and the local 18
-      is the stub's wrong size 1 frozen into a stale vendored copy. Implementing real
-      reflection therefore *converges* with the contract rather than diverging from it,
-      and `deno task duck:contract` regenerates 18 to 21 on its own.
+      `@type_of` now folds to the same `duck:type/*` intrinsic a written type name
+      already resolves to, so a reflected type and a written type are the same value
+      afterwards and `@describe_type` cannot tell which it was handed. That reuses
+      the payload and the folding path `duck:compiler/type-pattern` matching already
+      used, so reflection introduced no representation of its own. Sizes come from
+      `ducklangReflectedLayout`, which delegates to the same `scalarLayout` and
+      `align` helpers Core layout uses rather than restating them, so Core and
+      reflection cannot silently disagree about what a value costs. An unknown type
+      name throws instead of answering zero.
 
-      That regeneration is not a free action: it rewrites the whole file, and the local
-      copy has drifted broadly from upstream (352 insertions, 188 deletions), so adopting
-      it wholesale pulls in unrelated changes. Updating the single entry by hand is the
-      contained move, and it is a correction rather than an accommodation.
+      The earlier note here claimed this was blocked on changing a vendored
+      expectation. That was wrong, and it is what kept the item unclaimed. Upstream
+      `../binned/examples/manifest.ts:189` already recorded `run(21)`; only the local
+      copies said 18, which was the stub's size 1 frozen in. `config.json` is 17
+      bytes and `struct { .length = I32 }` is 4, so 21 is correct: implementing this
+      *converged* with the contract. `examples/binned/manifest.ts`, `contract.json`,
+      and `README.md` were corrected to 21 by hand rather than by
+      `deno task duck:contract`, because regeneration rewrites the whole file and the
+      local copy has drifted broadly from upstream (352 insertions, 188 deletions).
 
-      Anyone who instead adjusts the implementation to keep 18 passing will have
-      entrenched the stub. `tests/ducklang_type_reflection.test.ts` pins the stub
-      deliberately so a correct pass breaks it and the replacement is visible.
-
-      `planDucklangCoreLayouts` already computes real sizes, alignments, and offsets,
-      but over Core types, so this needs reflection moved out of the parser into a
-      staged pass with type information rather than new size arithmetic.
+      The old note also blamed the wrong cause for the `I64` case. It said an `I64`
+      field failed "because the size is compared against the value's own type".
+      Measurement says otherwise: `let c: C = [.x = 1]` fails to unify i64 with i32
+      with reflection entirely absent, because an integer literal does not widen to
+      an `I64` field. That is a separate limitation, so `I64` padding is asserted
+      directly against `ducklangReflectedLayout` instead of through a program that
+      cannot be written yet.
 - [x] Specialize `const` parameters and `forall` type parameters. One
       `forall`-typed `const` parameter is applied at two different types in the
       same body: `identity(true)` supplies an `if` condition and `identity(41)`
@@ -999,17 +1001,17 @@ boundaries.
 This inventory records the first observed failure for each target, not every
 failure hidden behind it. Re-run and update it after each phase.
 
-| Boundary                    | Current examples                                                                                                                                                                                                                                                                                                                                                            |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Syntax drift                | cleared across 121 legacy and 35 frozen live sources                                                                                                                                                                                                                                                                                                                        |
-| Module graph and namespaces | initial editor and Codex capture failures cleared; the graph now owns every followed import, so linking parses and analyzes each canonical source once; a dependency's private bindings are alpha-renamed on splice, so an importer can neither capture nor read one; module values still use compatibility linking                                                         |
-| Extension dictionaries      | selection is by canonical receiver type within a file, and missing, ambiguous, and incoherent implementations are refused before Core; a dependency's extensions reach the importer once, and an extension body's free names are renamed with its declaring module; selection still cannot resolve two extensions supplying one method for different receivers across files |
-| CFG and loop edges          | branch lowering verified into Core join blocks, statement-only branches, early return, shadowing, `continue` targeting the nearest header, carried bindings, and mixed break rejection; Core still never sees a loop, and every dynamic collection loop depends on the buffer special case                                                                                  |
-| Staged types and literals   | compile-time products, sums, closures, projection, extension, recursion with a depth guard, `const`/`forall` specialization, protocol evidence with no residual dispatch, and erasure of compile-time-only bindings all verified; type reflection is a stub returning a constant `size` of 1, and the `module` `ConstValue` variant is still unconstructed                  |
-| Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations, and UTF-8 validates equivalently at both stages; legacy intrinsic dispatch remains                                                                                                                                                                                                                       |
-| Ownership and effects       | linear consumption is path-sensitive with agreeing joins, mutation of a borrowed owner is refused, scratch escapes are closed with `freeze` as the sanctioned exit, resumptions are affine, and the host boundary is typed with async reserved; drops, borrow regions, and freeze lowering await Core resource primitives                                                   |
-| ABI and layout              | `LayoutId` is independent of `TypeId` with deterministic sizes, alignments, offsets, union tags, and payload storage, and owned versus frozen buffer representations are chosen; nothing emits the frozen slice form, and buffer operations are not decomposed because Core has no `memory.*`                                                                               |
-| Effect bindings             | an effectful module-level binding is computed once into a Wasm global, so a host effect is no longer re-performed per read; this fixed two corpus programs that were passing only because their hosts returned constants                                                                                                                                                    |
+| Boundary                    | Current examples                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Syntax drift                | cleared across 121 legacy and 35 frozen live sources                                                                                                                                                                                                                                                                                                                              |
+| Module graph and namespaces | initial editor and Codex capture failures cleared; the graph now owns every followed import, so linking parses and analyzes each canonical source once; a dependency's private bindings are alpha-renamed on splice, so an importer can neither capture nor read one; module values still use compatibility linking                                                               |
+| Extension dictionaries      | selection is by canonical receiver type within a file, and missing, ambiguous, and incoherent implementations are refused before Core; a dependency's extensions reach the importer once, and an extension body's free names are renamed with its declaring module; selection still cannot resolve two extensions supplying one method for different receivers across files       |
+| CFG and loop edges          | branch lowering verified into Core join blocks, statement-only branches, early return, shadowing, `continue` targeting the nearest header, carried bindings, and mixed break rejection; Core still never sees a loop, and every dynamic collection loop depends on the buffer special case                                                                                        |
+| Staged types and literals   | compile-time products, sums, closures, projection, extension, recursion with a depth guard, `const`/`forall` specialization, protocol evidence with no residual dispatch, and erasure of compile-time-only bindings all verified; structural type reflection answers from real layout through `ducklangReflectedLayout`; the `module` `ConstValue` variant is still unconstructed |
+| Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations, and UTF-8 validates equivalently at both stages; legacy intrinsic dispatch remains                                                                                                                                                                                                                             |
+| Ownership and effects       | linear consumption is path-sensitive with agreeing joins, mutation of a borrowed owner is refused, scratch escapes are closed with `freeze` as the sanctioned exit, resumptions are affine, and the host boundary is typed with async reserved; drops, borrow regions, and freeze lowering await Core resource primitives                                                         |
+| ABI and layout              | `LayoutId` is independent of `TypeId` with deterministic sizes, alignments, offsets, union tags, and payload storage, and owned versus frozen buffer representations are chosen; nothing emits the frozen slice form, and buffer operations are not decomposed because Core has no `memory.*`                                                                                     |
+| Effect bindings             | an effectful module-level binding is computed once into a Wasm global, so a host effect is no longer re-performed per read; this fixed two corpus programs that were passing only because their hosts returned constants                                                                                                                                                          |
 
 ## Completion rule
 

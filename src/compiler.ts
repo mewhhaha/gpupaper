@@ -29,6 +29,7 @@ import {
 import { expandDucklangIncludes } from "./ducklang_module_graph.ts";
 import { parseDucklangModuleWithTimings } from "./ducklang_parser.ts";
 import { qualifyDucklangTypeCollisions } from "./ducklang_type_identity.ts";
+import { reflectDucklangTypes } from "./ducklang_reflection.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
 import { elaborateDucklangSourceTests } from "./ducklang_tests.ts";
 import { expandStaticDucklangLoops } from "./ducklang_static_loops.ts";
@@ -292,7 +293,9 @@ async function compileDucklangModuleSource(
   const resolved = resolveDucklangModule(parsed);
   const resolutionMilliseconds = performance.now() - resolutionStart;
   const initialTypeStart = performance.now();
-  const initialInference = inferDucklangModule(resolved);
+  const initialInference = reflectDucklangTypes(
+    inferDucklangModule(resolved),
+  );
   const initialTypeMilliseconds = performance.now() - initialTypeStart;
   const initialTypes = initialInference.bindings.map((binding) =>
     `${binding.symbol.text}#${binding.symbol.id} :: ${
