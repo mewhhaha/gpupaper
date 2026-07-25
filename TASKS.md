@@ -365,7 +365,27 @@ behavior no longer depends on statement concatenation order.
       with payload bindings, and `extendDucklangConstProduct` leaves its base
       untouched.
 - [ ] Evaluate type constructors and canonicalize applications to `TypeId`s.
-- [ ] Implement structural type reflection over canonical type values.
+- [ ] Implement structural type reflection over canonical type values. Not
+      merely absent: it is stubbed with a wrong constant that programs can read.
+      `@type_of` and `@describe_type` are rewritten in the parser, before any
+      type information exists. `@type_of(x)` returns `x` unchanged, so the
+      reflected "type" is the value itself, and `@describe_type(t)` returns a
+      hardcoded `{ size: 1 }`. A one-field struct and a four-field struct both
+      report size 1, where a real pass would report 4 and 16, and an `I64` field
+      fails with "cannot unify Ducklang i64 with i32" because the size is
+      compared against the value's own type.
+
+      The corpus depends on the constant. `examples/compile_time/19_include_and_type_of.duck`
+      records 18, which is a 17-byte include plus this 1; real reflection over
+      `struct { .length = I32 }` makes it 21. So implementing this must change that
+      recorded expectation, and anyone who instead adjusts the implementation to keep
+      18 passing will have entrenched the stub. `tests/ducklang_type_reflection.test.ts`
+      pins the stub deliberately so a correct pass breaks it and the replacement is
+      visible.
+
+      `planDucklangCoreLayouts` already computes real sizes, alignments, and offsets,
+      but over Core types, so this needs reflection moved out of the parser into a
+      staged pass with type information rather than new size arithmetic.
 - [ ] Specialize `const` parameters and `forall` type parameters.
 - [x] Represent protocol evidence as a compile-time dictionary. Evidence is
       resolved during elaboration and nothing survives to dispatch. With runtime
