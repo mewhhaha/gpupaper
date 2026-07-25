@@ -521,8 +521,14 @@ policy.
       emission, transfer, and total timings separately.
 - [ ] Compare CPU-only and GPU paths by source size, Core operation count,
       function count, and batch size.
-- [ ] Preserve byte-identical output and deterministic diagnostics across
-      repeated runs.
+- [x] Preserve byte-identical output and deterministic diagnostics across
+      repeated runs. Asserted on the CPU path for the frozen editor, Codex, and
+      grep targets and for the module fixtures that carry generated names, plus
+      verbatim diagnostics for three corpus compile failures. Generated names
+      never reach the emitted bytes, so byte equality alone cannot see an
+      order-dependent discriminator; the inferred type listing is asserted too,
+      and that case is mutation-proved by making the type discriminator a
+      counter, which fails it. GPU/CPU differential emission remains Phase 8.
 
 Exit criterion: compatibility and performance claims name the exact recorded
 Binned revision, target set, hardware, execution mode, and measured pipeline
