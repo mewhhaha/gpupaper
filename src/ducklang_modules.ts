@@ -21,6 +21,7 @@ import {
 } from "./ducklang_hygiene.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveImportedPrimitive } from "./ducklang_primitives.ts";
+import type { SourceSpan } from "./syntax.ts";
 
 export type DucklangLinkOptions = {
   readonly sourceProvider?: DucklangSourceProvider;
@@ -218,17 +219,11 @@ async function resolveModuleImports(
         );
         if (fieldNames.length === 0) return parameter;
         const typeName = `$module_${statement.name.text}_parameter_${index}`;
-        statements.push({
-          kind: "structType",
-          name: typeName,
-          parameters: [],
-          fields: fieldNames.map((name) => ({
-            name,
-            type: { name: "Int", arguments: [], span: parameter.span },
-            span: parameter.span,
-          })),
-          span: parameter.span,
-        });
+        statements.push(moduleRecordStructType(
+          typeName,
+          fieldNames.map((name) => ({ name, span: parameter.span })),
+          parameter.span,
+        ));
         return { ...parameter, declaredType: typeName };
       });
       const directResult = statement.value.body.kind === "record"
@@ -248,17 +243,14 @@ async function resolveModuleImports(
         );
       }
       const resultTypeName = `$module_${statement.name.text}_exports`;
-      statements.push({
-        kind: "structType",
-        name: resultTypeName,
-        parameters: [],
-        fields: result.fields.map((field) => ({
+      statements.push(moduleRecordStructType(
+        resultTypeName,
+        result.fields.map((field) => ({
           name: field.name,
-          type: { name: "Int", arguments: [], span: field.span },
           span: field.span,
         })),
-        span: result.span,
-      });
+        result.span,
+      ));
       let body: DucklangExpression;
       if (directResult !== undefined) {
         body = { ...directResult, nominalType: resultTypeName };
@@ -548,17 +540,11 @@ async function resolveModuleImports(
       const fieldNames = collectParameterFields(dependency, parameter.text);
       if (fieldNames.length === 0) return parameter;
       const typeName = `$module_${namespace.text}_parameter_${index}`;
-      statements.push({
-        kind: "structType",
-        name: typeName,
-        parameters: [],
-        fields: fieldNames.map((name) => ({
-          name,
-          type: { name: "Int", arguments: [], span: parameter.span },
-          span: parameter.span,
-        })),
-        span: parameter.span,
-      });
+      statements.push(moduleRecordStructType(
+        typeName,
+        fieldNames.map((name) => ({ name, span: parameter.span })),
+        parameter.span,
+      ));
       return { ...parameter, declaredType: typeName };
     });
     const dependencyResult = dependencyStatements.at(-1);
@@ -567,17 +553,14 @@ async function resolveModuleImports(
       dependencyResult.expression.kind === "record"
     ) {
       const typeName = `$module_${namespace.text}_exports`;
-      statements.push({
-        kind: "structType",
-        name: typeName,
-        parameters: [],
-        fields: dependencyResult.expression.fields.map((field) => ({
+      statements.push(moduleRecordStructType(
+        typeName,
+        dependencyResult.expression.fields.map((field) => ({
           name: field.name,
-          type: { name: "Int", arguments: [], span: field.span },
           span: field.span,
         })),
-        span: dependencyResult.span,
-      });
+        dependencyResult.span,
+      ));
       dependencyStatements = [
         ...dependencyStatements.slice(0, -1),
         {
@@ -607,6 +590,33 @@ async function resolveModuleImports(
     });
   }
   return { ...module, statements };
+}
+
+/**
+ * A synthetic struct for a module parameter record or export record.
+ *
+ * Every field takes its own type parameter rather than a hardcoded `Int`, so an
+ * annotation that supplies no arguments gets one fresh type variable per field
+ * and inference decides each field's type. Hardcoding `Int` made any module
+ * record carrying a non-i32 field fail to unify.
+ */
+function moduleRecordStructType(
+  typeName: string,
+  fieldSpans: readonly { readonly name: string; readonly span: SourceSpan }[],
+  span: SourceSpan,
+): DucklangStatement {
+  const parameters = fieldSpans.map((_, index) => `t${index}`);
+  return {
+    kind: "structType",
+    name: typeName,
+    parameters,
+    fields: fieldSpans.map((field, index) => ({
+      name: field.name,
+      type: { name: parameters[index], arguments: [], span: field.span },
+      span: field.span,
+    })),
+    span,
+  };
 }
 
 function statementValueNames(statement: DucklangStatement): readonly string[] {

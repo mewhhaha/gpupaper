@@ -53,6 +53,16 @@ Deno.test("Ducklang imports do not change a struct field offset", async () => {
   assertEquals(await runFixture("point_layout_app.duck"), 2);
 });
 
+/**
+ * A module parameter record carries whatever types its fields hold. The
+ * synthetic struct the linker builds for it gives every field its own type
+ * parameter, so a `Text` capability infers as `Text`; hardcoding the field type
+ * as `Int` made this fail with "cannot unify Ducklang i32 with text".
+ */
+Deno.test("Ducklang module parameter records accept non-integer fields", async () => {
+  assertEquals(await runFixture("text_parameter_app.duck"), 5);
+});
+
 Deno.test("Ducklang module graph shares a transitive dependency", async () => {
   const sources = new Map([
     [

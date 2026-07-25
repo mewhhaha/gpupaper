@@ -1,0 +1,5 @@
+module (capabilities) where
+
+return {
+  .described = @len(capabilities.label)
+}
