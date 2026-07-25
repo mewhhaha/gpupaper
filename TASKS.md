@@ -515,8 +515,16 @@ terminators, and edge arguments.
       loads, stores, and copies.
 - [ ] Implement UTF-8 encode/decode at the runtime boundary or from buffer
       primitives with equivalent validation.
-- [ ] Lower generic source `List` through ordinary sum/product layout; do not
-      add list opcodes.
+- [x] Lower generic source `List` through ordinary sum/product layout; do not
+      add list opcodes. A `Cell value` struct plus a recursive `List value` sum
+      compiles and runs: a two-cell list sums to 42, a weighted traversal gives
+      420 so element order is observable rather than coincidental, and two lists
+      sharing one tail sum to 44 so the tail is linked rather than copied. No
+      primitive in the registry is named for lists, and neither `src/fcg.ts`,
+      `src/ducklang_fcg.ts`, nor `src/wasm.ts` contains a list opcode. Recursion
+      works because a sum payload is a managed handle; `planDucklangCoreLayouts`
+      still rejects a self-containing type, so a boxed payload is what the Core
+      layout path will need.
 - [x] Add deterministic out-of-bounds traps for buffer and aggregate indexing.
       Pinned from both sides rather than only asserting failure: a `Text` index
       of 0 and 2 into `"abc"` return, 3 and 99 trap; a struct index of 0 and 1
