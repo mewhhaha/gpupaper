@@ -67,10 +67,15 @@ export type DucklangConstValue =
 /**
  * Nested compile-time calls allowed before evaluation is refused.
  *
- * Each level costs a JavaScript frame, so this has to sit well under the host stack
- * budget for the diagnostic to arrive before a stack overflow does.
+ * One Ducklang call level costs several JavaScript frames, not one, because `evaluate`
+ * and `#call` alternate on the way down. At 2000 the guard was unreliable: it fired on a
+ * shallow stack but the host overflowed first when the suite already had frames below it,
+ * so the intermittent failure was "Maximum call stack size exceeded" instead of the
+ * diagnostic. 500 levels is far under the host budget with the same headroom in either
+ * case, and still well past any plausible compile-time recursion; the deepest in the
+ * tests is under ten.
  */
-const maximumConstCallDepth = 2_000;
+const maximumConstCallDepth = 500;
 
 export const emptyDucklangConstEnvironment: DucklangConstEnvironment = {
   parent: undefined,

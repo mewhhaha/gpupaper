@@ -97,3 +97,50 @@ function assertEquals(actual: unknown, expected: unknown): void {
     throw new Error(`expected ${expectedJson}; received ${actualJson}`);
   }
 }
+
+/**
+ * Ties are what the ordering rule is for.
+ *
+ * The case above has different profits, so it only exercises the profit comparison. When
+ * two overlapping proposals are worth the same, source order decides, and the outcome must
+ * not depend on the order the proposals arrived in. Both are asserted here, since a
+ * resolver that simply took the first proposal it saw would satisfy the profit case alone.
+ */
+Deno.test("flat FCG conflict resolution breaks profit ties by source order", () => {
+  const snapshot = flattenFcgModule({
+    functions: [{
+      name: "main",
+      parameters: [],
+      localCount: 0,
+      operations: [
+        { opcode: "const", operands: [0], sourceStart: 0, regionId: 0 },
+        { opcode: "i32.+", operands: [], sourceStart: 1, regionId: 0 },
+        { opcode: "drop", operands: [], sourceStart: 2, regionId: 0 },
+      ],
+    }],
+    constructorTags: new Map(),
+  });
+  const earlier: FlatFcgRewriteProposal = {
+    rule: "addZero",
+    functionIndex: 0,
+    operationStart: 0,
+    operationCount: 2,
+    profit: 2,
+  };
+  const later: FlatFcgRewriteProposal = {
+    rule: "selfLocalAssignment",
+    functionIndex: 0,
+    operationStart: 1,
+    operationCount: 2,
+    profit: 2,
+  };
+
+  // Equal profit, so the earlier operation wins.
+  assertEquals(resolveFlatFcgRewriteConflicts(snapshot, [earlier, later]), [
+    earlier,
+  ]);
+  // And the input order does not change that.
+  assertEquals(resolveFlatFcgRewriteConflicts(snapshot, [later, earlier]), [
+    earlier,
+  ]);
+});

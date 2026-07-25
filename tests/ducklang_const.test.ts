@@ -248,7 +248,7 @@ Deno.test("Ducklang reports non-terminating recursion at the source", async () =
     message = error instanceof Error ? error.message : String(error);
   }
   if (
-    !/Ducklang compile-time evaluation exceeded 2000 nested calls/.test(message)
+    !/Ducklang compile-time evaluation exceeded 500 nested calls/.test(message)
   ) {
     throw new Error(
       `expected a depth diagnostic, received ${JSON.stringify(message)}`,

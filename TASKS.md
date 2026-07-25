@@ -477,9 +477,16 @@ behavior no longer depends on statement concatenation order.
       not bound depth, because each level costs a host stack frame, so
       `let rec forever = value => forever(value + 1)` exhausted the JavaScript stack
       and reported "Maximum call stack size exceeded" with no source location long
-      before a million units of fuel ran out. Evaluation now refuses beyond 2000
+      before a million units of fuel ran out. Evaluation now refuses beyond 500
       nested calls with a source-located diagnostic, and the test also asserts the
       host stack message no longer reaches the user.
+
+      The limit is 500 rather than a larger round number for a measured reason. One
+      Ducklang call level costs several JavaScript frames, so at 2000 the guard fired on a
+      shallow stack but the host overflowed first when the suite already had frames below
+      it, making the test fail roughly one run in three with "Maximum call stack size
+      exceeded". 500 keeps the same headroom either way, and the deepest recursion in the
+      tests is under ten levels.
 
 - [x] Erase all compile-time-only bindings and values before Core construction.
       A binding read only at compile time is gone from the typed module
@@ -857,7 +864,14 @@ host-boundary plans before flattening.
 - [ ] Round-trip structured Core to flat Core and back in tests.
 - [ ] Port rewrite matching from adjacent stack instructions to value-use
       graphs.
-- [ ] Resolve rewrite conflicts by stable profit and source/value order.
+- [x] Resolve rewrite conflicts by stable profit and source/value order.
+      `resolveFlatFcgRewriteConflicts` orders proposals by descending profit,
+      then function index, then operation start, then rule identity, and accepts
+      greedily without overlap. Higher profit wins; on a tie the earlier
+      operation wins, and reversing the order the proposals arrive in does not
+      change the result. The existing test only covered differing profits
+      despite its name, so a resolver that took the first proposal it saw would
+      have passed it; the tie and stability cases are covered now.
 - [ ] Rebuild immutable snapshots after accepted rewrite batches.
 - [ ] Add GPU differential validation against the CPU Core validator and
       rewriter.
