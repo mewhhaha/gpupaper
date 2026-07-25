@@ -903,46 +903,17 @@ boundaries.
 This inventory records the first observed failure for each target, not every
 failure hidden behind it. Re-run and update it after each phase.
 
-| Boundary                    | Current examples                                                                                                                                                                                                                                                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Syntax drift                | cleared across 121 legacy and 35 frozen live sources                                                                                                                                                                                                                                                                |
-| Module graph and namespaces | initial editor and Codex capture failures cleared; the graph now owns every followed import, so linking parses and analyzes each canonical source once; a dependency's private bindings are alpha-renamed on splice, so an importer can neither capture nor read one; module values still use compatibility linking |
-| Extension dictionaries      | editor reaches type-directed `IntoIterator.iterator` selection                                                                                                                                                                                                                                                      |
-| CFG and loop edges          | Codex citation parser reaches branch-local `next_parser`; attributes, Base64, JSON, JSON encode, time, grep, and tar                                                                                                                                                                                                |
-| Staged types and literals   | collections, iterators, JSON values, numeric, numeric parse                                                                                                                                                                                                                                                         |
-| Nominal type identity       | same-named declarations in different files are file-qualified before elaboration, so an import no longer changes a struct field offset; a colliding name that is also a value name is rejected                                                                                                                      |
-| Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations; legacy intrinsic dispatch remains                                                                                                                                                                                                                |
-| ABI and layout              | effects prelude                                                                                                                                                                                                                                                                                                     |
-
-### Fixed: effect bindings re-performed their effect
-
-`value <- Input.read()` re-performed its effect at every read of `value`,
-because a module-level binding was emitted as a zero-argument function and each
-reference called it. Two reads meant two host calls, three meant three, and
-since successive calls can differ, `value + value` was not twice `value`: with a
-host returning 1 then 100 the program answered 101 where one performance
-answers 2.
-
-Fixed by giving each effectful module-level binding a mutable Wasm global that
-`main` fills once in a prologue, so every reference is a `global.get` of an
-already-computed value. Locals cannot express this, because the readers are
-separate functions with their own local space; that is why hoisting into `main`
-as a block made it worse rather than better.
-
-This required a globals section in `WasmModuleBuilder`, `global.get` and
-`global.set` in the FCG instruction set and both emitters, and reference
-lowering that prefers a global over a shape call.
-
-Two corpus programs were affected and are now correct rather than accidentally
-passing: `examples/data/04_dynamic_struct_branch.duck` read `flag` twice and
-`examples/failures/traps/04_zero_range_step.duck` read `step` three times, each
-masked by a host returning a constant.
-
-Each of the four host-interface targets grew by exactly 12 bytes, the global
-declaration plus one store and the load. wav and raytracer are unchanged,
-because neither binds an effect at module level.
-
-Covered by `tests/ducklang_effect_binding.test.ts`.
+| Boundary                    | Current examples                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Syntax drift                | cleared across 121 legacy and 35 frozen live sources                                                                                                                                                                                                                                                                                                                        |
+| Module graph and namespaces | initial editor and Codex capture failures cleared; the graph now owns every followed import, so linking parses and analyzes each canonical source once; a dependency's private bindings are alpha-renamed on splice, so an importer can neither capture nor read one; module values still use compatibility linking                                                         |
+| Extension dictionaries      | selection is by canonical receiver type within a file, and missing, ambiguous, and incoherent implementations are refused before Core; a dependency's extensions reach the importer once, and an extension body's free names are renamed with its declaring module; selection still cannot resolve two extensions supplying one method for different receivers across files |
+| CFG and loop edges          | branch lowering verified into Core join blocks, statement-only branches, early return, shadowing, `continue` targeting the nearest header, carried bindings, and mixed break rejection; Core still never sees a loop, and every dynamic collection loop depends on the buffer special case                                                                                  |
+| Staged types and literals   | compile-time products, sums, closures, projection, extension, recursion with a depth guard, `const`/`forall` specialization, protocol evidence with no residual dispatch, and erasure of compile-time-only bindings all verified; type reflection is a stub returning a constant `size` of 1, and the `module` `ConstValue` variant is still unconstructed                  |
+| Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations, and UTF-8 validates equivalently at both stages; legacy intrinsic dispatch remains                                                                                                                                                                                                                       |
+| Ownership and effects       | linear consumption is path-sensitive with agreeing joins, mutation of a borrowed owner is refused, scratch escapes are closed with `freeze` as the sanctioned exit, resumptions are affine, and the host boundary is typed with async reserved; drops, borrow regions, and freeze lowering await Core resource primitives                                                   |
+| ABI and layout              | `LayoutId` is independent of `TypeId` with deterministic sizes, alignments, offsets, union tags, and payload storage, and owned versus frozen buffer representations are chosen; nothing emits the frozen slice form, and buffer operations are not decomposed because Core has no `memory.*`                                                                               |
+| Effect bindings             | an effectful module-level binding is computed once into a Wasm global, so a host effect is no longer re-performed per read; this fixed two corpus programs that were passing only because their hosts returned constants                                                                                                                                                    |
 
 ## Completion rule
 
