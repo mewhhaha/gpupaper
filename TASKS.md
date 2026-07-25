@@ -480,10 +480,7 @@ terminators, and edge arguments.
       `product.make` with positional `product.project`, a `with_` update lowers
       to `product.update`, and a union lowers to `sum.make`, `sum.tag`, and
       `sum.payload`. No Core operation carries a source field name, so
-      projection really is positional. Note that `lowerDucklangToCore` lowers
-      only function bindings: a module-level value binding reports "Core
-      lowering has no runtime value for <name>", which is one of the gaps to
-      close before Core can be wired into the pipeline.
+      projection really is positional.
 - [x] Define `LayoutId` independently from `TypeId`. `src/ducklang_layout.ts`
       brands `LayoutId` separately and interns layouts structurally, so distinct
       semantic types share one layout when their storage agrees: `i32` and `f32`
