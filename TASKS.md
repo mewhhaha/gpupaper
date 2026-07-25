@@ -740,10 +740,19 @@ operation reaches flat Core without an assigned layout strategy.
       is and the backend refuses it with "cannot represent i32 -> i32", which is what the
       closure-environment item below is for.
 - [ ] Build typed closure environments from captured values.
-- [ ] Preserve direct calls when the callee is statically known.
+- [x] Preserve direct calls when the callee is statically known. A call to a
+      module-level function emits a `call` opcode to that function's own code
+      identity, with no indirect dispatch anywhere in the graph. The argument is
+      a runtime value so the call cannot fold away, which would leave nothing to
+      inspect.
 - [ ] Lower first-class calls to a code-table index plus environment pointer.
 - [ ] Add `call_indirect` signature validation.
-- [ ] Preserve recursive and mutually recursive closure groups.
+- [x] Preserve recursive and mutually recursive closure groups. A self-recursive
+      function survives as its own code identity and calls itself rather than
+      being unrolled. A mutually recursive `even`/`odd` pair keeps both members
+      as separate functions that call each other: `even(4)` walks the pair four
+      times and answers 1, so the group has to be intact for the program to
+      reach 42. Neither uses indirect dispatch.
 - [ ] Carry resource classifications into closure environment fields.
 - [ ] Reject reusable closures that would duplicate a linear capture.
 - [ ] Compile iterator records and combinators without iterator-specific backend
