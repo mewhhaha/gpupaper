@@ -387,7 +387,11 @@ behavior no longer depends on statement concatenation order.
 
 - [ ] Erase all compile-time-only bindings and values before Core construction.
 - [ ] Replace scalar-only comptime evaluation and ad hoc static closure
-      substitution after equivalent behavior is covered.
+      substitution after equivalent behavior is covered. The static closure
+      substitution half now has that coverage: `tests/ducklang_closures.test.ts`
+      pins both the shape after specialization and the value each program
+      computes, including a three-level capture that would answer 123 wrongly if
+      an environment were substituted incorrectly.
 
 Milestones:
 
@@ -519,7 +523,14 @@ operation reaches flat Core without an assigned layout strategy.
 
 ## Phase 6: Closure conversion and calls
 
-- [ ] Compute free variables for every runtime function.
+- [ ] Compute free variables for every runtime function. Not started, and the
+      current boundary is now covered by tests:
+      `specializeStaticDucklangClosures` removes higher-order structure by
+      specializing a closure at each known call site, so `adder`/`apply`-style
+      factories disappear and the backend emits direct calls only. It does not
+      lift, so a nested local function that captures an enclosing parameter is
+      rejected outright with "local Ducklang function inner requires closure
+      conversion". Core has no `closure.make` and no `call.indirect`.
 - [ ] Lift nested functions to top-level code identities.
 - [ ] Build typed closure environments from captured values.
 - [ ] Preserve direct calls when the callee is statically known.
