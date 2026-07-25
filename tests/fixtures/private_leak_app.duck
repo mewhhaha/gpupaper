@@ -1,0 +1,3 @@
+const open { .exposed = exposed } = import "./private_leak_module.duck" ()
+
+exposed(0) + secret

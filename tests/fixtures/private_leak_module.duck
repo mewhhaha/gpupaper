@@ -1,0 +1,6 @@
+module () where
+
+const secret = 999
+const exposed = value => secret + value
+
+return { exposed }

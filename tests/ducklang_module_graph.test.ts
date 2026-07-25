@@ -8,10 +8,39 @@ import {
   type DucklangSourceProvider,
   moduleId,
 } from "../src/ducklang_module_graph.ts";
+import { compileModuleSource, runMain } from "../src/compiler.ts";
 import { resolveDucklangLocalImports } from "../src/ducklang_modules.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
+
+/**
+ * A module's private binding must keep its own meaning no matter what the
+ * importer happens to name its own bindings. Both applications call the same
+ * exported `get`, which adds the dependency's private `helper = 100`, so both
+ * must return 100. The only difference between them is that the colliding
+ * application also declares an unrelated top-level `helper = 1`.
+ */
+Deno.test("Ducklang imports keep private bindings across a name collision", async () => {
+  assertEquals(await runFixture("private_binding_app.duck"), 100);
+  assertEquals(
+    await runFixture("private_binding_collision_app.duck"),
+    100,
+  );
+});
+
+/**
+ * A module's export record is its interface: selecting a name it does not export
+ * is already rejected with "does not export", so referencing a non-exported
+ * binding after an open import must be rejected the same way rather than
+ * silently resolving to the dependency's private binding.
+ */
+Deno.test("Ducklang open imports do not leak private bindings", async () => {
+  await assertRejects(
+    () => runFixture("private_leak_app.duck"),
+    /unknown Ducklang name secret/,
+  );
+});
 
 Deno.test("Ducklang module graph shares a transitive dependency", async () => {
   const sources = new Map([
@@ -295,6 +324,16 @@ function memorySourceProvider(
       });
     },
   };
+}
+
+async function runFixture(name: string): Promise<number | bigint> {
+  const file = await Deno.realPath(`tests/fixtures/${name}`);
+  const artifact = await compileModuleSource(
+    file as `${string}.duck`,
+    await Deno.readTextFile(file),
+    { gpuMode: "off" },
+  );
+  return await runMain(artifact.wasm);
 }
 
 function countingSourceProvider(provider: DucklangSourceProvider): {
