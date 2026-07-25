@@ -104,6 +104,46 @@ async function inferredNames(target: string): Promise<readonly string[]> {
   return artifact.initialTypes;
 }
 
+/**
+ * The Wasm byte counts recorded in PERFORMANCE.md, pinned so the document cannot
+ * silently drift from the compiler again. The Codex figure went stale once
+ * already: value-level hygiene grew it by 93 bytes and the table kept the old
+ * number. A change here is not a failure, it is a signal to re-record the
+ * document and say why the size moved.
+ */
+const recordedWasmBytes:
+  readonly (readonly [string, string | undefined, number])[] = [
+    [
+      "examples/binned/live/case-studies/editor/editor.duck",
+      "examples/binned/live/case-studies/editor/host.duck",
+      8373,
+    ],
+    [
+      "examples/binned/live/case-studies/codex/codex.duck",
+      "examples/binned/live/case-studies/codex/host.duck",
+      26930,
+    ],
+    [
+      "examples/binned/live/case-studies/grep/grep.duck",
+      "examples/binned/live/case-studies/grep/host.duck",
+      1416,
+    ],
+    [
+      "examples/binned/live/case-studies/tar/tar.duck",
+      "examples/binned/live/case-studies/tar/host.duck",
+      8449,
+    ],
+  ];
+
+for (const [target, host, expected] of recordedWasmBytes) {
+  Deno.test(
+    `Ducklang ${target.split("/").at(-1)} matches its recorded Wasm size`,
+    async () => {
+      assertEquals((await compile(target, host)).length, expected);
+    },
+  );
+}
+
 async function compile(
   target: string,
   host: string | undefined,

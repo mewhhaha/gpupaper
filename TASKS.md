@@ -516,7 +516,12 @@ policy.
 - [ ] Compile and execute grep and tar, including dynamic control flow.
 - [ ] Compile and execute wav after hexadecimal and bitwise coverage.
 - [ ] Compile and execute the raytracer after `F32`, `F64`, and SIMD coverage.
-- [ ] Record cold parser initialization separately from warm compilation.
+- [x] Record cold parser initialization separately from warm compilation.
+      `parserInitializationMilliseconds` is its own field in
+      `CompilationTimings`, separate from syntax and AST lowering;
+      `scripts/benchmark_ducklang_frontend.ts` records one cold measurement and
+      the median of five warm ones per target, and PERFORMANCE.md reports both
+      columns for all six targets.
 - [ ] Record CPU semantic elaboration, flat-Core construction, GPU rewrite, GPU
       emission, transfer, and total timings separately.
 - [ ] Compare CPU-only and GPU paths by source size, Core operation count,
