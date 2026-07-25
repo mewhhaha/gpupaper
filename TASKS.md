@@ -432,7 +432,19 @@ protocol search, extension search, or compile-time closures.
       into a join block carrying one `i32` parameter; a union match lowers the
       same way and projects its payload with `sum.payload` rather than
       re-deriving it from the scrutinee.
-- [ ] Lower unbounded loops to header and exit blocks.
+- [ ] Lower unbounded loops to header and exit blocks. Measured scope: this is
+      not a Core-only change. `ResolvedDucklangExpression` and
+      `TypedDucklangExpression` carry no loop, break, continue, `forRange`, or
+      `forCollection` node at all, and resolution rejects every one of them
+      outright at `src/ducklang_resolution.ts:854` and `:1611` with "dynamic
+      Ducklang ... requires loop IR lowering". Earlier passes lower loops to
+      recursive functions before resolution sees them, which is why the frozen
+      grep and tar targets run today. Giving Core header and exit blocks
+      therefore needs coordinated new nodes in resolution, typing rules in
+      inference, and lowering in Core, with the recursive-function path kept
+      working until Core is wired in. It cannot be landed as one green
+      increment, so it needs its own design pass rather than an incremental
+      attempt.
 - [ ] Pass every carried binding on loop back-edges and exits.
 - [ ] Lower bare and valued `break` without mixing their result signatures.
 - [ ] Lower `continue` to the nearest loop header.
