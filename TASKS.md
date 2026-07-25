@@ -369,7 +369,24 @@ behavior no longer depends on statement concatenation order.
 - [ ] Specialize `const` parameters and `forall` type parameters.
 - [ ] Represent protocol evidence as a compile-time dictionary.
 - [ ] Select extension implementations using canonical receiver types.
-- [ ] Reject missing, ambiguous, and incoherent implementations before Core.
+- [x] Reject missing, ambiguous, and incoherent implementations before Core. All
+      three are refused during extension elaboration, well ahead of Core. A
+      protocol method no extension provides reports "has no implementation"; two
+      extensions giving the same method for the same receiver report "has 2
+      incoherent implementations for I32"; a generic extension overlapped by a
+      concrete one is refused too. The accepting cases are pinned alongside,
+      since a selector that refused everything would satisfy the rejections by
+      itself.
+
+      Diagnostic defect recorded rather than fixed: the overlap case reports "has no
+      implementation for I32Box" when the problem is two candidates that both apply,
+      which sends a reader looking for a missing extension instead of a duplicated
+      one. Selection is correct; only the wording is wrong.
+
+      Also noted: an extension providing only some of a protocol's methods compiles,
+      because `extend I32 { ... }` extends a type rather than claiming to implement a
+      protocol. Whether that should be required is a language question, not a gap in
+      this checkbox.
 - [ ] Preserve binding-time environments across type aliases and extension
       layers.
 - [x] Add explicit fuel and recursion diagnostics for non-terminating
