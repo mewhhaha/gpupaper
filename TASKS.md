@@ -421,7 +421,20 @@ behavior no longer depends on statement concatenation order.
       down#0`, which named an internal
       symbol ID and never mentioned recursion.
 
-- [ ] Erase all compile-time-only bindings and values before Core construction.
+- [x] Erase all compile-time-only bindings and values before Core construction.
+      A binding read only at compile time is gone from the typed module
+      entirely: three programs whose `const`s feed only `comptime` expressions
+      reach the backend with `total` as their sole binding. No `comptime` node
+      survives anywhere in the typed module, including the frozen editor and
+      grep, so every staged expression was evaluated rather than carried along.
+
+      Deliberately not asserted: that no binding carries the compile-time stage. That
+      stage records the declaration kind, so a `const` read at runtime keeps it and
+      must survive as a runtime definition. The editor has 17 such bindings and
+      `escape_character` alone is read four times, so demanding the stage be absent
+      would require erasing values the program needs. The first version of the test
+      asserted exactly that and failed on the editor, which is how the distinction
+      was found.
 - [ ] Replace scalar-only comptime evaluation and ad hoc static closure
       substitution after equivalent behavior is covered. The static closure
       substitution half now has that coverage: `tests/ducklang_closures.test.ts`
