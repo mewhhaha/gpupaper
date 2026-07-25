@@ -236,28 +236,33 @@ Deno.test("Ducklang local module exports retain captured bindings", async () => 
   const resolved = resolveDucklangModule(linked);
   inferDucklangModule(resolved);
 
-  const captured = resolved.bindings.find((binding) =>
-    binding.symbol.text === "captured"
-  );
   const exported = resolved.bindings.find((binding) =>
     binding.symbol.text === "$module_captured_module_add_captured"
   );
   if (
-    captured === undefined ||
     exported?.value.kind !== "function" ||
     exported.value.body.kind !== "binary" ||
     exported.value.body.left.kind !== "reference"
   ) {
     throw new Error("missing captured local module function");
   }
-  assertEquals(exported.value.body.left.symbol.id, captured.symbol.id);
-  assertEquals(
-    exported.value.body.left.symbol.moduleId,
-    captured.symbol.moduleId,
+  // The dependency's private binding is alpha-renamed, so the invariant is the
+  // resolved link rather than the spelling: the exported function's capture must
+  // resolve to a real binding declared by the dependency, and that binding must
+  // still hold the dependency's value.
+  const capture = exported.value.body.left.symbol;
+  const captured = resolved.bindings.find((binding) =>
+    binding.symbol.id === capture.id
   );
+  if (captured === undefined) {
+    throw new Error(`capture ${capture.text} resolves to no binding`);
+  }
+  assertEquals(captured.symbol.moduleId, capture.moduleId);
+  assertEquals(captured.symbol.moduleId.endsWith("captured_module.duck"), true);
+  assertEquals(captured.symbol.text.startsWith("captured"), true);
   assertEquals(
-    exported.value.body.left.symbol.moduleId.endsWith("captured_module.duck"),
-    true,
+    captured.value.kind === "integer" ? captured.value.value : undefined,
+    40,
   );
 });
 
@@ -271,15 +276,23 @@ Deno.test("Codex citation parser import retains its texts environment", async ()
     source,
   );
 
-  const textsBinding = linked.statements.find((statement) =>
-    statement.kind === "binding" && statement.name.text === "texts"
-  );
   const pushBinding = linked.statements.find((statement) =>
     statement.kind === "binding" &&
     statement.name.text === "$module_citation_parser_module_push_citation_chunk"
   );
-  assertEquals(textsBinding?.kind, "binding");
-  assertEquals(referencesName(pushBinding, "texts"), true);
+  // The captured binding is alpha-renamed, so assert the capture is closed: the
+  // `texts` name the exported function references must be bound by a statement
+  // that linking actually emitted, not merely present as a string.
+  const referenced = referencedNamesStartingWith(pushBinding, "texts");
+  assertEquals(referenced.length > 0, true);
+  const boundNames = new Set(
+    linked.statements.flatMap((statement) =>
+      statement.kind === "binding" ? [statement.name.text] : []
+    ),
+  );
+  for (const name of referenced) {
+    assertEquals(boundNames.has(name), true);
+  }
   assertEquals(
     linked.statements.some((statement) =>
       statement.kind === "unionType" && statement.name === "Option"
@@ -406,15 +419,24 @@ function assertEquals(actual: unknown, expected: unknown): void {
   }
 }
 
-function referencesName(value: unknown, name: string): boolean {
+function referencedNamesStartingWith(
+  value: unknown,
+  prefix: string,
+): string[] {
+  const names = new Set<string>();
   const pending: unknown[] = [value];
   while (pending.length > 0) {
     const current = pending.pop();
     if (current === null || typeof current !== "object") continue;
     const node = current as Record<string, unknown>;
     const reference = node.name as Record<string, unknown> | undefined;
-    if (node.kind === "reference" && reference?.text === name) return true;
+    if (
+      node.kind === "reference" && typeof reference?.text === "string" &&
+      reference.text.startsWith(prefix)
+    ) {
+      names.add(reference.text);
+    }
     pending.push(...Object.values(node));
   }
-  return false;
+  return [...names];
 }

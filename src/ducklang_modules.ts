@@ -15,6 +15,10 @@ import {
   type ModuleId,
   moduleId,
 } from "./ducklang_module_graph.ts";
+import {
+  hygienicDucklangName,
+  renameDucklangValues,
+} from "./ducklang_hygiene.ts";
 import { parseDucklangModule } from "./ducklang_parser.ts";
 import { resolveImportedPrimitive } from "./ducklang_primitives.ts";
 
@@ -382,7 +386,7 @@ async function resolveModuleImports(
         }`,
       );
     }
-    const dependency = await instances.instantiate(
+    const rawDependency = await instances.instantiate(
       ducklangModuleInstanceKey({
         moduleId: dependencyNode.id,
         sourceHash: dependencyNode.sourceHash,
@@ -401,6 +405,9 @@ async function resolveModuleImports(
           graph,
         ),
     );
+    // Every splice path below receives a dependency whose private bindings
+    // already carry hygienic names, so no path can capture or expose one.
+    const dependency = hygieniseDucklangDependency(rawDependency);
     if (
       statement.open ||
       (statement.namespace === undefined && statement.selections.length > 0)
@@ -508,10 +515,11 @@ async function resolveModuleImports(
             }
             continue;
           }
+          // A dependency's private bindings are hygienically renamed, so a name
+          // shared with the importer is no longer a reason to drop one. Dropping
+          // it silently rebound the dependency's references to the importer's
+          // binding of the same name.
           const valueNames = statementValueNames(dependencyStatement);
-          if (valueNames.some((name) => declaredValueNames.has(name))) {
-            continue;
-          }
           statements.push(dependencyStatement);
           for (const name of valueNames) declaredValueNames.add(name);
           for (const key of statementTypeKeys(dependencyStatement)) {
@@ -849,7 +857,7 @@ function openModuleBindings(
       if (bindings.has(referencedName)) pendingBindings.push(referencedName);
     }
   }
-  return dependency.statements.flatMap<DucklangStatement>(
+  const spliced = dependency.statements.flatMap<DucklangStatement>(
     (dependencyStatement) => {
       if (dependencyStatement.kind === "import") {
         const selections = dependencyStatement.selections.filter((selection) =>
@@ -879,6 +887,46 @@ function openModuleBindings(
       return [{ ...dependencyStatement, name }];
     },
   );
+  return spliced;
+}
+
+/**
+ * Alpha-renames a dependency's private module-level bindings.
+ *
+ * Only the bindings that back an export belong in the importer's scope. The
+ * private bindings they depend on are spliced too, so renaming them keeps the
+ * importer from capturing one by declaring the same name, and keeps them from
+ * resolving for an importer that never selected them.
+ */
+function hygieniseDucklangDependency(
+  dependency: DucklangModule,
+): DucklangModule {
+  const result = dependency.statements.at(-1);
+  if (result?.kind !== "expression" || result.expression.kind !== "record") {
+    return dependency;
+  }
+  const exported = new Set(
+    result.expression.fields.flatMap((field) =>
+      field.value.kind === "reference" ? [field.value.name.text] : []
+    ),
+  );
+  const renames = new Map(
+    dependency.statements.flatMap((statement) =>
+      statement.kind === "binding" && !exported.has(statement.name.text)
+        ? [
+          [
+            statement.name.text,
+            hygienicDucklangName(statement.name.text, dependency.file),
+          ] as const,
+        ]
+        : []
+    ),
+  );
+  if (renames.size === 0) return dependency;
+  return {
+    ...dependency,
+    statements: renameDucklangValues(dependency.statements, renames),
+  };
 }
 
 function collectReferencedNames(value: unknown): readonly string[] {
