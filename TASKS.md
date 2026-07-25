@@ -559,7 +559,17 @@ Milestones:
       = ... }`
       passes a type as a `const` parameter and then uses that parameter in type
       position. A `const` parameter is a value binding, so the type namespace
-      cannot see it. This is a boundary on the "Specialize `const` parameters
+      cannot see it, and the information needed to fix it is not captured at
+      all: `DucklangParameter` is `DucklangName` (`src/ducklang_ast.ts:45`), a
+      bare name, so the `const` marker on a parameter is discarded at parse
+      time. Correcting a size estimate made earlier in this work: this is not a
+      contained fix. It needs const-ness recorded on a core AST type used at
+      every parameter site, carried through resolution to symbols, bound into
+      the type-parameter map during inference so `List value_type` and
+      `value: value_type` unify to one variable rather than two fresh ones, and
+      substituted per call site by specialization.
+
+      This is a boundary on the "Specialize `const` parameters
       and `forall` type parameters" item above, which is checked: that covers
       `const` parameters holding values and `forall` type parameters, but not a
       `const` parameter _holding a type_ and used as one, which needs the type
