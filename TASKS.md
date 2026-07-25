@@ -384,10 +384,21 @@ protocol search, extension search, or compile-time closures.
 
 ## Phase 4: SSA Core and structured control flow
 
-- [ ] Define immutable Core tables for functions, blocks, block parameters,
-      values, operations, terminators, and source spans.
-- [ ] Validate block ownership, unique value definitions, dominance, edge arity,
-      edge types, and terminator presence.
+- [x] Define immutable Core tables for functions, blocks, block parameters,
+      values, operations, terminators, and source spans. `DucklangCoreModule`
+      holds `readonly` type, signature, and function tables addressed by branded
+      integer IDs; each block carries its parameters, operations, and a
+      non-optional terminator, and every function, block parameter, operation,
+      and terminator carries a `SourceSpan`.
+- [x] Validate block ownership, unique value definitions, dominance, edge arity,
+      edge types, and terminator presence. `validateDucklangCore` covers all
+      six, and each rejection is now tested by breaking exactly one property of
+      a module the validator accepts: table index against ID for functions and
+      blocks, duplicate definitions, edge argument count against target
+      parameters, edge argument type against target parameter type, out-of-range
+      entry function, signature, and branch target, undefined values, and a real
+      iterative dominator computation rather than a use-before-definition scan.
+      Terminator presence is structural: the field is not optional.
 - [ ] Lower lexical shadowing to fresh `ValueId`s.
 - [ ] Lower statement-only blocks and branches to `Unit` plus continuation
       edges.
