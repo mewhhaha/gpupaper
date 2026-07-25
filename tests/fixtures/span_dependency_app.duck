@@ -1,0 +1,4 @@
+const span_dependency_module = import "./span_dependency_module.duck"
+const { get } = span_dependency_module()
+
+get(0)

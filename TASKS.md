@@ -538,9 +538,34 @@ behavior no longer depends on statement concatenation order.
 Milestones:
 
 - [ ] `prelude_types.duck` normalizes to an export module without reaching FCG.
-- [ ] `prelude.duck` normalizes using the source-defined type builders.
+      Measured first error:
+      `prelude_types.duck:1247: dynamic Ducklang forCollection
+      requires loop IR lowering`,
+      at `for field in shape`. Gated on loop IR.
+- [ ] `prelude.duck` normalizes using the source-defined type builders. Measured
+      first error: the same `forCollection` at `prelude_types.duck:1247`,
+      reached through its `import "duck:prelude/types"`. So this one is gated on
+      the item above rather than on anything in `prelude.duck` itself.
 - [ ] `prelude_functional.duck`, `prelude_list.duck`, and
       `prelude_iterators.duck` specialize their generic source definitions.
+      Three different measured first errors, so these are three separate gaps
+      and not one:
+      `prelude_runtime.duck:15193: assignment to digit has no visible Ducklang
+      binding`
+      (reached from `prelude_functional.duck`),
+      `prelude_list.duck:3644: unknown Ducklang type value_type`, and
+      `prelude_iterators.duck:4338: Ducklang field source_next does not uniquely
+      identify a struct`.
+      None of the three is a loop IR error, so they are not blocked behind
+      Phase 5.
+
+      These first errors were only trustworthy after fixing diagnostic
+      attribution. Resolution built messages from its own file paired with a
+      spliced statement's offset, so two of the five named the wrong file: the
+      `prelude.duck` error appeared to be at `prelude.duck:1247`, which is an
+      import statement, and the `prelude_functional.duck` error is really in
+      `prelude_runtime.duck`. Spans carry their own file and are now used, pinned
+      by `tests/ducklang_span_attribution.test.ts`.
 
 Exit criterion: Core is monomorphic and contains no modules, type values,
 protocol search, extension search, or compile-time closures.

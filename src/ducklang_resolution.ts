@@ -368,7 +368,9 @@ class DucklangResolver {
           candidate.id === symbol
         );
         throw new TypeError(
-          `${this.#file}:${declared?.span.start ?? 0}: linear Ducklang value ${
+          `${declared?.span.file ?? this.#file}:${
+            declared?.span.start ?? 0
+          }: linear Ducklang value ${
             declared?.text ?? symbol
           } is consumed on some paths but not branch ${index + 1}`,
         );
@@ -422,7 +424,7 @@ class DucklangResolver {
     return parameters.map((parameter) => {
       if (names.has(parameter.text)) {
         throw new SyntaxError(
-          `${this.#file}:${parameter.span.start}: duplicate Ducklang module parameter ${parameter.text}`,
+          `${parameter.span.file}:${parameter.span.start}: duplicate Ducklang module parameter ${parameter.text}`,
         );
       }
       names.add(parameter.text);
@@ -435,7 +437,7 @@ class DucklangResolver {
       if (!symbol.linear) continue;
       if ((this.#linearUseCounts.get(symbol.id) ?? 0) > 0) continue;
       throw new TypeError(
-        `${this.#file}:${symbol.span.start}: linear Ducklang value ${symbol.text} was not consumed`,
+        `${symbol.span.file}:${symbol.span.start}: linear Ducklang value ${symbol.text} was not consumed`,
       );
     }
   }
@@ -456,12 +458,12 @@ class DucklangResolver {
       if (statement.kind === "initDeclaration") {
         if (scope !== "module") {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang Init declarations must be module-level`,
+            `${statement.span.file}:${statement.span.start}: Ducklang Init declarations must be module-level`,
           );
         }
         if (this.#initFields.length > 0) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: duplicate Ducklang Init declaration`,
+            `${statement.span.file}:${statement.span.start}: duplicate Ducklang Init declaration`,
           );
         }
         const names = new Set<string>();
@@ -469,19 +471,19 @@ class DucklangResolver {
         for (const field of statement.fields) {
           if (names.has(field.name)) {
             throw new SyntaxError(
-              `${this.#file}:${field.span.start}: duplicate Ducklang Init field ${field.name}`,
+              `${field.span.file}:${field.span.start}: duplicate Ducklang Init field ${field.name}`,
             );
           }
           names.add(field.name);
           if (!this.#effects.has(field.effectName)) {
             throw new TypeError(
-              `${this.#file}:${field.span.start}: Ducklang Init field ${field.name} references unknown effect ${field.effectName}`,
+              `${field.span.file}:${field.span.start}: Ducklang Init field ${field.name} references unknown effect ${field.effectName}`,
             );
           }
           const existingField = effectFields.get(field.effectName);
           if (existingField !== undefined) {
             throw new TypeError(
-              `${this.#file}:${field.span.start}: Ducklang Init fields ${existingField} and ${field.name} both grant effect ${field.effectName}`,
+              `${field.span.file}:${field.span.start}: Ducklang Init fields ${existingField} and ${field.name} both grant effect ${field.effectName}`,
             );
           }
           effectFields.set(field.effectName, field.name);
@@ -504,7 +506,7 @@ class DucklangResolver {
         const symbols = statement.bindings.map((binding) => {
           if (names.has(binding.name.text)) {
             throw new SyntaxError(
-              `${this.#file}:${binding.name.span.start}: duplicate Ducklang recursive binding ${binding.name.text}`,
+              `${binding.name.span.file}:${binding.name.span.start}: duplicate Ducklang recursive binding ${binding.name.text}`,
             );
           }
           names.add(binding.name.text);
@@ -538,19 +540,19 @@ class DucklangResolver {
       if (statement.kind === "effectDeclaration") {
         if (scope !== "module") {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang effect declarations must be module-level`,
+            `${statement.span.file}:${statement.span.start}: Ducklang effect declarations must be module-level`,
           );
         }
         if (this.#effects.has(statement.name)) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: duplicate Ducklang effect ${statement.name}`,
+            `${statement.span.file}:${statement.span.start}: duplicate Ducklang effect ${statement.name}`,
           );
         }
         const operationNames = new Set<string>();
         for (const operation of statement.operations) {
           if (operationNames.has(operation.name)) {
             throw new SyntaxError(
-              `${this.#file}:${operation.span.start}: duplicate Ducklang effect operation ${statement.name}.${operation.name}`,
+              `${operation.span.file}:${operation.span.start}: duplicate Ducklang effect operation ${statement.name}.${operation.name}`,
             );
           }
           operationNames.add(operation.name);
@@ -561,7 +563,7 @@ class DucklangResolver {
       if (statement.kind === "structType") {
         if (scope !== "module") {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang struct declarations must be module-level`,
+            `${statement.span.file}:${statement.span.start}: Ducklang struct declarations must be module-level`,
           );
         }
         const duplicate = this.#structTypes.some((declaration) =>
@@ -576,14 +578,14 @@ class DucklangResolver {
         );
         if (duplicate) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+            `${statement.span.file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
           );
         }
         const fieldNames = new Set<string>();
         for (const field of statement.fields) {
           if (fieldNames.has(field.name)) {
             throw new SyntaxError(
-              `${this.#file}:${field.span.start}: duplicate Ducklang field ${statement.name}.${field.name}`,
+              `${field.span.file}:${field.span.start}: duplicate Ducklang field ${statement.name}.${field.name}`,
             );
           }
           fieldNames.add(field.name);
@@ -594,7 +596,7 @@ class DucklangResolver {
       if (statement.kind === "unionType") {
         if (scope !== "module") {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang type declarations must be module-level`,
+            `${statement.span.file}:${statement.span.start}: Ducklang type declarations must be module-level`,
           );
         }
         if (
@@ -611,7 +613,7 @@ class DucklangResolver {
           )
         ) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+            `${statement.span.file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
           );
         }
         this.#unionTypes.push(statement);
@@ -620,7 +622,7 @@ class DucklangResolver {
       if (statement.kind === "typeAlias") {
         if (scope !== "module") {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang type aliases must be module-level`,
+            `${statement.span.file}:${statement.span.start}: Ducklang type aliases must be module-level`,
           );
         }
         const duplicate = this.#typeAliases.some((alias) =>
@@ -635,7 +637,7 @@ class DucklangResolver {
         );
         if (duplicate) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
+            `${statement.span.file}:${statement.span.start}: duplicate Ducklang type ${statement.name}`,
           );
         }
         this.#typeAliases.push(statement);
@@ -653,7 +655,7 @@ class DucklangResolver {
           target.modulePath !== expectedModulePath
         ) {
           throw new TypeError(
-            `${this.#file}:${statement.target.span.start}: Ducklang ${statement.patternKind} pattern does not match its target`,
+            `${statement.target.span.file}:${statement.target.span.start}: Ducklang ${statement.patternKind} pattern does not match its target`,
           );
         }
         const descriptor = JSON.parse(target.exportName) as {
@@ -669,7 +671,7 @@ class DucklangResolver {
         const members = descriptor.fields ?? descriptor.cases;
         if (members === undefined) {
           throw new TypeError(
-            `${this.#file}:${statement.target.span.start}: Ducklang ${statement.patternKind} target has no members`,
+            `${statement.target.span.file}:${statement.target.span.start}: Ducklang ${statement.patternKind} target has no members`,
           );
         }
         for (const expected of statement.fields) {
@@ -679,13 +681,13 @@ class DucklangResolver {
           if (actual?.type !== expected.type) {
             const received = actual === undefined ? "missing" : actual.type;
             throw new TypeError(
-              `${this.#file}:${statement.span.start}: Ducklang ${statement.patternKind} pattern field ${expected.name} expects ${expected.type}; received ${received}`,
+              `${statement.span.file}:${statement.span.start}: Ducklang ${statement.patternKind} pattern field ${expected.name} expects ${expected.type}; received ${received}`,
             );
           }
         }
         if (!statement.open && members.length !== statement.fields.length) {
           throw new TypeError(
-            `${this.#file}:${statement.span.start}: closed Ducklang ${statement.patternKind} pattern expects ${statement.fields.length} members; received ${members.length}`,
+            `${statement.span.file}:${statement.span.start}: closed Ducklang ${statement.patternKind} pattern expects ${statement.fields.length} members; received ${members.length}`,
           );
         }
         continue;
@@ -693,7 +695,7 @@ class DucklangResolver {
       if (statement.kind === "import") {
         if (statement.namespace !== undefined || statement.open) {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: Ducklang local and open imports require module graph resolution`,
+            `${statement.span.file}:${statement.span.start}: Ducklang local and open imports require module graph resolution`,
           );
         }
         if (
@@ -907,7 +909,7 @@ class DucklangResolver {
         statement.kind === "break" || statement.kind === "continue"
       ) {
         throw new TypeError(
-          `${this.#file}:${statement.span.start}: dynamic Ducklang ${statement.kind} requires loop IR lowering`,
+          `${statement.span.file}:${statement.span.start}: dynamic Ducklang ${statement.kind} requires loop IR lowering`,
         );
       }
       if (statement.kind === "expression") {
@@ -938,7 +940,7 @@ class DucklangResolver {
           steps.push({ kind: "expression", expression });
         } else {
           throw new SyntaxError(
-            `${this.#file}:${statement.span.start}: module-level Ducklang return must be the final statement`,
+            `${statement.span.file}:${statement.span.start}: module-level Ducklang return must be the final statement`,
           );
         }
         continue;
@@ -962,7 +964,7 @@ class DucklangResolver {
           );
           if (declaration === undefined || field === undefined) {
             throw new TypeError(
-              `${this.#file}:${statement.value.span.start}: Ducklang struct type projection ${structName}.shape.${projectedFieldName} does not name a declared field`,
+              `${statement.value.span.file}:${statement.value.span.start}: Ducklang struct type projection ${structName}.shape.${projectedFieldName} does not name a declared field`,
             );
           }
           const duplicate = this.#typeAliases.some((alias) =>
@@ -974,7 +976,7 @@ class DucklangResolver {
           );
           if (duplicate) {
             throw new SyntaxError(
-              `${this.#file}:${statement.name.span.start}: duplicate Ducklang type ${statement.name.text}`,
+              `${statement.name.span.file}:${statement.name.span.start}: duplicate Ducklang type ${statement.name.text}`,
             );
           }
           this.#typeAliases.push({
@@ -1017,7 +1019,7 @@ class DucklangResolver {
       const previous = environment.get(statement.name.text);
       if (previous === undefined) {
         throw new ReferenceError(
-          `${this.#file}:${statement.name.span.start}: assignment to ${statement.name.text} has no visible Ducklang binding`,
+          `${statement.name.span.file}:${statement.name.span.start}: assignment to ${statement.name.text} has no visible Ducklang binding`,
         );
       }
       const value = this.#resolveExpression(
@@ -1050,7 +1052,7 @@ class DucklangResolver {
         };
       }
       throw new TypeError(
-        `${this.#file}:${span.start}: Ducklang block has no result expression`,
+        `${span.file}:${span.start}: Ducklang block has no result expression`,
       );
     }
     return { bindings, steps, result, environment };
@@ -1144,7 +1146,7 @@ class DucklangResolver {
         };
       case "moduleImport":
         throw new SyntaxError(
-          `${this.#file}:${expression.span.start}: Ducklang import expression must initialize a module binding`,
+          `${expression.span.file}:${expression.span.start}: Ducklang import expression must initialize a module binding`,
         );
       case "hostCall": {
         const operation = this.#effects.get(expression.effectName)?.find(
@@ -1152,12 +1154,12 @@ class DucklangResolver {
         );
         if (operation === undefined) {
           throw new ReferenceError(
-            `${this.#file}:${expression.span.start}: unknown Ducklang effect operation ${expression.effectName}.${expression.operationName}`,
+            `${expression.span.file}:${expression.span.start}: unknown Ducklang effect operation ${expression.effectName}.${expression.operationName}`,
           );
         }
         if (operation.parameterTypes.length !== expression.arguments.length) {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang effect operation ${expression.effectName}.${expression.operationName} expects ${operation.parameterTypes.length} arguments; received ${expression.arguments.length}`,
+            `${expression.span.file}:${expression.span.start}: Ducklang effect operation ${expression.effectName}.${expression.operationName} expects ${operation.parameterTypes.length} arguments; received ${expression.arguments.length}`,
           );
         }
         return {
@@ -1270,14 +1272,14 @@ class DucklangResolver {
             };
           }
           throw new ReferenceError(
-            `${this.#file}:${expression.span.start}: unknown Ducklang name ${expression.name.text}`,
+            `${expression.span.file}:${expression.span.start}: unknown Ducklang name ${expression.name.text}`,
           );
         }
         if (symbol.linear) {
           const uses = (this.#linearUseCounts.get(symbol.id) ?? 0) + 1;
           if (uses > 1) {
             throw new TypeError(
-              `${this.#file}:${expression.span.start}: linear Ducklang value ${symbol.text} was already consumed`,
+              `${expression.span.file}:${expression.span.start}: linear Ducklang value ${symbol.text} was already consumed`,
             );
           }
           this.#linearUseCounts.set(symbol.id, uses);
@@ -1313,7 +1315,7 @@ class DucklangResolver {
         for (const parameter of expression.parameters) {
           if (parameterNames.has(parameter.text)) {
             throw new SyntaxError(
-              `${this.#file}:${parameter.span.start}: duplicate Ducklang parameter ${parameter.text}`,
+              `${parameter.span.file}:${parameter.span.start}: duplicate Ducklang parameter ${parameter.text}`,
             );
           }
           parameterNames.add(parameter.text);
@@ -1350,7 +1352,7 @@ class DucklangResolver {
       case "recursiveCall": {
         if (currentRecursive === undefined) {
           throw new ReferenceError(
-            `${this.#file}:${expression.span.start}: recursive call has no enclosing recursive function`,
+            `${expression.span.file}:${expression.span.start}: recursive call has no enclosing recursive function`,
           );
         }
         return {
@@ -1689,7 +1691,7 @@ class DucklangResolver {
         };
       case "loop":
         throw new SyntaxError(
-          `${this.#file}:${expression.span.start}: dynamic Ducklang loop expression requires loop IR lowering`,
+          `${expression.span.file}:${expression.span.start}: dynamic Ducklang loop expression requires loop IR lowering`,
         );
     }
   }
