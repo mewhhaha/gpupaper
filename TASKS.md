@@ -355,7 +355,18 @@ behavior no longer depends on statement concatenation order.
 
 ## Phase 3: Compile-time normalization and specialization
 
-- [ ] Implement the complete `ConstValue` domain.
+- [ ] Implement the complete `ConstValue` domain. Five of the six variants are
+      reachable from source and pinned by `tests/ducklang_const_domain.test.ts`:
+      an integer and text give `scalar`, a declared struct gives `product` with
+      its contents, a union case gives `sum` with its case name and payload, a
+      function gives `closure`, and a builtin type name gives `type`.
+
+      `module` is the one left. It is declared and `projectDucklangConst` already
+      consumes it, but nothing constructs it. Producing one means evaluating a module
+      instance's exports at compile time, which is the namespace-projection work in
+      Phase 2, so this item finishes there rather than here. The roadmap permits a
+      module to reuse the product representation, so what is missing is the tagging
+      and the path that produces it, not a new representation.
 - [x] Evaluate compile-time closures with immutable lexical environments. A
       closure that captures `base = 40` still answers 42 after a later
       `let base = 100`; a mutable environment would answer 102.
