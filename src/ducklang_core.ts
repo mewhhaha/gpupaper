@@ -290,16 +290,98 @@ export function lowerDucklangToCore(
       module.result.span,
     ),
   );
-  const core = {
+  const core = canonicalizeDucklangCoreTypes({
     schemaVersion: 1,
     file: module.file,
     types: types.finish(),
     signatures,
     functions,
     entryFunction: mainFunctionId,
-  } satisfies DucklangCoreModule;
+  });
   validateDucklangCore(core);
   return core;
+}
+
+/**
+ * Merges structurally identical Core types onto one `CoreTypeId`.
+ *
+ * The registry interns by source type spelling, so two spellings of the same
+ * Core structure take two IDs: `Int` and `I32` both resolve to `scalar i32`, and
+ * two nominally distinct structs with the same field types both resolve to the
+ * same product. Core types are structural by design, and the validator compares
+ * edge argument types by ID, so leaving duplicates in place would let it reject
+ * two values of the same type as differently typed. Nominal distinctness is
+ * settled before Core by qualifyDucklangTypeCollisions.
+ *
+ * Merging one pair can make another pair identical, because a product's key is
+ * built from its field IDs, so this runs to a fixpoint.
+ */
+export function canonicalizeDucklangCoreTypes(
+  module: DucklangCoreModule,
+): DucklangCoreModule {
+  let types = module.types;
+  let mapping = types.map((_, index) => index as CoreTypeId);
+  // Duplicates stay in the table until the final renumbering, so a round is
+  // never the identity. Progress is measured by the number of distinct
+  // structures, which can only fall, so the loop is bounded by the table size
+  // and stops as soon as a round merges nothing new.
+  let previousDistinct = Number.POSITIVE_INFINITY;
+  for (let round = 0; round <= types.length; round += 1) {
+    const canonical = new Map<string, CoreTypeId>();
+    const representatives = types.map((entry, index) => {
+      const key = JSON.stringify(entry);
+      const existing = canonical.get(key);
+      if (existing !== undefined) return existing;
+      canonical.set(key, index as CoreTypeId);
+      return index as CoreTypeId;
+    });
+    if (canonical.size >= previousDistinct) break;
+    previousDistinct = canonical.size;
+    types = types.map((entry) => remapCoreType(entry, representatives));
+    mapping = mapping.map((id) => representatives[id]);
+  }
+  // Dense renumbering keeps `types[id]` addressable after the merge.
+  const surviving = [...new Set(mapping)].sort((left, right) => left - right);
+  const dense = new Map(
+    surviving.map((id, index) => [id, index as CoreTypeId]),
+  );
+  const finalMapping = mapping.map((id) => dense.get(id)!);
+  const remap = (id: CoreTypeId): CoreTypeId => finalMapping[id];
+  return {
+    ...module,
+    types: surviving.map((id) => remapCoreType(types[id], finalMapping)),
+    signatures: module.signatures.map((signature) => ({
+      parameters: signature.parameters.map(remap),
+      result: remap(signature.result),
+    })),
+    functions: module.functions.map((function_) => ({
+      ...function_,
+      blocks: function_.blocks.map((block) => ({
+        ...block,
+        parameters: block.parameters.map((parameter) => ({
+          ...parameter,
+          type: remap(parameter.type),
+        })),
+        operations: block.operations.map((operation) => ({
+          ...operation,
+          type: remap(operation.type),
+        })),
+      })),
+    })),
+  };
+}
+
+function remapCoreType(
+  entry: DucklangCoreType,
+  mapping: readonly CoreTypeId[],
+): DucklangCoreType {
+  if (entry.kind === "product") {
+    return { kind: "product", fields: entry.fields.map((id) => mapping[id]) };
+  }
+  if (entry.kind === "sum") {
+    return { kind: "sum", cases: entry.cases.map((id) => mapping[id]) };
+  }
+  return entry;
 }
 
 class CoreTypeRegistry {

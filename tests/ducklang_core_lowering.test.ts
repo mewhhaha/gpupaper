@@ -195,6 +195,63 @@ for (const [description, source, expected] of aggregateCases) {
   });
 }
 
+/**
+ * Core types are structural, so one structure must have one ID.
+ *
+ * The type registry interns by source type spelling, which gives two IDs to one
+ * structure whenever two spellings agree: `Int` and `I32` both resolve to
+ * `scalar i32`, and two nominally distinct structs with the same field types both
+ * resolve to the same product. The validator compares edge argument types by ID,
+ * so duplicates would let it reject two values of the same type as differently
+ * typed. Nominal distinctness is settled before Core by
+ * qualifyDucklangTypeCollisions.
+ */
+Deno.test("Core canonicalizes structurally identical types onto one ID", async () => {
+  const parsed = await parseDucklangModule(
+    "canonical.duck",
+    "type A = struct { .x = Int, .y = Int }\ntype B = struct { .p = Int, .q = Int }\ntype C = struct { .x = Int }\nlet f = () => {\n  let a: A = [1, 2]\n  let b: B = [3, 4]\n  let c: C = [5]\n  a.x + b.p + c.x\n}\nf()\n",
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  validateDucklangCore(module);
+
+  const keys = module.types.map((entry) => JSON.stringify(entry));
+  assertEquals(keys.length - new Set(keys).size, 0);
+  // A and B share one product type; C keeps its own because it has one field.
+  assertEquals(
+    module.types.filter((entry) => entry.kind === "product").length,
+    2,
+  );
+  // Every surviving ID is still addressable and in range.
+  for (const entry of module.types) {
+    const referenced = entry.kind === "product"
+      ? entry.fields
+      : entry.kind === "sum"
+      ? entry.cases
+      : [];
+    for (const id of referenced) {
+      assertEquals(id >= 0 && id < module.types.length, true);
+    }
+  }
+});
+
+Deno.test("Core canonicalization survives a merge that enables another", async () => {
+  // Two products become identical only after their differing field types merge,
+  // so a single pass would leave them distinct.
+  const parsed = await parseDucklangModule(
+    "cascade.duck",
+    "type Inner = struct { .v = Int }\ntype Outer1 = struct { .a = Int, .b = Int }\ntype Outer2 = struct { .c = Int, .d = Int }\nlet f = () => {\n  let i: Inner = [1]\n  let x: Outer1 = [2, 3]\n  let y: Outer2 = [4, 5]\n  i.v + x.a + y.c\n}\nf()\n",
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  validateDucklangCore(module);
+
+  const keys = module.types.map((entry) => JSON.stringify(entry));
+  assertEquals(keys.length - new Set(keys).size, 0);
+});
+
 async function lower(
   source: string,
   functionName: string,

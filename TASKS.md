@@ -460,7 +460,17 @@ terminators, and edge arguments.
 
 ## Phase 5: Aggregate and buffer semantics
 
-- [ ] Assign canonical semantic types to tuples, records, arrays, and unions.
+- [x] Assign canonical semantic types to tuples, records, arrays, and unions.
+      Core assigns scalar, buffer, product, sum, and function types, and
+      `canonicalizeDucklangCoreTypes` now merges structurally identical entries
+      onto one `CoreTypeId`. It was not canonical before: the registry interns
+      by source spelling, so `Int` and `I32` each took an ID for `scalar i32`,
+      and two nominally distinct structs with the same field types each took an
+      ID for the same product. Because the validator compares edge argument
+      types by ID, duplicates could have let it reject two values of the same
+      type as differently typed. Merging runs to a fixpoint, since a product's
+      key is built from its field IDs and one merge can enable another. Nominal
+      distinctness is settled before Core by `qualifyDucklangTypeCollisions`.
 - [x] Lower construction, projection, functional update, tag access, and payload
       access to Core value primitives. A declared struct lowers to
       `product.make` with positional `product.project`, a `with_` update lowers
