@@ -356,8 +356,14 @@ behavior no longer depends on statement concatenation order.
 ## Phase 3: Compile-time normalization and specialization
 
 - [ ] Implement the complete `ConstValue` domain.
-- [ ] Evaluate compile-time closures with immutable lexical environments.
-- [ ] Evaluate compile-time products, sums, projection, and extension.
+- [x] Evaluate compile-time closures with immutable lexical environments. A
+      closure that captures `base = 40` still answers 42 after a later
+      `let base = 100`; a mutable environment would answer 102.
+- [x] Evaluate compile-time products, sums, projection, and extension. A
+      declared struct evaluates to a `product` compile-time value, field
+      projection and a functional `with_` update both evaluate, sums evaluate
+      with payload bindings, and `extendDucklangConstProduct` leaves its base
+      untouched.
 - [ ] Evaluate type constructors and canonicalize applications to `TypeId`s.
 - [ ] Implement structural type reflection over canonical type values.
 - [ ] Specialize `const` parameters and `forall` type parameters.

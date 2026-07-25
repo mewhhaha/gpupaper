@@ -25,6 +25,48 @@ Deno.test("Ducklang const closures capture immutable lexical environments", asyn
   );
 });
 
+Deno.test("Ducklang const closures keep their captured value after rebinding", async () => {
+  // The capture is what makes the environment immutable rather than merely
+  // present: rebinding `base` after the closure is built must not change what
+  // the closure sees. A mutable environment would answer 102.
+  const expression = await typedResult(`comptime {
+  let base = 40
+  let add = value => base + value
+  let base = 100
+  add(2)
+}
+`);
+
+  assertEquals(
+    evaluateDucklangConst(expression, { fuel: 100 }),
+    scalarI32(42),
+  );
+});
+
+Deno.test("Ducklang const evaluator builds products and projects their fields", async () => {
+  const projected = await typedResult(
+    "type Point = struct { .x = Int, .y = Int }\ncomptime {\n  let point: Point = [20, 22]\n  point.x + point.y\n}\n",
+  );
+  assertEquals(evaluateDucklangConst(projected, { fuel: 500 }), scalarI32(42));
+
+  // The product itself is a compile-time value, not only a projection result.
+  const product = await typedResult(
+    "type Point = struct { .x = Int, .y = Int }\ncomptime {\n  let point: Point = [20, 22]\n  point\n}\n",
+  );
+  assertEquals(evaluateDucklangConst(product, { fuel: 500 }), {
+    kind: "product",
+    fields: [{ value: scalarI32(20) }, { value: scalarI32(22) }],
+  });
+});
+
+Deno.test("Ducklang const evaluator applies a functional product update", async () => {
+  const expression = await typedResult(
+    "type Point = struct { .x = Int, .y = Int }\ncomptime {\n  let point: Point = [20, 1]\n  let moved = Point.with_y(point, 22)\n  moved.x + moved.y\n}\n",
+  );
+
+  assertEquals(evaluateDucklangConst(expression, { fuel: 500 }), scalarI32(42));
+});
+
 Deno.test("Ducklang const evaluator handles sums and payload bindings", async () => {
   const expression = await typedResult(`type Maybe = | \`Some I32 | \`None Unit
 comptime {
@@ -89,6 +131,31 @@ Deno.test("Ducklang canonical type IDs preserve semantic structure", () => {
   });
 
   assertEquals(left, right);
+
+  // Canonicalization must also separate structures that differ, or equality
+  // would be meaningless.
+  const swapped = canonicalDucklangTypeId({
+    kind: "constructor",
+    name: "tuple",
+    arguments: [
+      { kind: "constructor", name: "text", arguments: [] },
+      { kind: "constructor", name: "i32", arguments: [] },
+    ],
+  });
+  assertEquals(left === swapped, false);
+  const nested = canonicalDucklangTypeId({
+    kind: "constructor",
+    name: "tuple",
+    arguments: [
+      {
+        kind: "constructor",
+        name: "tuple",
+        arguments: [{ kind: "constructor", name: "i32", arguments: [] }],
+      },
+      { kind: "constructor", name: "text", arguments: [] },
+    ],
+  });
+  assertEquals(left === nested, false);
 });
 
 Deno.test("Ducklang const evaluation reports exhausted fuel at the source", async () => {
