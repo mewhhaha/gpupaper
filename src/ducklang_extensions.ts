@@ -458,7 +458,14 @@ function selectMethod(
 }
 
 function typeConstructorName(typeName: string): string {
-  return typeName.replace(/^&/, "").match(/^[A-Za-z_][A-Za-z0-9_]*/)?.[0] ??
+  // The trailing `$` discriminator is part of the constructor's identity, not a type
+  // argument. Matching only letters, digits, and underscores truncated a
+  // file-qualified name like `Shape$85a31555` to `Shape`, so it stopped matching the
+  // extension that targeted it and selection reported no implementation for a name it
+  // was holding an implementation for. A space still ends the match, so type
+  // arguments are dropped as before.
+  return typeName.replace(/^&/, "")
+    .match(/^[A-Za-z_][A-Za-z0-9_]*(?:\$[0-9a-f]{8})?/)?.[0] ??
     typeName;
 }
 

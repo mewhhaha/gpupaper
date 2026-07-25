@@ -417,26 +417,23 @@ behavior no longer depends on statement concatenation order.
       graph, and no protocol or method name reaches it. A first version of this
       test used literals, which constant-folded to a single `const` and would
       have proved nothing about dispatch.
-- [ ] Select extension implementations using canonical receiver types. Works
-      within one file: an alias selects the same implementation as its
-      underlying type, and two structurally identical but nominally distinct
-      structs each select their own extension, so selection is by canonical
-      identity rather than by structure.
+- [x] Select extension implementations using canonical receiver types. Within a
+      file an alias selects the same implementation as its underlying type, and
+      two structurally identical but nominally distinct structs each select
+      their own, so selection is by canonical identity rather than structure.
+      Across files two modules may each declare a type of the same name with its
+      own extension, and each call reaches its own: the provider answers 40 and
+      the consumer 2.
 
-      Does not work across files. `tests/fixtures/shape_consumer.duck` imports a
-      module that declares its own `Shape` with a `measure` extension and declares a
-      second `Shape` with its own, and the provider's own call fails with "extension
-      method measure has no implementation for Shape$85a31555" even though an
-      extension with exactly that target type is present. Two extensions supplying
-      one method for different receivers is what selection cannot resolve; the same
-      shape fails for an overlapping generic and concrete extension in one file, with
-      the same misleading wording.
+      Two defects had to be fixed for the cross-file case. A dependency's extensions
+      were appended twice, by the namespace import path and again by
+      `mergeImportedDeclarations`, giving one receiver two identical implementations.
+      And `typeConstructorName` extracted the constructor with a pattern that stopped at
+      `$`, truncating the file-qualified `Shape$85a31555` back to `Shape`, so selection
+      reported no implementation for a name it was holding an implementation for. That
+      was the nominal qualification pass colliding with a pattern written before it
+      existed.
 
-      One cause found and fixed on the way: the dependency's extensions were appended
-      twice, by the namespace import path and again by `mergeImportedDeclarations`,
-      giving one receiver two identical implementations. That is deduplicated by span
-      identity now and covered by `tests/ducklang_extension_linking.test.ts`, but it
-      was not the whole story.
 - [x] Reject missing, ambiguous, and incoherent implementations before Core. All
       three are refused during extension elaboration, well ahead of Core. A
       protocol method no extension provides reports "has no implementation"; two
