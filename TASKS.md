@@ -600,19 +600,21 @@ protocol search, extension search, or compile-time closures.
       `examples/failures/traps/04_zero_range_step.duck`, whose recorded input is
       step 0; the static half now has its own test.
 - [ ] Lower collection loops after protocol specialization, without a
-      collection-specific backend loop. Measured: the collection-specific loop
-      is still load-bearing, and only for `Bytes`. `lowerIndexedBufferLoop` in
-      `src/ducklang_control_flow.ts` special-cases a collection whose declared
-      type is `Bytes` or `Text`. Stubbing it to return `undefined` leaves a
-      `Text` loop and a loop over a source-defined collection working through
-      the protocol, both giving the same answers, but a `Bytes` loop then fails
-      with "dynamic Ducklang forCollection requires loop IR lowering" even with
-      `duck:prelude/iterators` imported so `IntoIterator` is in scope.
+      collection-specific backend loop. Measured by stubbing
+      `lowerIndexedBufferLoop` in `src/ducklang_control_flow.ts` to return
+      `undefined`. The dividing line is whether the collection's length is
+      statically known, not its element type: a `Text` literal loop still works
+      because `expandStaticDucklangLoops` unrolls it, while both a `Text` built
+      at runtime with `<>` and a `Bytes` from `@Utf8.encode` fail with "dynamic
+      Ducklang forCollection requires loop IR lowering". Importing
+      `duck:prelude/iterators` so `IntoIterator` is in scope does not help
+      either.
 
-      So the asymmetry is the finding: `Text` already goes through protocol
-      specialization and `Bytes` does not. Closing this item means making the `Bytes`
-      route match `Text`'s, after which the special case can be deleted, rather than
-      writing a new loop lowering.
+      So protocol specialization does not currently lower a dynamic collection loop at
+      all, and the special case is what carries every one of them. Closing this item
+      means giving the protocol route a dynamic loop, which is the same loop IR the
+      Phase 4 items above need, rather than adjusting one element type.
+
 - [ ] Replace recursive-function loop lowering after Core covers its tests.
 
 Milestones:
