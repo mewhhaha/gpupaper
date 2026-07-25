@@ -1,0 +1,22 @@
+module () where
+
+const { struct } = import "duck:prelude" ()
+
+type Shape = struct { .size = Int }
+
+duck Measure Self {
+  type Out
+  .measure = Self -> Out
+}
+
+extend Shape {
+  type Out = Int
+  .measure = (s: Shape) => 40
+}
+
+const make = () => {
+  let s: Shape = [.size = 1]
+  Measure.measure(s)
+}
+
+return { make }

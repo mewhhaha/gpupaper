@@ -704,6 +704,11 @@ function mergeImportedDeclarations(
   const protocols = [...module.protocols];
   const protocolNames = new Set(protocols.map((protocol) => protocol.name));
   const extensions = [...module.extensions];
+  const extensionKeys = new Set(
+    module.extensions.map((extension) =>
+      `${extension.span.file}\u0000${extension.span.start}`
+    ),
+  );
   const fixities = [...module.fixities];
 
   for (const node of graph.modules.values()) {
@@ -727,7 +732,16 @@ function mergeImportedDeclarations(
       protocols.push(protocol);
       protocolNames.add(protocol.name);
     }
-    extensions.push(...node.module.extensions);
+    // The namespace path already appended this dependency's extensions, so
+    // appending them again gave one receiver two identical implementations and
+    // extension selection then refused the program. Span identity is what
+    // distinguishes a genuine second implementation from the same one twice.
+    for (const extension of node.module.extensions) {
+      const key = `${extension.span.file}\u0000${extension.span.start}`;
+      if (extensionKeys.has(key)) continue;
+      extensionKeys.add(key);
+      extensions.push(extension);
+    }
     fixities.push(...node.module.fixities);
   }
 
