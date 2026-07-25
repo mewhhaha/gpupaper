@@ -510,12 +510,29 @@ policy.
 
 - [ ] Compile every recorded prelude module independently to its intended stage:
       compile-time export module, runtime library, or host interface.
-- [ ] Compile and execute the editor with its declared host interface.
-- [ ] Compile and execute the Codex application with its declared host
-      interface.
-- [ ] Compile and execute grep and tar, including dynamic control flow.
-- [ ] Compile and execute wav after hexadecimal and bitwise coverage.
-- [ ] Compile and execute the raytracer after `F32`, `F64`, and SIMD coverage.
+- [x] Compile and execute the editor with its declared host interface.
+      `tests/ducklang_managed.test.ts` compiles `editor.duck` against
+      `editor/host.duck` and runs a finite terminal session through the managed
+      ABI, asserting the emitted frames.
+- [x] Compile and execute the Codex application with its declared host
+      interface. `tests/ducklang_managed.test.ts` compiles `codex.duck` against
+      `codex/host.duck` and runs a completed model turn.
+- [x] Compile and execute grep and tar, including dynamic control flow. grep
+      streams a file to `Eof` and returns exit code 0; tar accepts an empty
+      archive. Both genuinely exercise dynamic control flow: grep has an
+      unbounded `loop`, a dynamic range `line_start..length pending`, a
+      multi-level `break 2`, and a valued `break code`; tar has computed dynamic
+      ranges such as `start..start + block_size`. This is the current pipeline,
+      not the Core path; the Phase 4 milestones for grep's valued loop exits and
+      tar's dynamic ranges reaching Core remain open.
+- [x] Compile and execute wav after hexadecimal and bitwise coverage. wav emits
+      a complete RIFF buffer, and its source does exercise both: hexadecimal
+      literals such as `0x46464952` and `0xff`, and `>>` and `&`.
+- [x] Compile and execute the raytracer after `F32`, `F64`, and SIMD coverage.
+      The raytracer emits the expected PPM header and first pixel. Its source
+      exercises `F32` only, in 38 places, with no `F64` and no `f32x4`; the
+      `F64` and `F32x4` builtin types and the SIMD primitive canonicalization
+      come from Phase 1 and are not exercised by this target.
 - [x] Record cold parser initialization separately from warm compilation.
       `parserInitializationMilliseconds` is its own field in
       `CompilationTimings`, separate from syntax and AST lowering;
