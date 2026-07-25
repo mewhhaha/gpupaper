@@ -252,6 +252,72 @@ Deno.test("Core canonicalization survives a merge that enables another", async (
   assertEquals(keys.length - new Set(keys).size, 0);
 });
 
+/**
+ * Module-level value bindings.
+ *
+ * lowerDucklangToCore turns each function binding into a Core function, but a
+ * module-level value binding is neither a function nor part of the module result,
+ * so every reference to one failed with "Core lowering has no runtime value for
+ * <name>". `main` now lowers as a block that binds them before the result.
+ *
+ * This was one of the three recorded blockers to wiring Core into the pipeline.
+ */
+const moduleBindingCases: readonly (readonly [string, string, number])[] = [
+  ["a scalar", "let base = 40\nbase + 2\n", 1],
+  [
+    "a struct",
+    "type Point = struct { .x = Int, .y = Int }\nlet p: Point = [20, 22]\np.x + p.y\n",
+    1,
+  ],
+  [
+    "a recursive list built from module-level cells",
+    "type Cell value = struct { .head = value, .tail = List value }\ntype List value = | `Cons Cell value | `Nil Unit\nlet sum_list = rec (l: List Int) => {\n  if let `Cons cell = l {\n    cell.head + sum_list(cell.tail)\n  } else {\n    0\n  }\n}\nlet empty: List Int = `Nil ()\nlet two: List Int = `Cons ([42, empty])\nsum_list(two)\n",
+    2,
+  ],
+];
+
+for (const [description, source, expectedFunctions] of moduleBindingCases) {
+  Deno.test(`Core lowers a module-level binding of ${description}`, async () => {
+    const parsed = await parseDucklangModule("module_binding.duck", source);
+    const module = lowerDucklangToCore(
+      inferDucklangModule(resolveDucklangModule(parsed)),
+    );
+    validateDucklangCore(module);
+
+    assertEquals(module.functions.length, expectedFunctions);
+    const main = module.functions.at(-1)!;
+    assertEquals(main.name, "main");
+    // The binding's value has to be computed inside main, so main cannot be an
+    // empty shell that merely returns a constant.
+    assertEquals(
+      main.blocks.reduce((total, block) => total + block.operations.length, 0) >
+        1,
+      true,
+    );
+  });
+}
+
+Deno.test("Core lowering leaves a function-only module unchanged", async () => {
+  const parsed = await parseDucklangModule(
+    "function_only.duck",
+    "let f = () => 42\nf()\n",
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  validateDucklangCore(module);
+
+  // No value bindings, so main stays the module result alone: one call.
+  assertEquals(module.functions.length, 2);
+  assertEquals(
+    module.functions.at(-1)!.blocks.reduce(
+      (total, block) => total + block.operations.length,
+      0,
+    ),
+    1,
+  );
+});
+
 async function lower(
   source: string,
   functionName: string,

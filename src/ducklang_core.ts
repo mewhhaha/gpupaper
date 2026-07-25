@@ -258,6 +258,24 @@ export function lowerDucklangToCore(
     );
   }
   const mainSignature = signature([], module.result.type, module.result.span);
+  // Module-level value bindings are not Core functions, so `main` lowers as a
+  // block that binds them before the module result. Without this, any reference
+  // to one reported "Core lowering has no runtime value for <name>".
+  const valueBindings = module.bindings.filter((binding) =>
+    binding.value.kind !== "function"
+  );
+  const mainBody: TypedDucklangExpression = valueBindings.length === 0
+    ? module.result
+    : {
+      kind: "block",
+      steps: valueBindings.map((binding) => ({
+        kind: "binding" as const,
+        binding,
+      })),
+      result: module.result,
+      type: module.result.type,
+      span: module.result.span,
+    };
   const functions = functionBindings.map((binding) =>
     new CoreFunctionLowerer(
       module,
@@ -286,7 +304,7 @@ export function lowerDucklangToCore(
       undefined,
       mainSignature,
       [],
-      module.result,
+      mainBody,
       module.result.span,
     ),
   );
