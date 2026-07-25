@@ -1,0 +1,260 @@
+module () where
+
+const _ = import "duck:prelude/effects" ();
+const {} = import "duck:prelude/functional" ();
+
+const default_state = initial => {
+  let current = initial;
+  handler State {
+    get: (!resume) => !resume current,
+    put: (value, !resume) => {
+      current = value
+      !resume(())
+    },
+    return: value => value,
+  }
+};
+
+const default_reader = environment => handler Reader {
+  ask: (!resume) => !resume environment,
+  return: value => value,
+};
+
+const handle_writer = write_output => handler Writer {
+  tell: (output, !resume) => {
+    write_output output
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_raise = on_error => handler Raise {
+  raise: (error, !resume) => on_error error,
+  return: value => value,
+};
+
+extend Do {
+  type Handled = Do,
+  .make = _ => handler Do {
+    unwrap: (wrapped, resume) => Monad.bind([wrapped, value => resume value]),
+    return: value => Monad.pure(value),
+  },
+  .output = monad => monad,
+  .order = _ => 100,
+}
+
+extend Option {
+  type Handled = Do,
+  .make = _ => handler Do {
+    unwrap: (wrapped, !resume) => AffineMonad.bind_affine([wrapped, value => !resume value]),
+    return: value => AffineMonad.pure_affine(value),
+  },
+  .output = monad => monad,
+  .order = _ => 100,
+}
+
+const deterministic_clock = [start: I64, step: I64] => {
+  let wall_time = start;
+  let monotonic_time = 0i64;
+  handler Clock {
+    wall_time_ms: (!resume) => {
+      let current = wall_time;
+      wall_time = wall_time + step
+      !resume current
+    },
+    monotonic_ms: (!resume) => {
+      let current = monotonic_time;
+      monotonic_time = monotonic_time + 1i64
+      !resume current
+    },
+    return: value => value,
+  }
+};
+
+const handle_random = [next_i32, next_f32, random_bytes] => handler Random {
+  next_i32: (!resume) => !resume(next_i32()),
+  next_f32: (!resume) => !resume(next_f32()),
+  bytes: (length, !resume) => !resume(random_bytes length),
+  return: value => value,
+};
+
+const handle_console = [read_line, write, write_line] => handler Console {
+  read_line: (!resume) => !resume(read_line()),
+  write: (text, !resume) => {
+    write text
+    !resume(())
+  },
+  write_line: (text, !resume) => {
+    write_line text
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_environment = lookup => handler Environment {
+  lookup: (name, !resume) => !resume(lookup name),
+  return: value => value,
+};
+
+const handle_resource = [acquire, release] => handler Resource {
+  acquire: (!resume) => !resume(acquire()),
+  release: (resource, !resume) => {
+    release resource
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_log = write_log => handler Log {
+  log: (message, !resume) => {
+    write_log message
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_validation = on_invalid => handler Validation {
+  invalid: (error, !resume) => on_invalid error,
+  return: value => value,
+};
+
+const handle_async = [spawn, await_task, yield_task, cancel] => handler Async {
+  spawn: (task, !resume) => !resume(spawn task),
+  await: (task, !resume) => !resume(await_task task),
+  yield: (!resume) => {
+    yield_task()
+    !resume(())
+  },
+  cancel: (task, !resume) => {
+    cancel task
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_channel = [send, receive, close] => handler Channel {
+  send: (value, !resume) => {
+    send value
+    !resume(())
+  },
+  receive: (!resume) => !resume(receive()),
+  close: (!resume) => {
+    close()
+    !resume(())
+  },
+  return: value => value,
+};
+
+const single_slot_channel = initial => {
+  let value = initial;
+  handler Channel {
+    send: (next, !resume) => {
+      value = next
+      !resume(())
+    },
+    receive: (!resume) => !resume value,
+    close: (!resume) => !resume(()),
+    return: result => result,
+  }
+};
+
+const handle_mutex = [lock, unlock] => handler Mutex {
+  lock: (!resume) => !resume(lock()),
+  unlock: (value, !resume) => {
+    unlock value
+    !resume(())
+  },
+  return: result => result,
+};
+
+const sequential_mutex = initial => {
+  let value = initial;
+  handler Mutex {
+    lock: (!resume) => !resume value,
+    unlock: (next, !resume) => {
+      value = next
+      !resume(())
+    },
+    return: result => result,
+  }
+};
+
+const handle_semaphore = [acquire, release] => handler Semaphore {
+  acquire: (!resume) => {
+    acquire()
+    !resume(())
+  },
+  release: (!resume) => {
+    release()
+    !resume(())
+  },
+  return: value => value,
+};
+
+const counting_semaphore = (initial: I32) => {
+  let permits = initial;
+  handler Semaphore {
+    acquire: (!resume) => {
+      permits = permits - 1
+      !resume(())
+    },
+    release: (!resume) => {
+      permits = permits + 1
+      !resume(())
+    },
+    return: value => value,
+  }
+};
+
+const handle_task_group = [spawn, cancel_all, await_all] => handler TaskGroup {
+  spawn: (task, !resume) => !resume(spawn task),
+  cancel_all: (!resume) => {
+    cancel_all()
+    !resume(())
+  },
+  await_all: (!resume) => {
+    await_all()
+    !resume(())
+  },
+  return: value => value,
+};
+
+const handle_stm = [read, write, retry, or_else] => handler Stm {
+  read: (address, !resume) => !resume(read address),
+  write: (address, value, !resume) => {
+    write [address, value]
+    !resume(())
+  },
+  retry: (!resume) => {
+    retry()
+    !resume(())
+  },
+  or_else: (transaction, !resume) => {
+    or_else transaction
+    !resume(())
+  },
+  return: value => value,
+};
+
+return {
+  .default_state,
+  .default_reader,
+  .handle_writer,
+  .handle_raise,
+  .deterministic_clock,
+  .handle_random,
+  .handle_console,
+  .handle_environment,
+  .handle_resource,
+  .handle_log,
+  .handle_validation,
+  .handle_async,
+  .handle_channel,
+  .single_slot_channel,
+  .handle_mutex,
+  .sequential_mutex,
+  .handle_semaphore,
+  .counting_semaphore,
+  .handle_task_group,
+  .handle_stm,
+};

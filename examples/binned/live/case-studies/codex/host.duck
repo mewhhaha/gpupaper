@@ -1,0 +1,38 @@
+module () where
+
+declare effect Input {
+  prompt: () => Text
+}
+
+declare effect Model {
+  suspending start: (&Text) => StartResult
+  suspending next: () => Text
+  suspending submit: (&Text) => StartResult
+}
+
+declare effect Tool {
+  suspending run: (&Text, &Text) => Text
+}
+
+declare effect Approval {
+  suspending request: (&Text, &Text, &Text) => ApprovalDecision
+}
+
+declare effect Events {
+  message: (&Text) => Unit
+  tool_started: (&Text, &Text) => Unit
+  tool_finished: (&Text) => Unit
+  tool_denied: (&Text) => Unit
+  failed: (&Text) => Unit
+  completed: () => Unit
+}
+
+declare Init {
+  input: Input
+  model: Model
+  tool: Tool
+  approval: Approval
+  events: Events
+}
+
+return {};

@@ -361,6 +361,11 @@ export const success_examples: SuccessExample[] = [
     route: "core",
     runs: run(42),
   },
+  {
+    path: "examples/data/18_const_value_patterns.duck",
+    route: "core",
+    runs: run(42),
+  },
 
   { path: "examples/loops/01_range_sum.duck", route: "core", runs: run(10) },
   {
@@ -452,6 +457,11 @@ export const success_examples: SuccessExample[] = [
   },
   {
     path: "examples/ownership_modules/06_multi_file_capability_app.duck",
+    route: "core",
+    runs: run(42),
+  },
+  {
+    path: "examples/ownership_modules/07_local_module_binding.duck",
     route: "core",
     runs: run(42),
   },
@@ -572,6 +582,11 @@ export const compile_failure_examples: CompileFailureExample[] = [
     path: "examples/failures/compile/12_missing_imported_export.duck",
     route: "core",
     message: "does not export missing",
+  },
+  {
+    path: "examples/failures/compile/13_runtime_value_pattern.duck",
+    route: "core",
+    message: "Value pattern requires a compile-time expression: runtime",
   },
 ];
 

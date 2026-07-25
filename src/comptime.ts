@@ -4,6 +4,10 @@ import type {
   SourceSpan,
   ValueDeclaration,
 } from "./syntax.ts";
+import {
+  acquireCompilerGpuErrorScope,
+  requestCompilerGpuDevice,
+} from "./gpu_device.ts";
 
 export type ComptimeValue =
   | { readonly kind: "integer"; readonly value: number }
@@ -41,7 +45,20 @@ export type ScalarComptimeExpression =
   }
   | {
     readonly kind: "binary";
-    readonly operator: "+" | "-" | "*" | "/" | "%" | "==" | "<" | ">" | "&&";
+    readonly operator:
+      | "+"
+      | "-"
+      | "*"
+      | "/"
+      | "%"
+      | "=="
+      | "!="
+      | "<"
+      | "<="
+      | ">"
+      | ">="
+      | "&&"
+      | "||";
     readonly left: ScalarComptimeExpression;
     readonly right: ScalarComptimeExpression;
     readonly span: SourceSpan;
@@ -67,10 +84,22 @@ const opcode = {
   lessThan: 9,
   greaterThan: 10,
   and: 11,
+  notEqual: 12,
+  lessThanOrEqual: 13,
+  greaterThanOrEqual: 14,
+  or: 15,
 } as const;
 
 const comptimeStackCapacity = 64;
 const maximumComptimeFuel = 1_000_000;
+type ComptimeGpuContextRequest =
+  | {
+    readonly status: "available";
+    readonly device: GPUDevice;
+    readonly pipeline: GPUComputePipeline;
+  }
+  | { readonly status: "unavailable"; readonly reason: string };
+let comptimeContextPromise: Promise<ComptimeGpuContextRequest> | undefined;
 
 const evaluatorShader = `
 struct Parameters { job_count: u32, max_program_length: u32, stack_capacity: u32, fuel: u32 }
@@ -127,6 +156,10 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
     else if (operation == 9u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left < right); }
     else if (operation == 10u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left > right); }
     else if (operation == 11u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 && right != 0); }
+    else if (operation == 12u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != right); }
+    else if (operation == 13u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left <= right); }
+    else if (operation == 14u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left >= right); }
+    else if (operation == 15u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 || right != 0); }
     else { statuses[job] = 2u; return; }
     pc += 1u;
   }
@@ -168,13 +201,26 @@ export function compileScalarComptimeExpression(
             "/": opcode.divide,
             "%": opcode.remainder,
             "==": opcode.equal,
+            "!=": opcode.notEqual,
             "<": opcode.lessThan,
+            "<=": opcode.lessThanOrEqual,
             ">": opcode.greaterThan,
+            ">=": opcode.greaterThanOrEqual,
             "&&": opcode.and,
+            "||": opcode.or,
           }[node.operator],
         );
         operands.push(0);
-        return ["==", "<", ">", "&&"].includes(node.operator)
+        return [
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "&&",
+            "||",
+          ].includes(node.operator)
           ? "boolean"
           : "integer";
       case "if": {
@@ -299,12 +345,20 @@ export function evaluateBytecodeOnCpu(
         stack.push(left % right);
       } else if (operation === opcode.equal) {
         stack.push(left === right ? 1 : 0);
+      } else if (operation === opcode.notEqual) {
+        stack.push(left !== right ? 1 : 0);
       } else if (operation === opcode.lessThan) {
         stack.push(left < right ? 1 : 0);
+      } else if (operation === opcode.lessThanOrEqual) {
+        stack.push(left <= right ? 1 : 0);
       } else if (operation === opcode.greaterThan) {
         stack.push(left > right ? 1 : 0);
+      } else if (operation === opcode.greaterThanOrEqual) {
+        stack.push(left >= right ? 1 : 0);
       } else if (operation === opcode.and) {
         stack.push(left !== 0 && right !== 0 ? 1 : 0);
+      } else if (operation === opcode.or) {
+        stack.push(left !== 0 || right !== 0 ? 1 : 0);
       } else {
         throw new Error(
           `comptime program at ${program.sourceStart} has unknown opcode ${operation}`,
@@ -330,33 +384,15 @@ export async function evaluateBytecodeOnGpu(
   if (programs.length === 0) {
     return { status: "completed", values: [], backend: "gpu" };
   }
-  if (navigator.gpu === undefined) {
+  const context = await requestComptimeGpuContext();
+  if (context.status === "unavailable") {
     return {
       status: "unavailable",
-      reason: "WebGPU is unavailable in this runtime",
+      reason: context.reason,
       backend: "gpu",
     };
   }
-  let device: GPUDevice;
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    if (adapter === null) {
-      return {
-        status: "unavailable",
-        reason: "WebGPU adapter is unavailable",
-        backend: "gpu",
-      };
-    }
-    device = await adapter.requestDevice();
-  } catch (error) {
-    return {
-      status: "unavailable",
-      reason: `WebGPU device request failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      backend: "gpu",
-    };
-  }
+  const { device, pipeline } = context;
   const starts: number[] = [];
   const combinedOpcodes: number[] = [];
   const combinedOperands: number[] = [];
@@ -416,25 +452,12 @@ export async function evaluateBytecodeOnGpu(
     stackBuffer,
     parameterBuffer,
   ];
+  const releaseEvaluation = await acquireCompilerGpuErrorScope();
   let readbackMapped = false;
+  let validationScopePending = false;
   try {
-    const shader = device.createShaderModule({ code: evaluatorShader });
-    const compilation = await shader.getCompilationInfo();
-    const errors = compilation.messages.filter((message) =>
-      message.type === "error"
-    );
-    if (errors.length > 0) {
-      throw new Error(
-        `WebGPU comptime shader failed: ${
-          errors.map((message) => message.message).join("; ")
-        }`,
-      );
-    }
     device.pushErrorScope("validation");
-    const pipeline = device.createComputePipeline({
-      layout: "auto",
-      compute: { module: shader, entryPoint: "evaluate" },
-    });
+    validationScopePending = true;
     const bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: buffers.map((buffer, binding) => ({
@@ -466,6 +489,7 @@ export async function evaluateBytecodeOnGpu(
     await readback.mapAsync(GPUMapMode.READ);
     readbackMapped = true;
     const validationError = await device.popErrorScope();
+    validationScopePending = false;
     if (validationError !== null) {
       throw new Error(
         `WebGPU comptime validation failed: ${validationError.message}`,
@@ -500,9 +524,10 @@ export async function evaluateBytecodeOnGpu(
     }
     return { status: "completed", values: completed, backend: "gpu" };
   } finally {
+    if (validationScopePending) await device.popErrorScope();
     if (readbackMapped) readback.unmap();
     for (const buffer of [...buffers, readback]) buffer.destroy();
-    device.destroy();
+    releaseEvaluation();
   }
 }
 
@@ -667,6 +692,55 @@ function expressionChildren(expression: Expression): readonly Expression[] {
     default:
       return [];
   }
+}
+
+function requestComptimeGpuContext(): Promise<ComptimeGpuContextRequest> {
+  if (comptimeContextPromise !== undefined) return comptimeContextPromise;
+  const pendingContext: Promise<ComptimeGpuContextRequest> = (async () => {
+    try {
+      const request = await requestCompilerGpuDevice();
+      if (request.status === "unavailable") return request;
+      const device = request.device;
+      const shader = device.createShaderModule({ code: evaluatorShader });
+      const errors = (await shader.getCompilationInfo()).messages.filter(
+        (message) => message.type === "error",
+      );
+      if (errors.length > 0) {
+        throw new Error(
+          `WebGPU comptime shader failed: ${
+            errors.map((message) => message.message).join("; ")
+          }`,
+        );
+      }
+      const pipeline = await device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module: shader, entryPoint: "evaluate" },
+      });
+      return { status: "available", device, pipeline };
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason: `WebGPU comptime initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+  })();
+  comptimeContextPromise = pendingContext;
+  void pendingContext.then((context) => {
+    if (context.status === "unavailable") {
+      if (comptimeContextPromise === pendingContext) {
+        comptimeContextPromise = undefined;
+      }
+      return;
+    }
+    void context.device.lost.then(() => {
+      if (comptimeContextPromise === pendingContext) {
+        comptimeContextPromise = undefined;
+      }
+    });
+  });
+  return pendingContext;
 }
 
 function createGpuBuffer(

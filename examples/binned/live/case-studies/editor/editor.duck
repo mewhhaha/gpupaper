@@ -1,0 +1,926 @@
+module (!init: Init) where
+
+const { .cast, .struct } = import "duck:prelude/types" ();
+const { .iterator_count } = import "duck:prelude/iterators" ();
+const { .list } = import "duck:prelude/list" ();
+
+type Key =
+  | `Character Char
+  | `ArrowLeft Unit
+  | `ArrowRight Unit
+  | `Escape Unit
+  | `Backspace Unit
+  | `Enter Unit
+  | `Tab Unit
+  | `ControlC Unit
+
+type KeyDecoder =
+  | `Ground Unit
+  | `EscapePrefix Unit
+  | `ControlSequence Unit
+
+type EditorCommand =
+  | `Save Unit
+  | `Quit Unit
+
+const key_sequence = comptime list Key;
+const editor_commands = comptime list EditorCommand;
+
+type PieceTree = | `Empty Unit | `Leaf PieceLeaf | `Branch PieceBranch
+type PieceLeaf = struct { .piece = Bytes, .lines = I32 }
+type PieceBranch = struct {
+  .left = PieceTree,
+  .right = PieceTree,
+  .length = I32,
+  .lines = I32,
+  .height = I32,
+}
+type PieceIteratorState = struct { .pending = List PieceTree }
+type PieceTable = struct { .root = PieceTree, .length = I32, .lines = I32 }
+type Selection = struct { .anchor = I32, .head = I32 }
+type SelectionSet = struct { .primary = Selection, .secondary = List Selection }
+type Mode = | `Normal Unit | `Extend Unit | `Insert Unit
+type Status = | `Ready Unit | `SaveFailed Unit
+type Highlight = struct { .start = I32, .end = I32 }
+type TerminalSize = struct { .columns = I32, .rows = I32 }
+type OutputBuilder = struct { .buffer = Bytes, .length = I32 }
+type KeyDecodeStep = struct {
+  .decoder = KeyDecoder,
+  .keys = List Key,
+}
+type EditorStep = struct {
+  .editor = Editor,
+  .commands = List EditorCommand,
+}
+type EditorInputStep = struct {
+  .editor = Editor,
+  .decoder = KeyDecoder,
+  .commands = List EditorCommand,
+}
+type AppliedKeys = struct {
+  .editor = Editor,
+  .commands = List EditorCommand,
+}
+type CommandOutcome = | `Continue Editor | `Quit Editor
+type RenderView = struct {
+  .document = Bytes,
+  .highlight = Highlight,
+  .mode = Mode,
+  .status = Status,
+  .size = TerminalSize,
+}
+type Editor = struct {
+  .document = PieceTable,
+  .selections = SelectionSet,
+  .mode = Mode,
+  .status = Status,
+}
+
+effect RenderOutput {
+  append: (I32) => Unit
+}
+
+const { .not, .slice } = import "duck:prelude" ();
+
+const escape_character = cast(27, Char);
+const control_c_character = cast(3, Char);
+const backspace_character = cast(8, Char);
+const delete_character = cast(127, Char);
+const control_sequence_introducer: Char = '[';
+const cursor_home_command: Char = 'H';
+const erase_display_command: Char = 'J';
+const inverse_video_parameter: Char = '7';
+const reset_style_parameter: Char = '0';
+const select_graphic_rendition_command: Char = 'm';
+const utf8_continuation_lower_bound = 0x80;
+const utf8_continuation_upper_bound = 0xc0;
+const minimum_document_rows = 1;
+const terminal_status_row_count = 1;
+const minimum_render_columns = 8;
+const terminal_line_break_byte_count = 2;
+// The frame emits two 3-byte cursor/display sequences and at most four 4-byte style sequences.
+const terminal_frame_control_capacity = 22;
+
+const empty_piece_tree = () => {
+  let tree: PieceTree = `Empty ();
+  tree
+};
+
+const empty_piece_cursor = () => {
+  let cursor: List PieceTree = `Nil ();
+  cursor
+};
+
+let is_line_break = (byte: I32) => {
+  let character = cast(byte, Char);
+  character == '\n'
+};
+
+let piece_line_count = (piece: Bytes) => {
+  let bytes = IntoIterator.iterator(piece);
+  iterator_count(bytes, is_line_break)
+};
+
+let piece_tree_length = (tree: PieceTree) => match tree {
+  | `Empty () => 0
+  | `Leaf leaf => leaf.piece.length()
+  | `Branch branch => branch.length
+};
+
+let piece_tree_lines = (tree: PieceTree) => match tree {
+  | `Empty () => 0
+  | `Leaf leaf => leaf.lines
+  | `Branch branch => branch.lines
+};
+
+let piece_tree_height = (tree: PieceTree) => match tree {
+  | `Empty () => 0
+  | `Leaf _ => 1
+  | `Branch branch => branch.height
+};
+
+let piece_tree_leaf = (bytes: Bytes) => {
+  if bytes.length() == 0 {
+    empty_piece_tree()
+  } else {
+    let leaf: PieceTree = `Leaf (PieceLeaf.new { .piece = bytes, .lines = piece_line_count bytes });
+    leaf
+  }
+};
+
+let piece_tree_branch = (left: PieceTree, right: PieceTree) => {
+  if let `Empty () = left {
+    right
+  } else if let `Empty () = right {
+    left
+  } else {
+    let left_height = piece_tree_height left;
+    let right_height = piece_tree_height right;
+    let height = if left_height > right_height { left_height + 1 } else { right_height + 1 };
+    let branch: PieceTree = `Branch (PieceBranch.new {
+      .left = left,
+      .right = right,
+      .length = piece_tree_length left + piece_tree_length right,
+      .lines = piece_tree_lines left + piece_tree_lines right,
+      .height = height,
+    });
+    branch
+  }
+};
+
+let rec join_piece_trees = (left: PieceTree, right: PieceTree) => {
+  let left_height = piece_tree_height left;
+  let right_height = piece_tree_height right;
+
+  if left_height > right_height + 1 {
+    let `Branch branch = left else { return piece_tree_branch(left, right); };
+    piece_tree_branch(branch.left, join_piece_trees(branch.right, right))
+  } else if right_height > left_height + 1 {
+    let `Branch branch = right else { return piece_tree_branch(left, right); };
+    piece_tree_branch(join_piece_trees(left, branch.left), branch.right)
+  } else {
+    piece_tree_branch(left, right)
+  }
+};
+
+let piece_table = (bytes: Bytes) => {
+  let root = piece_tree_leaf bytes;
+  PieceTable.new {
+    .root = root,
+    .length = piece_tree_length root,
+    .lines = piece_tree_lines root,
+  }
+};
+
+let byte_at = (table: PieceTable, wanted: I32) => {
+  let remaining = wanted;
+  let current = table.root;
+  let found = 0;
+  let done = false;
+
+  loop {
+    match current {
+      | `Empty () => {
+        done = true
+      }
+      | `Leaf leaf => {
+        let piece: Bytes = leaf.piece;
+        found = piece[remaining]
+        done = true
+      }
+      | `Branch branch => {
+        let left = branch.left;
+        let left_length = piece_tree_length left;
+
+        if remaining < left_length {
+          current = left
+        } else {
+          remaining = remaining - left_length
+          current = branch.right
+        }
+      }
+    }
+
+    if done { break; }
+  }
+
+  found
+};
+
+let rec split_piece_tree = (tree: PieceTree, position: I32) => {
+  let length = piece_tree_length tree;
+
+  if position <= 0 {
+    (empty_piece_tree(), tree)
+  } else if position >= length {
+    (tree, empty_piece_tree())
+  } else {
+    match tree {
+      | `Empty () => (empty_piece_tree(), empty_piece_tree())
+      | `Leaf leaf => {
+        let piece = leaf.piece;
+        let left = piece_tree_leaf(slice(&piece, 0, position));
+        let right = piece_tree_leaf(slice(&piece, position, piece.length()));
+        (left, right)
+      }
+      | `Branch branch => {
+        let left = branch.left;
+        let right = branch.right;
+        let left_length = piece_tree_length left;
+
+        if position < left_length {
+          let (prefix, suffix) = split_piece_tree(left, position);
+          (prefix, join_piece_trees(suffix, right))
+        } else {
+          let (prefix, suffix) = split_piece_tree(right, position - left_length);
+          (join_piece_trees(left, prefix), suffix)
+        }
+      }
+    }
+  }
+};
+
+let insert_bytes = (table, position, bytes) => {
+  let inserted_length = bytes.length();
+
+  if inserted_length == 0 {
+    table
+  } else {
+    let (left, right) = split_piece_tree(table.root, position);
+    let inserted = piece_tree_leaf bytes;
+    let root = join_piece_trees(join_piece_trees(left, inserted), right);
+    PieceTable.new {
+      .root = root,
+      .length = piece_tree_length root,
+      .lines = piece_tree_lines root,
+    }
+  }
+};
+
+let delete_bytes = (table, start, end) => {
+  if start >= end {
+    table
+  } else {
+    let (prefix, suffix) = split_piece_tree(table.root, end);
+    let (left, _) = split_piece_tree(prefix, start);
+    let root = join_piece_trees(left, suffix);
+    PieceTable.new {
+      .root = root,
+      .length = piece_tree_length root,
+      .lines = piece_tree_lines root,
+    }
+  }
+};
+
+let normalize_piece_cursor: List PieceTree -> List PieceTree = (cursor: List PieceTree) => {
+  let pending = cursor;
+  let normalized = empty_piece_cursor();
+  let done = false;
+
+  loop {
+    if let `Cons node = pending {
+      let [tree, tail] = node;
+
+      match tree {
+        | `Empty () => {
+          pending = tail
+        }
+        | `Leaf _ => {
+          normalized = pending
+          done = true
+        }
+        | `Branch branch => {
+          let right_node: List PieceTree = `Cons [branch.right, tail];
+          pending = `Cons [branch.left, right_node]
+        }
+      }
+    } else {
+      normalized = pending
+      done = true
+    }
+
+    if done { break; }
+  }
+
+  normalized
+};
+
+let piece_cursor = (tree: PieceTree) => {
+  let pending: List PieceTree = `Cons [tree, empty_piece_cursor()];
+  let cursor: PieceIteratorState = [.pending = normalize_piece_cursor pending];
+  cursor
+};
+
+extend PieceIteratorState {
+  type Item = Bytes,
+  .has_next = (cursor: PieceIteratorState) => {
+    if let `Cons _ = cursor.pending { true } else { false }
+  },
+  .next = (cursor: PieceIteratorState) => {
+    let `Cons node = cursor.pending else {
+      return @panic "Cannot advance an exhausted piece cursor";
+    };
+    let [tree, tail] = node;
+    let `Leaf leaf = tree else {
+      return @panic "Piece cursor was not normalized";
+    };
+    let pending = tail;
+    let next: List PieceTree = `Nil ();
+    let done = false;
+
+    loop {
+      if let `Cons pending_node = pending {
+        let [pending_tree, pending_tail] = pending_node;
+
+        match pending_tree {
+          | `Empty () => {
+            pending = pending_tail
+          }
+          | `Leaf _ => {
+            next = pending
+            done = true
+          }
+          | `Branch branch => {
+            let right_node: List PieceTree = `Cons [branch.right, pending_tail];
+            pending = `Cons [branch.left, right_node]
+          }
+        }
+      } else {
+        next = pending
+        done = true
+      }
+
+      if done { break; }
+    }
+
+    let next_state: PieceIteratorState = [.pending = next];
+    [leaf.piece, next_state]
+  },
+}
+
+let materialize = (table: PieceTable) => {
+  let output = Bytes.generate(table.length, _ => 0);
+  let output_offset = 0;
+  let pieces = piece_cursor table.root;
+
+  for piece in pieces {
+    let leaf_bytes: Bytes = piece;
+
+    for byte in leaf_bytes {
+      output[output_offset] = byte
+      output_offset = output_offset + 1
+    }
+  }
+
+  output
+};
+
+let selection_start = selection => {
+  if selection.anchor < selection.head { selection.anchor } else { selection.head }
+};
+
+let replace_primary_selection = (editor: Editor, selection: Selection) => {
+  let selections = SelectionSet.new {
+    .primary = selection,
+    .secondary = editor.selections.secondary,
+  };
+  Editor.new {
+    .document = editor.document,
+    .selections = selections,
+    .mode = editor.mode,
+    .status = editor.status,
+  }
+};
+
+let is_utf8_continuation = byte => {
+  byte >= utf8_continuation_lower_bound && byte < utf8_continuation_upper_bound
+};
+
+let next_character = (table, position) => {
+  let next = position + 1;
+
+  for candidate in next..table.length {
+    let byte = byte_at(table, candidate);
+    if not(is_utf8_continuation byte) { break; }
+    next = candidate + 1
+  }
+
+  next
+};
+
+let previous_character = (table, position) => {
+  let previous = position - 1;
+
+  for candidate in previous..0 by -1 {
+    let byte = byte_at(table, candidate);
+    if not(is_utf8_continuation byte) { break; }
+    previous = candidate - 1
+  }
+
+  previous
+};
+
+let clamp_character = (table, position) => {
+  if table.length == 0 {
+    0
+  } else if position < 0 {
+    0
+  } else if position >= table.length {
+    previous_character(table, table.length)
+  } else {
+    position
+  }
+};
+
+let selection_head_end = (table, selection) => {
+  if table.length == 0 {
+    0
+  } else {
+    let furthest =
+      if selection.anchor > selection.head { selection.anchor } else { selection.head };
+    next_character(table, furthest)
+  }
+};
+
+let move_head = (editor, position) => {
+  let head = clamp_character(&editor.document, position);
+  let anchor = if let `Extend () = editor.mode { editor.selections.primary.anchor } else { head };
+  replace_primary_selection(editor, Selection.new { .anchor = anchor, .head = head })
+};
+
+let collapse = (editor, position) => {
+  let cursor = clamp_character(&editor.document, position);
+  let mode = if let `Extend () = editor.mode { `Normal () } else { editor.mode };
+  let updated = replace_primary_selection(
+    editor,
+    Selection.new { .anchor = cursor, .head = cursor },
+  );
+  updated <& { .mode = mode }
+};
+
+let delete_selection = editor => {
+  let start = selection_start(&editor.selections.primary);
+  let end = selection_head_end(&editor.document, &editor.selections.primary);
+  let document = delete_bytes(editor.document, start, end);
+  let updated = editor <& { .document = document };
+  collapse(updated, start)
+};
+
+let insert_byte = (editor, byte) => {
+  let bytes = Bytes.generate(1, _ => byte);
+  let position = editor.selections.primary.head;
+  let document = insert_bytes(editor.document, position, bytes);
+  let updated = editor <& { .document = document };
+  collapse(updated, position + 1)
+};
+
+let continue_editing = editor => {
+  EditorStep.new {
+    .editor = editor,
+    .commands = editor_commands.empty(),
+  }
+};
+
+let request_editor_command = (editor, command: EditorCommand) => {
+  EditorStep.new {
+    .editor = editor,
+    .commands = editor_commands.singleton command,
+  }
+};
+
+let apply_normal_character = (editor, character) => {
+  match character {
+    | 'h' => {
+      let updated = move_head(
+        editor,
+        previous_character(&editor.document, editor.selections.primary.head),
+      );
+      continue_editing updated
+    }
+    | 'l' => {
+      let updated = move_head(
+        editor,
+        next_character(&editor.document, editor.selections.primary.head),
+      );
+      continue_editing updated
+    }
+    | 'v' => {
+      let mode = if let `Extend () = editor.mode { `Normal () } else { `Extend () };
+      continue_editing(editor <& { .mode = mode })
+    }
+    | 'd' => continue_editing(delete_selection editor)
+    | 'c' => {
+      let updated = delete_selection editor;
+      continue_editing(updated <& { .mode = `Insert () })
+    }
+    | 'i' => {
+      let updated = collapse(editor, selection_start(&editor.selections.primary));
+      continue_editing(updated <& { .mode = `Insert () })
+    }
+    | 'a' => {
+      let position = selection_head_end(&editor.document, &editor.selections.primary);
+      let updated = collapse(editor, position);
+      continue_editing(updated <& { .mode = `Insert () })
+    }
+    | 'w' => request_editor_command(editor, `Save ())
+    | 'q' => request_editor_command(editor, `Quit ())
+    | _ => continue_editing editor
+  }
+};
+
+let apply_backspace = editor => {
+  if editor.selections.primary.head == 0 {
+    continue_editing editor
+  } else {
+    let start = previous_character(&editor.document, editor.selections.primary.head);
+    let document = delete_bytes(editor.document, start, editor.selections.primary.head);
+    let updated = editor <& { .document = document };
+    continue_editing(collapse(updated, start))
+  }
+};
+
+let apply_insert_key = (editor, key: Key) => match key {
+  | `Escape () => continue_editing(editor <& { .mode = `Normal () })
+  | `Backspace () => apply_backspace editor
+  | `Enter () => continue_editing(insert_byte(editor, cast('\n', I32)))
+  | `Tab () => continue_editing(insert_byte(editor, cast('\t', I32)))
+  | `Character character => {
+    let byte: I32 = cast(character, I32);
+
+    if byte >= cast(' ', I32) {
+      continue_editing(insert_byte(editor, byte))
+    } else {
+      continue_editing editor
+    }
+  }
+  | _ => continue_editing editor
+};
+
+let apply_key = (editor, key) => match key {
+  | `ArrowLeft () => {
+    let updated = move_head(
+      editor,
+      previous_character(&editor.document, editor.selections.primary.head),
+    );
+    continue_editing updated
+  }
+  | `ArrowRight () => {
+    let updated = move_head(
+      editor,
+      next_character(&editor.document, editor.selections.primary.head),
+    );
+    continue_editing updated
+  }
+  | `ControlC () => {
+    if let `Insert () = editor.mode {
+      continue_editing editor
+    } else {
+      request_editor_command(editor, `Quit ())
+    }
+  }
+  | `Character character => {
+    if let `Insert () = editor.mode {
+      apply_insert_key(editor, key)
+    } else {
+      apply_normal_character(editor, character)
+    }
+  }
+  | _ => {
+    if let `Insert () = editor.mode {
+      apply_insert_key(editor, key)
+    } else {
+      continue_editing editor
+    }
+  }
+};
+
+let decoded_without_key = decoder => {
+  KeyDecodeStep.new {
+    .decoder = decoder,
+    .keys = key_sequence.empty(),
+  }
+};
+
+let decoded_key = (decoder, key: Key) => {
+  KeyDecodeStep.new {
+    .decoder = decoder,
+    .keys = key_sequence.singleton key,
+  }
+};
+
+let decode_ground_character = character => match character {
+  | #(escape_character) => decoded_without_key(`EscapePrefix ())
+  | #(control_c_character) => decoded_key(`Ground (), `ControlC ())
+  | #(backspace_character) | #(delete_character) => {
+    decoded_key(`Ground (), `Backspace ())
+  }
+  | '\r' => decoded_key(`Ground (), `Enter ())
+  | '\t' => decoded_key(`Ground (), `Tab ())
+  | _ => decoded_key(`Ground (), `Character character)
+};
+
+let decode_key_character = (decoder, character) => {
+  match decoder {
+    | `Ground () => decode_ground_character character
+    | `EscapePrefix () => {
+      if character == control_sequence_introducer {
+        decoded_without_key(`ControlSequence ())
+      } else {
+        let decoded = decode_ground_character character;
+        KeyDecodeStep.new {
+          .decoder = decoded.decoder,
+          .keys = key_sequence.prepend(`Escape (), decoded.keys),
+        }
+      }
+    }
+    | `ControlSequence () => {
+      match character {
+        | 'D' => decoded_key(`Ground (), `ArrowLeft ())
+        | 'C' => decoded_key(`Ground (), `ArrowRight ())
+        | _ => decoded_without_key(`Ground ())
+      }
+    }
+  }
+};
+
+let apply_decoded_keys = (
+  editor: Editor,
+  keys: List Key,
+  reversed_commands: List EditorCommand,
+) => {
+  let updated = editor;
+  let commands = reversed_commands;
+
+  for key in keys {
+    let step = apply_key(updated, key);
+    updated = step.editor
+
+    for command in step.commands {
+      commands = editor_commands.prepend(command, commands)
+    }
+  }
+
+  AppliedKeys.new {
+    .editor = updated,
+    .commands = commands,
+  }
+};
+
+let apply_keys = (editor, decoder, bytes) => {
+  let updated = editor;
+  let current_decoder = decoder;
+  let reversed_commands = editor_commands.empty();
+
+  for byte in bytes {
+    let character = cast(byte, Char);
+    let decoded = decode_key_character(current_decoder, character);
+    current_decoder = decoded.decoder
+    let applied = apply_decoded_keys(
+      updated,
+      decoded.keys,
+      reversed_commands,
+    );
+    updated = applied.editor
+    reversed_commands = applied.commands
+  }
+
+  if let `EscapePrefix () = current_decoder {
+    let step = apply_key(updated, `Escape ());
+    updated = step.editor
+    current_decoder = `Ground ()
+  }
+
+  EditorInputStep.new {
+    .editor = updated,
+    .decoder = current_decoder,
+    .commands = editor_commands.reverse reversed_commands,
+  }
+};
+
+let execute_commands = (editor: Editor, commands: List EditorCommand) => {
+  let updated = editor;
+  let pending = commands;
+  let quit_requested = false;
+  let commands_done = false;
+
+  loop {
+    if let `Cons node = pending {
+      let [command, remaining_commands] = node;
+      pending = remaining_commands
+
+      match command {
+        | `Save () => {
+          let contents = materialize(&updated.document);
+          save_result <- Terminal.save(&contents)
+          let status = if let `Ok () = save_result { `Ready () } else { `SaveFailed () };
+          updated = updated <& { .status = status }
+        }
+        | `Quit () => {
+          quit_requested = true
+        }
+      }
+    } else {
+      commands_done = true
+    }
+
+    if commands_done { break; }
+  }
+
+  if quit_requested { `Quit updated } else { `Continue updated }
+};
+
+let output_builder = capacity => {
+  OutputBuilder.new {
+    .buffer = Bytes.generate(capacity, _ => 0),
+    .length = 0,
+  }
+};
+
+let append_output_byte = (output, byte) => {
+  let buffer = output.buffer;
+  buffer[output.length] = byte
+  OutputBuilder.new { .buffer = buffer, .length = output.length + 1 }
+};
+
+let render_output = capacity => {
+  let output = output_builder capacity;
+  handler RenderOutput {
+    append: (byte, !resume) => {
+      output = append_output_byte(output, byte)
+      !resume(())
+    },
+    return: _ => slice(&output.buffer, 0, output.length),
+  }
+};
+
+let emit_output_byte = byte => {
+  _ <- RenderOutput.append(byte)
+  ()
+};
+
+let emit_output_character = (character: Char) => {
+  _ <- emit_output_byte(cast(character, I32))
+  ()
+};
+
+let emit_control_sequence = (command: Char) => {
+  _ <- emit_output_character escape_character
+  _ <- emit_output_character control_sequence_introducer
+  _ <- emit_output_character command
+  ()
+};
+
+let emit_sgr = (parameter: Char) => {
+  _ <- emit_control_sequence parameter
+  _ <- emit_output_character select_graphic_rendition_command
+  ()
+};
+
+const display_byte = (byte: I32) => {
+  let character = cast(byte, Char);
+  if character == '\t' { cast(' ', I32) } else { byte }
+};
+
+let render = view => {
+  let document = view.document;
+  let selected_start = view.highlight.start;
+  let selected_end = view.highlight.end;
+  let mode = view.mode;
+  let status = view.status;
+  let columns = view.size.columns;
+  let rows = view.size.rows;
+  let document_rows = rows - terminal_status_row_count;
+  let visible_rows =
+    if document_rows > minimum_document_rows { document_rows } else { minimum_document_rows };
+  let visible_columns =
+    if columns > minimum_render_columns { columns } else { minimum_render_columns };
+  let line_break_capacity = visible_rows * terminal_line_break_byte_count;
+  let output_capacity =
+    document.length() + line_break_capacity + visible_columns + terminal_frame_control_capacity;
+
+  try {
+    _ <- emit_control_sequence cursor_home_command
+    _ <- emit_control_sequence erase_display_command
+    let highlighted = false;
+    let row = 0;
+    let column = 0;
+
+    for position in 0..document.length() {
+      let byte = display_byte document[position];
+      let character = cast(byte, Char);
+
+      if row < visible_rows {
+        if position == selected_start {
+          _ <- emit_sgr inverse_video_parameter
+          highlighted = true
+        }
+
+        if position == selected_end && highlighted {
+          _ <- emit_sgr reset_style_parameter
+          highlighted = false
+        }
+
+        if character == '\n' {
+          _ <- emit_output_character '\r'
+          _ <- emit_output_character '\n'
+          row = row + 1
+          column = 0
+        } else if column < visible_columns {
+          _ <- emit_output_byte byte
+
+          if not(is_utf8_continuation byte) {
+            column = column + 1
+          }
+        }
+      }
+    }
+
+    if highlighted {
+      _ <- emit_sgr reset_style_parameter
+    }
+
+    for _ in row..visible_rows {
+      _ <- emit_output_character '\r'
+      _ <- emit_output_character '\n'
+    }
+
+    _ <- emit_sgr inverse_video_parameter
+    let label = if let `SaveFailed () = status {
+      " SAVE FAILED  w retry  q quit "
+    } else if let `Insert () = mode {
+      " INSERT  esc normal "
+    } else if let `Extend () = mode {
+      " EXTEND  h/l move  d delete  i/a insert  w save  q quit "
+    } else {
+      " NORMAL  h/l move  v extend  d delete  i/a insert  w save  q quit "
+    };
+
+    for label_index in 0..label.length() {
+      if label_index < visible_columns {
+        _ <- emit_output_byte label[label_index]
+      }
+    }
+
+    _ <- emit_sgr reset_style_parameter
+    ()
+  } with render_output output_capacity
+};
+
+document <- Terminal.load()
+let initial_document = piece_table document;
+let editor = Editor.new {
+  .document = initial_document,
+  .selections = SelectionSet.new {
+    .primary = Selection.new { .anchor = 0, .head = 0 },
+    .secondary = `Nil (),
+  },
+  .mode = `Normal (),
+  .status = `Ready (),
+};
+let key_decoder: KeyDecoder = `Ground ();
+
+loop {
+  columns <- Terminal.columns()
+  rows <- Terminal.rows()
+  let rendered_document = materialize(&editor.document);
+  let rendered_start = selection_start(&editor.selections.primary);
+  let rendered_end = selection_head_end(&editor.document, &editor.selections.primary);
+  let view = RenderView.new {
+    .document = rendered_document,
+    .highlight = Highlight.new { .start = rendered_start, .end = rendered_end },
+    .mode = editor.mode,
+    .status = editor.status,
+    .size = TerminalSize.new { .columns = columns, .rows = rows },
+  };
+  let frame = render view;
+  _ <- Terminal.write(&frame)
+  read_result <- Terminal.read()
+  let `Keys keys = read_result else { break; };
+  let input_step: EditorInputStep = apply_keys(editor, key_decoder, keys);
+  key_decoder = input_step.decoder
+  outcome <- execute_commands(input_step.editor, input_step.commands)
+  let `Continue updated_editor = outcome else { break; };
+  editor = updated_editor
+}
+
+return { .code = 0 };

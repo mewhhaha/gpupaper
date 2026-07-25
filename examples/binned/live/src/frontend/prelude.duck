@@ -1,0 +1,95 @@
+module () where
+
+infixr 75 :> = @seal
+infixl 75 :< = @representation
+infixl 65 :+ = @type .extend
+infixl 45 :| = @type .union
+infixl 50 :& = @type .intersection
+infixl 55 :- = @type .difference
+
+duck Length Self {
+  .length = &Self -> I32
+}
+
+duck Index Self {
+  type Item
+  .get = [&Self, I32] -> Item
+}
+
+duck IndexSet Self {
+  type Item
+  .set = [Self, I32, Item] -> Self
+}
+
+duck Iterable Self {
+  type Item
+  .length = &Self -> I32
+  .get = [&Self, I32] -> Item
+}
+
+duck Iterator Self {
+  type Item
+  .has_next = Self -> Bool
+  .next = Self -> [Item, Self]
+}
+
+extend Bytes {
+  type Item = I32,
+  .length = (value: &Bytes) => @len value,
+  .get = (value: &Bytes, index: I32) => @get(value, index),
+  .set = (value: Bytes, index: I32, item: I32) => {
+    value[index] = item
+    value
+  },
+}
+
+extend Text {
+  type Item = Char,
+  .length = (value: &Text) => @len value,
+  .get = (value: &Text, index: I32) => @cast(@get(value, index), Char),
+}
+
+extend List Element {
+  type Item = Element,
+  .has_next = (values: List Element) => if let `Cons _ = values {
+    true
+  } else {
+    false
+  },
+  .next = (values: List Element) => if let `Cons node = values {
+    node
+  } else {
+    @panic "Cannot advance an exhausted List iterator"
+  },
+}
+
+const types_module = import "duck:prelude/types" ();
+const {
+  .cast,
+  .newtype,
+  .packed,
+  .representation,
+  .seal,
+  .struct,
+  .type_difference,
+  .type_extend,
+  .type_intersection,
+  .type_union,
+} = types_module;
+const not: Bool -> Bool = value => if value { false } else { true };
+const slice = [value, start, end] => @slice(value, start, end);
+
+return {
+  .struct,
+  .packed,
+  .newtype,
+  .cast,
+  .seal,
+  .representation,
+  .type_extend,
+  .type_union,
+  .type_intersection,
+  .type_difference,
+  .not,
+  .slice,
+};

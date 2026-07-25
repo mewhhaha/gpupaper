@@ -1,0 +1,13 @@
+module () where
+
+const fail: () -> Unit = () => @panic "Test failed";
+
+const assert: Bool -> Unit = condition => {
+  if condition { () } else { fail() }
+};
+
+const assert_false: Bool -> Unit = condition => {
+  if condition { fail() } else { () }
+};
+
+return { .assert, .assert_false, .fail };

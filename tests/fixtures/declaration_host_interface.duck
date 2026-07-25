@@ -1,0 +1,8 @@
+module () where
+
+type ReadResult = | `Value I32 | `End Unit
+
+declare effect Input { read: () => I32 }
+declare Init { input: Input }
+
+return {}

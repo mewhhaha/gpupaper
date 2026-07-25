@@ -10,8 +10,8 @@ export returns an `i32`.
 The Ducklang frontend uses a Baba-generated Wasm parser for the complete
 vendored examples corpus. Its independent pipeline is: Baba cursor, source AST,
 module/name resolution, typed and effect IR, GPU-assisted equality checking,
-compile-time evaluation, FCG, and Wasm. The enforced contract runs all 92
-success programs, 12 intended compile failures, 4 traps, 1 source-test module,
+compile-time evaluation, FCG, and Wasm. The enforced contract runs all 94
+success programs, 13 intended compile failures, 4 traps, 1 source-test module,
 and all 9 dependency modules through their declared consumers.
 
 Host effects and dynamic `Text` use a browser-compatible managed ABI. Wasm
@@ -31,6 +31,7 @@ Deno 2 with WebGPU is required for the GPU paths.
 deno task check
 deno task test
 deno task experiments
+deno task benchmark:frontend
 deno task run examples/all.hs
 deno task compile examples/all.hs output.wasm
 deno task run examples/duck/06_functions_and_blocks.duck
@@ -66,6 +67,19 @@ contains the complete runtime ABI; the host never needs to parse Duck source.
 of Experiments A–F. The combined example returns `42` and exercises algebraic
 data, a class instance, two hygienic Wasm macros, CPU/GPU compile-time
 evaluation, interaction-calculus evaluation, FCG lowering, and Wasm emission.
+Compilation artifacts also expose a validated flat FCG package with explicit
+control-region IDs. Deterministic batch rewrites operate within those regions
+and feed both FCG artifacts and final Wasm lowering. When WebGPU is enabled, it
+resolves nested function-body and section lengths, encodes scalar immediates and
+LEB128 values, scans final offsets, and emits bytes that must match the CPU
+encoder exactly.
+
+`deno task benchmark:frontend` reports cold and warm Baba initialization,
+syntax, AST lowering, elaboration, resolution, inference, CPU backend, and GPU
+type/emission timings. Its defaults are all six frozen Binned applications.
+Syntax, semantic, or GPU failures are reported as benchmark outcomes rather than
+silently omitted. The recorded RTX 4080 SUPER results and methodology are in
+[Ducklang frontend performance](PERFORMANCE.md).
 
 ## Implemented experiments
 
@@ -130,7 +144,7 @@ clock, or process import.
 
 The canonical Duck syntax is [grammar/duck.baba](grammar/duck.baba). Baba 6
 generates its lexer, deterministic LR plan, and standalone Wasm runtime. The
-conformance test parses all 118 `.duck` files copied from the sibling `binned`
+conformance test parses all 121 `.duck` files copied from the sibling `binned`
 repository, including its success cases, expected compile failures, runtime-trap
 fixtures, and imported dependencies. `deno task duck:grammar` regenerates the
 Baba grammar and reviewed conflict policy from the vendored Tree-sitter grammar
@@ -203,7 +217,9 @@ Haskell-like or Duck source
   -> IC and CPU/GPU bytecode compile-time evaluation
   -> final type inference
   -> FCG operation rows
-  -> exact Wasm binary emission
+  -> validated flat FCG columns
+  -> deterministic region-aware batch rewrites
+  -> CPU/WebGPU differential Wasm layout and emission
   -> WebAssembly.validate / instantiate
 ```
 
@@ -223,16 +239,24 @@ source never becomes WGSL.
 - `scripts/import_ducklang_grammar.ts`, `update_duck_conflicts.ts`,
   `generate_ducklang_parser.ts`: reproducible grammar migration, LR policy, and
   parser artifacts.
-- `tests/ducklang_syntax.test.ts`: all 118 vendored Ducklang sources through the
+- `tests/ducklang_syntax.test.ts`: all 121 vendored Ducklang sources through the
   generated Wasm parser.
 - `src/resolution.ts`, `types.ts`: CPU reference frontend and FTCG equality
   capture.
 - `src/gpu_solver.ts`: WebGPU union and occurs-check kernels.
+- `src/gpu_device.ts`: shared compiler device and error-scope coordination.
+- `src/flat_fcg.ts`, `fcg_rewrite.ts`: canonical GPU-facing FCG columns and
+  deterministic region-aware snapshot/propose/resolve/rebuild rewrites.
+- `src/gpu_wasm.ts`: WebGPU nested-length resolution, LEB128 encoding, prefix
+  layout, and byte emission.
 - `src/comptime.ts`: CPU and WebGPU compile-time bytecode.
 - `src/macros.ts`: hygienic Wasm macro boundary.
 - `src/interaction.ts`: pinned interaction-calculus experiment.
-- `src/fcg.ts`, `wasm.ts`: FCG lowering and dependency-free Wasm encoding.
+- `src/fcg.ts`, `wasm.ts`: rewrite-integrated FCG lowering, semantic Wasm
+  planning, and the dependency-free CPU encoding oracle.
 - `src/compiler.ts`, `cli.ts`: orchestration and commands.
+- `scripts/benchmark_ducklang_frontend.ts`: cold/warm frontend and full-pipeline
+  measurements.
 - `tests/compiler.test.ts`: observable regression and differential tests.
 
 Baba is the only third-party dependency. It is pinned because grammar analysis

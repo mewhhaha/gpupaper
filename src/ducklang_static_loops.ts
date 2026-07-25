@@ -1,6 +1,7 @@
 import type {
   DucklangExpression,
   DucklangModule,
+  DucklangName,
   DucklangStatement,
 } from "./ducklang_ast.ts";
 
@@ -268,6 +269,24 @@ function expandStatements(
     const substituted = substituteStatement(statement, values, inLoop);
     if (
       substituted.kind === "binding" &&
+      substituted.declarationKind === "const" &&
+      isStaticTypeExpression(substituted.value)
+    ) {
+      values.set(substituted.name.text, substituted.value);
+      continue;
+    }
+    if (
+      substituted.kind === "binding" &&
+      substituted.value.kind === "function" &&
+      substituted.value.parameters.some((parameter) =>
+        parameter.variadic || parameter.compileTimeRecord
+      )
+    ) {
+      values.set(substituted.name.text, substituted.value);
+      continue;
+    }
+    if (
+      substituted.kind === "binding" &&
       substituted.value.kind !== "function"
     ) {
       const staticRecord = evaluateStaticValue(
@@ -320,8 +339,22 @@ function expandStatements(
         if (name !== undefined) values.delete(name.text);
       }
     }
+    if (statement.kind === "recordBinding") {
+      for (const field of statement.fields) {
+        values.delete(field.localName.text);
+      }
+    }
   }
   return { statements: expanded, control: "next", values };
+}
+
+function isStaticTypeExpression(expression: DucklangExpression): boolean {
+  if (expression.kind === "reference") {
+    return /^[A-Z]/.test(expression.name.text);
+  }
+  return expression.kind === "call" &&
+    isStaticTypeExpression(expression.callee) &&
+    expression.arguments.every(isStaticTypeExpression);
 }
 
 function substituteStatement(
@@ -334,6 +367,7 @@ function substituteStatement(
     case "assignment":
       return {
         ...statement,
+        name: substituteDeclaredType(statement.name, values),
         value: substituteExpression(statement.value, values, replaceReferences),
       };
     case "unionBinding":
@@ -364,9 +398,19 @@ function substituteStatement(
       };
     }
     case "productBinding":
+    case "recordBinding":
       return {
         ...statement,
         value: substituteExpression(statement.value, values, replaceReferences),
+      };
+    case "typePattern":
+      return {
+        ...statement,
+        target: substituteExpression(
+          statement.target,
+          values,
+          replaceReferences,
+        ),
       };
     case "return":
       return {
@@ -446,6 +490,8 @@ function substituteExpression(
   switch (expression.kind) {
     case "integer":
     case "integer64":
+    case "float32":
+    case "float64":
     case "boolean":
     case "unit":
     case "string":
@@ -471,13 +517,17 @@ function substituteExpression(
       if (replaceReferences) {
         return values.get(expression.name.text) ?? expression;
       }
-      const staticFunction = values.get(expression.name.text);
-      return staticFunction?.kind === "function" &&
-          staticFunction.parameters.some((parameter) =>
-            parameter.variadic || parameter.compileTimeRecord
-          )
-        ? staticFunction
-        : expression;
+      const staticValue = values.get(expression.name.text);
+      if (staticValue?.kind === "record") return staticValue;
+      if (
+        staticValue?.kind === "function" &&
+        staticValue.parameters.some((parameter) =>
+          parameter.variadic || parameter.compileTimeRecord
+        )
+      ) {
+        return staticValue;
+      }
+      return expression;
     }
     case "function": {
       const functionValues = new Map(values);
@@ -486,6 +536,12 @@ function substituteExpression(
       }
       return {
         ...expression,
+        parameters: expression.parameters.map((parameter) =>
+          substituteDeclaredType(parameter, values)
+        ),
+        parameterTypeSources: expression.parameterTypeSources?.map((source) =>
+          substituteExpression(source, values, replaceReferences)
+        ),
         body: substituteExpression(
           expression.body,
           functionValues,
@@ -543,10 +599,19 @@ function substituteExpression(
         : variadicIndex;
       const parameterValues = new Map<string, DucklangExpression>();
       for (let index = 0; index < fixedParameterCount; index += 1) {
-        const argument = callee.parameters[index].compileTimeRecord
+        const parameter = callee.parameters[index];
+        const argument = parameter.compileTimeRecord
           ? substituteExpression(expression.arguments[index], values)
           : arguments_[index];
-        parameterValues.set(callee.parameters[index].text, argument);
+        parameterValues.set(
+          parameter.text,
+          parameter.identityPolymorphic && argument.kind === "reference"
+            ? {
+              ...argument,
+              name: { ...argument.name, identityPolymorphic: true },
+            }
+            : argument,
+        );
       }
       if (variadicIndex >= 0) {
         parameterValues.set(callee.parameters[variadicIndex].text, {
@@ -573,16 +638,17 @@ function substituteExpression(
         ...block,
         statements: expanded.statements,
       };
-      if (body.kind !== "comptime") return expandedBlock;
       const resultStatement = expanded.statements.at(-1);
       const staticResult = resultStatement?.kind === "expression"
         ? evaluateStaticValue(
           substituteExpression(resultStatement.expression, expanded.values),
         )
         : undefined;
+      if (staticResult !== undefined) return staticResult;
+      if (body.kind !== "comptime") return expandedBlock;
       return {
         ...body,
-        expression: staticResult ?? expandedBlock,
+        expression: expandedBlock,
       };
     }
     case "index":
@@ -791,6 +857,31 @@ function substituteExpression(
   }
 }
 
+function substituteDeclaredType(
+  name: DucklangName,
+  values: ReadonlyMap<string, DucklangExpression>,
+): DucklangName {
+  if (name.declaredType === undefined) return name;
+  const typeValue = values.get(name.declaredType);
+  const declaredType = staticTypeName(typeValue);
+  return declaredType === undefined ? name : { ...name, declaredType };
+}
+
+function staticTypeName(
+  expression: DucklangExpression | undefined,
+): string | undefined {
+  if (expression?.kind === "reference" && /^[A-Z]/.test(expression.name.text)) {
+    return expression.name.text;
+  }
+  if (
+    expression?.kind === "call" && expression.callee.kind === "reference" &&
+    /^[A-Z]/.test(expression.callee.name.text)
+  ) {
+    return expression.callee.name.text;
+  }
+  return undefined;
+}
+
 function evaluateLoopBreak(
   statements: readonly DucklangStatement[],
   values: ReadonlyMap<string, DucklangExpression>,
@@ -868,6 +959,9 @@ function evaluateStaticInteger(
 function evaluateStaticValue(
   expression: DucklangExpression,
 ): DucklangExpression | undefined {
+  if (expression.kind === "comptime") {
+    return evaluateStaticValue(expression.expression);
+  }
   const integer = evaluateStaticInteger(expression);
   if (integer !== undefined) {
     return { kind: "integer", value: integer, span: expression.span };

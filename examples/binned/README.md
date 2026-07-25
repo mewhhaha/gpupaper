@@ -116,6 +116,7 @@ just duck test examples/testing/01_inline_tests.duck
 | `15_packed_integers.duck`              | packed fixed-width integer fields          | Core    | `2`         |
 | `16_struct_constructor_and_shape.duck` | source-defined `.new` and `.shape` members | Core    | `42`        |
 | `17_match_patterns.duck`               | alternatives and text capture patterns     | Core    | `42`        |
+| `18_const_value_patterns.duck`         | literal and computed const-value patterns  | Core    | `42`        |
 
 ## Loops And Collections
 
@@ -144,6 +145,7 @@ just duck test examples/testing/01_inline_tests.duck
 | `04_freeze_and_share.duck`          | immutable sharing                                       | Core    | `42`   |
 | `05_host_ownership_contracts.duck`  | bounded borrow and ownership transfer effect ABI        | Managed | `42`   |
 | `06_multi_file_capability_app.duck` | explicit dependency import and module capability object | Core    | `42`   |
+| `07_local_module_binding.duck`      | local module binding and capability application         | Core    | `42`   |
 
 ## Effects
 
@@ -174,8 +176,9 @@ effects or deterministic mocks when `--dry-run` is present; see
 
 ## Expected Failures
 
-`failures/compile/` contains 12 programs that demonstrate rejected linear use,
-type errors, aggregate errors, ownership violations, frozen mutation, and import
-validation. `failures/traps/` contains four valid programs that trap at runtime:
-explicit panic, text and struct bounds failures, and a dynamically zero loop
-step. These are executable specifications and are checked by `examples.test.ts`.
+`failures/compile/` contains 13 programs that demonstrate rejected linear use,
+type errors, aggregate errors, ownership violations, frozen mutation, import
+validation, and runtime values used as const-value patterns. `failures/traps/`
+contains four valid programs that trap at runtime: explicit panic, text and
+struct bounds failures, and a dynamically zero loop step. These are executable
+specifications and are checked by `examples.test.ts`.

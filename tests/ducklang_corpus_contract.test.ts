@@ -61,6 +61,7 @@ const supportedSuccessPaths = new Set([
   "examples/data/15_packed_integers.duck",
   "examples/data/16_struct_constructor_and_shape.duck",
   "examples/data/17_match_patterns.duck",
+  "examples/data/18_const_value_patterns.duck",
   "examples/functions/01_closure_capture.duck",
   "examples/functions/02_returned_closure.duck",
   "examples/functions/03_closure_local_shadow.duck",
@@ -94,6 +95,7 @@ const supportedSuccessPaths = new Set([
   "examples/ownership_modules/04_freeze_and_share.duck",
   "examples/ownership_modules/05_host_ownership_contracts.duck",
   "examples/ownership_modules/06_multi_file_capability_app.duck",
+  "examples/ownership_modules/07_local_module_binding.duck",
   "examples/showcases/01_numeric_toolkit.duck",
   "examples/showcases/02_text_analyzer.duck",
   "examples/showcases/03_geometry_transform.duck",
@@ -121,6 +123,7 @@ const supportedCompileFailurePaths = new Set([
   "examples/failures/compile/10_scratch_heap_escape.duck",
   "examples/failures/compile/11_frozen_mutation.duck",
   "examples/failures/compile/12_missing_imported_export.duck",
+  "examples/failures/compile/13_runtime_value_pattern.duck",
 ]);
 const semanticallyCoveredDependencyPaths = new Set([
   "examples/compile_time/open_module.duck",
@@ -138,10 +141,10 @@ Deno.test("the vendored Ducklang contract accounts for the complete corpus", asy
   const contract = parseDucklangCorpusContract(
     await Deno.readTextFile(contractUrl),
   );
-  assertEquals(contract.success.length, 92, "success contract count");
+  assertEquals(contract.success.length, 94, "success contract count");
   assertEquals(
     contract.compileFailures.length,
-    12,
+    13,
     "compile-failure contract count",
   );
   assertEquals(contract.traps.length, 4, "trap contract count");
@@ -162,7 +165,7 @@ Deno.test("the vendored Ducklang contract accounts for the complete corpus", asy
     ...contract.sourceTests,
     ...contract.dependencies,
   ]);
-  assertEquals(contractedPaths.size, 118, "distinct contracted source count");
+  assertEquals(contractedPaths.size, 121, "distinct contracted source count");
 });
 
 Deno.test("the implemented Ducklang corpus baseline produces its declared results", async () => {

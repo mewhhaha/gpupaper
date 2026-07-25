@@ -1,0 +1,109 @@
+module () where
+
+const {
+  .text_append,
+  .append_text,
+  .text_length,
+  .text_get,
+  .text_slice,
+  .text_starts_with_at,
+  .text_starts_with,
+  .text_ends_with,
+  .text_find_from,
+  .text_find,
+  .text_contains,
+  .text_split,
+  .text_ascii_words,
+  .text_replace_all,
+  .text_escape_xml,
+  .text_compare,
+  .text_less_than,
+  .text_is_blank,
+  .text_trim_whitespace,
+  .text_trim_start_whitespace,
+  .text_trim_ascii_whitespace,
+  .text_repeat,
+  .text_collapse_ascii_whitespace,
+  .text_line_count,
+  .text_utf8_length,
+  .text_take_utf8_characters,
+  .text_truncate_end_bytes,
+  .text_truncate_middle_bytes,
+  .text_truncate_middle_tokens,
+} = import "duck:prelude/runtime" ();
+
+const text_copy: &Text -> Text = (value: &Text) => @append(value, "");
+
+const text_trim_end_ascii_whitespace = (text: Text) => {
+  let end = text_length text;
+
+  loop {
+    if end <= 0 { break; }
+    let byte = text_get [text, end - 1];
+    if byte == 9 || byte == 10 || byte == 11 || byte == 12 || byte == 13 || byte == 32 {
+      end = end - 1
+    } else {
+      break;
+    }
+  }
+
+  text_slice [text, 0, end]
+};
+
+const text_join = (values: List Text, separator: Text) => {
+  let current = values;
+  let joined: Text = "";
+  let first = true;
+
+  loop {
+    if let `Cons node = current {
+      let [value, tail] = node;
+      if first {
+        joined = value
+        first = false
+      } else {
+        joined = text_append [joined, text_append [separator, value]]
+      }
+      current = tail
+    } else {
+      break;
+    }
+  }
+
+  joined
+};
+
+return {
+  .text_append,
+  .append_text,
+  .text_length,
+  .text_get,
+  .text_slice,
+  .text_copy,
+  .text_starts_with_at,
+  .text_starts_with,
+  .text_ends_with,
+  .text_find_from,
+  .text_find,
+  .text_contains,
+  .text_split,
+  .text_ascii_words,
+  .text_replace_all,
+  .text_escape_xml,
+  .text_compare,
+  .text_less_than,
+  .text_is_blank,
+  .text_trim_whitespace,
+  .text_trim_start_whitespace,
+  .text_trim_ascii_whitespace,
+  .text_trim_end_ascii_whitespace,
+  .text_join,
+  .text_repeat,
+  .text_collapse_ascii_whitespace,
+  .text_line_count,
+  .text_utf8_length,
+  .text_take_utf8_characters,
+  .text_truncate_end_bytes,
+  .text_truncate_middle_bytes,
+  .text_truncate_middle_tokens,
+};

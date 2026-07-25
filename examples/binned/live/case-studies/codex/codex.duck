@@ -1,0 +1,119 @@
+module (!init: Init) where
+
+const { .struct } = import "duck:prelude" ();
+const { .text_append } = import "duck:prelude/runtime" ();
+const citation_parser_module = import "./citation_parser.duck";
+const { .finish_citations, .push_citation_chunk } = citation_parser_module();
+const protocol_module = import "./protocol.duck";
+const { .decode_model_event, .encode_tool_result, .encode_user_message } = protocol_module();
+
+type CodexCitationParser = CitationParser
+type CodexCitationChunk = CitationChunk
+type CodexModelEventResult = ModelEventResult
+type CodexModelToolCall = ModelToolCall
+
+type StartResult =
+  | `Started Unit
+  | `Err Text
+
+type ApprovalDecision =
+  | `Approved Unit
+  | `Denied Text
+
+let run_turn: Text -> <Model :| Tool :| Approval :| Events> I32 = prompt => {
+  let input = encode_user_message prompt;
+  start <- Model.start(&input)
+
+  if let `Err message = start {
+    _ <- Events.failed(&message)
+    let failed_result: I32 = -1;
+    failed_result
+  } else {
+    let tool_count = 0;
+    let failure: Text = "";
+
+    loop {
+      document <- Model.next()
+      let decoded: CodexModelEventResult = decode_model_event document;
+
+      if let `Err message = decoded {
+        failure = message
+        _ <- Events.failed(&message)
+        break;
+      } else if let `Ok event = decoded {
+        if let `ToolCall raw_tool_call = event {
+          let tool_call: CodexModelToolCall = raw_tool_call;
+          let [call_id, name, arguments] = tool_call;
+          _ <- Events.tool_started(&call_id, &name)
+          let approved = false;
+
+          decision <- Approval.request(&call_id, &name, &arguments)
+
+          if let `Approved () = decision {
+            approved = true
+          } else if let `Denied _ = decision {
+            ()
+          }
+
+          if approved {
+            raw_output <- Tool.run(&name, &arguments)
+            let output = encode_tool_result(call_id, raw_output);
+            submitted <- Model.submit(&output)
+
+            if let `Started () = submitted {
+              tool_count = tool_count + 1
+              _ <- Events.tool_finished(&call_id)
+            } else if let `Err message = submitted {
+              failure = message
+              break;
+            }
+
+            ()
+          } else {
+            let output = encode_tool_result(call_id, "Tool call denied");
+            submitted <- Model.submit(&output)
+            _ <- Events.tool_denied(&call_id)
+
+            if let `Err message = submitted {
+              failure = message
+              break;
+            }
+
+            ()
+          }
+
+          ()
+        } else if let `Message raw_text = event {
+          let parser: CodexCitationParser = freeze (["", false, ""] as CodexCitationParser);
+          let pushed: CodexCitationChunk = push_citation_chunk(parser, raw_text);
+          let [next_parser, visible_prefix, _] = pushed;
+          let finished: CodexCitationChunk = finish_citations next_parser;
+          let [_, visible_suffix, _] = finished;
+          let text = text_append [visible_prefix, visible_suffix];
+          _ <- Events.message(&text)
+          ()
+        } else if let `Completed () = event {
+          _ <- Events.completed()
+          break;
+        } else if let `Error message = event {
+          failure = message
+          _ <- Events.failed(&message)
+          break;
+        } else if let `Ignored () = event {
+          ()
+        }
+      }
+    }
+
+    if failure == "" {
+      tool_count
+    } else {
+      -1
+    }
+  }
+};
+
+prompt <- Input.prompt()
+result <- run_turn prompt;
+
+return { .tool_count = result };

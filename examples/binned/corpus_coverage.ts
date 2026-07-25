@@ -30,6 +30,9 @@ export const corpus_feature_examples: Record<string, string[]> = {
   "ducklang.txt / Packed types and fixed-width integers": [
     "examples/data/15_packed_integers.duck",
   ],
+  "ducklang.txt / Duck associated types": [
+    "examples/compile_time/22_generic_extension.duck",
+  ],
   "else_if.txt / Else-if chains": [
     "examples/basics/10_else_if.duck",
   ],
@@ -70,8 +73,15 @@ export const corpus_feature_examples: Record<string, string[]> = {
   "loop_expressions.txt / Loop remains a contextual keyword": [
     "examples/basics/13_contextual_keyword_names.duck",
   ],
+  "loop_expressions.txt / Continue in a loop expression": [
+    "examples/loops/05_continue.duck",
+    "examples/loops/09_loop_expression_syntax.duck",
+  ],
   "modules_and_effects.txt / Inferred host effect": [
     "examples/basics/08_dynamic_condition.duck",
+  ],
+  "modules_and_effects.txt / Local module binding": [
+    "examples/ownership_modules/07_local_module_binding.duck",
   ],
   "modules_and_effects.txt / Effect row expressions and effectful bind": [
     "examples/handlers/03_composed_default_handlers.duck",
@@ -94,6 +104,28 @@ export const corpus_feature_examples: Record<string, string[]> = {
   ],
   "surface_forms.txt / Operator prefixes do not become application arguments": [
     "examples/compile_time/18_ducks_and_operators.duck",
+  ],
+  "surface_forms.txt / Compile-time value match patterns": [
+    "examples/data/18_const_value_patterns.duck",
+  ],
+  "surface_forms.txt / Condition forms and type tests": [
+    "examples/data/14_type_sets.duck",
+    "examples/compile_time/22_generic_extension.duck",
+  ],
+  "surface_forms.txt / Positional, shape, and type-check patterns": [
+    "examples/basics/12_value_packs_and_tuples.duck",
+    "examples/data/16_struct_constructor_and_shape.duck",
+    "examples/compile_time/21_type_patterns.duck",
+  ],
+  "surface_forms.txt / Scratch regions and aggregate rebuilding": [
+    "examples/ownership_modules/03_scratch_cleanup.duck",
+    "examples/data/06_struct_index_assignment.duck",
+  ],
+  "surface_forms.txt / Union case values": [
+    "examples/data/07_generic_option.duck",
+  ],
+  "surface_forms.txt / Line comments": [
+    "examples/data/18_const_value_patterns.duck",
   ],
   "surface_forms.txt / Prefix negation in values and conditions": [
     "examples/basics/09_literals.duck",

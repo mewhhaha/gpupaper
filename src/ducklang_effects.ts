@@ -188,10 +188,17 @@ function collectExpressionEffects(
   >,
 ): Map<string, DucklangEffectReference> {
   const effects = new Map<string, DucklangEffectReference>();
+  const localFunctions = new Map<
+    number,
+    Extract<ResolvedDucklangExpression, { readonly kind: "function" }>
+  >();
+  const activeLocalFunctions = new Set<number>();
   const visit = (current: ResolvedDucklangExpression): void => {
     switch (current.kind) {
       case "integer":
       case "integer64":
+      case "float32":
+      case "float64":
       case "boolean":
       case "unit":
       case "string":
@@ -224,6 +231,16 @@ function collectExpressionEffects(
               ? new Map()
               : bindingEffects.get(target) ?? new Map(),
           );
+        } else if (
+          current.callee.kind === "reference" &&
+          localFunctions.has(current.callee.symbol.id) &&
+          !activeLocalFunctions.has(current.callee.symbol.id)
+        ) {
+          const symbolId = current.callee.symbol.id;
+          const localFunction = localFunctions.get(symbolId)!;
+          activeLocalFunctions.add(symbolId);
+          visit(localFunction.body);
+          activeLocalFunctions.delete(symbolId);
         } else if (current.callee.kind === "function") {
           visit(current.callee.body);
         }
@@ -282,10 +299,15 @@ function collectExpressionEffects(
         return;
       case "block":
         for (const step of current.steps) {
-          const value = step.kind === "binding"
-            ? step.binding.value
-            : step.expression;
-          if (value.kind !== "function") visit(value);
+          if (
+            step.kind === "binding" && step.binding.value.kind === "function"
+          ) {
+            localFunctions.set(step.binding.symbol.id, step.binding.value);
+            continue;
+          }
+          visit(
+            step.kind === "binding" ? step.binding.value : step.expression,
+          );
         }
         visit(current.result);
         return;

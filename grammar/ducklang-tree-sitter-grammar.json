@@ -1,6 +1,6 @@
 {
-  "name": "duck",
   "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/grammar.schema.json",
+  "name": "duck",
   "word": "identifier",
   "rules": {
     "source_file": {
@@ -3080,6 +3080,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "condition_application_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "condition_field_expression"
         },
         {
@@ -3290,6 +3294,119 @@
             "content": {
               "type": "SYMBOL",
               "name": "parenthesized_or_product"
+            }
+          }
+        ]
+      }
+    },
+    "condition_application_expression": {
+      "type": "PREC_LEFT",
+      "value": 9,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "function",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "condition_application_expression"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                {
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "effect_identifier"
+                  },
+                  "named": true,
+                  "value": "identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intrinsic_identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "condition_field_expression"
+                }
+              ]
+            }
+          },
+          {
+            "type": "SYMBOL",
+            "name": "_condition_application_space"
+          },
+          {
+            "type": "FIELD",
+            "name": "argument",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "_aggregate_constructor_identifier"
+                },
+                {
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "effect_identifier"
+                  },
+                  "named": true,
+                  "value": "identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intrinsic_identifier"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "string"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "character"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "boolean"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "atom_expression"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "import_meta_expression"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "linear_reference"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "parenthesized_or_product"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "array_expression"
+                }
+              ]
             }
           }
         ]
@@ -6637,6 +6754,10 @@
     {
       "type": "SYMBOL",
       "name": "_application_space"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_condition_application_space"
     },
     {
       "type": "SYMBOL",

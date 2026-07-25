@@ -11,9 +11,17 @@ import type {
   DucklangUnionCase,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
+import { type ModuleId, moduleId } from "./ducklang_module_graph.ts";
+import {
+  PrimitiveId,
+  type PrimitiveId as PrimitiveIdType,
+  resolveImportedPrimitive,
+  resolveSourcePrimitive,
+} from "./ducklang_primitives.ts";
 
 export type DucklangSymbol = {
   readonly id: number;
+  readonly moduleId: ModuleId;
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
   readonly declaredType?: string;
@@ -35,6 +43,16 @@ export type ResolvedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "float32";
+    readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "float64";
+    readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "boolean";
     readonly value: boolean;
     readonly span: SourceSpan;
@@ -52,6 +70,11 @@ export type ResolvedDucklangExpression =
     readonly kind: "intrinsic";
     readonly modulePath: string;
     readonly exportName: string;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "primitive";
+    readonly primitiveId: PrimitiveIdType;
     readonly span: SourceSpan;
   }
   | {
@@ -111,6 +134,7 @@ export type ResolvedDucklangExpression =
     readonly kind: "project";
     readonly product: ResolvedDucklangExpression;
     readonly index: number;
+    readonly arity?: number;
     readonly span: SourceSpan;
   }
   | {
@@ -122,6 +146,8 @@ export type ResolvedDucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
+    readonly parameterTypeSources?: readonly ResolvedDucklangExpression[];
+    readonly declaredResultType?: string;
     readonly body: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
@@ -186,6 +212,7 @@ export type ResolvedDucklangExpression =
   }
   | {
     readonly kind: "comptime";
+    readonly context: "explicit" | "valuePattern";
     readonly expression: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
@@ -297,6 +324,12 @@ class DucklangResolver {
   readonly #initFields: DucklangInitField[] = [];
   readonly #structTypes: ResolvedDucklangStructType[] = [];
   readonly #linearUseCounts = new Map<number, number>();
+  readonly #bindingStages = new Map<
+    number,
+    ResolvedDucklangBinding["stage"]
+  >();
+  readonly #primitiveSymbols = new Map<number, PrimitiveIdType>();
+  #resolvingValuePattern = false;
 
   constructor(file: string) {
     this.#file = file;
@@ -440,6 +473,7 @@ class DucklangResolver {
             ),
             span: sourceBinding.span,
           } satisfies ResolvedDucklangBinding;
+          this.#bindingStages.set(binding.symbol.id, binding.stage);
           bindings.push(binding);
           steps.push({ kind: "binding", binding });
         }
@@ -475,11 +509,14 @@ class DucklangResolver {
           );
         }
         const duplicate = this.#structTypes.some((declaration) =>
-          declaration.name === statement.name
+          declaration.name === statement.name &&
+          declaration.span.file === statement.span.file
         ) || this.#unionTypes.some((declaration) =>
-          declaration.name === statement.name
+          declaration.name === statement.name &&
+          declaration.span.file === statement.span.file
         ) || this.#typeAliases.some((declaration) =>
-          declaration.name === statement.name
+          declaration.name === statement.name &&
+          declaration.span.file === statement.span.file
         );
         if (duplicate) {
           throw new SyntaxError(
@@ -506,12 +543,15 @@ class DucklangResolver {
         }
         if (
           this.#unionTypes.some((declaration) =>
-            declaration.name === statement.name
+            declaration.name === statement.name &&
+            declaration.span.file === statement.span.file
           ) || this.#typeAliases.some((alias) =>
-            alias.name === statement.name
+            alias.name === statement.name &&
+            alias.span.file === statement.span.file
           ) ||
           this.#structTypes.some((declaration) =>
-            declaration.name === statement.name
+            declaration.name === statement.name &&
+            declaration.span.file === statement.span.file
           )
         ) {
           throw new SyntaxError(
@@ -528,11 +568,14 @@ class DucklangResolver {
           );
         }
         const duplicate = this.#typeAliases.some((alias) =>
-          alias.name === statement.name
+          alias.name === statement.name &&
+          alias.span.file === statement.span.file
         ) || this.#unionTypes.some((declaration) =>
-          declaration.name === statement.name
+          declaration.name === statement.name &&
+          declaration.span.file === statement.span.file
         ) || this.#structTypes.some((declaration) =>
-          declaration.name === statement.name
+          declaration.name === statement.name &&
+          declaration.span.file === statement.span.file
         );
         if (duplicate) {
           throw new SyntaxError(
@@ -540,6 +583,55 @@ class DucklangResolver {
           );
         }
         this.#typeAliases.push(statement);
+        continue;
+      }
+      if (statement.kind === "typePattern") {
+        const target = this.#resolveExpression(
+          statement.target,
+          environment,
+          currentRecursive,
+        );
+        const expectedModulePath = `duck:type/${statement.patternKind}`;
+        if (
+          target.kind !== "intrinsic" ||
+          target.modulePath !== expectedModulePath
+        ) {
+          throw new TypeError(
+            `${this.#file}:${statement.target.span.start}: Ducklang ${statement.patternKind} pattern does not match its target`,
+          );
+        }
+        const descriptor = JSON.parse(target.exportName) as {
+          readonly fields?: readonly {
+            readonly name: string;
+            readonly type: string;
+          }[];
+          readonly cases?: readonly {
+            readonly name: string;
+            readonly type: string;
+          }[];
+        };
+        const members = descriptor.fields ?? descriptor.cases;
+        if (members === undefined) {
+          throw new TypeError(
+            `${this.#file}:${statement.target.span.start}: Ducklang ${statement.patternKind} target has no members`,
+          );
+        }
+        for (const expected of statement.fields) {
+          const actual = members.find((member) =>
+            member.name === expected.name
+          );
+          if (actual?.type !== expected.type) {
+            const received = actual === undefined ? "missing" : actual.type;
+            throw new TypeError(
+              `${this.#file}:${statement.span.start}: Ducklang ${statement.patternKind} pattern field ${expected.name} expects ${expected.type}; received ${received}`,
+            );
+          }
+        }
+        if (!statement.open && members.length !== statement.fields.length) {
+          throw new TypeError(
+            `${this.#file}:${statement.span.start}: closed Ducklang ${statement.patternKind} pattern expects ${statement.fields.length} members; received ${members.length}`,
+          );
+        }
         continue;
       }
       if (statement.kind === "import") {
@@ -583,19 +675,33 @@ class DucklangResolver {
           if (selection.localName === undefined) continue;
           const symbol = this.#declare(selection.localName, scope);
           environment.set(symbol.text, symbol);
+          const primitive = resolveImportedPrimitive(
+            statement.path,
+            selection.exportName,
+          );
           const binding = {
             symbol,
             previous: undefined,
             recursive: false,
             stage: "compileTime",
-            value: {
-              kind: "intrinsic",
-              modulePath: statement.path,
-              exportName: selection.exportName,
-              span: selection.span,
-            },
+            value: primitive === undefined
+              ? {
+                kind: "intrinsic" as const,
+                modulePath: statement.path,
+                exportName: selection.exportName,
+                span: selection.span,
+              }
+              : {
+                kind: "primitive" as const,
+                primitiveId: primitive.id,
+                span: selection.span,
+              },
             span: selection.span,
           } satisfies ResolvedDucklangBinding;
+          this.#bindingStages.set(binding.symbol.id, binding.stage);
+          if (primitive !== undefined) {
+            this.#primitiveSymbols.set(binding.symbol.id, primitive.id);
+          }
           bindings.push(binding);
           steps.push({ kind: "binding", binding });
         }
@@ -635,6 +741,7 @@ class DucklangResolver {
           value,
           span: statement.span,
         } satisfies ResolvedDucklangBinding;
+        this.#bindingStages.set(binding.symbol.id, binding.stage);
         bindings.push(binding);
         steps.push({ kind: "binding", binding });
         continue;
@@ -659,6 +766,7 @@ class DucklangResolver {
           ),
           span: statement.span,
         } satisfies ResolvedDucklangBinding;
+        this.#bindingStages.set(productBinding.symbol.id, productBinding.stage);
         bindings.push(productBinding);
         steps.push({ kind: "binding", binding: productBinding });
         for (const [elementIndex, name] of statement.names.entries()) {
@@ -670,33 +778,69 @@ class DucklangResolver {
             previous: undefined,
             recursive: false,
             stage,
-            value: statement.productKind === "tuple"
-              ? {
-                kind: "project",
-                product: {
-                  kind: "reference",
-                  symbol: productSymbol,
-                  span: statement.span,
-                },
-                index: elementIndex,
-                span: name.span,
-              }
-              : {
-                kind: "index",
-                collection: {
-                  kind: "reference",
-                  symbol: productSymbol,
-                  span: statement.span,
-                },
-                index: {
-                  kind: "integer",
-                  value: elementIndex,
-                  span: name.span,
-                },
-                span: name.span,
+            value: {
+              kind: "project",
+              product: {
+                kind: "reference",
+                symbol: productSymbol,
+                span: statement.span,
               },
+              index: elementIndex,
+              arity: statement.names.length,
+              span: name.span,
+            },
             span: name.span,
           } satisfies ResolvedDucklangBinding;
+          this.#bindingStages.set(binding.symbol.id, binding.stage);
+          bindings.push(binding);
+          steps.push({ kind: "binding", binding });
+        }
+        continue;
+      }
+      if (statement.kind === "recordBinding") {
+        const stage = statement.declarationKind === "const"
+          ? "compileTime"
+          : "runtime";
+        const recordSymbol = this.#declare({
+          text: "destructuredRecord",
+          span: statement.span,
+        }, scope);
+        const recordBinding = {
+          symbol: recordSymbol,
+          previous: undefined,
+          recursive: false,
+          stage,
+          value: this.#resolveExpression(
+            statement.value,
+            environment,
+            currentRecursive,
+          ),
+          span: statement.span,
+        } satisfies ResolvedDucklangBinding;
+        this.#bindingStages.set(recordBinding.symbol.id, recordBinding.stage);
+        bindings.push(recordBinding);
+        steps.push({ kind: "binding", binding: recordBinding });
+        for (const field of statement.fields) {
+          const symbol = this.#declare(field.localName, scope);
+          environment.set(symbol.text, symbol);
+          const binding = {
+            symbol,
+            previous: undefined,
+            recursive: false,
+            stage,
+            value: {
+              kind: "field",
+              product: {
+                kind: "reference",
+                symbol: recordSymbol,
+                span: statement.span,
+              },
+              fieldName: field.fieldName,
+              span: field.localName.span,
+            },
+            span: field.localName.span,
+          } satisfies ResolvedDucklangBinding;
+          this.#bindingStages.set(binding.symbol.id, binding.stage);
           bindings.push(binding);
           steps.push({ kind: "binding", binding });
         }
@@ -789,8 +933,11 @@ class DucklangResolver {
         const recursive = statement.recursive ||
           (statement.value.kind === "function" && statement.value.recursive);
         if (recursive) environment.set(symbol.text, symbol);
+        const sourceValue = recursive && statement.value.kind === "function"
+          ? { ...statement.value, recursive: true }
+          : statement.value;
         const value = this.#resolveExpression(
-          statement.value,
+          sourceValue,
           environment,
           recursive ? symbol : currentRecursive,
         );
@@ -805,6 +952,7 @@ class DucklangResolver {
           value,
           span: statement.span,
         } satisfies ResolvedDucklangBinding;
+        this.#bindingStages.set(binding.symbol.id, binding.stage);
         bindings.push(binding);
         steps.push({ kind: "binding", binding });
         continue;
@@ -831,11 +979,20 @@ class DucklangResolver {
         value,
         span: statement.span,
       } satisfies ResolvedDucklangBinding;
+      this.#bindingStages.set(binding.symbol.id, binding.stage);
       bindings.push(binding);
       steps.push({ kind: "binding", binding });
     }
 
     if (result === undefined) {
+      if (scope === "local") {
+        return {
+          bindings,
+          steps,
+          result: { kind: "unit", span },
+          environment,
+        };
+      }
       throw new TypeError(
         `${this.#file}:${span.start}: Ducklang block has no result expression`,
       );
@@ -851,6 +1008,8 @@ class DucklangResolver {
     switch (expression.kind) {
       case "integer":
       case "integer64":
+      case "float32":
+      case "float64":
       case "boolean":
       case "string":
       case "unit":
@@ -965,6 +1124,14 @@ class DucklangResolver {
       case "reference": {
         const symbol = environment.get(expression.name.text);
         if (symbol === undefined) {
+          const primitive = resolveSourcePrimitive(expression.name.text);
+          if (primitive !== undefined) {
+            return {
+              kind: "primitive",
+              primitiveId: primitive.id,
+              span: expression.span,
+            };
+          }
           const syntheticIntrinsic = expression.name.text ===
               "$duck_string_pattern_matches"
             ? {
@@ -981,15 +1148,18 @@ class DucklangResolver {
               modulePath: "duck:compiler/type-pattern",
               exportName: "matches",
             }
-            : expression.name.text === "@len"
+            : [
+                "Int",
+                "I32",
+                "I64",
+                "Char",
+                "Bool",
+                "Text",
+                "Unit",
+              ].includes(expression.name.text)
             ? {
-              modulePath: "duck:compiler/reflection",
-              exportName: "length",
-            }
-            : expression.name.text === "$duck_panic"
-            ? {
-              modulePath: "duck:prelude/runtime",
-              exportName: "panic",
+              modulePath: "duck:type/builtin",
+              exportName: expression.name.text,
             }
             : undefined;
           if (syntheticIntrinsic !== undefined) {
@@ -1046,7 +1216,29 @@ class DucklangResolver {
           }
           this.#linearUseCounts.set(symbol.id, uses);
         }
-        return { kind: "reference", symbol, span: expression.span };
+        if (
+          this.#resolvingValuePattern &&
+          this.#bindingStages.get(symbol.id) !== "compileTime"
+        ) {
+          throw new TypeError(
+            `Value pattern requires a compile-time expression: ${symbol.text}`,
+          );
+        }
+        const primitiveId = this.#primitiveSymbols.get(symbol.id);
+        if (primitiveId !== undefined) {
+          return {
+            kind: "primitive",
+            primitiveId,
+            span: expression.span,
+          };
+        }
+        return {
+          kind: "reference",
+          symbol: expression.name.identityPolymorphic
+            ? { ...symbol, identityPolymorphic: true }
+            : symbol,
+          span: expression.span,
+        };
       }
       case "function": {
         const functionEnvironment = new Map(environment);
@@ -1067,6 +1259,20 @@ class DucklangResolver {
           kind: "function",
           recursive: expression.recursive,
           parameters,
+          ...(expression.parameterTypeSources === undefined ? {} : {
+            parameterTypeSources: expression.parameterTypeSources.map((
+              source,
+            ) =>
+              this.#resolveExpression(
+                source,
+                environment,
+                currentRecursive,
+              )
+            ),
+          }),
+          ...(expression.declaredResultType === undefined
+            ? {}
+            : { declaredResultType: expression.declaredResultType }),
           body: this.#resolveExpression(
             expression.body,
             functionEnvironment,
@@ -1105,42 +1311,80 @@ class DucklangResolver {
         ) {
           const structName = expression.callee.product.name.text;
           const memberName = expression.callee.fieldName;
+          const primitive = resolveSourcePrimitive(
+            `@${structName}.${memberName}`,
+          );
+          if (primitive !== undefined) {
+            return {
+              ...expression,
+              callee: {
+                kind: "primitive",
+                primitiveId: primitive.id,
+                span: expression.callee.span,
+              },
+              arguments: expression.arguments.map((argument) =>
+                this.#resolveExpression(
+                  argument,
+                  environment,
+                  currentRecursive,
+                )
+              ),
+            };
+          }
           const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === structName &&
+            candidate.span.file === expression.span.file
+          ) ?? this.#structTypes.find((candidate) =>
             candidate.name === structName
           );
           const argument = expression.arguments[0];
           if (declaration !== undefined && argument !== undefined) {
             if (
-              memberName === "pack" &&
+              memberName === "new" &&
+              expression.arguments.length === 1 &&
+              (argument.kind === "record" || argument.kind === "product")
+            ) {
+              return this.#resolveExpression(
+                { ...argument, nominalType: structName },
+                environment,
+                currentRecursive,
+              );
+            }
+            const structArguments =
               expression.arguments.length === 1 && argument.kind === "product"
+                ? argument.values
+                : expression.arguments;
+            if (
+              memberName === "pack" &&
+              structArguments.length === declaration.fields.length
             ) {
               return {
-                ...argument,
+                kind: "product",
                 productKind: "tuple",
                 nominalType: structName,
-                values: argument.values.map((value) =>
+                values: structArguments.map((value) =>
                   this.#resolveExpression(value, environment, currentRecursive)
                 ),
+                span: expression.span,
               };
             }
             const updatedField = memberName.startsWith("with_")
               ? memberName.slice("with_".length)
               : undefined;
             if (
-              updatedField !== undefined && expression.arguments.length === 1 &&
-              argument.kind === "product" && argument.values.length === 2
+              updatedField !== undefined && structArguments.length === 2
             ) {
               return {
                 kind: "recordUpdate",
                 product: this.#resolveExpression(
-                  argument.values[0],
+                  structArguments[0],
                   environment,
                   currentRecursive,
                 ),
                 fields: [{
                   name: updatedField,
                   value: this.#resolveExpression(
-                    argument.values[1],
+                    structArguments[1],
                     environment,
                     currentRecursive,
                   ),
@@ -1151,7 +1395,9 @@ class DucklangResolver {
             }
             if (
               expression.arguments.length === 1 &&
-              declaration.fields.some((field) => field.name === memberName)
+              declaration.fields.some((field) =>
+                field.name === memberName
+              )
             ) {
               return {
                 kind: "field",
@@ -1211,7 +1457,37 @@ class DucklangResolver {
             currentRecursive,
           ),
         };
-      case "binary":
+      case "binary": {
+        const primitiveId = {
+          "&&&": PrimitiveId.bitAnd,
+          "|||": PrimitiveId.bitOr,
+          "^^^": PrimitiveId.bitXor,
+          "<<": PrimitiveId.shiftLeft,
+          ">>": PrimitiveId.shiftRightUnsigned,
+        }[expression.operator];
+        if (primitiveId !== undefined) {
+          return {
+            kind: "call",
+            callee: {
+              kind: "primitive",
+              primitiveId,
+              span: expression.span,
+            },
+            arguments: [
+              this.#resolveExpression(
+                expression.left,
+                environment,
+                currentRecursive,
+              ),
+              this.#resolveExpression(
+                expression.right,
+                environment,
+                currentRecursive,
+              ),
+            ],
+            span: expression.span,
+          };
+        }
         return {
           ...expression,
           left: this.#resolveExpression(
@@ -1225,6 +1501,7 @@ class DucklangResolver {
             currentRecursive,
           ),
         };
+      }
       case "unary":
         return {
           ...expression,
@@ -1302,15 +1579,24 @@ class DucklangResolver {
           span: expression.span,
         };
       }
-      case "comptime":
-        return {
-          ...expression,
-          expression: this.#resolveExpression(
-            expression.expression,
-            environment,
-            currentRecursive,
-          ),
-        };
+      case "comptime": {
+        const previousValuePattern = this.#resolvingValuePattern;
+        if (expression.context === "valuePattern") {
+          this.#resolvingValuePattern = true;
+        }
+        try {
+          return {
+            ...expression,
+            expression: this.#resolveExpression(
+              expression.expression,
+              environment,
+              currentRecursive,
+            ),
+          };
+        } finally {
+          this.#resolvingValuePattern = previousValuePattern;
+        }
+      }
       case "scratch":
         return {
           ...expression,
@@ -1333,6 +1619,7 @@ class DucklangResolver {
   ): DucklangSymbol {
     const symbol = {
       id: this.#symbols.length,
+      moduleId: moduleId(name.span.file),
       text: name.text,
       scope,
       ...(name.declaredType === undefined

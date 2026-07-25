@@ -9,11 +9,12 @@ const marker: Marker = #answer
 let greeting: FrozenText = "hello"
 let view: &Text = &greeting
 let value: Value = 37
+let marker_matches = marker is #answer
 
 let answer: Answer = if value is Int {
-  value + length(view)
+  value + length view
 } else {
   0
 }
 
-if marker is #answer { answer } else { 0 }
+if marker_matches { answer } else { 0 }

@@ -2,7 +2,8 @@ const { struct } = import "duck:prelude" ()
 
 type Box value = struct { .value = value }
 
-duck Read Self Value {
+duck Read Self {
+  type Value
   .read = Self -> Value
 }
 

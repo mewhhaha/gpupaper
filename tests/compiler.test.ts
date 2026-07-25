@@ -9,6 +9,7 @@ import {
   solveTypeEqualitiesOnGpu,
   unionPairsOnGpu,
 } from "../src/gpu_solver.ts";
+import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
 import { evaluateWithInteractionCalculus } from "../src/interaction.ts";
 import { expandMacros } from "../src/macros.ts";
 import { parseModule } from "../src/parser.ts";
@@ -311,6 +312,32 @@ Deno.test("WebGPU equality closure accepts compatible constructors", async () =>
   assertEquals(result.status, "solved");
 });
 
+Deno.test("WebGPU constructor decomposition generates child equalities", async () => {
+  const variable: Type = { kind: "variable", id: 0 };
+  const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
+  const left: Type = {
+    kind: "constructor",
+    name: "List",
+    arguments: [variable],
+  };
+  const right: Type = {
+    kind: "constructor",
+    name: "List",
+    arguments: [integer],
+  };
+  const result = await solveTypeEqualitiesOnGpu([{
+    left,
+    right,
+    span: testSpan,
+  }]);
+  if (result.status === "unavailable") return;
+  if (result.status !== "solved") {
+    throw new Error(`expected solved decomposition; received ${result.status}`);
+  }
+  assertEquals(result.equalityCount, 2);
+  assertEquals(result.decompositionCount > 0, true);
+});
+
 Deno.test("WebGPU equality closure reports constructor clashes", async () => {
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
   const boolean: Type = { kind: "constructor", name: "Bool", arguments: [] };
@@ -354,6 +381,29 @@ Deno.test("one WebGPU union pass closes a maximum-length equality chain", async 
   const representatives = await unionPairsOnGpu(512, equalities);
   if (representatives === undefined) return;
   assertEquals(representatives, new Array(512).fill(0));
+});
+
+Deno.test("WebGPU closes constructor equalities beyond the quadratic kernel size", async () => {
+  let left: Type = { kind: "variable", id: 0 };
+  let right: Type = { kind: "variable", id: 1 };
+  for (let depth = 0; depth < 300; depth += 1) {
+    left = { kind: "constructor", name: "List", arguments: [left] };
+    right = { kind: "constructor", name: "List", arguments: [right] };
+  }
+  const result = await solveTypeEqualitiesOnGpu([{
+    left,
+    right,
+    span: testSpan,
+  }]);
+  if (result.status === "unavailable") return;
+  if (result.status !== "solved") {
+    throw new Error(
+      `expected scalable constructor closure; received ${result.status}`,
+    );
+  }
+  assertEquals(result.termCount > 512, true);
+  assertEquals(result.equalityCount, 301);
+  assertEquals(result.unionRounds, 1);
 });
 
 Deno.test("concurrent WebGPU solves keep their results isolated", async () => {
@@ -560,6 +610,28 @@ Deno.test("repeated CPU compilation emits byte-identical Wasm", async () => {
   assertEquals([...first.wasm], [...second.wasm]);
 });
 
+Deno.test("FCG rewrites optimize arithmetic identities inside structured branches", async () => {
+  const artifact = await compileModuleSource(
+    "test.hs",
+    "main = if True then 42 + 0 else 7 * 1\n",
+    { gpuMode: "off" },
+  );
+
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(
+    artifact.fcg.functions[0].operations.map((operation) => operation.opcode),
+    ["const", "if", "const", "const"],
+  );
+  assertEquals(
+    new Set(
+      artifact.fcg.functions[0].operations.map((operation) =>
+        operation.regionId
+      ),
+    ).size,
+    3,
+  );
+});
+
 Deno.test("LEB128 encoders cover signed and unsigned boundaries", () => {
   assertEquals(encodeUnsigned(0), [0]);
   assertEquals(encodeUnsigned(127), [127]);
@@ -589,6 +661,35 @@ Deno.test("Wasm function vectors count entries across LEB128 boundaries", () => 
   const wasm = builder.finish();
   assertEquals(
     WebAssembly.validate(new Uint8Array(wasm).buffer as ArrayBuffer),
+    true,
+  );
+});
+
+Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () => {
+  const builder = new WasmModuleBuilder();
+  let functionIndex = 0;
+  for (let index = 0; index < 129; index += 1) {
+    const typeIndex = builder.addFunctionType([], [wasmType.i64]);
+    functionIndex = builder.addFunction(
+      typeIndex,
+      [],
+      wasmInstruction.i64Constant(
+        index % 2 === 0 ? -0x8000_0000_0000_0000n : 0x7fff_ffff_ffff_ffffn,
+      ),
+    );
+  }
+  builder.exportFunction("main", functionIndex);
+  const plan = builder.finishPlan();
+  const gpu = await emitWasmPlanOnGpu(plan);
+  if (gpu.status === "unavailable") return;
+
+  assertEquals([...gpu.bytes], [...builder.finish()]);
+  assertEquals(gpu.atomCount, plan.atoms.length);
+  assertEquals(gpu.lengthRounds, plan.maximumDependencyLevel);
+  assertEquals(
+    WebAssembly.validate(
+      new Uint8Array(gpu.bytes).buffer as ArrayBuffer,
+    ),
     true,
   );
 });

@@ -133,6 +133,16 @@ export type DucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "float32";
+    readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "float64";
+    readonly value: number;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "boolean";
     readonly value: boolean;
     readonly span: SourceSpan;
@@ -204,6 +214,8 @@ export type DucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangParameter[];
+    readonly parameterTypeSources?: readonly DucklangExpression[];
+    readonly declaredResultType?: string;
     readonly body: DucklangExpression;
     readonly span: SourceSpan;
   }
@@ -267,6 +279,7 @@ export type DucklangExpression =
   }
   | {
     readonly kind: "comptime";
+    readonly context: "explicit" | "valuePattern";
     readonly expression: DucklangExpression;
     readonly span: SourceSpan;
   }
@@ -321,6 +334,17 @@ export type DucklangStatement =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "typePattern";
+    readonly patternKind: "struct" | "union";
+    readonly fields: readonly {
+      readonly name: string;
+      readonly type: string;
+    }[];
+    readonly open: boolean;
+    readonly target: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "import";
     readonly path: string;
     readonly selections: readonly DucklangImportSelection[];
@@ -330,7 +354,7 @@ export type DucklangStatement =
   }
   | {
     readonly kind: "binding";
-    readonly declarationKind: "let" | "const";
+    readonly declarationKind: "let" | "const" | "module";
     readonly recursive: boolean;
     readonly name: DucklangName;
     readonly value: DucklangExpression;
@@ -350,6 +374,16 @@ export type DucklangStatement =
     readonly declarationKind: "let" | "const";
     readonly productKind: "tuple" | "array";
     readonly names: readonly (DucklangName | undefined)[];
+    readonly value: DucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "recordBinding";
+    readonly declarationKind: "let" | "const";
+    readonly fields: readonly {
+      readonly fieldName: string;
+      readonly localName: DucklangName;
+    }[];
     readonly value: DucklangExpression;
     readonly span: SourceSpan;
   }

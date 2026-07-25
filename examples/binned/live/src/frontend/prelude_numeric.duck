@@ -1,0 +1,87 @@
+module () where
+
+const {} = import "duck:prelude/types" ();
+const {
+  .bit_and,
+  .bit_or,
+  .bit_xor,
+  .shift_left,
+  .shift_right_unsigned,
+  .sqrt_f32,
+  .f32_from_i32,
+  .i32_from_f32,
+  .f64_from_i32,
+  .i32_from_f64,
+  .unsafe_i32_wrap_i64,
+  .unsafe_i64_extend_i32_signed,
+  .unsafe_i64_extend_i32_unsigned,
+  .unsafe_i32_reinterpret_f32,
+  .unsafe_f32_reinterpret_i32,
+  .format_i32,
+  .format_i64,
+  .format_f32,
+  .f32x4,
+  .f32x4_splat,
+  .f32x4_add,
+  .f32x4_subtract,
+  .f32x4_multiply,
+  .f32x4_divide,
+} = import "duck:prelude/runtime" ();
+
+const saturating_add_i64: [I64, I64] -> I64 = (left: I64, right: I64) => {
+  if right > 0i64 && left > 9223372036854775807i64 - right {
+    9223372036854775807i64
+  } else if right < 0i64 && left < -9223372036854775808i64 - right {
+    -9223372036854775808i64
+  } else {
+    left + right
+  }
+};
+
+const min_i64: [I64, I64] -> I64 = (left: I64, right: I64) => {
+  if left <= right { left } else { right }
+};
+
+const max_i64: [I64, I64] -> I64 = (left: I64, right: I64) => {
+  if left >= right { left } else { right }
+};
+
+const min_i32: [I32, I32] -> I32 = (left: I32, right: I32) => {
+  if left <= right { left } else { right }
+};
+
+const max_i32: [I32, I32] -> I32 = (left: I32, right: I32) => {
+  if left >= right { left } else { right }
+};
+
+return {
+  .saturating_add_i64,
+  .min_i64,
+  .max_i64,
+  .min_i32,
+  .max_i32,
+  .bit_and,
+  .bit_or,
+  .bit_xor,
+  .shift_left,
+  .shift_right_unsigned,
+  .sqrt_f32,
+  .f32_from_i32,
+  .i32_from_f32,
+  .f64_from_i32,
+  .i32_from_f64,
+  .unsafe_i32_wrap_i64,
+  .unsafe_i64_extend_i32_signed,
+  .unsafe_i64_extend_i32_unsigned,
+  .unsafe_i32_reinterpret_f32,
+  .unsafe_f32_reinterpret_i32,
+  .format_i32,
+  .format_i64,
+  .format_f32,
+  .f32x4,
+  .f32x4_splat,
+  .f32x4_add,
+  .f32x4_subtract,
+  .f32x4_multiply,
+  .f32x4_divide,
+};

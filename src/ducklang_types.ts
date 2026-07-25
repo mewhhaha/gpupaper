@@ -1,4 +1,11 @@
 import type { SourceSpan } from "./syntax.ts";
+import {
+  BuiltinTypeId,
+  type BuiltinTypeId as BuiltinTypeIdentity,
+  primitiveDescriptor,
+  PrimitiveId,
+  type PrimitiveOperandPattern,
+} from "./ducklang_primitives.ts";
 import type { DucklangTypeReference } from "./ducklang_ast.ts";
 import type {
   DucklangEffectOperation,
@@ -31,6 +38,18 @@ export type TypedDucklangExpression =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "float32";
+    readonly value: number;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "float64";
+    readonly value: number;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "boolean";
     readonly value: boolean;
     readonly type: Type;
@@ -51,6 +70,12 @@ export type TypedDucklangExpression =
     readonly kind: "intrinsic";
     readonly modulePath: string;
     readonly exportName: string;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "primitive";
+    readonly primitiveId: PrimitiveId;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -89,6 +114,7 @@ export type TypedDucklangExpression =
     readonly kind: "project";
     readonly product: TypedDucklangExpression;
     readonly index: number;
+    readonly arity?: number;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -114,6 +140,8 @@ export type TypedDucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
+    readonly parameterTypeSources?: readonly TypedDucklangExpression[];
+    readonly declaredResultType?: string;
     readonly body: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
@@ -203,6 +231,7 @@ export type TypedDucklangExpression =
   }
   | {
     readonly kind: "comptime";
+    readonly context: "explicit" | "valuePattern";
     readonly expression: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
@@ -221,9 +250,13 @@ export type DucklangBinaryOperator =
   | "/"
   | "%"
   | "=="
+  | "!="
   | "<"
+  | "<="
   | ">"
-  | "&&";
+  | ">="
+  | "&&"
+  | "||";
 
 export type TypedDucklangBinding = {
   readonly symbol: DucklangSymbol;
@@ -269,12 +302,16 @@ type InferredExpression = {
 
 const i32Type: Type = { kind: "constructor", name: "i32", arguments: [] };
 const i64Type: Type = { kind: "constructor", name: "i64", arguments: [] };
+const f32Type: Type = { kind: "constructor", name: "f32", arguments: [] };
+const f64Type: Type = { kind: "constructor", name: "f64", arguments: [] };
 const booleanType: Type = {
   kind: "constructor",
   name: "bool",
   arguments: [],
 };
 const textType: Type = { kind: "constructor", name: "text", arguments: [] };
+const bytesType: Type = { kind: "constructor", name: "bytes", arguments: [] };
+const f32x4Type: Type = { kind: "constructor", name: "f32x4", arguments: [] };
 const unitType: Type = { kind: "constructor", name: "unit", arguments: [] };
 const typeDescriptorType: Type = {
   kind: "constructor",
@@ -288,9 +325,13 @@ const binaryOperators = new Set([
   "/",
   "%",
   "==",
+  "!=",
   "<",
+  "<=",
   ">",
+  ">=",
   "&&",
+  "||",
 ]);
 
 export function inferDucklangModule(
@@ -309,7 +350,7 @@ export function inferDucklangModule(
   );
   const environment = inference.inferModuleParameters(module.parameters);
   const bindings = inference.inferBindings(module.bindings, environment);
-  const result = inference.inferExpression(module.result, environment);
+  const result = inference.inferModuleResult(module.result, environment);
   return inference.finish(bindings, result, effectAnalysis.moduleEffects);
 }
 
@@ -330,7 +371,9 @@ class DucklangInference {
   readonly #equalities: EqualityConstraint[] = [];
   readonly #substitutions = new Map<number, Type>();
   readonly #symbolTypes = new Map<number, Type>();
+  readonly #productConstraints = new Map<number, Type[]>();
   readonly #numericVariables = new Set<number>();
+  readonly #bottomVariables = new Set<number>();
   readonly #unionTypes: readonly ResolvedDucklangUnionType[];
   readonly #typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly #structTypes: readonly ResolvedDucklangStructType[];
@@ -412,7 +455,20 @@ class DucklangInference {
     const typed: TypedDucklangBinding[] = [];
     for (const binding of bindings) {
       if (!binding.recursive) continue;
-      const type = this.#freshVariable();
+      const type = binding.value.kind === "function" &&
+          binding.value.declaredResultType !== undefined
+        ? functionType(
+          binding.value.parameters.map((parameter) =>
+            parameter.declaredType !== undefined
+              ? this.#declaredType(parameter.declaredType, parameter.span)
+              : this.#freshVariable()
+          ),
+          this.#declaredType(
+            binding.value.declaredResultType,
+            binding.value.span,
+          ),
+        )
+        : this.#freshVariable();
       environment.set(binding.symbol.id, type);
       this.#symbolTypes.set(binding.symbol.id, type);
     }
@@ -425,7 +481,42 @@ class DucklangInference {
           `${this.#file}:${binding.span.start}: missing type for recursive Ducklang binding ${binding.symbol.text}#${binding.symbol.id}`,
         );
       }
-      const inferred = this.inferExpression(binding.value, environment);
+      if (
+        recursiveType !== undefined && binding.value.kind === "function" &&
+        binding.value.parameterTypeSources !== undefined
+      ) {
+        const parameterSourceTypes = binding.value.parameterTypeSources.map((
+          source,
+        ) => this.inferExpression(source, environment).type);
+        this.#unify(
+          recursiveType,
+          functionType(
+            binding.value.parameters.map((parameter, index) =>
+              parameter.declaredType !== undefined
+                ? this.#declaredType(parameter.declaredType, parameter.span)
+                : parameterSourceTypes[index]
+            ),
+            binding.value.declaredResultType === undefined
+              ? this.#freshVariable()
+              : this.#declaredType(
+                binding.value.declaredResultType,
+                binding.value.span,
+              ),
+          ),
+          binding.span,
+        );
+      }
+      const declaredBindingType = binding.symbol.declaredType === undefined
+        ? undefined
+        : this.#declaredType(
+          binding.symbol.declaredType,
+          binding.symbol.span,
+        );
+      const inferred = this.inferExpression(
+        binding.value,
+        environment,
+        declaredBindingType,
+      );
       const bindingType = recursiveType ?? inferred.type;
       if (recursiveType !== undefined) {
         this.#unify(recursiveType, inferred.type, binding.span);
@@ -449,11 +540,17 @@ class DucklangInference {
         }
       }
       if (binding.symbol.declaredType !== undefined) {
-        this.#unify(
-          this.#declaredType(binding.symbol.declaredType, binding.symbol.span),
-          bindingType,
-          binding.span,
-        );
+        const declaredType = declaredBindingType!;
+        try {
+          this.#unify(declaredType, bindingType, binding.span);
+        } catch (cause) {
+          throw new TypeError(
+            `${binding.span.file}:${binding.span.start}: Ducklang binding ${binding.symbol.text} declares ${
+              sourceTypeName(this.#apply(declaredType))
+            } but produces ${sourceTypeName(this.#apply(bindingType))}`,
+            { cause },
+          );
+        }
       }
       environment.set(binding.symbol.id, bindingType);
       this.#symbolTypes.set(binding.symbol.id, bindingType);
@@ -481,15 +578,54 @@ class DucklangInference {
     return environment;
   }
 
+  inferModuleResult(
+    expression: ResolvedDucklangExpression,
+    environment: ReadonlyMap<number, Type>,
+  ): InferredExpression {
+    if (
+      expression.kind !== "record" || expression.nominalType !== undefined ||
+      expression.fields.length !== this.#exportNames.length ||
+      !this.#exportNames.every((name, index) =>
+        expression.fields[index]?.name === name
+      )
+    ) {
+      return this.inferExpression(expression, environment);
+    }
+    const values = expression.fields.map((field) =>
+      this.inferExpression(field.value, environment)
+    );
+    if (values.length === 1) return values[0];
+    const type: Type = {
+      kind: "constructor",
+      name: "tuple",
+      arguments: values.map((value) => value.type),
+    };
+    return {
+      expression: {
+        kind: "product",
+        productKind: "tuple",
+        values: values.map((value) => value.expression),
+        type,
+        span: expression.span,
+      },
+      type,
+    };
+  }
+
   inferExpression(
     expression: ResolvedDucklangExpression,
     environment: ReadonlyMap<number, Type>,
+    expectedType?: Type,
   ): InferredExpression {
     switch (expression.kind) {
       case "integer":
         return { expression: { ...expression, type: i32Type }, type: i32Type };
       case "integer64":
         return { expression: { ...expression, type: i64Type }, type: i64Type };
+      case "float32":
+        return { expression: { ...expression, type: f32Type }, type: f32Type };
+      case "float64":
+        return { expression: { ...expression, type: f64Type }, type: f64Type };
       case "boolean":
         return {
           expression: { ...expression, type: booleanType },
@@ -527,36 +663,6 @@ class DucklangInference {
           expression.exportName === "matches"
         ) {
           type = functionType([typeDescriptorType, textType], booleanType);
-        } else if (
-          expression.modulePath === "duck:compiler/reflection" &&
-          expression.exportName === "length"
-        ) {
-          type = functionType([textType], i32Type);
-        } else if (
-          expression.modulePath === "duck:prelude/runtime" &&
-          expression.exportName === "length"
-        ) {
-          type = functionType([textType], i32Type);
-        } else if (
-          expression.modulePath === "duck:prelude/runtime" &&
-          expression.exportName === "append"
-        ) {
-          type = functionType([textType, textType], textType);
-        } else if (
-          expression.modulePath === "duck:prelude/runtime" &&
-          expression.exportName === "slice"
-        ) {
-          type = functionType([textType, i32Type, i32Type], textType);
-        } else if (
-          expression.modulePath === "duck:prelude/runtime" &&
-          expression.exportName === "get"
-        ) {
-          type = functionType([textType, i32Type], i32Type);
-        } else if (
-          expression.modulePath === "duck:prelude/runtime" &&
-          expression.exportName === "panic"
-        ) {
-          type = functionType([textType], i32Type);
         } else if (
           expression.modulePath === "duck:prelude/attributes" &&
           expression.exportName === "test"
@@ -669,6 +775,31 @@ class DucklangInference {
             arguments: [i32Type, i32Type],
           }, i32Type], booleanType);
         } else if (
+          expression.modulePath === "duck:prelude/iterators" &&
+          expression.exportName === "iterator_count"
+        ) {
+          const state = this.#freshVariable();
+          const value = this.#freshVariable();
+          type = functionType([
+            {
+              kind: "constructor",
+              name: "IteratorValue",
+              arguments: [state, value],
+            },
+            functionType([value], booleanType),
+          ], i32Type);
+        } else if (
+          expression.modulePath === "duck:prelude" &&
+          expression.exportName === "not"
+        ) {
+          type = functionType([booleanType], booleanType);
+        } else if (
+          expression.modulePath === "duck:prelude" &&
+          expression.exportName === "slice"
+        ) {
+          const buffer = this.#freshVariable();
+          type = functionType([buffer, i32Type, i32Type], buffer);
+        } else if (
           expression.modulePath.startsWith("duck:struct/") &&
           expression.exportName === "new"
         ) {
@@ -688,10 +819,19 @@ class DucklangInference {
           };
           type = functionType([structType], structType);
         } else if (
-          expression.modulePath === "duck:prelude" &&
+          (expression.modulePath === "duck:prelude" ||
+            expression.modulePath === "duck:prelude/types") &&
+          expression.exportName === "cast"
+        ) {
+          type = functionType([
+            this.#freshVariable(),
+            typeDescriptorType,
+          ], this.#freshVariable());
+        } else if (
+          (expression.modulePath === "duck:prelude" ||
+            expression.modulePath === "duck:prelude/types") &&
           (expression.exportName === "struct" ||
             expression.exportName === "packed" ||
-            expression.exportName === "cast" ||
             expression.exportName === "newtype" ||
             expression.exportName === "representation" ||
             expression.exportName === "seal")
@@ -702,6 +842,43 @@ class DucklangInference {
             `${this.#file}:${expression.span.start}: Ducklang import ${expression.modulePath} does not provide a typed intrinsic ${expression.exportName}`,
           );
         }
+        return { expression: { ...expression, type }, type };
+      }
+      case "primitive": {
+        const descriptor = primitiveDescriptor(expression.primitiveId);
+        const operandTypes: Type[] = [];
+        const operandType = (operand: PrimitiveOperandPattern): Type => {
+          if (typeof operand === "number") return this.#builtinType(operand);
+          if (typeof operand === "object") {
+            if ("function" in operand) {
+              const parameters = operand.function.parameters.map(operandType);
+              const result = operand.function.result;
+              return functionType(
+                parameters,
+                result === "bottom"
+                  ? this.#freshVariable()
+                  : typeof result === "number"
+                  ? this.#builtinType(result)
+                  : operandTypes[result.sameAs],
+              );
+            }
+            return operandTypes[operand.sameAs];
+          }
+          return this.#freshVariable();
+        };
+        for (const operand of descriptor.signature.operands) {
+          operandTypes.push(operandType(operand));
+        }
+        const result = descriptor.signature.result;
+        const resultType = result === "bottom"
+          ? this.#freshBottomVariable()
+          : typeof result === "number"
+          ? this.#builtinType(result)
+          : operandTypes[result.sameAs];
+        const type = functionType(
+          operandTypes,
+          resultType,
+        );
         return { expression: { ...expression, type }, type };
       }
       case "hostCall": {
@@ -747,12 +924,50 @@ class DucklangInference {
         };
       }
       case "unionCase": {
+        const appliedExpectedType = expectedType === undefined
+          ? undefined
+          : this.#apply(expectedType);
+        const expectedUnionName = appliedExpectedType?.kind === "constructor"
+          ? appliedExpectedType.name
+          : undefined;
         const unionCase = this.#unionCaseType(
           expression.caseName,
           expression.span,
-          expression.nominalType,
+          expression.nominalType ?? expectedUnionName,
         );
-        const value = this.inferExpression(expression.value, environment);
+        let value = this.inferExpression(expression.value, environment);
+        const payloadType = this.#apply(unionCase.payload);
+        const payloadDeclaration = payloadType.kind === "constructor"
+          ? this.#structTypes.find((declaration) =>
+            declaration.name === payloadType.name
+          )
+          : undefined;
+        if (
+          value.expression.kind === "product" &&
+          value.expression.nominalType === undefined &&
+          payloadDeclaration !== undefined &&
+          payloadDeclaration.fields.length === value.expression.values.length
+        ) {
+          for (const [index, field] of payloadDeclaration.fields.entries()) {
+            this.#unify(
+              this.#structFieldType(
+                payloadDeclaration,
+                payloadType,
+                field.type,
+              ),
+              value.expression.values[index].type,
+              value.expression.values[index].span,
+            );
+          }
+          value = {
+            expression: {
+              ...value.expression,
+              nominalType: payloadDeclaration.name,
+              type: payloadType,
+            },
+            type: payloadType,
+          };
+        }
         try {
           this.#unify(value.type, unionCase.payload, expression.value.span);
         } catch (cause) {
@@ -806,21 +1021,11 @@ class DucklangInference {
             );
           }
           type = nominalType;
-        } else if (expression.productKind === "tuple") {
+        } else {
           type = {
             kind: "constructor",
             name: "tuple",
             arguments: values.map((value) => value.type),
-          };
-        } else {
-          const elementType = values[0]?.type ?? this.#freshVariable();
-          for (const value of values.slice(1)) {
-            this.#unify(elementType, value.type, expression.span);
-          }
-          type = {
-            kind: "constructor",
-            name: "array",
-            arguments: [elementType],
           };
         }
         return {
@@ -834,7 +1039,30 @@ class DucklangInference {
       }
       case "field": {
         const product = this.inferExpression(expression.product, environment);
-        const productType = this.#apply(product.type);
+        let productType = this.#apply(product.type);
+        if (productType.kind === "variable") {
+          const candidates = this.#structTypes.filter((declaration) =>
+            declaration.fields.some((field) =>
+              field.name === expression.fieldName
+            )
+          );
+          if (candidates.length !== 1) {
+            const candidateNames = candidates.map((candidate) => candidate.name)
+              .join(", ");
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang field ${expression.fieldName} does not uniquely identify a struct; candidates: ${
+                candidateNames || "none"
+              }`,
+            );
+          }
+          const declaration = candidates[0];
+          this.#unify(productType, {
+            kind: "constructor",
+            name: declaration.name,
+            arguments: declaration.parameters.map(() => this.#freshVariable()),
+          }, expression.product.span);
+          productType = this.#apply(product.type);
+        }
         if (productType.kind !== "constructor") {
           throw new TypeError(
             `${this.#file}:${expression.span.start}: Ducklang field ${expression.fieldName} requires a struct; received ${
@@ -1029,16 +1257,54 @@ class DucklangInference {
       case "project": {
         const product = this.inferExpression(expression.product, environment);
         const productType = this.#apply(product.type);
-        if (
-          productType.kind !== "constructor" ||
-          productType.name !== "tuple" ||
-          expression.index >= productType.arguments.length
-        ) {
+        if (productType.kind === "variable" && expression.arity !== undefined) {
+          let fields = this.#productConstraints.get(productType.id);
+          if (fields === undefined) {
+            fields = Array.from(
+              { length: expression.arity },
+              () => this.#freshVariable(),
+            );
+            this.#productConstraints.set(productType.id, fields);
+          }
+          const type = fields[expression.index];
+          if (type === undefined) {
+            throw new RangeError(
+              `${expression.span.file}:${expression.span.start}: Ducklang product projection ${expression.index} is outside arity ${fields.length}`,
+            );
+          }
+          return {
+            expression: { ...expression, product: product.expression, type },
+            type,
+          };
+        }
+        if (productType.kind !== "constructor") {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang product projection ${expression.index} requires a tuple with that element`,
+            `${expression.span.file}:${expression.span.start}: Ducklang product projection ${expression.index} requires a product; received ${
+              formatDucklangType(productType)
+            }`,
           );
         }
-        const type = productType.arguments[expression.index];
+        let type: Type | undefined;
+        if (productType.name === "tuple") {
+          type = productType.arguments[expression.index];
+        } else if (productType.name === "array") {
+          type = productType.arguments[0];
+        } else {
+          const declaration = this.#structTypes.find((candidate) =>
+            candidate.name === productType.name
+          );
+          const field = declaration?.fields[expression.index];
+          if (declaration !== undefined && field !== undefined) {
+            type = this.#structFieldType(declaration, productType, field.type);
+          }
+        }
+        if (type === undefined) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: Ducklang product projection ${expression.index} is outside ${
+              sourceTypeName(productType)
+            }`,
+          );
+        }
         return {
           expression: { ...expression, product: product.expression, type },
           type,
@@ -1060,41 +1326,86 @@ class DucklangInference {
       }
       case "function": {
         const functionEnvironment = new Map(environment);
-        const parameterTypes = expression.parameters.map((parameter) => {
-          const type = parameter.declaredType === undefined
-            ? this.#freshVariable()
-            : this.#declaredType(parameter.declaredType, parameter.span);
+        const parameterTypeSources = expression.parameterTypeSources?.map((
+          source,
+        ) => this.inferExpression(source, environment));
+        const parameterTypes = expression.parameters.map((parameter, index) => {
+          const type = parameter.declaredType !== undefined
+            ? this.#declaredType(parameter.declaredType, parameter.span)
+            : parameterTypeSources?.[index]?.type ?? this.#freshVariable();
           functionEnvironment.set(parameter.id, type);
           this.#symbolTypes.set(parameter.id, type);
           return type;
         });
-        const body = this.inferExpression(expression.body, functionEnvironment);
-        this.#unifyReturnTypes(body.expression, body.type);
+        const declaredResultType = expression.declaredResultType === undefined
+          ? undefined
+          : this.#declaredType(
+            expression.declaredResultType,
+            expression.span,
+          );
+        const body = this.inferExpression(
+          expression.body,
+          functionEnvironment,
+          declaredResultType,
+        );
+        const resultType = declaredResultType ?? body.type;
+        if (declaredResultType !== undefined) {
+          this.#unify(body.type, declaredResultType, expression.body.span);
+        }
+        this.#unifyReturnTypes(body.expression, resultType);
         const type = parameterTypes.toReversed().reduce<Type>(
           (result, parameter) => ({ kind: "function", parameter, result }),
-          body.type,
+          resultType,
         );
         return {
-          expression: { ...expression, body: body.expression, type },
+          expression: {
+            ...expression,
+            parameterTypeSources: parameterTypeSources?.map((source) =>
+              source.expression
+            ),
+            body: body.expression,
+            type,
+          },
           type,
         };
       }
       case "call": {
         const callee = this.inferExpression(expression.callee, environment);
-        const arguments_ = expression.arguments.map((argument) =>
-          this.inferExpression(argument, environment)
-        );
+        const arguments_: InferredExpression[] = [];
         let result = callee.type;
         let calleeResult = callee.type;
-        for (const [index, argument] of arguments_.entries()) {
-          result = this.#freshVariable();
-          this.#unify(
-            calleeResult,
-            { kind: "function", parameter: argument.type, result },
-            expression.arguments[index].span,
+        for (
+          const [index, argumentExpression] of expression.arguments.entries()
+        ) {
+          const appliedCallee = this.#apply(calleeResult);
+          const argument = this.inferExpression(
+            argumentExpression,
+            environment,
+            appliedCallee.kind === "function"
+              ? appliedCallee.parameter
+              : undefined,
           );
+          arguments_.push(argument);
+          result = this.#freshVariable();
+          try {
+            this.#unify(
+              calleeResult,
+              { kind: "function", parameter: argument.type, result },
+              argumentExpression.span,
+            );
+          } catch (cause) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: Ducklang call argument ${
+                index + 1
+              } cannot apply ${sourceTypeName(this.#apply(calleeResult))} to ${
+                sourceTypeName(this.#apply(argument.type))
+              }`,
+              { cause },
+            );
+          }
           calleeResult = result;
         }
+        result = this.#apply(result);
         return {
           expression: {
             ...expression,
@@ -1116,9 +1427,28 @@ class DucklangInference {
         let type: Type;
         if (
           collectionType.kind === "constructor" &&
-          collectionType.name === "text"
+          (collectionType.name === "text" ||
+            collectionType.name === "bytes")
         ) {
           type = i32Type;
+        } else if (
+          collectionType.kind === "constructor" &&
+          collectionType.name === "tuple"
+        ) {
+          if (expression.index.kind === "integer") {
+            const selected = collectionType.arguments[expression.index.value];
+            if (selected === undefined) {
+              throw new RangeError(
+                `${expression.span.file}:${expression.span.start}: Ducklang product index ${expression.index.value} is outside arity ${collectionType.arguments.length}`,
+              );
+            }
+            type = selected;
+          } else {
+            type = collectionType.arguments[0] ?? this.#freshVariable();
+            for (const elementType of collectionType.arguments.slice(1)) {
+              this.#unify(type, elementType, expression.collection.span);
+            }
+          }
         } else if (
           collectionType.kind === "constructor" &&
           collectionType.name === "array" &&
@@ -1132,22 +1462,44 @@ class DucklangInference {
           const firstField = declaration?.fields[0];
           if (declaration === undefined || firstField === undefined) {
             throw new TypeError(
-              `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text, an array, or a nonempty homogeneous struct; received ${
+              `${expression.collection.span.file}:${expression.collection.span.start}: Ducklang index requires Text, Bytes, an array, or a nonempty homogeneous struct; received ${
                 formatDucklangType(collectionType)
               }`,
             );
           }
-          type = this.#typeReference(firstField.type, new Map(), []);
-          for (const field of declaration.fields.slice(1)) {
-            this.#unify(
-              type,
-              this.#typeReference(field.type, new Map(), []),
-              field.span,
+          if (expression.index.kind === "integer") {
+            const field = declaration.fields[expression.index.value];
+            if (field === undefined) {
+              throw new RangeError(
+                `${expression.span.file}:${expression.span.start}: Ducklang product index ${expression.index.value} is outside ${declaration.name} arity ${declaration.fields.length}`,
+              );
+            }
+            type = this.#structFieldType(
+              declaration,
+              collectionType,
+              field.type,
             );
+          } else {
+            type = this.#structFieldType(
+              declaration,
+              collectionType,
+              firstField.type,
+            );
+            for (const field of declaration.fields.slice(1)) {
+              this.#unify(
+                type,
+                this.#structFieldType(
+                  declaration,
+                  collectionType,
+                  field.type,
+                ),
+                field.span,
+              );
+            }
           }
         } else {
           throw new TypeError(
-            `${this.#file}:${expression.collection.span.start}: Ducklang index requires Text, an array, or a nonempty homogeneous struct; received ${
+            `${expression.collection.span.file}:${expression.collection.span.start}: Ducklang index requires Text, Bytes, an array, or a nonempty homogeneous struct; received ${
               formatDucklangType(collectionType)
             }`,
           );
@@ -1167,6 +1519,23 @@ class DucklangInference {
         const index = this.inferExpression(expression.index, environment);
         this.#unify(index.type, i32Type, expression.index.span);
         const productType = this.#apply(product.type);
+        if (
+          productType.kind === "constructor" &&
+          productType.name === "bytes"
+        ) {
+          const value = this.inferExpression(expression.value, environment);
+          this.#unify(value.type, i32Type, expression.value.span);
+          return {
+            expression: {
+              ...expression,
+              product: product.expression,
+              index: index.expression,
+              value: value.expression,
+              type: bytesType,
+            },
+            type: bytesType,
+          };
+        }
         const declaration = productType.kind === "constructor"
           ? this.#structTypes.find((candidate) =>
             candidate.name === productType.name
@@ -1175,7 +1544,7 @@ class DucklangInference {
         const firstField = declaration?.fields[0];
         if (declaration === undefined || firstField === undefined) {
           throw new TypeError(
-            `${this.#file}:${expression.product.span.start}: Ducklang indexed assignment requires a nonempty homogeneous struct; received ${
+            `${this.#file}:${expression.product.span.start}: Ducklang indexed assignment requires Bytes or a nonempty homogeneous struct; received ${
               formatDucklangType(productType)
             }`,
           );
@@ -1202,7 +1571,9 @@ class DucklangInference {
         };
       }
       case "binary": {
-        if (expression.operator === "<>") {
+        if (
+          expression.operator === "<>" || expression.operator === "++"
+        ) {
           const left = this.inferExpression(expression.left, environment);
           const right = this.inferExpression(expression.right, environment);
           this.#unify(left.type, textType, expression.left.span);
@@ -1226,37 +1597,67 @@ class DucklangInference {
         const operator = expression.operator as DucklangBinaryOperator;
         const left = this.inferExpression(expression.left, environment);
         const right = this.inferExpression(expression.right, environment);
-        if (operator === "&&") {
+        if (operator === "&&" || operator === "||") {
           this.#unify(left.type, booleanType, expression.left.span);
           this.#unify(right.type, booleanType, expression.right.span);
         } else {
           const leftType = this.#apply(left.type);
           const rightType = this.#apply(right.type);
           if (
-            isIntegerType(leftType) && isIntegerType(rightType) &&
+            isScalarNumericType(leftType) &&
+            isScalarNumericType(rightType) &&
             formatDucklangType(leftType) !== formatDucklangType(rightType)
           ) {
+            const mixedTypes = [
+              formatDucklangType(leftType),
+              formatDucklangType(rightType),
+            ].sort().join(" and ");
             throw new TypeError(
-              `${this.#file}:${expression.span.start}: Mixed i32 and i64 operands`,
+              `${this.#file}:${expression.span.start}: Mixed ${mixedTypes} numeric operand types: left ${
+                formatDucklangType(leftType)
+              }, right ${formatDucklangType(rightType)}`,
             );
           }
-          this.#unify(left.type, right.type, expression.span);
+          try {
+            this.#unify(left.type, right.type, expression.span);
+          } catch (cause) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: Ducklang operator ${operator} has incompatible operands ${
+                sourceTypeName(this.#apply(left.type))
+              } at ${expression.left.span.start} and ${
+                sourceTypeName(this.#apply(right.type))
+              } at ${expression.right.span.start}`,
+              { cause },
+            );
+          }
           const operandType = this.#apply(left.type);
-          const equalityOnNonIntegers = operator === "==" &&
+          const equalityOnNonIntegers =
+            (operator === "==" || operator === "!=") &&
             operandType.kind === "constructor" &&
             (operandType.name === "bool" || operandType.name === "text") &&
             operandType.arguments.length === 0;
           if (operandType.kind === "variable") {
             this.#numericVariables.add(operandType.id);
-          } else if (!isIntegerType(operandType) && !equalityOnNonIntegers) {
+          } else if (
+            !isScalarNumericType(operandType) && !equalityOnNonIntegers
+          ) {
             throw new TypeError(
-              `${this.#file}:${expression.span.start}: Ducklang operator ${operator} requires equal-width integers; received ${
+              `${this.#file}:${expression.span.start}: Ducklang operator ${operator} requires equal-width numeric values; received ${
                 formatDucklangType(operandType)
               }`,
             );
           }
         }
-        const type = ["==", "<", ">", "&&"].includes(operator)
+        const type = [
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "&&",
+            "||",
+          ].includes(operator)
           ? booleanType
           : this.#apply(left.type);
         return {
@@ -1290,9 +1691,9 @@ class DucklangInference {
             this.#unify(operandType, i32Type, expression.span);
             operandType = i32Type;
           }
-          if (!isIntegerType(operandType)) {
+          if (!isScalarNumericType(operandType)) {
             throw new TypeError(
-              `${this.#file}:${expression.span.start}: Ducklang unary - requires an integer; received ${
+              `${this.#file}:${expression.span.start}: Ducklang unary - requires a numeric value; received ${
                 formatDucklangType(operandType)
               }`,
             );
@@ -1302,6 +1703,20 @@ class DucklangInference {
               kind: "integer64",
               value: 0n,
               type: i64Type,
+              span: expression.span,
+            }
+            : operandType.name === "f32"
+            ? {
+              kind: "float32",
+              value: 0,
+              type: f32Type,
+              span: expression.span,
+            }
+            : operandType.name === "f64"
+            ? {
+              kind: "float64",
+              value: 0,
+              type: f64Type,
               span: expression.span,
             }
             : {
@@ -1350,17 +1765,49 @@ class DucklangInference {
         const returned = this.inferExpression(
           expression.expression,
           environment,
+          expectedType,
         );
+        const type = this.#freshBottomVariable();
         return {
           expression: {
             ...expression,
             expression: returned.expression,
-            type: returned.type,
+            type,
           },
-          type: returned.type,
+          type,
         };
       }
       case "if": {
+        let branchExpectedType = expectedType;
+        let consequenceResult = expression.consequence;
+        while (consequenceResult.kind === "block") {
+          consequenceResult = consequenceResult.result;
+        }
+        let alternativeResult = expression.alternative;
+        while (alternativeResult?.kind === "block") {
+          alternativeResult = alternativeResult.result;
+        }
+        if (
+          branchExpectedType === undefined &&
+          consequenceResult.kind === "unionCase" &&
+          consequenceResult.nominalType === undefined &&
+          alternativeResult?.kind === "unionCase" &&
+          alternativeResult.nominalType === undefined
+        ) {
+          const alternativeUnions = new Set(
+            this.#unionCaseCandidates(
+              alternativeResult.caseName,
+              alternativeResult.span,
+            ).map((candidate) => candidate.unionName),
+          );
+          const commonUnions = this.#unionCaseCandidates(
+            consequenceResult.caseName,
+            consequenceResult.span,
+          ).filter((candidate) => alternativeUnions.has(candidate.unionName));
+          if (commonUnions.length === 1) {
+            branchExpectedType = commonUnions[0].union;
+          }
+        }
         const condition = this.inferExpression(
           expression.condition,
           environment,
@@ -1368,11 +1815,22 @@ class DucklangInference {
         const consequence = this.inferExpression(
           expression.consequence,
           environment,
+          branchExpectedType,
         );
         const consequenceType = this.#apply(consequence.type);
         const alternative = expression.alternative === undefined
           ? consequenceType.kind === "constructor" &&
-              consequenceType.name === "i64"
+              consequenceType.name === "unit"
+            ? {
+              expression: {
+                kind: "unit" as const,
+                type: unitType,
+                span: expression.span,
+              },
+              type: unitType,
+            }
+            : consequenceType.kind === "constructor" &&
+                consequenceType.name === "i64"
             ? {
               expression: {
                 kind: "integer64" as const,
@@ -1402,7 +1860,11 @@ class DucklangInference {
               },
               type: i32Type,
             }
-          : this.inferExpression(expression.alternative, environment);
+          : this.inferExpression(
+            expression.alternative,
+            environment,
+            branchExpectedType,
+          );
         const conditionType = this.#apply(condition.type);
         const scalarCondition = conditionType.kind === "variable" ||
           (conditionType.kind === "constructor" &&
@@ -1415,11 +1877,22 @@ class DucklangInference {
             }`,
           );
         }
-        this.#unify(
-          consequence.type,
-          alternative.type,
-          expression.alternative?.span ?? expression.span,
-        );
+        try {
+          this.#unify(
+            consequence.type,
+            alternative.type,
+            expression.alternative?.span ?? expression.span,
+          );
+        } catch (cause) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: Ducklang if branches have incompatible types ${
+              sourceTypeName(this.#apply(consequence.type))
+            } at ${consequence.expression.span.start} and ${
+              sourceTypeName(this.#apply(alternative.type))
+            } at ${alternative.expression.span.start}`,
+            { cause },
+          );
+        }
         return {
           expression: {
             ...expression,
@@ -1433,19 +1906,27 @@ class DucklangInference {
       }
       case "ifUnion": {
         const value = this.inferExpression(expression.value, environment);
+        const scrutineeType = this.#apply(value.type);
+        const expectedUnionName = scrutineeType.kind === "constructor"
+          ? scrutineeType.name
+          : undefined;
         const candidates = this.#unionCaseCandidates(
           expression.caseName,
           expression.span,
+          expectedUnionName,
         );
-        if (candidates.length === 1) {
+        const scrutineeCandidates = candidates.filter((candidate) =>
+          this.#typesCouldMatch(value.type, candidate.union)
+        );
+        if (scrutineeCandidates.length === 1) {
           this.#unify(
             value.type,
-            candidates[0].union,
+            scrutineeCandidates[0].union,
             expression.value.span,
           );
         }
-        const payloadType = candidates.length === 1
-          ? candidates[0].payload
+        const payloadType = scrutineeCandidates.length === 1
+          ? scrutineeCandidates[0].payload
           : this.#freshVariable();
         const consequenceEnvironment = new Map(environment);
         if (expression.payloadSymbol !== undefined) {
@@ -1461,32 +1942,58 @@ class DucklangInference {
         const consequence = this.inferExpression(
           expression.consequence,
           consequenceEnvironment,
+          expectedType,
         );
+        const consequenceType = this.#apply(consequence.type);
+        const missingAlternativeType = expression.alternative === undefined &&
+            !(consequenceType.kind === "constructor" &&
+              consequenceType.name === "unit")
+          ? this.#freshBottomVariable()
+          : undefined;
         const alternative = expression.alternative === undefined
-          ? {
-            expression: {
-              kind: "integer" as const,
-              value: 0,
-              type: i32Type,
-              span: expression.span,
-            },
-            type: i32Type,
-          }
-          : this.inferExpression(expression.alternative, environment);
-        const compatibleCandidates = candidates.filter((candidate) =>
-          this.#typesCouldMatch(value.type, candidate.union) &&
+          ? consequenceType.kind === "constructor" &&
+              consequenceType.name === "unit"
+            ? {
+              expression: {
+                kind: "unit" as const,
+                type: unitType,
+                span: expression.span,
+              },
+              type: unitType,
+            }
+            : {
+              expression: {
+                kind: "call" as const,
+                callee: {
+                  kind: "primitive" as const,
+                  primitiveId: PrimitiveId.panic,
+                  type: functionType([textType], missingAlternativeType!),
+                  span: expression.span,
+                },
+                arguments: [],
+                type: missingAlternativeType!,
+                span: expression.span,
+              },
+              type: missingAlternativeType!,
+            }
+          : this.inferExpression(
+            expression.alternative,
+            environment,
+            expectedType,
+          );
+        const compatibleCandidates = scrutineeCandidates.filter((candidate) =>
           this.#typesCouldMatch(payloadType, candidate.payload)
         );
         if (compatibleCandidates.length === 0) {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} matches neither scrutinee ${
+            `${expression.span.file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} matches neither scrutinee ${
               formatDucklangType(this.#apply(value.type))
             } nor payload ${formatDucklangType(this.#apply(payloadType))}`,
           );
         }
         if (compatibleCandidates.length > 1) {
           throw new TypeError(
-            `${this.#file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} is ambiguous among ${
+            `${expression.span.file}:${expression.span.start}: Ducklang constructor pattern ${expression.caseName} is ambiguous among ${
               compatibleCandidates.map((candidate) => candidate.unionName).join(
                 ", ",
               )
@@ -1496,7 +2003,16 @@ class DucklangInference {
         const unionCase = compatibleCandidates[0];
         this.#unify(value.type, unionCase.union, expression.value.span);
         this.#unify(payloadType, unionCase.payload, expression.span);
-        this.#unify(consequence.type, alternative.type, expression.span);
+        try {
+          this.#unify(consequence.type, alternative.type, expression.span);
+        } catch (cause) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: Ducklang union-pattern branches have incompatible types ${
+              sourceTypeName(this.#apply(consequence.type))
+            } and ${sourceTypeName(this.#apply(alternative.type))}`,
+            { cause },
+          );
+        }
         return {
           expression: {
             ...expression,
@@ -1532,6 +2048,7 @@ class DucklangInference {
         const result = this.inferExpression(
           expression.result,
           blockEnvironment,
+          expectedType,
         );
         return {
           expression: {
@@ -1595,6 +2112,7 @@ class DucklangInference {
     caseName: string,
     span: SourceSpan,
     expectedUnionName?: string,
+    preferSourceFile = true,
   ): readonly {
     readonly unionName: string;
     readonly union: Type;
@@ -1604,11 +2122,17 @@ class DucklangInference {
       ? undefined
       : this.#typeAliases.find((alias) => alias.name === expectedUnionName)
         ?.target.name ?? expectedUnionName;
-    const declarations = this.#unionTypes.filter((candidate) =>
+    const namedDeclarations = this.#unionTypes.filter((candidate) =>
       (expectedDeclarationName === undefined ||
         candidate.name === expectedDeclarationName) &&
       candidate.cases.some((unionCase) => unionCase.name === caseName)
     );
+    const localDeclarations = namedDeclarations.filter((candidate) =>
+      candidate.span.file === span.file
+    );
+    const declarations = !preferSourceFile || localDeclarations.length === 0
+      ? namedDeclarations
+      : localDeclarations;
     if (declarations.length === 0) {
       throw new TypeError(
         `${this.#file}:${span.start}: unknown Ducklang union constructor ${caseName}`,
@@ -1638,8 +2162,20 @@ class DucklangInference {
   #typesCouldMatch(left: Type, right: Type): boolean {
     const appliedLeft = this.#apply(left);
     const appliedRight = this.#apply(right);
-    if (appliedLeft.kind === "variable" || appliedRight.kind === "variable") {
-      return true;
+    if (appliedLeft.kind === "variable") {
+      const fields = this.#productConstraints.get(appliedLeft.id);
+      if (fields === undefined || appliedRight.kind === "variable") return true;
+      const rightFields = this.#productFieldTypes(
+        appliedRight,
+        fields.length,
+      );
+      return rightFields !== undefined &&
+        fields.every((field, index) =>
+          this.#typesCouldMatch(field, rightFields[index])
+        );
+    }
+    if (appliedRight.kind === "variable") {
+      return this.#typesCouldMatch(appliedRight, appliedLeft);
     }
     if (appliedLeft.kind !== appliedRight.kind) return false;
     if (appliedLeft.kind === "function" && appliedRight.kind === "function") {
@@ -1666,11 +2202,59 @@ class DucklangInference {
     return this.#typeReference({ name, arguments: [], span }, new Map(), []);
   }
 
+  #builtinType(id: BuiltinTypeIdentity): Type {
+    switch (id) {
+      case BuiltinTypeId.i32:
+      case BuiltinTypeId.char:
+        return i32Type;
+      case BuiltinTypeId.i64:
+        return i64Type;
+      case BuiltinTypeId.f32:
+        return f32Type;
+      case BuiltinTypeId.f64:
+        return f64Type;
+      case BuiltinTypeId.f32x4:
+        return f32x4Type;
+      case BuiltinTypeId.bool:
+        return booleanType;
+      case BuiltinTypeId.text:
+        return textType;
+      case BuiltinTypeId.bytes:
+        return bytesType;
+      case BuiltinTypeId.unit:
+        return unitType;
+    }
+  }
+
   #typeReference(
     reference: DucklangTypeReference,
     parameters: ReadonlyMap<string, Type>,
     expandingAliases: readonly string[],
   ): Type {
+    if (reference.name === "$tuple") {
+      return {
+        kind: "constructor",
+        name: "tuple",
+        arguments: reference.arguments.map((argument) =>
+          this.#typeReference(argument, parameters, expandingAliases)
+        ),
+      };
+    }
+    if (reference.name === "$function" && reference.arguments.length === 2) {
+      const parameter = this.#typeReference(
+        reference.arguments[0],
+        parameters,
+        expandingAliases,
+      );
+      const result = this.#typeReference(
+        reference.arguments[1],
+        parameters,
+        expandingAliases,
+      );
+      return parameter.kind === "constructor" && parameter.name === "tuple"
+        ? functionType(parameter.arguments, result)
+        : functionType([parameter], result);
+    }
     const parameter = parameters.get(reference.name);
     if (parameter !== undefined) {
       if (reference.arguments.length !== 0) {
@@ -1680,40 +2264,59 @@ class DucklangInference {
       }
       return parameter;
     }
-    if (reference.name === "Int" || reference.name === "I32") return i32Type;
+    if (
+      reference.name === "Int" || reference.name === "I32" ||
+      reference.name === "Char"
+    ) {
+      return i32Type;
+    }
     if (reference.name === "I64") return i64Type;
+    if (reference.name === "F32") return f32Type;
+    if (reference.name === "F64") return f64Type;
+    if (reference.name === "F32x4") return f32x4Type;
     if (reference.name === "Bool") return booleanType;
     if (reference.name === "Text") return textType;
+    if (reference.name === "Bytes") return bytesType;
     if (reference.name === "Unit") return unitType;
     if (/^U(?:[1-9]|[12][0-9]|3[01])$/.test(reference.name)) return i32Type;
-    if (
-      this.#structTypes.some((declaration) =>
-        declaration.name === reference.name
-      )
-    ) {
-      const declaration = this.#structTypes.find((candidate) =>
+    const structDeclaration =
+      this.#structTypes.find((candidate) =>
+        candidate.name === reference.name &&
+        candidate.span.file === reference.span.file
+      ) ?? this.#structTypes.find((candidate) =>
         candidate.name === reference.name
-      )!;
-      if (reference.arguments.length !== declaration.parameters.length) {
+      );
+    if (structDeclaration !== undefined) {
+      const arguments_ = reference.arguments.length === 0
+        ? structDeclaration.parameters.map(() => this.#freshVariable())
+        : reference.arguments.map((argument) =>
+          this.#typeReference(argument, parameters, expandingAliases)
+        );
+      if (arguments_.length !== structDeclaration.parameters.length) {
         throw new TypeError(
-          `${this.#file}:${reference.span.start}: Ducklang struct ${reference.name} expects ${declaration.parameters.length} arguments; received ${reference.arguments.length}`,
+          `${this.#file}:${reference.span.start}: Ducklang struct ${reference.name} expects ${structDeclaration.parameters.length} arguments; received ${reference.arguments.length}`,
         );
       }
       return {
         kind: "constructor",
         name: reference.name,
-        arguments: reference.arguments.map((argument) =>
-          this.#typeReference(argument, parameters, expandingAliases)
-        ),
+        arguments: arguments_,
       };
     }
-    const arguments_ = reference.arguments.map((argument) =>
+    let arguments_ = reference.arguments.map((argument) =>
       this.#typeReference(argument, parameters, expandingAliases)
     );
-    const alias = this.#typeAliases.find((candidate) =>
-      candidate.name === reference.name
-    );
+    const alias =
+      this.#typeAliases.find((candidate) =>
+        candidate.name === reference.name &&
+        candidate.span.file === reference.span.file
+      ) ?? this.#typeAliases.find((candidate) =>
+        candidate.name === reference.name
+      );
     if (alias !== undefined) {
+      if (arguments_.length === 0 && alias.parameters.length > 0) {
+        arguments_ = alias.parameters.map(() => this.#freshVariable());
+      }
       if (alias.parameters.length !== arguments_.length) {
         throw new TypeError(
           `${this.#file}:${reference.span.start}: Ducklang type alias ${alias.name} expects ${alias.parameters.length} arguments; received ${arguments_.length}`,
@@ -1734,13 +2337,20 @@ class DucklangInference {
         [...expandingAliases, alias.name],
       );
     }
-    const declaration = this.#unionTypes.find((candidate) =>
-      candidate.name === reference.name
-    );
+    const declaration =
+      this.#unionTypes.find((candidate) =>
+        candidate.name === reference.name &&
+        candidate.span.file === reference.span.file
+      ) ?? this.#unionTypes.find((candidate) =>
+        candidate.name === reference.name
+      );
     if (declaration === undefined) {
       throw new TypeError(
         `${this.#file}:${reference.span.start}: unknown Ducklang type ${reference.name}`,
       );
+    }
+    if (arguments_.length === 0 && declaration.parameters.length > 0) {
+      arguments_ = declaration.parameters.map(() => this.#freshVariable());
     }
     if (declaration.parameters.length !== arguments_.length) {
       throw new TypeError(
@@ -1802,8 +2412,15 @@ class DucklangInference {
     requiredEffects: readonly DucklangEffectReference[],
   ): TypedDucklangModule {
     for (const variable of this.#numericVariables) {
-      if (this.#apply({ kind: "variable", id: variable }).kind === "variable") {
-        this.#substitutions.set(variable, i32Type);
+      const applied = this.#apply({ kind: "variable", id: variable });
+      if (applied.kind === "variable") {
+        this.#substitutions.set(applied.id, i32Type);
+      }
+    }
+    for (const variable of this.#bottomVariables) {
+      const applied = this.#apply({ kind: "variable", id: variable });
+      if (applied.kind === "variable") {
+        this.#substitutions.set(applied.id, unitType);
       }
     }
     const normalizedBindings = bindings.map((binding) => ({
@@ -1838,10 +2455,13 @@ class DucklangInference {
     switch (expression.kind) {
       case "integer":
       case "integer64":
+      case "float32":
+      case "float64":
       case "boolean":
       case "unit":
       case "string":
       case "intrinsic":
+      case "primitive":
       case "reference":
         return { ...expression, type };
       case "hostCall":
@@ -2011,10 +2631,18 @@ class DucklangInference {
     return type;
   }
 
+  #freshBottomVariable(): Type {
+    const type = this.#freshVariable();
+    if (type.kind === "variable") {
+      this.#bottomVariables.add(type.id);
+    }
+    return type;
+  }
+
   #unifyReturnTypes(expression: TypedDucklangExpression, result: Type): void {
     switch (expression.kind) {
       case "return":
-        this.#unify(expression.type, result, expression.span);
+        this.#unify(expression.expression.type, result, expression.span);
         return;
       case "hostCall":
         for (const argument of expression.arguments) {
@@ -2024,6 +2652,8 @@ class DucklangInference {
       case "function":
       case "integer":
       case "integer64":
+      case "float32":
+      case "float64":
       case "boolean":
       case "reference":
         return;
@@ -2070,6 +2700,36 @@ class DucklangInference {
           }`,
         );
       }
+      const fields = this.#productConstraints.get(left.id);
+      if (fields !== undefined) {
+        if (right.kind === "variable") {
+          const rightFields = this.#productConstraints.get(right.id);
+          if (rightFields === undefined) {
+            this.#productConstraints.set(right.id, fields);
+          } else {
+            if (rightFields.length !== fields.length) {
+              throw new TypeError(
+                `${span.file}:${span.start}: Ducklang product constraints require both arity ${fields.length} and ${rightFields.length}`,
+              );
+            }
+            for (let index = 0; index < fields.length; index += 1) {
+              this.#unify(fields[index], rightFields[index], span);
+            }
+          }
+        } else {
+          const rightFields = this.#productFieldTypes(right, fields.length);
+          if (rightFields === undefined) {
+            throw new TypeError(
+              `${span.file}:${span.start}: Ducklang destructuring expects a product with ${fields.length} fields; received ${
+                formatDucklangType(right)
+              }`,
+            );
+          }
+          for (let index = 0; index < fields.length; index += 1) {
+            this.#unify(fields[index], rightFields[index], span);
+          }
+        }
+      }
       this.#substitutions.set(left.id, right);
       return;
     }
@@ -2096,6 +2756,29 @@ class DucklangInference {
       `${this.#file}:${span.start}: cannot unify Ducklang ${
         formatDucklangType(left)
       } with ${formatDucklangType(right)}`,
+    );
+  }
+
+  #productFieldTypes(
+    type: Type,
+    arity: number,
+  ): readonly Type[] | undefined {
+    const applied = this.#apply(type);
+    if (applied.kind !== "constructor") return undefined;
+    if (applied.name === "tuple") {
+      return applied.arguments.length === arity ? applied.arguments : undefined;
+    }
+    if (applied.name === "array" && applied.arguments.length === 1) {
+      return Array.from({ length: arity }, () => applied.arguments[0]);
+    }
+    const declaration = this.#structTypes.find((candidate) =>
+      candidate.name === applied.name
+    );
+    if (declaration === undefined || declaration.fields.length !== arity) {
+      return undefined;
+    }
+    return declaration.fields.map((field) =>
+      this.#structFieldType(declaration, applied, field.type)
     );
   }
 
@@ -2148,16 +2831,20 @@ function sourceTypeName(type: Type): string {
   if (type.kind !== "constructor") return formatDucklangType(type);
   if (type.name === "i32") return "Int";
   if (type.name === "i64") return "I64";
+  if (type.name === "f32") return "F32";
+  if (type.name === "f64") return "F64";
+  if (type.name === "f32x4") return "F32x4";
   if (type.name === "bool") return "Bool";
   if (type.name === "text") return "Text";
+  if (type.name === "bytes") return "Bytes";
   if (type.name === "unit") return "Unit";
   return formatDucklangType(type);
 }
 
-function isIntegerType(
+function isScalarNumericType(
   type: Type,
 ): type is Extract<Type, { readonly kind: "constructor" }> {
   return type.kind === "constructor" &&
-    (type.name === "i32" || type.name === "i64") &&
+    ["i32", "i64", "f32", "f64"].includes(type.name) &&
     type.arguments.length === 0;
 }

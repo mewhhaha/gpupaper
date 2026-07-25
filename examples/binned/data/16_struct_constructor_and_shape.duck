@@ -6,5 +6,6 @@ const make_point = Point.new
 const x_type = Point.shape.x
 let x: x_type = 40
 let point = make_point { .y = 2, .x = x }
+let { .x = point_x, .y = point_y } = point
 
-point.x + point.y
+point_x + point_y

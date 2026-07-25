@@ -1,0 +1,6 @@
+let runtime = 3
+
+match 3 {
+  | #(runtime) => 42
+  | _ => 0
+}

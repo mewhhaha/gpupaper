@@ -12,11 +12,11 @@ revision are recorded in [examples/binned/SOURCE.md](examples/binned/SOURCE.md).
 
 ## Enforced corpus contract
 
-The generated Baba 6 Wasm parser accepts all 118 vendored `.duck` files. The
+The generated Baba 6 Wasm parser accepts all 121 vendored `.duck` files. The
 semantic contract then classifies every file exactly once:
 
-- 92 success fixtures compile to Wasm and return every declared result;
-- 12 intentional compile failures reject for their declared reason;
+- 94 success fixtures compile to Wasm and return every declared result;
+- 13 intentional compile failures reject for their declared reason;
 - 4 trap fixtures compile and trap for every declared runtime input;
 - 1 inline source-test module discovers and executes its `@[test]` functions;
 - 9 dependency modules compile through their success, failure, or managed host

@@ -6,12 +6,26 @@ import type {
   ValueDeclaration,
 } from "./syntax.ts";
 import type { InferredModule } from "./types.ts";
-import { wasmInstruction, WasmModuleBuilder, wasmType } from "./wasm.ts";
+import {
+  type FlatFcgPackage,
+  flattenFcgModule,
+  inflateFlatFcgPackage,
+} from "./flat_fcg.ts";
+import { type FlatFcgRewriteProposal, rewriteFlatFcg } from "./fcg_rewrite.ts";
+import {
+  emitWasmPlanOnCpu,
+  type WasmBinaryPlan,
+  type WasmInstruction,
+  wasmInstruction,
+  WasmModuleBuilder,
+  wasmType,
+} from "./wasm.ts";
 
 export type FcgOperation = {
   readonly opcode: string;
   readonly operands: readonly (number | string)[];
   readonly sourceStart: number;
+  readonly regionId: number;
 };
 
 export type FcgFunction = {
@@ -28,6 +42,8 @@ export type FcgModule = {
 
 export type WasmArtifact = {
   readonly fcg: FcgModule;
+  readonly flatFcg: FlatFcgPackage;
+  readonly wasmPlan: WasmBinaryPlan;
   readonly wasm: Uint8Array;
 };
 
@@ -60,17 +76,45 @@ export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
   }
   const constructorShapes = collectConstructorShapes(inferred.module);
   const primitiveShapes = collectPrimitiveShapes(inferred.module);
-  const loweredFunctions: FcgFunction[] = [];
-
-  for (const declaration of valueDeclarations) {
-    const shape = functionShapes.get(declaration.name.text)!;
+  const analyzedFunctions = valueDeclarations.map((declaration) => {
     const compiler = new FunctionCompiler(
       declaration,
       functionShapes,
       constructorShapes,
       primitiveShapes,
     );
-    const compiled = compiler.compile();
+    return compiler.compile();
+  });
+  const constructorTags = new Map(
+    [...constructorShapes].map(([name, shape]) => [name, shape.tag]),
+  );
+  const analyzedFcg = {
+    functions: valueDeclarations.map((declaration, functionIndex) => ({
+      name: declaration.name.text,
+      parameters: declaration.parameters.map((parameter) => parameter.text),
+      localCount: analyzedFunctions[functionIndex].localCount,
+      operations: analyzedFunctions[functionIndex].operations,
+    })),
+    constructorTags,
+  };
+  const rewrite = rewriteFlatFcg(flattenFcgModule(analyzedFcg));
+  const acceptedRewrites = acceptedRewritesByFunction(
+    analyzedFcg,
+    rewrite.accepted,
+  );
+  const loweredFunctions: FcgFunction[] = [];
+  for (const declaration of valueDeclarations) {
+    const shape = functionShapes.get(declaration.name.text)!;
+    const functionRewrites = acceptedRewrites.get(shape.functionIndex);
+    const compiled = functionRewrites === undefined
+      ? analyzedFunctions[shape.functionIndex]
+      : new FunctionCompiler(
+        declaration,
+        functionShapes,
+        constructorShapes,
+        primitiveShapes,
+        functionRewrites,
+      ).compile();
     const functionIndex = builder.addFunction(
       shape.typeIndex,
       new Array(compiled.localCount).fill(wasmType.i32),
@@ -101,14 +145,21 @@ export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
     );
   }
   builder.exportFunction("main", mainShape.functionIndex);
-  const constructorTags = new Map(
-    [...constructorShapes].map(([name, shape]) => [name, shape.tag]),
-  );
-  const wasm = builder.finish();
+  const wasmPlan = builder.finishPlan();
+  const wasm = emitWasmPlanOnCpu(wasmPlan);
   if (!WebAssembly.validate(new Uint8Array(wasm).buffer as ArrayBuffer)) {
     throw new Error("internal error: emitted WebAssembly did not validate");
   }
-  return { fcg: { functions: loweredFunctions, constructorTags }, wasm };
+  const fcg = { functions: loweredFunctions, constructorTags };
+  const rewrittenFcg = inflateFlatFcgPackage(rewrite.package);
+  if (
+    JSON.stringify(fcg.functions) !== JSON.stringify(rewrittenFcg.functions)
+  ) {
+    throw new Error(
+      "internal error: accepted FCG rewrites did not match Wasm lowering",
+    );
+  }
+  return { fcg, flatFcg: rewrite.package, wasmPlan, wasm };
 }
 
 class FunctionCompiler {
@@ -116,8 +167,11 @@ class FunctionCompiler {
   readonly #functionShapes: ReadonlyMap<string, FunctionShape>;
   readonly #constructors: ReadonlyMap<string, ConstructorShape>;
   readonly #primitives: ReadonlyMap<string, PrimitiveShape>;
+  readonly #acceptedRewrites: ReadonlySet<string>;
   readonly #locals = new Map<string, number>();
   readonly #operations: FcgOperation[] = [];
+  #currentRegionId = 0;
+  #nextRegionId = 1;
   #nextLocal: number;
 
   constructor(
@@ -125,11 +179,13 @@ class FunctionCompiler {
     functionShapes: ReadonlyMap<string, FunctionShape>,
     constructors: ReadonlyMap<string, ConstructorShape>,
     primitives: ReadonlyMap<string, PrimitiveShape>,
+    acceptedRewrites: ReadonlySet<string> = new Set(),
   ) {
     this.#declaration = declaration;
     this.#functionShapes = functionShapes;
     this.#constructors = constructors;
     this.#primitives = primitives;
+    this.#acceptedRewrites = acceptedRewrites;
     declaration.parameters.forEach((parameter, index) =>
       this.#locals.set(parameter.text, index)
     );
@@ -137,7 +193,7 @@ class FunctionCompiler {
   }
 
   compile(): {
-    readonly instructions: readonly number[];
+    readonly instructions: readonly WasmInstruction[];
     readonly operations: readonly FcgOperation[];
     readonly localCount: number;
   } {
@@ -149,7 +205,7 @@ class FunctionCompiler {
     };
   }
 
-  #compileExpression(expression: Expression): number[] {
+  #compileExpression(expression: Expression): readonly WasmInstruction[] {
     switch (expression.kind) {
       case "integer":
         this.#record("const", [expression.value], expression.span);
@@ -177,6 +233,23 @@ class FunctionCompiler {
         );
       }
       case "binary": {
+        const arithmeticRewrite = expression.operator === "+" &&
+            expression.right.kind === "integer" &&
+            expression.right.value === 0
+          ? "addZero"
+          : expression.operator === "*" &&
+              expression.right.kind === "integer" &&
+              expression.right.value === 1
+          ? "multiplyOne"
+          : undefined;
+        if (
+          arithmeticRewrite !== undefined &&
+          this.#acceptedRewrites.has(
+            `${arithmeticRewrite}:${expression.span.start}`,
+          )
+        ) {
+          return this.#compileExpression(expression.left);
+        }
         const instruction = expression.operator === "+"
           ? wasmInstruction.i32Add
           : expression.operator === "-"
@@ -195,9 +268,9 @@ class FunctionCompiler {
         return [
           ...condition,
           ...wasmInstruction.ifI32,
-          ...this.#compileExpression(expression.thenBranch),
+          ...this.#compileInNewRegion(expression.thenBranch),
           ...wasmInstruction.else,
-          ...this.#compileExpression(expression.elseBranch),
+          ...this.#compileInNewRegion(expression.elseBranch),
           ...wasmInstruction.end,
         ];
       }
@@ -275,7 +348,7 @@ class FunctionCompiler {
     shape: FunctionShape,
     callArguments: readonly Expression[],
     span: SourceSpan,
-  ): number[] {
+  ): readonly WasmInstruction[] {
     if (callArguments.length !== shape.parameterCount) {
       throw new TypeError(
         `${span.file}:${span.start}: ${shape.declaration.name.text} expects ${shape.parameterCount} arguments; received ${callArguments.length}`,
@@ -292,7 +365,7 @@ class FunctionCompiler {
     constructor: ConstructorShape,
     callArguments: readonly Expression[],
     span: SourceSpan,
-  ): number[] {
+  ): readonly WasmInstruction[] {
     if (callArguments.length !== constructor.fieldCount) {
       throw new TypeError(
         `${span.file}:${span.start}: constructor expects ${constructor.fieldCount} fields; received ${callArguments.length}`,
@@ -334,11 +407,13 @@ class FunctionCompiler {
       readonly expression: Expression;
     }[],
     span: SourceSpan,
-  ): number[] {
+  ): readonly WasmInstruction[] {
     const scrutineeLocal = this.#allocateLocal(`$case${span.start}`);
-    const compileAlternatives = (index: number): number[] => {
+    const compileAlternatives = (
+      index: number,
+    ): readonly WasmInstruction[] => {
       const alternative = alternatives[index];
-      if (alternative === undefined) return [0x00];
+      if (alternative === undefined) return [...wasmInstruction.unreachable];
       if (alternative.pattern.kind === "wildcard") {
         return this.#compileExpression(alternative.expression);
       }
@@ -354,7 +429,7 @@ class FunctionCompiler {
           alternative.pattern.span,
         );
       const previousBindings = new Map(this.#locals);
-      let branchPrefix: number[] = [];
+      let branchPrefix: WasmInstruction[] = [];
       if (
         alternative.pattern.kind === "constructor" &&
         alternative.pattern.fields.length === 1
@@ -371,7 +446,7 @@ class FunctionCompiler {
       }
       const branch = [
         ...branchPrefix,
-        ...this.#compileExpression(alternative.expression),
+        ...this.#compileInNewRegion(alternative.expression),
       ];
       this.#locals.clear();
       for (const [name, local] of previousBindings) {
@@ -398,7 +473,7 @@ class FunctionCompiler {
     scrutineeLocal: number,
     name: string,
     span: SourceSpan,
-  ): number[] {
+  ): readonly WasmInstruction[] {
     const constructor = this.#constructors.get(name);
     if (constructor === undefined) {
       throw new TypeError(
@@ -426,8 +501,49 @@ class FunctionCompiler {
     operands: readonly (number | string)[],
     span: SourceSpan,
   ): void {
-    this.#operations.push({ opcode, operands, sourceStart: span.start });
+    this.#operations.push({
+      opcode,
+      operands,
+      sourceStart: span.start,
+      regionId: this.#currentRegionId,
+    });
   }
+
+  #compileInNewRegion(
+    expression: Expression,
+  ): readonly WasmInstruction[] {
+    const parentRegionId = this.#currentRegionId;
+    this.#currentRegionId = this.#nextRegionId;
+    this.#nextRegionId += 1;
+    const instructions = this.#compileExpression(expression);
+    this.#currentRegionId = parentRegionId;
+    return instructions;
+  }
+}
+
+function acceptedRewritesByFunction(
+  snapshot: FcgModule,
+  accepted: readonly FlatFcgRewriteProposal[],
+): ReadonlyMap<number, ReadonlySet<string>> {
+  const acceptedByFunction = new Map<number, Set<string>>();
+  const operationStarts: number[] = [];
+  let operationStart = 0;
+  for (const function_ of snapshot.functions) {
+    operationStarts.push(operationStart);
+    operationStart += function_.operations.length;
+  }
+  for (const proposal of accepted) {
+    const relativeOperationIndex = proposal.operationStart -
+      operationStarts[proposal.functionIndex] + proposal.operationCount - 1;
+    const operation = snapshot.functions[proposal.functionIndex].operations[
+      relativeOperationIndex
+    ];
+    const rewrites = acceptedByFunction.get(proposal.functionIndex) ??
+      new Set<string>();
+    rewrites.add(`${proposal.rule}:${operation.sourceStart}`);
+    acceptedByFunction.set(proposal.functionIndex, rewrites);
+  }
+  return acceptedByFunction;
 }
 
 function collectPrimitiveShapes(

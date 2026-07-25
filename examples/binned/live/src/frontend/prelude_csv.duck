@@ -1,0 +1,82 @@
+module () where
+
+const csv_text_append: [Text, Text] -> Text = [left: Text, right: Text] => @append(left, right);
+
+const csv_escape_field: Text -> Text = value => {
+  let source: Bytes = @Utf8.encode value;
+  let escaped: Bytes = @Bytes.generate(0, _ => 0);
+  let requires_quotes = false;
+  for index in 0..@len source {
+    let byte = @get(source, index);
+    let encoded_byte: Bytes = @Bytes.generate(1, _ => byte);
+    escaped = @append(escaped, encoded_byte)
+    if byte == 34 {
+      escaped = @append(escaped, encoded_byte)
+      requires_quotes = true
+    } else if byte == 44 || byte == 10 || byte == 13 {
+      requires_quotes = true
+    }
+  }
+  if requires_quotes {
+    let quote: Bytes = @Bytes.generate(1, _ => 34);
+    escaped = @append(quote, escaped)
+    escaped = @append(escaped, quote)
+    @Utf8.decode escaped
+  } else {
+    @Utf8.decode escaped
+  }
+};
+
+const csv_append_field: [Text, Text, Bool] -> Text = (line: Text, value: Text, first: Bool) => {
+  if first {
+    csv_escape_field value
+  } else {
+    csv_text_append(line, csv_text_append(",", csv_escape_field value))
+  }
+};
+
+const csv_i32_decimal_digit_count: I32 -> I32 = value => {
+  let remaining = value;
+  let count = 1;
+  let done = false;
+  if remaining < 0 {
+    done = remaining > -10
+  } else {
+    done = remaining < 10
+  }
+  loop {
+    if done { break; }
+    remaining = remaining / 10
+    count = count + 1
+    if remaining > -10 { done = true }
+  }
+  count
+};
+
+const csv_format_i32: I32 -> Text = value => {
+  let digit_count = csv_i32_decimal_digit_count value;
+  let negative = value < 0;
+  let output_length = if negative { digit_count + 1 } else { digit_count };
+  let encoded = @Bytes.generate(output_length, index => {
+    if negative && index == 0 {
+      45
+    } else {
+      let digit_index = output_length - index - 1;
+      let divisor = 1;
+      if digit_index > 0 {
+        for _ in 0..digit_index { divisor = divisor * 10 }
+      }
+      let digit = (value / divisor) % 10;
+      if digit < 0 { digit = 0 - digit }
+      48 + digit
+    }
+  });
+  @Utf8.decode encoded
+};
+
+return {
+  .csv_append_field,
+  .csv_escape_field,
+  .csv_format_i32,
+  .csv_text_append,
+};

@@ -1,0 +1,18 @@
+module () where
+
+type ReadResult = | `Keys Bytes | `End Unit
+
+type SaveResult = | `Ok Unit | `Err Unit
+
+declare effect Terminal {
+  load: () => Bytes
+  read: () => ReadResult
+  write: (&Bytes) => Unit
+  save: (&Bytes) => SaveResult
+  columns: () => I32
+  rows: () => I32
+}
+
+declare Init { terminal: Terminal }
+
+return {};

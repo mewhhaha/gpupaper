@@ -1,0 +1,103 @@
+module () where
+
+const {} = import "duck:prelude/types" ();
+
+duck DefaultHandler Effect {
+  type Handled
+  .make = _ -> _
+  .output = _ -> Type
+  .order = _ -> I32
+}
+
+effect State value {
+  get: () => value
+  put: (value) => Unit
+}
+
+effect Reader environment {
+  ask: () => environment
+}
+
+effect Writer output {
+  tell: (output) => Unit
+}
+
+effect Raise error {
+  raise: (error) => Unit
+}
+
+effect Do monad {
+  unwrap: forall value.(monad value) => value
+}
+
+effect Clock {
+  wall_time_ms: () => I64
+  monotonic_ms: () => I64
+}
+
+effect Random {
+  next_i32: () => I32
+  next_f32: () => F32
+  bytes: (I32) => Bytes
+}
+
+effect Console {
+  read_line: () => Text
+  write: (#Text) => Unit
+  write_line: (#Text) => Unit
+}
+
+effect Environment value {
+  lookup: (#Text) => value
+}
+
+effect Resource resource {
+  acquire: () => resource
+  release: (resource) => Unit
+}
+
+effect Log message {
+  log: (message) => Unit
+}
+
+effect Validation error {
+  invalid: (error) => Unit
+}
+
+effect Async task result {
+  spawn: (task) => I32
+  await: (I32) => result
+  yield: () => Unit
+  cancel: (I32) => Unit
+}
+
+effect Channel value {
+  send: (value) => Unit
+  receive: () => value
+  close: () => Unit
+}
+
+effect Mutex value {
+  lock: () => value
+  unlock: (value) => Unit
+}
+
+effect Semaphore {
+  acquire: () => Unit
+  release: () => Unit
+}
+
+effect TaskGroup task {
+  spawn: (task) => I32
+  cancel_all: () => Unit
+  await_all: () => Unit
+}
+
+effect Stm value {
+  read: (I32) => value
+  write: (I32, value) => Unit
+  retry: () => Unit
+  or_else: (I32) => Unit
+}
+
+return {};

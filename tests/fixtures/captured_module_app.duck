@@ -1,0 +1,4 @@
+const captured_module = import "./captured_module.duck"
+const { add_captured } = captured_module()
+
+add_captured(2)

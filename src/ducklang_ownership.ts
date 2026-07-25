@@ -109,7 +109,8 @@ function blockResult(
 }
 
 function allocatesText(expression: DucklangExpression): boolean {
-  return expression.kind === "binary" && expression.operator === "<>";
+  return expression.kind === "binary" &&
+    (expression.operator === "<>" || expression.operator === "++");
 }
 
 function isExpression(value: unknown): value is DucklangExpression {

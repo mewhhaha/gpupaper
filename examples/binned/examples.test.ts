@@ -132,8 +132,8 @@ Deno.test("example manifest accounts for every .duck file", () => {
 
   const actual = new Set(collect_duck_files("examples"));
   assert_equals([...actual].sort(), [...expected].sort());
-  assert_equals(success_examples.length, 92);
-  assert_equals(compile_failure_examples.length, 12);
+  assert_equals(success_examples.length, 94);
+  assert_equals(compile_failure_examples.length, 13);
   assert_equals(trap_examples.length, 4);
   assert_equals(test_example_paths.length, 1);
 });
@@ -171,6 +171,19 @@ Deno.test("every tree-sitter corpus feature names runnable examples", () => {
       }
     }
   }
+});
+
+Deno.test("tree-sitter corpus covers every named syntax node", () => {
+  const definitions = JSON.parse(
+    Deno.readTextFileSync("tree-sitter-duck/src/node-types.json"),
+  ) as { type: string; named: boolean }[];
+  const covered = collect_corpus_node_types("tree-sitter-duck/test/corpus");
+  const missing = definitions
+    .filter((definition) => definition.named && !covered.has(definition.type))
+    .map((definition) => definition.type)
+    .sort();
+
+  assert_equals(missing, []);
 });
 
 function compile_example(example: SuccessExample): string {
@@ -338,6 +351,44 @@ function collect_corpus_features(path: string): string[] {
   }
 
   return features;
+}
+
+function collect_corpus_node_types(path: string): Set<string> {
+  const node_types = new Set<string>();
+  const expected_tree = /^---\r?\n([\s\S]*?)(?=^={3,}\r?$|(?![\s\S]))/gm;
+  const node = /\(([A-Za-z_][A-Za-z0-9_]*)/g;
+
+  for (const entry of Deno.readDirSync(path)) {
+    if (!entry.isFile || !entry.name.endsWith(".txt")) {
+      continue;
+    }
+
+    const corpus = Deno.readTextFileSync(path + "/" + entry.name);
+
+    for (const tree_match of corpus.matchAll(expected_tree)) {
+      const tree = tree_match[1];
+
+      if (tree === undefined) {
+        throw new Error(
+          "Corpus case is missing an expected tree: " + entry.name,
+        );
+      }
+
+      for (const node_match of tree.matchAll(node)) {
+        const node_type = node_match[1];
+
+        if (node_type === undefined) {
+          throw new Error(
+            "Corpus tree contains an unnamed node: " + entry.name,
+          );
+        }
+
+        node_types.add(node_type);
+      }
+    }
+  }
+
+  return node_types;
 }
 
 function error_message(error: unknown): string {

@@ -109,10 +109,18 @@ function preferredReduction(
   const preferredRules = [
     "array_expression",
     "index_assignment",
-    "block",
-    "field_block",
+    "loop_expression",
+    "linear_reference",
+    "nonempty_field_block",
+    "first_shape_field",
+    "handler_operation_clause",
+    "handler_return_clause",
+    "effect_handler_expression",
+    "arrow_function",
     "shorthand_field",
     "field_definition",
+    "block",
+    "field_block",
     "binding_statement",
   ];
   for (const rule of preferredRules) {

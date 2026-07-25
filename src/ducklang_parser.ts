@@ -33,165 +33,806 @@ const maximumIntegerLiteral = 2_147_483_647;
 const stringPatternMatchesName = "$duck_string_pattern_matches";
 const stringPatternCaptureName = "$duck_string_pattern_capture";
 const typePatternMatchesName = "$duck_type_pattern_matches";
+type DucklangParser = ReturnType<typeof createParser>;
+let parserPromise: Promise<DucklangParser> | undefined;
+
+export type DucklangParseTimings = {
+  readonly parserInitializationMilliseconds: number;
+  readonly syntaxMilliseconds: number;
+  readonly astLoweringMilliseconds: number;
+};
+
+export class DucklangSyntaxError extends SyntaxError {
+  readonly timings: DucklangParseTimings;
+
+  constructor(message: string, timings: DucklangParseTimings) {
+    super(message);
+    this.name = "DucklangSyntaxError";
+    this.timings = timings;
+  }
+}
 
 export async function parseDucklangModule(
   file: string,
   source: string,
 ): Promise<DucklangModule> {
-  const parser = createParser({
-    bytes: await Deno.readFile(parserWasmUrl),
-    plan: await Deno.readFile(parserPlanUrl),
+  return (await parseDucklangModuleWithTimings(file, source)).module;
+}
+
+export async function parseDucklangModuleWithTimings(
+  file: string,
+  source: string,
+): Promise<
+  {
+    readonly module: DucklangModule;
+    readonly timings: DucklangParseTimings;
+  }
+> {
+  const initializationStart = performance.now();
+  const parser = await getDucklangParser();
+  const parserInitializationMilliseconds = performance.now() -
+    initializationStart;
+  const syntaxStart = performance.now();
+  const classifiedSource = classifyContextualTokens(source);
+  const result = parser.parse(classifiedSource, {
+    maxTraceActions: 10_000_000,
   });
-  try {
-    const result = parser.parse(source, { maxTraceActions: 10_000_000 });
-    if (!result.ok) {
-      const diagnostic = result.diagnostics[0];
-      throw new SyntaxError(
-        `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
-      );
+  const syntaxMilliseconds = performance.now() - syntaxStart;
+  if (!result.ok) {
+    const diagnostic = result.diagnostics[0];
+    throw new DucklangSyntaxError(
+      `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
+      {
+        parserInitializationMilliseconds,
+        syntaxMilliseconds,
+        astLoweringMilliseconds: 0,
+      },
+    );
+  }
+  const astLoweringStart = performance.now();
+  const document = findRule(result.cursor, "document") ?? result.cursor;
+  const protocols: DucklangProtocolDeclaration[] = [];
+  const extensions: DucklangExtensionDeclaration[] = [];
+  const fixities: DucklangFixityDeclaration[] = [];
+  const loweredStatements = document.children().flatMap((cursor) => {
+    const declaration = lowerDispatchDeclaration(file, cursor);
+    if (declaration?.kind === "protocol") {
+      protocols.push(declaration.value);
+      return [];
     }
-    const protocols: DucklangProtocolDeclaration[] = [];
-    const extensions: DucklangExtensionDeclaration[] = [];
-    const fixities: DucklangFixityDeclaration[] = [];
-    const loweredStatements = result.cursor.children().flatMap((cursor) => {
-      const declaration = lowerDispatchDeclaration(file, cursor);
-      if (declaration?.kind === "protocol") {
-        protocols.push(declaration.value);
-        return [];
+    if (declaration?.kind === "extension") {
+      extensions.push(declaration.value);
+      return [];
+    }
+    if (declaration?.kind === "fixity") {
+      fixities.push(declaration.value);
+      return [];
+    }
+    if (
+      findRule(cursor, "fixity_declaration_statement") !== undefined
+    ) {
+      return [];
+    }
+    const statement = lowerModuleStatement(file, cursor);
+    return statement === undefined ? [] : [statement];
+  });
+  const moduleHeader = findRule(document, "module_header");
+  const moduleReturn = findRule(document, "module_return_statement");
+  const exportBlock = moduleReturn === undefined
+    ? undefined
+    : findRule(moduleReturn, "field_block") ??
+      findRule(moduleReturn, "shape_field_block");
+  const exportNames = exportBlock === undefined
+    ? []
+    : lowerRecordFields(file, exportBlock).map((field) => field.name);
+  const parameterList = moduleHeader === undefined
+    ? undefined
+    : findRule(moduleHeader, "parameter_list");
+  const splitStatements = loweredStatements.flatMap((statement) => {
+    if (
+      statement.kind !== "binding" ||
+      statement.value.kind !== "function" ||
+      statement.value.body.kind !== "binary" ||
+      statement.value.body.left.kind !== "call" ||
+      statement.value.body.left.callee.kind !== "block" ||
+      statement.value.body.left.arguments.length !== 1
+    ) {
+      return [statement];
+    }
+    const body = statement.value.body.left.callee;
+    const trailingExpression = statement.value.body.left.arguments[0];
+    if (
+      !source.slice(body.span.end, trailingExpression.span.start).includes(
+        "\n",
+      )
+    ) {
+      return [statement];
+    }
+    const resultExpression: DucklangExpression = {
+      ...statement.value.body,
+      left: trailingExpression,
+      span: spanFrom(
+        trailingExpression.span,
+        statement.value.body.right.span,
+      ),
+    };
+    return [
+      {
+        ...statement,
+        value: {
+          ...statement.value,
+          body,
+          span: { ...statement.value.span, end: body.span.end },
+        },
+        span: { ...statement.span, end: body.span.end },
+      },
+      {
+        kind: "expression" as const,
+        expression: resultExpression,
+        span: resultExpression.span,
+      },
+    ];
+  });
+  const statements: DucklangStatement[] = [];
+  for (let index = 0; index < splitStatements.length; index += 1) {
+    const statement = splitStatements[index];
+    if (statement.kind !== "binding" || !statement.recursive) {
+      statements.push(statement);
+      continue;
+    }
+    const bindings = [{
+      name: statement.name,
+      value: statement.value,
+      span: statement.span,
+    }];
+    while (index + 1 < splitStatements.length) {
+      const candidate = splitStatements[index + 1];
+      if (
+        candidate.kind !== "expression" ||
+        candidate.expression.kind !== "binary" ||
+        candidate.expression.operator !== "=" ||
+        candidate.expression.left.kind !== "call" ||
+        candidate.expression.left.callee.kind !== "reference" ||
+        candidate.expression.left.callee.name.text !== "and" ||
+        candidate.expression.left.arguments.length !== 1 ||
+        candidate.expression.left.arguments[0].kind !== "reference" ||
+        !source.slice(candidate.span.start).startsWith("and ")
+      ) {
+        break;
       }
-      if (declaration?.kind === "extension") {
-        extensions.push(declaration.value);
-        return [];
-      }
-      if (declaration?.kind === "fixity") {
-        fixities.push(declaration.value);
-        return [];
-      }
-      const statement = lowerModuleStatement(file, cursor);
-      return statement === undefined ? [] : [statement];
-    });
-    const moduleHeader = findRule(result.cursor, "module_header");
-    const moduleReturn = findRule(result.cursor, "module_return_statement");
-    const exportBlock = moduleReturn === undefined
-      ? undefined
-      : findRule(moduleReturn, "field_block");
-    const exportNames = exportBlock === undefined
-      ? []
-      : exportBlock.children().flatMap((field) => {
-        if (
-          field.type !== "rule" ||
-          (field.name !== "shape_field" && field.name !== "shorthand_field")
-        ) {
-          return [];
-        }
-        return [
-          identifierName(
-            file,
-            field.name === "shape_field" ? requiredField(field, "name") : field,
-            "module export name",
-          ).text,
-        ];
+      const name = candidate.expression.left.arguments[0].name;
+      const value = candidate.expression.right;
+      bindings.push({
+        name,
+        value,
+        span: spanFrom(name.span, value.span),
       });
-    const parameterList = moduleHeader === undefined
-      ? undefined
-      : findRule(moduleHeader, "parameter_list");
-    const statements = loweredStatements.flatMap((statement) => {
-      if (
-        statement.kind !== "binding" ||
-        statement.value.kind !== "function" ||
-        statement.value.body.kind !== "binary" ||
-        statement.value.body.left.kind !== "call" ||
-        statement.value.body.left.callee.kind !== "block" ||
-        statement.value.body.left.arguments.length !== 1
-      ) {
-        return [statement];
+      index += 1;
+    }
+    if (bindings.length === 1) {
+      statements.push(statement);
+      continue;
+    }
+    statements.push({
+      kind: "recursiveGroup",
+      declarationKind: statement.declarationKind === "const" ? "const" : "let",
+      bindings,
+      span: spanFrom(statement.span, bindings.at(-1)!.span),
+    });
+  }
+  const typedMetadata: DucklangStatement[] = source.includes("@describe_type")
+    ? [{
+      kind: "structType",
+      name: "$TypeDescription",
+      parameters: [],
+      fields: [{
+        name: "size",
+        type: {
+          name: "I32",
+          arguments: [],
+          span: sourceSpan(file, result.cursor),
+        },
+        span: sourceSpan(file, result.cursor),
+      }],
+      span: sourceSpan(file, result.cursor),
+    }]
+    : [];
+  const module = {
+    file,
+    exportNames,
+    parameters: parameterList === undefined
+      ? []
+      : parameterList.children().flatMap((parameter) =>
+        parameter.type === "rule" && parameter.name === "parameter"
+          ? (() => {
+            const name = identifierName(
+              file,
+              requiredField(parameter, "name"),
+              "module parameter",
+            );
+            const declaredType = parameter.field("type");
+            const declaredTypeName = isCursor(declaredType)
+              ? simpleTypeName(declaredType)
+              : undefined;
+            return [{
+              ...name,
+              ...(declaredTypeName === undefined
+                ? {}
+                : { declaredType: declaredTypeName }),
+            }];
+          })()
+          : []
+      ),
+    protocols,
+    extensions: extensions.map((extension) => ({
+      ...extension,
+      methods: extension.methods.map((method) => ({
+        ...method,
+        value: normalizeExpressionStatementBoundaries(method.value, source),
+      })),
+    })),
+    fixities,
+    statements: normalizeStatementBoundaries(
+      [...typedMetadata, ...statements],
+      source,
+    ),
+    span: sourceSpan(file, result.cursor),
+  };
+  return {
+    module,
+    timings: {
+      parserInitializationMilliseconds,
+      syntaxMilliseconds,
+      astLoweringMilliseconds: performance.now() - astLoweringStart,
+    },
+  };
+}
+
+function normalizeStatementBoundaries(
+  statements: readonly DucklangStatement[],
+  source: string,
+): readonly DucklangStatement[] {
+  return statements.flatMap((statement) => {
+    const normalized = normalizeStatementExpressions(statement, source);
+    if (
+      normalized.kind === "expression" &&
+      normalized.expression.kind === "call" &&
+      normalized.expression.arguments.length === 0 &&
+      normalized.expression.callee.kind === "call"
+    ) {
+      const precedingExpressionEnd =
+        normalized.expression.callee.arguments.at(-1)?.span.end ??
+          normalized.expression.callee.span.end;
+      const separator = source.slice(
+        precedingExpressionEnd,
+        normalized.expression.span.end,
+      );
+      const unitOffset = separator.lastIndexOf("()");
+      if (separator.includes("\n") && unitOffset >= 0) {
+        const unitStart = precedingExpressionEnd + unitOffset;
+        const precedingExpression = {
+          ...normalized.expression.callee,
+          span: {
+            ...normalized.expression.callee.span,
+            end: precedingExpressionEnd,
+          },
+        };
+        const unit: DucklangExpression = {
+          kind: "unit",
+          span: {
+            file: normalized.span.file,
+            start: unitStart,
+            end: unitStart + 2,
+          },
+        };
+        return [
+          {
+            kind: "expression" as const,
+            expression: precedingExpression,
+            span: {
+              ...normalized.span,
+              end: precedingExpressionEnd,
+            },
+          },
+          {
+            kind: "expression" as const,
+            expression: unit,
+            span: unit.span,
+          },
+        ];
       }
-      const body = statement.value.body.left.callee;
-      const trailingExpression = statement.value.body.left.arguments[0];
-      if (
-        !source.slice(body.span.end, trailingExpression.span.start).includes(
-          "\n",
-        )
-      ) {
-        return [statement];
-      }
-      const resultExpression: DucklangExpression = {
-        ...statement.value.body,
-        left: trailingExpression,
+    }
+    if (
+      (normalized.kind !== "binding" &&
+        normalized.kind !== "productBinding" &&
+        normalized.kind !== "recordBinding") ||
+      normalized.value.kind !== "call" ||
+      normalized.value.arguments.length === 0
+    ) {
+      return [normalized];
+    }
+    const initializer = normalized.kind !== "binding" ||
+        normalized.name.declaredType === undefined
+      ? normalized.value.callee
+      : applyNominalProductType(
+        normalized.value.callee,
+        normalized.name.declaredType,
+      );
+    const firstFollowingArgument = normalized.value.arguments[0];
+    if (
+      !source.slice(
+        initializer.span.end,
+        firstFollowingArgument.span.start,
+      ).includes(";")
+    ) {
+      return [normalized];
+    }
+    const followingExpression: DucklangExpression =
+      normalized.value.arguments.length === 1 ? firstFollowingArgument : {
+        kind: "product",
+        productKind: "array",
+        values: normalized.value.arguments,
         span: spanFrom(
-          trailingExpression.span,
-          statement.value.body.right.span,
+          firstFollowingArgument.span,
+          normalized.value.arguments.at(-1)!.span,
         ),
       };
-      return [
-        {
-          ...statement,
-          value: {
-            ...statement.value,
-            body,
-            span: { ...statement.value.span, end: body.span.end },
-          },
-          span: { ...statement.span, end: body.span.end },
-        },
-        {
-          kind: "expression" as const,
-          expression: resultExpression,
-          span: resultExpression.span,
-        },
-      ];
-    });
-    const typedMetadata: DucklangStatement[] = source.includes("@describe_type")
-      ? [{
-        kind: "structType",
-        name: "$TypeDescription",
-        parameters: [],
-        fields: [{
-          name: "size",
-          type: {
-            name: "I32",
-            arguments: [],
-            span: sourceSpan(file, result.cursor),
-          },
-          span: sourceSpan(file, result.cursor),
-        }],
-        span: sourceSpan(file, result.cursor),
-      }]
-      : [];
-    return {
-      file,
-      exportNames,
-      parameters: parameterList === undefined
-        ? []
-        : parameterList.children().flatMap((parameter) =>
-          parameter.type === "rule" && parameter.name === "parameter"
-            ? (() => {
-              const name = identifierName(
-                file,
-                requiredField(parameter, "name"),
-                "module parameter",
-              );
-              const declaredType = parameter.field("type");
-              const declaredTypeName = isCursor(declaredType)
-                ? simpleTypeName(declaredType)
-                : undefined;
-              return [{
-                ...name,
-                ...(declaredTypeName === undefined
-                  ? {}
-                  : { declaredType: declaredTypeName }),
-              }];
-            })()
-            : []
+    return [
+      {
+        ...normalized,
+        value: initializer,
+        span: { ...normalized.span, end: initializer.span.end },
+      },
+      {
+        kind: "expression" as const,
+        expression: followingExpression,
+        span: followingExpression.span,
+      },
+    ];
+  });
+}
+
+function normalizeStatementExpressions(
+  statement: DucklangStatement,
+  source: string,
+): DucklangStatement {
+  switch (statement.kind) {
+    case "recursiveGroup":
+      return {
+        ...statement,
+        bindings: statement.bindings.map((binding) => ({
+          ...binding,
+          value: normalizeExpressionStatementBoundaries(binding.value, source),
+        })),
+      };
+    case "typePattern":
+      return {
+        ...statement,
+        target: normalizeExpressionStatementBoundaries(
+          statement.target,
+          source,
         ),
-      protocols,
-      extensions,
-      fixities,
-      statements: [...typedMetadata, ...statements],
-      span: sourceSpan(file, result.cursor),
-    };
-  } finally {
-    parser.dispose();
+      };
+    case "binding":
+    case "assignment":
+      return {
+        ...statement,
+        value: normalizeExpressionStatementBoundaries(statement.value, source),
+      };
+    case "unionBinding":
+      return {
+        ...statement,
+        value: normalizeExpressionStatementBoundaries(statement.value, source),
+        alternative: normalizeExpressionStatementBoundaries(
+          statement.alternative,
+          source,
+        ),
+      };
+    case "productBinding":
+    case "recordBinding":
+      return {
+        ...statement,
+        value: normalizeExpressionStatementBoundaries(statement.value, source),
+      };
+    case "forRange":
+      return {
+        ...statement,
+        start: normalizeExpressionStatementBoundaries(statement.start, source),
+        end: normalizeExpressionStatementBoundaries(statement.end, source),
+        step: statement.step === undefined
+          ? undefined
+          : normalizeExpressionStatementBoundaries(statement.step, source),
+        body: normalizeExpressionStatementBoundaries(statement.body, source),
+      };
+    case "forCollection":
+      return {
+        ...statement,
+        collection: normalizeExpressionStatementBoundaries(
+          statement.collection,
+          source,
+        ),
+        body: normalizeExpressionStatementBoundaries(statement.body, source),
+      };
+    case "break":
+      return {
+        ...statement,
+        value: statement.value === undefined
+          ? undefined
+          : normalizeExpressionStatementBoundaries(statement.value, source),
+      };
+    case "return":
+    case "expression":
+      return {
+        ...statement,
+        expression: normalizeExpressionStatementBoundaries(
+          statement.expression,
+          source,
+        ),
+      };
+    case "effectDeclaration":
+    case "initDeclaration":
+    case "unionType":
+    case "structType":
+    case "typeAlias":
+    case "import":
+    case "continue":
+      return statement;
   }
+}
+
+function normalizeExpressionStatementBoundaries(
+  expression: DucklangExpression,
+  source: string,
+): DucklangExpression {
+  const normalize = (child: DucklangExpression) =>
+    normalizeExpressionStatementBoundaries(child, source);
+  const normalizeFields = (fields: readonly DucklangRecordField[]) =>
+    fields.map((field) => ({ ...field, value: normalize(field.value) }));
+  switch (expression.kind) {
+    case "hostCall":
+    case "recursiveCall":
+      return {
+        ...expression,
+        arguments: expression.arguments.map(normalize),
+      };
+    case "optionDo":
+      return { ...expression, option: normalize(expression.option) };
+    case "unionCase":
+      return { ...expression, value: normalize(expression.value) };
+    case "product":
+      return { ...expression, values: expression.values.map(normalize) };
+    case "field":
+      return { ...expression, product: normalize(expression.product) };
+    case "recordUpdate":
+      return {
+        ...expression,
+        product: normalize(expression.product),
+        fields: normalizeFields(expression.fields),
+      };
+    case "record":
+      return { ...expression, fields: normalizeFields(expression.fields) };
+    case "function": {
+      const body = normalize(expression.body);
+      return {
+        ...expression,
+        body: expression.declaredResultType === undefined
+          ? body
+          : applyNominalProductType(body, expression.declaredResultType),
+      };
+    }
+    case "call":
+      return {
+        ...expression,
+        callee: normalize(expression.callee),
+        arguments: expression.arguments.map(normalize),
+      };
+    case "index":
+      return {
+        ...expression,
+        collection: normalize(expression.collection),
+        index: normalize(expression.index),
+      };
+    case "indexUpdate":
+      return {
+        ...expression,
+        product: normalize(expression.product),
+        index: normalize(expression.index),
+        value: normalize(expression.value),
+      };
+    case "binary":
+      return {
+        ...expression,
+        left: normalize(expression.left),
+        right: normalize(expression.right),
+      };
+    case "unary":
+      return { ...expression, operand: normalize(expression.operand) };
+    case "if":
+      return {
+        ...expression,
+        condition: normalize(expression.condition),
+        consequence: normalize(expression.consequence),
+        alternative: expression.alternative === undefined
+          ? undefined
+          : normalize(expression.alternative),
+      };
+    case "ifUnion":
+      return {
+        ...expression,
+        value: normalize(expression.value),
+        consequence: normalize(expression.consequence),
+        alternative: expression.alternative === undefined
+          ? undefined
+          : normalize(expression.alternative),
+      };
+    case "block":
+      return {
+        ...expression,
+        statements: normalizeStatementBoundaries(expression.statements, source),
+      };
+    case "comptime":
+      return { ...expression, expression: normalize(expression.expression) };
+    case "scratch":
+    case "loop":
+      return { ...expression, body: normalize(expression.body) };
+    case "integer":
+    case "integer64":
+    case "float32":
+    case "float64":
+    case "boolean":
+    case "unit":
+    case "string":
+    case "moduleImport":
+    case "reference":
+      return expression;
+  }
+}
+
+function classifyContextualTokens(source: string): string {
+  const classified = source.split("");
+  classifyMultilineArrowParameters(source, classified);
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let lineComment = false;
+  const delimiters: string[] = [];
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (lineComment) {
+      if (character === "\n" || character === "\r") lineComment = false;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "(" || character === "[" || character === "{") {
+      delimiters.push(character);
+    } else if (
+      character === ")" || character === "]" || character === "}"
+    ) {
+      delimiters.pop();
+    }
+    if (
+      (character === "\n" || character === "\r") &&
+      delimiters.at(-1) === "("
+    ) {
+      const arrayStart = source.slice(index).match(/^[\r\n][ \t]*\[/);
+      if (arrayStart !== null) {
+        for (
+          let whitespace = index;
+          whitespace < index + arrayStart[0].length - 1;
+          whitespace += 1
+        ) {
+          classified[whitespace] = " ";
+        }
+      }
+    }
+
+    const remaining = source.slice(index);
+    let precedingDottedField = index - 1;
+    while (
+      precedingDottedField >= 0 &&
+      /[ \t\r\n]/.test(source[precedingDottedField])
+    ) {
+      precedingDottedField -= 1;
+    }
+    const dottedShorthand = source[precedingDottedField] === "{" ||
+        source[precedingDottedField] === ","
+      ? remaining.match(
+        /^\.[A-Za-z][A-Za-z0-9_]*(?=[ \t\r\n]*(?:,|\}))/,
+      )
+      : null;
+    if (dottedShorthand !== null) {
+      classified[index] = " ";
+      index += dottedShorthand[0].length - 1;
+      continue;
+    }
+    const trailingArrayClose = remaining.match(/^,[ \t\r\n]*\]/);
+    if (trailingArrayClose !== null) {
+      classified[index] = "\\";
+      classified[index + trailingArrayClose[0].length - 1] = "A";
+      index += trailingArrayClose[0].length - 1;
+      continue;
+    }
+    const trailingShapeClose = remaining.match(/^,[ \t\r\n]*\}/);
+    if (trailingShapeClose !== null) {
+      classified[index] = "\\";
+      index += trailingShapeClose[0].length - 1;
+      continue;
+    }
+    const caretOperator = remaining.match(/^\^{2,}/);
+    if (caretOperator !== null) {
+      classified[index] = "\\";
+      classified[index + caretOperator[0].length - 1] = "C";
+      index += caretOperator[0].length - 1;
+      continue;
+    }
+    const handlerKeyword = remaining.match(/^handler(?=[ \t]+[A-Z])/);
+    if (handlerKeyword !== null) {
+      classified[index] = "\\";
+      classified[index + handlerKeyword[0].length - 1] = "K";
+      index += handlerKeyword[0].length - 1;
+      continue;
+    }
+    const floatLiteral = remaining.match(
+      /^([0-9])([0-9]*\.[0-9]+f(?:32|64))\b/,
+    );
+    if (floatLiteral !== null) {
+      const decimalPoint = index + floatLiteral[0].indexOf(".");
+      classified[index] = "\\";
+      classified[decimalPoint] = String.fromCharCode(
+        "k".charCodeAt(0) + Number.parseInt(floatLiteral[1], 10),
+      );
+      index += floatLiteral[0].length - 1;
+      continue;
+    }
+    const hexadecimalLiteral = remaining.match(/^0[xX][0-9A-Fa-f]+\b/);
+    if (hexadecimalLiteral !== null) {
+      classified[index] = "\\";
+      classified[index + 1] = "H";
+      index += hexadecimalLiteral[0].length - 1;
+      continue;
+    }
+    const discardedArrow = canStartBareArrowFunction(source, index)
+      ? remaining.match(/^_[ \t]*=>/)
+      : null;
+    if (discardedArrow !== null) {
+      classified[index] = "\\";
+      classified[index + 1] = "D";
+      for (
+        let padding = index + 2;
+        padding < index + discardedArrow[0].length;
+        padding += 1
+      ) {
+        classified[padding] = "~";
+      }
+      index += discardedArrow[0].length - 1;
+      continue;
+    }
+    const singleArrowParameter = canStartSingleArrowFunction(source, index)
+      ? remaining.match(/^([A-Za-z][A-Za-z0-9_]*)([ \t]*)=>/)
+      : null;
+    if (singleArrowParameter !== null) {
+      classified[index] = "\\";
+      classified[index + singleArrowParameter[0].length - 1] =
+        singleArrowParameter[1][0];
+      index += singleArrowParameter[0].length - 1;
+      continue;
+    }
+    const precedingSource = source.slice(0, index).trimEnd();
+    const recordExpressionContext = precedingSource.length === 0 ||
+      precedingSource.endsWith(":+") ||
+      precedingSource.endsWith("<&") ||
+      precedingSource.endsWith(";") ||
+      precedingSource.endsWith("}");
+    const recordShape = recordExpressionContext
+      ? remaining.match(/^\{[ \t\r\n]*\./)
+      : null;
+    if (recordShape !== null) {
+      classified[index] = "\\";
+      classified[index + recordShape[0].length - 1] = "R";
+      index += recordShape[0].length - 1;
+      continue;
+    }
+    const shorthandRecord = recordExpressionContext
+      ? remaining.match(
+        /^\{[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*(?:[ \t\r\n]*,[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*)+[ \t\r\n]*\}/,
+      )
+      : null;
+    if (shorthandRecord !== null) {
+      classified[index] = "\\";
+      classified[index + shorthandRecord[0].length - 1] = "S";
+      index += shorthandRecord[0].length - 1;
+    }
+  }
+  return classified.join("");
+}
+
+function classifyMultilineArrowParameters(
+  source: string,
+  classified: string[],
+): void {
+  for (
+    const match of source.matchAll(
+      /\([^()]*[\r\n][^()]*\)(?=[ \t\r\n]*=>)/g,
+    )
+  ) {
+    if (!/[:!_]|\bconst\b/.test(match[0])) continue;
+    const start = match.index;
+    for (let offset = 0; offset < match[0].length; offset += 1) {
+      if (match[0][offset] === "\n" || match[0][offset] === "\r") {
+        classified[start + offset] = " ";
+      }
+    }
+  }
+}
+
+function canStartBareArrowFunction(source: string, start: number): boolean {
+  let previous = start - 1;
+  while (previous >= 0 && /[ \t\r\n]/.test(source[previous])) previous -= 1;
+  if (previous < 0) return true;
+  if ("=(:,[{".includes(source[previous])) return true;
+  return source[previous] === ">" && source[previous - 1] === "=";
+}
+
+function canStartSingleArrowFunction(source: string, start: number): boolean {
+  if (!canStartBareArrowFunction(source, start)) return false;
+  const prefix = source.slice(0, start).trimEnd();
+  const lineStart = Math.max(
+    prefix.lastIndexOf("\n"),
+    prefix.lastIndexOf("\r"),
+  );
+  if (
+    /\band\s+[A-Za-z][A-Za-z0-9_]*\s*=$/.test(
+      prefix.slice(lineStart + 1),
+    )
+  ) {
+    return false;
+  }
+  if (!prefix.endsWith("=>")) return true;
+  const outerParameters = prefix.slice(0, -2).trimEnd();
+  if (!outerParameters.endsWith(")")) return true;
+  const open = outerParameters.lastIndexOf("(");
+  if (open < 0) return true;
+  return /[:!_]|\bconst\b/.test(
+    outerParameters.slice(open + 1, -1),
+  ) || outerParameters.slice(open + 1, -1).trim().length === 0;
+}
+
+export async function clearDucklangParserCache(): Promise<void> {
+  const pendingParser = parserPromise;
+  parserPromise = undefined;
+  if (pendingParser === undefined) return;
+  (await pendingParser).dispose();
+}
+
+function getDucklangParser(): Promise<DucklangParser> {
+  if (parserPromise !== undefined) return parserPromise;
+  const pendingParser = Promise.all([
+    Deno.readFile(parserWasmUrl),
+    Deno.readFile(parserPlanUrl),
+  ]).then(([bytes, plan]) => createParser({ bytes, plan }));
+  parserPromise = pendingParser;
+  void pendingParser.catch(() => {
+    if (parserPromise === pendingParser) parserPromise = undefined;
+  });
+  return pendingParser;
 }
 
 type DispatchDeclaration =
@@ -276,6 +917,14 @@ function lowerDispatchDeclaration(
   const targetNames = targetTokens.filter((token) =>
     token.kind === "identifier"
   );
+  if (
+    targetTokens.some((token) =>
+      token.kind === "intrinsic_identifier" || token.text.startsWith("@")
+    )
+  ) {
+    return undefined;
+  }
+  if (targetNames.length === 1) return undefined;
   if (targetNames.length !== 2) {
     throw unsupported(file, declaration, "qualified fixity target");
   }
@@ -292,7 +941,7 @@ function lowerDispatchDeclaration(
     value: {
       fixity: fixity.text as DucklangFixityDeclaration["fixity"],
       precedence: Number.parseInt(precedence.text, 10),
-      operator: operator.text,
+      operator: operatorText(operator),
       protocolName: targetNames[0].text,
       methodName: targetNames[1].text,
       span: sourceSpan(file, declaration),
@@ -388,11 +1037,10 @@ function lowerModuleStatement(
             requiredField(field, "name"),
             "Init field name",
           ),
-          effectName: tokenText(
+          effectName: lowerTypeReference(
             file,
             requiredField(field, "type"),
-            "Init field effect",
-          ),
+          ).name,
           span: sourceSpan(file, field),
         }];
       }),
@@ -455,8 +1103,14 @@ function lowerModuleStatement(
     const effectValue = option === undefined
       ? lowerEffectBindingValue(file, valueCursor, value)
       : { kind: "optionDo" as const, option, span: value.span };
-    const bindingName = requiredField(statement, "name");
-    if (findRule(bindingName, "wildcard") !== undefined) {
+    const bindingHead = tokenField(statement, "head");
+    const bindingName = bindingHead ?? requiredField(statement, "name");
+    const fusedName = bindingHead?.text.match(
+      /^([A-Za-z_][A-Za-z0-9_]*)[ \t]*<-$/,
+    )?.[1];
+    if (
+      fusedName === "_" || findRule(bindingName, "wildcard") !== undefined
+    ) {
       return {
         kind: "expression",
         expression: effectValue,
@@ -467,13 +1121,23 @@ function lowerModuleStatement(
       kind: "binding",
       declarationKind: "let",
       recursive: false,
-      name: identifierName(file, bindingName, "effect result binding"),
+      name: fusedName === undefined
+        ? identifierName(file, bindingName, "effect result binding")
+        : {
+          text: fusedName,
+          span: {
+            file,
+            start: bindingHead!.span.start,
+            end: bindingHead!.span.start + fusedName.length,
+          },
+        },
       value: effectValue,
       span: sourceSpan(file, statement),
     };
   }
   if (statement.name === "module_return_statement") {
-    const fieldBlock = findRule(statement, "field_block");
+    const fieldBlock = findRule(statement, "field_block") ??
+      findRule(statement, "shape_field_block");
     if (fieldBlock === undefined) {
       throw unsupported(file, statement, "module return object");
     }
@@ -534,6 +1198,36 @@ function lowerModuleStatement(
     const declaredType = statement.field("type");
     if (
       value.kind === "function" && isCursor(declaredType) &&
+      value.parameters.length > 0 &&
+      findRule(declaredType, "forall_type") !== undefined
+    ) {
+      const functionType = findRule(declaredType, "function_type");
+      const functionResult = functionType?.field("result");
+      const parameter = functionType?.children().find((child) =>
+        child.type === "rule" && child !== functionResult &&
+        child.name !== "latent_effect_row"
+      );
+      if (parameter !== undefined) {
+        const parameterType = lowerTypeReference(file, parameter);
+        const parameterTypes = parameterType.name === "$tuple"
+          ? parameterType.arguments
+          : [parameterType];
+        if (parameterTypes.length === value.parameters.length) {
+          value = {
+            ...value,
+            parameters: value.parameters.map((parameter, index) => {
+              const type = parameterTypes[index];
+              return parameter.declaredType !== undefined ||
+                  type.name.startsWith("$")
+                ? parameter
+                : { ...parameter, declaredType: type.name };
+            }),
+          };
+        }
+      }
+    }
+    if (
+      value.kind === "function" && isCursor(declaredType) &&
       hasIdentityForallParameter(declaredType) &&
       value.parameters[0] !== undefined
     ) {
@@ -548,11 +1242,24 @@ function lowerModuleStatement(
     const declaredTypeName = isCursor(declaredType)
       ? simpleTypeName(declaredType)
       : undefined;
+    const declaredResultTypeName = isCursor(declaredType)
+      ? finalResultTypeName(declaredType)
+      : undefined;
+    const declaredTypeTokens: TokenCursor[] = [];
+    if (isCursor(declaredType)) {
+      collectAllTokens(declaredType, declaredTypeTokens);
+    }
+    const declaredFunctionType = declaredTypeTokens.some((token) =>
+      token.text === "->"
+    );
+    const bindingDeclaredTypeName = declaredTypeName ??
+      (declaredFunctionType ? undefined : declaredResultTypeName);
     const declaredEffectRow = isCursor(declaredType)
       ? lowerDeclaredEffectRow(file, declaredType)
       : undefined;
-    if (declaredTypeName !== undefined) {
-      value = applyNominalProductType(value, declaredTypeName);
+    const nominalType = declaredTypeName ?? declaredResultTypeName;
+    if (nominalType !== undefined) {
+      value = applyNominalProductType(value, nominalType);
     }
     const bindingPattern = requiredField(statement, "name");
     const children = statement.children();
@@ -615,7 +1322,10 @@ function lowerModuleStatement(
         span: sourceSpan(file, statement),
       };
     }
-    const tuplePattern = findRule(bindingPattern, "binding_product_pattern");
+    const tuplePattern = findRule(
+      bindingPattern,
+      "positional_product_pattern",
+    );
     const arrayPattern = findRule(bindingPattern, "array_pattern");
     const productPattern = tuplePattern ?? arrayPattern;
     if (productPattern !== undefined) {
@@ -644,23 +1354,18 @@ function lowerModuleStatement(
     const namedShape = findRule(bindingPattern, "named_shape_pattern");
     if (namedShape !== undefined) {
       const selections = lowerImportSelections(file, namedShape);
-      const selection = selections.length === 1 ? selections[0] : undefined;
-      if (selection?.localName === undefined) {
-        throw unsupported(file, namedShape, "multi-field record binding");
-      }
       return {
-        kind: "binding",
+        kind: "recordBinding",
         declarationKind: tokenField(statement, "kind")?.text === "const"
           ? "const"
           : "let",
-        recursive: false,
-        name: selection.localName,
-        value: {
-          kind: "field",
-          product: value,
-          fieldName: selection.exportName,
-          span: sourceSpan(file, statement),
-        },
+        fields: selections.flatMap((selection) =>
+          selection.localName === undefined ? [] : [{
+            fieldName: selection.exportName,
+            localName: selection.localName,
+          }]
+        ),
+        value,
         span: sourceSpan(file, statement),
       };
     }
@@ -671,16 +1376,25 @@ function lowerModuleStatement(
     if (singlePattern.type === "rule" && singlePattern.name === "wildcard") {
       return undefined;
     }
-    const parsedName = identifierName(
-      file,
-      requiredField(statement, "name"),
-      "binding pattern",
-    );
+    const bindingTokens: TokenCursor[] = [];
+    collectAllTokens(singlePattern, bindingTokens);
+    const bindingName = bindingTokens.length === 1 &&
+        (bindingTokens[0].kind === "identifier" ||
+          bindingTokens[0].text === "struct")
+      ? bindingTokens[0]
+      : undefined;
+    if (bindingName === undefined) {
+      throw unsupported(file, singlePattern, "binding pattern");
+    }
+    const parsedName = {
+      text: bindingName.text,
+      span: sourceSpan(file, bindingName),
+    };
     const name = {
       ...parsedName,
-      ...(declaredTypeName === undefined
+      ...(bindingDeclaredTypeName === undefined
         ? {}
-        : { declaredType: declaredTypeName }),
+        : { declaredType: bindingDeclaredTypeName }),
       ...(declaredEffectRow === undefined ? {} : { declaredEffectRow }),
       ...(tokenField(statement, "linear") !== undefined
         ? { linear: true }
@@ -693,6 +1407,20 @@ function lowerModuleStatement(
       recursive: tokenField(statement, "recursive") !== undefined,
       name,
       value,
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "module_binding_statement") {
+    return {
+      kind: "binding",
+      declarationKind: "module",
+      recursive: false,
+      name: identifierName(
+        file,
+        requiredField(statement, "name"),
+        "module binding name",
+      ),
+      value: lowerExpression(file, requiredField(statement, "value")),
       span: sourceSpan(file, statement),
     };
   }
@@ -890,6 +1618,43 @@ function lowerModuleStatement(
     return {
       kind: "return",
       expression: lowerExpression(file, requiredField(statement, "value")),
+      span: sourceSpan(file, statement),
+    };
+  }
+  if (statement.name === "type_pattern_statement") {
+    const pattern = requiredField(statement, "pattern");
+    if (pattern.type !== "rule" || pattern.name !== "type_pattern") {
+      throw unsupported(file, pattern, "type pattern statement");
+    }
+    const patternKind = tokenText(
+      file,
+      requiredField(pattern, "kind"),
+      "type pattern kind",
+    );
+    if (patternKind !== "struct" && patternKind !== "union") {
+      throw unsupported(file, pattern, "type pattern kind");
+    }
+    return {
+      kind: "typePattern",
+      patternKind,
+      fields: pattern.children().flatMap((child) => {
+        if (child.type !== "rule" || child.name !== "type_pattern_field") {
+          return [];
+        }
+        return [{
+          name: tokenText(
+            file,
+            requiredField(child, "name"),
+            "type pattern field",
+          ),
+          type: lowerTypeReference(
+            file,
+            requiredField(child, "type"),
+          ).name,
+        }];
+      }),
+      open: tokenField(pattern, "open") !== undefined,
+      target: lowerExpression(file, requiredField(statement, "value")),
       span: sourceSpan(file, statement),
     };
   }
@@ -1112,6 +1877,47 @@ function lowerTypeReference(
   file: string,
   input: SyntaxCursor,
 ): DucklangTypeReference {
+  const functionType = findRule(input, "function_type");
+  const functionResult = functionType?.field("result");
+  if (functionType !== undefined && isCursor(functionResult)) {
+    const parameter = functionType.children().find((child) =>
+      child.type === "rule" && child !== functionResult &&
+      child.name !== "latent_effect_row"
+    );
+    if (parameter === undefined) {
+      throw unsupported(file, functionType, "function parameter type");
+    }
+    return {
+      name: "$function",
+      arguments: [
+        lowerTypeReference(file, parameter),
+        lowerTypeReference(file, functionResult),
+      ],
+      span: sourceSpan(file, functionType),
+    };
+  }
+  const product = findRule(input, "type_product");
+  if (product !== undefined) {
+    const elements: RuleCursor[] = [];
+    const collectElements = (cursor: RuleCursor): void => {
+      for (const child of cursor.children()) {
+        if (child.type !== "rule") continue;
+        if (child.name === "type_reference") {
+          elements.push(child);
+        } else {
+          collectElements(child);
+        }
+      }
+    };
+    collectElements(product);
+    if (elements.length > 0) {
+      return {
+        name: "$tuple",
+        arguments: elements.map((element) => lowerTypeReference(file, element)),
+        span: sourceSpan(file, product),
+      };
+    }
+  }
   const newtype = findRule(input, "newtype_type");
   if (newtype !== undefined) {
     const representation = findRule(newtype, "type_reference");
@@ -1251,11 +2057,15 @@ function lowerExpression(
     input,
     new Set([
       "_expression",
-      "is_expression",
       "condition_expression",
       "condition_parenthesized_expression",
       "_condition_primary",
       "_primary_expression",
+      "_if_consequence",
+      "_else_block",
+      "_else_if",
+      "_collection_range_body",
+      "_numeric_range_body",
       "parenthesized_or_product",
       "boolean",
     ]),
@@ -1268,10 +2078,19 @@ function lowerExpression(
       child.name !== "type_reference"
     );
     if (value === undefined) throw unsupported(file, cursor, "cast value");
-    return lowerExpression(file, value);
+    const annotations = cursorFields(cursor, "type");
+    const annotation = annotations.at(-1);
+    if (!isCursor(annotation)) return lowerExpression(file, value);
+    return applyNominalProductType(
+      lowerExpression(file, value),
+      lowerTypeReference(file, annotation).name,
+    );
   }
 
-  if (cursor.name === "condition_is_expression") {
+  if (
+    cursor.name === "is_expression" ||
+    cursor.name === "condition_is_expression"
+  ) {
     const [valueInput, typeInput] = cursor.children().filter(
       (child): child is RuleCursor => child.type === "rule",
     );
@@ -1333,6 +2152,61 @@ function lowerExpression(
     };
   }
 
+  if (cursor.name === "effect_handler_expression") {
+    const effect = requiredField(cursor, "effect");
+    const clauses = requiredField(cursor, "clauses");
+    if (clauses.type !== "rule") {
+      throw unsupported(file, clauses, "handler clauses");
+    }
+    const effectTokens: TokenCursor[] = [];
+    collectAllTokens(effect, effectTokens);
+    const effectName = effectTokens.find((token) =>
+      token.kind === "effect_identifier"
+    )?.text;
+    if (effectName === undefined) {
+      throw unsupported(file, effect, "handler effect");
+    }
+    const fields = clauses.children().flatMap((child) => {
+      if (
+        child.type !== "rule" ||
+        (child.name !== "handler_operation_clause" &&
+          child.name !== "handler_return_clause")
+      ) {
+        return [];
+      }
+      const name = child.name === "handler_return_clause"
+        ? "return"
+        : identifierName(
+          file,
+          requiredField(child, "name"),
+          "handler operation",
+        ).text;
+      const value = child.name === "handler_operation_clause"
+        ? {
+          kind: "function" as const,
+          recursive: false,
+          parameters: arrowParameters(
+            file,
+            requiredField(child, "parameters"),
+          ),
+          body: lowerExpression(file, requiredField(child, "body")),
+          span: sourceSpan(file, child),
+        }
+        : lowerExpression(file, requiredField(child, "value"));
+      return [{
+        name,
+        value,
+        span: sourceSpan(file, child),
+      }];
+    });
+    return {
+      kind: "record",
+      fields,
+      nominalType: `$effect_handler_${effectName}`,
+      span: sourceSpan(file, cursor),
+    };
+  }
+
   if (
     cursor.name === "binary_expression" ||
     cursor.name === "condition_binary_expression"
@@ -1346,18 +2220,30 @@ function lowerExpression(
     if (leftCursor === undefined || operators.length !== rightOperands.length) {
       throw unsupported(file, cursor, "binary expression shape");
     }
-    const leadingOperator = operators[0]?.text;
+    const leadingOperator = operators[0] === undefined
+      ? undefined
+      : operatorText(operators[0]);
     if (
       leadingOperator === "=>" || leadingOperator === "=" ||
       leadingOperator === ":="
     ) {
       let right = lowerExpression(file, rightOperands[0]);
       for (let index = 1; index < operators.length; index += 1) {
-        const next = lowerExpression(
-          file,
-          rightOperands[index],
-        );
-        right = lowerBinaryExpression(operators[index].text, right, next);
+        const operator = operatorText(operators[index]);
+        const next = lowerExpression(file, rightOperands[index]);
+        if (
+          (operator === ":+" || operator === "<&") &&
+          next.kind === "record"
+        ) {
+          right = {
+            kind: "recordUpdate",
+            product: right,
+            fields: next.fields,
+            span: spanFrom(right.span, next.span),
+          };
+          continue;
+        }
+        right = lowerBinaryExpression(operator, right, next);
       }
       if (leadingOperator === "=>") {
         return {
@@ -1378,18 +2264,21 @@ function lowerExpression(
       };
     }
 
-    if (operators.length === 1 && operators[0].text === ":+") {
-      const fieldBlock = findRule(rightOperands[0], "nonempty_field_block");
-      if (fieldBlock === undefined) {
-        throw unsupported(file, rightOperands[0], "struct update fields");
+    if (
+      operators.length === 1 &&
+      (operatorText(operators[0]) === ":+" ||
+        operatorText(operators[0]) === "<&")
+    ) {
+      const fields = lowerExpression(file, rightOperands[0]);
+      if (fields.kind === "record") {
+        const product = lowerExpression(file, leftCursor);
+        return {
+          kind: "recordUpdate",
+          product,
+          fields: fields.fields,
+          span: spanFrom(product.span, fields.span),
+        };
       }
-      const product = lowerExpression(file, leftCursor);
-      return {
-        kind: "recordUpdate",
-        product,
-        fields: lowerRecordFields(file, fieldBlock),
-        span: spanFrom(product.span, sourceSpan(file, fieldBlock)),
-      };
     }
 
     const operands = [
@@ -1407,7 +2296,9 @@ function lowerExpression(
           `rule ${cursor.name} has an invalid binary operator sequence`,
         );
       }
-      expressionStack.push(lowerBinaryExpression(operator.text, left, right));
+      expressionStack.push(
+        lowerBinaryExpression(operatorText(operator), left, right),
+      );
     };
     const precedence = (operator: string): number => {
       if (operator === "$" || operator === "|>") return 10;
@@ -1423,7 +2314,8 @@ function lowerExpression(
       const operator = operators[index];
       while (
         operatorStack.length > 0 &&
-        precedence(operatorStack.at(-1)!.text) >= precedence(operator.text)
+        precedence(operatorText(operatorStack.at(-1)!)) >=
+          precedence(operatorText(operator))
       ) {
         reduce();
       }
@@ -1450,17 +2342,34 @@ function lowerExpression(
     if (operator === undefined) {
       return lowerExpression(file, onlyRuleChild(cursor));
     }
-    const operand = lowerExpression(file, requiredField(cursor, "operand"));
-    if (operator.text === "comptime") {
+    const operandCursor = requiredField(cursor, "operand");
+    const decodedOperator = operatorText(operator);
+    if (decodedOperator === "-") {
+      const operandTokens: TokenCursor[] = [];
+      collectAllTokens(operandCursor, operandTokens);
+      if (
+        operandTokens.length === 1 &&
+        operandTokens[0].text === "9223372036854775808i64"
+      ) {
+        return {
+          kind: "integer64",
+          value: -9_223_372_036_854_775_808n,
+          span: sourceSpan(file, cursor),
+        };
+      }
+    }
+    const operand = lowerExpression(file, operandCursor);
+    if (decodedOperator === "comptime") {
       return {
         kind: "comptime",
+        context: "explicit",
         expression: operand,
         span: sourceSpan(file, cursor),
       };
     }
     return {
       kind: "unary",
-      operator: operator.text,
+      operator: decodedOperator,
       operand,
       span: sourceSpan(file, cursor),
     };
@@ -1559,20 +2468,51 @@ function lowerExpression(
     ) {
       return expression.arguments[0];
     }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference" &&
+      expression.callee.name.text === "@construct" &&
+      expression.arguments[1] !== undefined
+    ) {
+      return expression.arguments[1];
+    }
     return expression;
   }
 
   if (cursor.name === "condition_call_expression") {
-    const [callee, ...suffixes] = cursor.children().filter((child) =>
-      child.type === "rule"
+    const directArguments = new Set(cursorFields(cursor, "argument"));
+    const children = cursor.children();
+    const callee = children.find((child) =>
+      child.type === "rule" && !directArguments.has(child)
     );
     if (callee === undefined) {
       throw unsupported(file, cursor, "condition call callee");
     }
+    const suffixes = children.filter((child) =>
+      child !== callee &&
+      (directArguments.has(child) || child.type === "rule")
+    );
     let expression = lowerExpression(file, callee);
     for (const suffix of suffixes) {
-      const argument = suffix.field("argument");
+      const argument = directArguments.has(suffix)
+        ? suffix
+        : suffix.type === "rule"
+        ? suffix.field("argument")
+        : undefined;
       if (!isCursor(argument)) {
+        if (suffix.type !== "rule") {
+          throw unsupported(file, suffix, "condition call argument");
+        }
+        const index = suffix.field("index");
+        if (isCursor(index)) {
+          expression = {
+            kind: "index",
+            collection: expression,
+            index: lowerExpression(file, index),
+            span: spanFrom(expression.span, sourceSpan(file, suffix)),
+          };
+          continue;
+        }
         const names: TokenCursor[] = [];
         collectTokens(suffix, names, "identifier");
         if (names.length !== 1) {
@@ -1680,7 +2620,13 @@ function lowerExpression(
     const pattern = cursor.field("pattern");
     if (isCursor(pattern)) {
       const unionPattern = findRule(pattern, "union_pattern");
-      if (unionPattern === undefined) {
+      const wildcardUnionPattern = findRule(
+        pattern,
+        "wildcard_union_pattern",
+      );
+      if (
+        unionPattern === undefined && wildcardUnionPattern === undefined
+      ) {
         const literal = descendSingleRule(
           pattern,
           new Set(["_match_pattern", "_single_match_pattern"]),
@@ -1714,19 +2660,30 @@ function lowerExpression(
           span: sourceSpan(file, cursor),
         };
       }
-      const payload = requiredField(unionPattern, "value");
-      const payloadName = payload.type === "token" &&
+      const payload = unionPattern?.field("value");
+      const payloadName = isCursor(payload) && payload.type === "token" &&
           payload.kind === "identifier"
         ? identifierName(file, payload, "union payload binding")
         : undefined;
-      const alternative = cursor.field("alternative");
-      return {
-        kind: "ifUnion",
-        caseName: tokenText(
+      const wildcardToken = wildcardUnionPattern?.children().find((
+        child,
+      ): child is TokenCursor => child.type === "token");
+      const caseName = unionPattern === undefined
+        ? wildcardToken?.text.match(
+          /^`([A-Z][A-Za-z0-9_]*)[ \t]+_$/,
+        )?.[1]
+        : tokenText(
           file,
           requiredField(unionPattern, "case"),
           "union pattern case",
-        ),
+        );
+      if (caseName === undefined) {
+        throw unsupported(file, pattern, "wildcard union pattern");
+      }
+      const alternative = cursor.field("alternative");
+      return {
+        kind: "ifUnion",
+        caseName,
         payloadName,
         value: lowerExpression(file, requiredField(cursor, "value")),
         consequence: lowerExpression(
@@ -1758,6 +2715,19 @@ function lowerExpression(
   }
 
   if (cursor.name === "block") {
+    const fields = cursor.children().filter((child): child is RuleCursor =>
+      child.type === "rule" &&
+      (child.name === "shape_field" ||
+        child.name === "field_definition" ||
+        child.name === "shorthand_field")
+    );
+    if (fields.length > 0) {
+      return {
+        kind: "record",
+        fields: lowerRecordFields(file, cursor),
+        span: sourceSpan(file, cursor),
+      };
+    }
     const statements = cursor.children().flatMap((child) => {
       if (child.type !== "rule" || child.name !== "_statement") return [];
       const statement = lowerModuleStatement(file, child);
@@ -1782,7 +2752,10 @@ function lowerExpression(
     return lowerExpression(file, onlyRuleChild(cursor));
   }
 
-  if (cursor.name === "import_expression") {
+  if (
+    cursor.name === "import_expression" ||
+    cursor.name === "include_expression"
+  ) {
     const path = tokenField(cursor, "path");
     if (path === undefined) {
       throw new Error("Ducklang import expression has no path token");
@@ -1795,18 +2768,57 @@ function lowerExpression(
   }
 
   if (cursor.name === "union_case") {
-    const caseName = tokenText(
-      file,
-      requiredField(cursor, "case"),
-      "union case",
-    );
+    const arrayHead = tokenField(cursor, "head");
+    const caseName = arrayHead === undefined
+      ? tokenText(
+        file,
+        requiredField(cursor, "case"),
+        "union case",
+      )
+      : arrayHead.text.match(/^`([A-Z][A-Za-z0-9_]*)[ \t]+\[$/)?.[1];
+    if (caseName === undefined) {
+      throw unsupported(file, cursor, "union array case");
+    }
     if (caseName === "Replace") {
       return lowerExpression(file, requiredField(cursor, "value"));
     }
+    const value = requiredField(cursor, "value");
+    const namedFields = value.type === "rule"
+      ? value.children().filter((child): child is RuleCursor =>
+        child.type === "rule" && child.name === "product_field"
+      )
+      : [];
     return {
       kind: "unionCase",
       caseName,
-      value: lowerExpression(file, requiredField(cursor, "value")),
+      value: arrayHead === undefined
+        ? lowerExpression(file, value)
+        : namedFields.length > 0
+        ? {
+          kind: "record",
+          fields: namedFields.map((field) => ({
+            name: identifierName(
+              file,
+              requiredField(field, "name"),
+              "record field name",
+            ).text,
+            value: lowerExpression(file, requiredField(field, "value")),
+            span: sourceSpan(file, field),
+          })),
+          span: sourceSpan(file, value),
+        }
+        : {
+          kind: "product",
+          productKind: "array",
+          values: value.type === "rule"
+            ? value.children().flatMap((child) =>
+              child.type === "rule" && child.name === "_expression"
+                ? [lowerExpression(file, child)]
+                : []
+            )
+            : [],
+          span: sourceSpan(file, value),
+        },
       span: sourceSpan(file, cursor),
     };
   }
@@ -1868,7 +2880,11 @@ function lowerExpression(
     };
   }
 
-  if (cursor.name === "field_block") {
+  if (
+    cursor.name === "field_block" ||
+    cursor.name === "nonempty_field_block" ||
+    cursor.name === "shape_field_block"
+  ) {
     return {
       kind: "record",
       fields: lowerRecordFields(file, cursor),
@@ -1876,7 +2892,40 @@ function lowerExpression(
     };
   }
 
-  if (cursor.name === "array_expression") {
+  if (cursor.name === "shape_value") {
+    const fields = findRule(cursor, "shape_field_block");
+    if (fields === undefined) {
+      throw unsupported(file, cursor, "shape value fields");
+    }
+    return {
+      kind: "record",
+      fields: lowerRecordFields(file, fields),
+      span: sourceSpan(file, cursor),
+    };
+  }
+
+  if (
+    cursor.name === "array_expression" ||
+    cursor.name === "line_array_expression"
+  ) {
+    const namedFields = cursor.children().filter((child): child is RuleCursor =>
+      child.type === "rule" && child.name === "product_field"
+    );
+    if (namedFields.length > 0) {
+      return {
+        kind: "record",
+        fields: namedFields.map((field) => ({
+          name: identifierName(
+            file,
+            requiredField(field, "name"),
+            "record field name",
+          ).text,
+          value: lowerExpression(file, requiredField(field, "value")),
+          span: sourceSpan(file, field),
+        })),
+        span: sourceSpan(file, cursor),
+      };
+    }
     return {
       kind: "product",
       productKind: "array",
@@ -1894,6 +2943,7 @@ function lowerExpression(
 
 type MatchArm = {
   readonly patterns: readonly SyntaxCursor[];
+  readonly guard: SyntaxCursor | undefined;
   readonly body: SyntaxCursor;
   readonly span: SourceSpan;
 };
@@ -1902,40 +2952,20 @@ function lowerMatchExpression(
   file: string,
   cursor: RuleCursor,
 ): DucklangExpression {
-  const start = cursor.children().find((child): child is TokenCursor =>
-    child.type === "token" && child.kind === "MATCH_START"
-  );
-  if (start === undefined) {
-    throw unsupported(file, cursor, "match target");
+  const target = lowerExpression(file, requiredField(cursor, "target"));
+  const cases = requiredField(cursor, "cases");
+  if (cases.type !== "rule") {
+    throw unsupported(file, cases, "match cases");
   }
-  const targetMatch = start.text.match(
-    /^match[ \t]+([A-Za-z][A-Za-z0-9_]*)[ \t]*\{[ \t\r\n]*\|$/,
-  );
-  if (targetMatch === null) {
-    throw unsupported(file, start, "match target token");
-  }
-  const targetSpan = {
-    file,
-    start: start.span.start + start.text.indexOf(targetMatch[1]),
-    end: start.span.start + start.text.indexOf(targetMatch[1]) +
-      targetMatch[1].length,
-  };
-  const target: DucklangExpression = {
-    kind: "reference",
-    name: { text: targetMatch[1], span: targetSpan },
-    span: targetSpan,
-  };
-  const caseRules = cursor.children().filter((child): child is RuleCursor =>
+  const caseRules = cases.children().filter((child): child is RuleCursor =>
     child.type === "rule" &&
     (child.name === "match_case_tail" || child.name === "match_case")
   );
   const arms = caseRules.map((caseRule): MatchArm => {
     const guard = caseRule.field("guard");
-    if (isCursor(guard)) {
-      throw unsupported(file, guard, "guarded match case");
-    }
     return {
       patterns: cursorFields(caseRule, "pattern"),
+      guard: isCursor(guard) ? guard : undefined,
       body: requiredField(caseRule, "body"),
       span: sourceSpan(file, caseRule),
     };
@@ -1972,7 +3002,68 @@ function lowerMatchArm(
     )
   );
   if (patterns.some((pattern) => findRule(pattern, "wildcard") !== undefined)) {
-    return body;
+    if (arm.guard === undefined) return body;
+    if (alternative === undefined) {
+      throw new TypeError(
+        `${file}:${arm.span.start}: guarded Ducklang match expression is not exhaustive`,
+      );
+    }
+    return {
+      kind: "if",
+      condition: lowerExpression(file, arm.guard),
+      consequence: body,
+      alternative,
+      span: arm.span,
+    };
+  }
+  if (arm.guard !== undefined) {
+    throw unsupported(file, arm.guard, "non-wildcard guarded match case");
+  }
+  const wildcardUnionPattern = patterns.length === 1
+    ? findRule(patterns[0], "wildcard_union_pattern")
+    : undefined;
+  if (wildcardUnionPattern !== undefined) {
+    const wildcardToken = wildcardUnionPattern.children().find((
+      child,
+    ): child is TokenCursor => child.type === "token");
+    const caseName = wildcardToken?.text.match(
+      /^`([A-Z][A-Za-z0-9_]*)[ \t]+_$/,
+    )?.[1];
+    if (caseName === undefined) {
+      throw unsupported(file, wildcardUnionPattern, "wildcard union pattern");
+    }
+    return {
+      kind: "ifUnion",
+      caseName,
+      payloadName: undefined,
+      value: target,
+      consequence: body,
+      alternative,
+      span: arm.span,
+    };
+  }
+  const unionPattern = patterns.length === 1
+    ? findRule(patterns[0], "union_pattern")
+    : undefined;
+  if (unionPattern !== undefined) {
+    const payload = requiredField(unionPattern, "value");
+    const payloadName = payload.type === "token" &&
+        payload.kind === "identifier"
+      ? identifierName(file, payload, "union payload binding")
+      : undefined;
+    return {
+      kind: "ifUnion",
+      caseName: tokenText(
+        file,
+        requiredField(unionPattern, "case"),
+        "union pattern case",
+      ),
+      payloadName,
+      value: target,
+      consequence: body,
+      alternative,
+      span: arm.span,
+    };
   }
   const productPattern = patterns.length === 1 &&
       patterns[0].type === "rule" &&
@@ -2113,7 +3204,25 @@ function lowerValuePatternCondition(
     }
   }
   if (pattern.type !== "token") {
-    throw unsupported(file, pattern, "match value pattern");
+    const constValuePattern = findRule(pattern, "const_value_pattern");
+    if (constValuePattern === undefined) {
+      throw unsupported(file, pattern, "match value pattern");
+    }
+    return {
+      kind: "binary",
+      operator: "==",
+      left: target,
+      right: {
+        kind: "comptime",
+        context: "valuePattern",
+        expression: lowerExpression(
+          file,
+          requiredField(constValuePattern, "value"),
+        ),
+        span: sourceSpan(file, constValuePattern),
+      },
+      span,
+    };
   }
   const literal = lowerTokenExpression(file, pattern);
   if (literal.kind === "reference") {
@@ -2235,6 +3344,12 @@ function stringExpression(value: string, span: SourceSpan): DucklangExpression {
   return { kind: "string", value, span };
 }
 
+function operatorText(operator: TokenCursor): string {
+  return operator.kind === "CARET_OPERATOR"
+    ? "^".repeat(operator.text.length)
+    : operator.text;
+}
+
 function lowerBinaryExpression(
   operator: string,
   left: DucklangExpression,
@@ -2279,27 +3394,71 @@ function lowerRecordFields(
   file: string,
   fieldBlock: RuleCursor,
 ): readonly DucklangRecordField[] {
-  return fieldBlock.children().flatMap((child) => {
-    if (child.type !== "rule") return [];
-    if (child.name !== "shape_field" && child.name !== "field_definition") {
-      throw unsupported(file, child, "record field");
-    }
-    return [{
-      name: identifierName(
-        file,
-        requiredField(child, "name"),
-        "struct update field",
-      ).text,
-      value: lowerExpression(file, requiredField(child, "value")),
-      span: sourceSpan(file, child),
-    }];
-  });
+  return fieldBlock.children().flatMap(
+    (child): readonly DucklangRecordField[] => {
+      if (child.type === "token" && child.kind === "SHORTHAND_RECORD") {
+        return shorthandRecordFields(file, child);
+      }
+      if (child.type !== "rule") return [];
+      if (child.name === "shorthand_field") {
+        const name = identifierName(file, child, "record shorthand field");
+        return [{
+          name: name.text,
+          value: { kind: "reference", name, span: name.span },
+          span: sourceSpan(file, child),
+        }];
+      }
+      if (
+        child.name !== "shape_field" &&
+        child.name !== "first_shape_field" &&
+        child.name !== "field_definition"
+      ) {
+        throw unsupported(file, child, "record field");
+      }
+      return [{
+        name: identifierName(
+          file,
+          requiredField(child, "name"),
+          "struct update field",
+        ).text,
+        value: lowerExpression(file, requiredField(child, "value")),
+        span: sourceSpan(file, child),
+      }];
+    },
+  );
+}
+
+function shorthandRecordFields(
+  file: string,
+  cursor: TokenCursor,
+): readonly DucklangRecordField[] {
+  return [...cursor.text.slice(1, -1).matchAll(/[A-Za-z][A-Za-z0-9_]*/g)].map(
+    (match) => {
+      const start = cursor.span.start + 1 + match.index;
+      const name = {
+        text: match[0],
+        span: { file, start, end: start + match[0].length },
+      };
+      return {
+        name: name.text,
+        value: { kind: "reference" as const, name, span: name.span },
+        span: name.span,
+      };
+    },
+  );
 }
 
 function applyNominalProductType(
   expression: DucklangExpression,
   nominalType: string,
 ): DucklangExpression {
+  if (expression.kind === "function") {
+    return {
+      ...expression,
+      declaredResultType: nominalType,
+      body: applyNominalProductType(expression.body, nominalType),
+    };
+  }
   if (expression.kind === "product" && expression.productKind === "array") {
     return { ...expression, productKind: "tuple", nominalType };
   }
@@ -2310,6 +3469,15 @@ function applyNominalProductType(
     return { ...expression, nominalType };
   }
   if (expression.kind === "if") {
+    return {
+      ...expression,
+      consequence: applyNominalProductType(expression.consequence, nominalType),
+      alternative: expression.alternative === undefined
+        ? undefined
+        : applyNominalProductType(expression.alternative, nominalType),
+    };
+  }
+  if (expression.kind === "ifUnion") {
     return {
       ...expression,
       consequence: applyNominalProductType(expression.consequence, nominalType),
@@ -2335,8 +3503,35 @@ function simpleTypeName(input: SyntaxCursor): string | undefined {
   const tokens: TokenCursor[] = [];
   collectAllTokens(input, tokens);
   const [token] = tokens;
-  return tokens.length === 1 && token.kind === "identifier"
+  return token?.kind === "identifier" &&
+      tokens.every((candidate) =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.text)
+      )
     ? token.text
+    : undefined;
+}
+
+function finalResultTypeName(input: SyntaxCursor): string | undefined {
+  const functionType = findRule(input, "function_type");
+  const result = functionType?.field("result");
+  if (isCursor(result)) return finalResultTypeName(result);
+  const simpleName = simpleTypeName(input);
+  if (simpleName !== undefined) return simpleName;
+  const tokens: TokenCursor[] = [];
+  collectAllTokens(input, tokens);
+  const identifiers = tokens.filter((token) => token.kind === "identifier");
+  if (
+    identifiers.length === 1 &&
+    tokens.every((token) =>
+      token.kind === "identifier" || token.text === "(" || token.text === ")"
+    )
+  ) {
+    return identifiers[0].text;
+  }
+  const [constructor] = tokens;
+  return constructor?.kind === "identifier" &&
+      /^[A-Z][A-Za-z0-9_]*$/.test(constructor.text)
+    ? constructor.text
     : undefined;
 }
 
@@ -2345,7 +3540,56 @@ function lowerTokenExpression(
   cursor: TokenCursor,
 ): DucklangExpression {
   const span = sourceSpan(file, cursor);
+  if (cursor.kind === "SHORTHAND_RECORD") {
+    return {
+      kind: "record",
+      fields: shorthandRecordFields(file, cursor),
+      span,
+    };
+  }
+  if (cursor.kind === "FLOAT_LITERAL") {
+    const encoded = cursor.text.match(
+      /^\\([0-9]*)([k-t])([0-9]+)f(32|64)$/,
+    );
+    if (encoded === null) {
+      throw unsupported(file, cursor, "floating-point literal");
+    }
+    const leadingDigit = String(encoded[2].charCodeAt(0) - "k".charCodeAt(0));
+    const value = Number.parseFloat(
+      `${leadingDigit}${encoded[1]}.${encoded[3]}`,
+    );
+    return encoded[4] === "32"
+      ? { kind: "float32", value: Math.fround(value), span }
+      : { kind: "float64", value, span };
+  }
+  if (cursor.kind === "HEX_LITERAL") {
+    const value = Number.parseInt(cursor.text.slice(2), 16);
+    if (!Number.isSafeInteger(value) || value > maximumIntegerLiteral) {
+      throw new SyntaxError(
+        `${file}:${cursor.span.start}: integer literal 0x${
+          cursor.text.slice(2)
+        } is outside signed i32`,
+      );
+    }
+    return { kind: "integer", value, span };
+  }
   if (cursor.kind === "number") {
+    const floatingPoint = cursor.text.match(/^([0-9]+)f(32|64)$/);
+    if (floatingPoint !== null) {
+      const value = Number.parseFloat(floatingPoint[1]);
+      return floatingPoint[2] === "32"
+        ? { kind: "float32", value: Math.fround(value), span }
+        : { kind: "float64", value, span };
+    }
+    if (/^0[xX][0-9A-Fa-f]+$/.test(cursor.text)) {
+      const value = Number.parseInt(cursor.text.slice(2), 16);
+      if (!Number.isSafeInteger(value) || value > maximumIntegerLiteral) {
+        throw new SyntaxError(
+          `${file}:${cursor.span.start}: integer literal ${cursor.text} is outside signed i32`,
+        );
+      }
+      return { kind: "integer", value, span };
+    }
     if (/^[0-9]+i64$/.test(cursor.text)) {
       const value = BigInt(cursor.text.slice(0, -3));
       if (value > 9_223_372_036_854_775_807n) {
@@ -2404,11 +3648,18 @@ function lowerCallArguments(
   file: string,
   input: SyntaxCursor,
 ): readonly DucklangExpression[] {
+  const wrappedDirectArgument = input.type === "rule" &&
+    ((input.name === "postfix_expression" &&
+      input.children().length === 1) ||
+      input.name === "_primary_expression");
+  const directArrayArgument = input.type === "rule" &&
+    (input.name === "array_expression" ||
+      input.name === "line_array_expression");
+  const argument = wrappedDirectArgument ? onlyRuleOrTokenChild(input) : input;
   const cursor = descendSingleRule(
-    input,
+    argument,
     new Set([
       "parenthesized_or_product",
-      "postfix_expression",
       "_primary_expression",
     ]),
   );
@@ -2420,7 +3671,15 @@ function lowerCallArguments(
     );
   }
   if (cursor.type === "rule" && cursor.name === "unit_pattern") return [];
-  return [lowerExpression(file, cursor)];
+  const lowered = lowerExpression(file, cursor);
+  if (
+    (wrappedDirectArgument || directArrayArgument) &&
+    lowered.kind === "product" &&
+    lowered.productKind === "array"
+  ) {
+    return lowered.values;
+  }
+  return [lowered];
 }
 
 function lowerParameters(
@@ -2428,8 +3687,44 @@ function lowerParameters(
   input: CursorFieldValue,
 ): readonly DucklangParameter[] {
   if (!isCursor(input)) throw new Error("arrow parameters are missing");
-  if (input.type === "token") return [identifierName(file, input, "parameter")];
+  if (input.type === "token") {
+    if (
+      input.kind === "ARROW_PARAMETER" ||
+      input.kind === "ARROW_PARAMETER_LIST" ||
+      input.kind === "BRACKET_PARAMETER_LIST"
+    ) {
+      return arrowParameters(file, input);
+    }
+    if (input.kind === "DISCARDED_ARROW") {
+      return [{
+        text: `discarded_parameter_${input.span.start}`,
+        span: {
+          file,
+          start: input.span.start,
+          end: input.span.start + 1,
+        },
+      }];
+    }
+    if (input.kind === "SINGLE_ARROW_PARAMETER") {
+      const equals = input.text.lastIndexOf("=");
+      const text = input.text.at(-1)! +
+        input.text.slice(1, equals).trimEnd();
+      return [{
+        text,
+        span: {
+          file,
+          start: input.span.start,
+          end: input.span.start + text.length,
+        },
+      }];
+    }
+    return [identifierName(file, input, "parameter")];
+  }
+  if (input.name === "unit_pattern") return [];
   if (input.name === "parameter_list") return arrowParameters(file, input);
+  if (input.name === "bracket_parameter_list") {
+    return arrowParameters(file, input);
+  }
   if (input.name === "const_parameter_list") {
     return constParameterNames(file, input);
   }
@@ -2453,13 +3748,73 @@ function constParameterNames(
   collectAllTokens(cursor, tokens);
   const list = tokens.find((token) => token.kind === "CONST_PARAMETER_LIST");
   if (list === undefined) {
-    throw new Error("Ducklang const parameter list has no fused token");
+    const parameters = cursor.children().filter((child): child is RuleCursor =>
+      child.type === "rule" && child.name === "parameter"
+    );
+    if (parameters.length > 0) {
+      return parameters.map((parameter) => {
+        const name = identifierName(
+          file,
+          requiredField(parameter, "name"),
+          "const parameter",
+        );
+        const parameterTokens: TokenCursor[] = [];
+        collectAllTokens(parameter, parameterTokens);
+        const declaredType = parameter.field("type");
+        const simpleDeclaredType = isCursor(declaredType) &&
+            !parameterTokens.some((token) => token.text === "->")
+          ? lowerTypeReference(file, declaredType).name
+          : undefined;
+        const compileTime = parameterTokens.some((token) =>
+          token.text === "const"
+        );
+        return {
+          ...name,
+          ...(parameterTokens.some((token) => token.text === "...")
+            ? { variadic: true }
+            : {}),
+          ...(compileTime ? { compileTimeRecord: true } : {}),
+          ...(simpleDeclaredType === undefined ||
+              (compileTime && /^[a-z]/.test(simpleDeclaredType))
+            ? {}
+            : { declaredType: simpleDeclaredType }),
+        };
+      });
+    }
+    throw new Error(
+      `Ducklang const parameter list has no fused token; children ${
+        cursor.children().map((child) =>
+          child.type === "rule" ? child.name : child.kind
+        ).join(", ")
+      }; tokens ${tokens.map((token) => token.kind).join(", ")}`,
+    );
   }
-  const parameters = list.text.slice(1, -1).split(",");
+  const contents = list.text.slice(1, -1);
+  const parameters: string[] = [];
+  let parameterStart = 0;
+  let delimiterDepth = 0;
+  for (let index = 0; index < contents.length; index += 1) {
+    const character = contents[index];
+    if (character === "(" || character === "[" || character === "{") {
+      delimiterDepth += 1;
+      continue;
+    }
+    if (character === ")" || character === "]" || character === "}") {
+      delimiterDepth -= 1;
+      continue;
+    }
+    if (character !== "," || delimiterDepth !== 0) continue;
+    parameters.push(contents.slice(parameterStart, index));
+    parameterStart = index + 1;
+  }
+  const trailingParameter = contents.slice(parameterStart);
+  if (trailingParameter.trim().length > 0) {
+    parameters.push(trailingParameter);
+  }
   let searchStart = 1;
   return parameters.map((parameter) => {
     const match = parameter.trim().match(
-      /^(const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*([A-Za-z][A-Za-z0-9_]*(?:\s+[A-Za-z][A-Za-z0-9_]*)*))?$/,
+      /^(const\s+)?(?:\.\.\.)?([A-Za-z][A-Za-z0-9_]*)(?:\s*:\s*(.+))?$/,
     );
     if (match === null) {
       throw unsupported(file, list, "const parameter list");
@@ -2478,10 +3833,7 @@ function constParameterNames(
     return {
       text: match[2],
       ...(parameter.includes("...") ? { variadic: true } : {}),
-      ...(match[1] !== undefined && match[3] !== undefined &&
-          declaredType === undefined && /^[a-z]/.test(match[3])
-        ? { compileTimeRecord: true }
-        : {}),
+      ...(match[1] === undefined ? {} : { compileTimeRecord: true }),
       ...(declaredType === undefined ? {} : { declaredType }),
       span: {
         file,
@@ -2501,9 +3853,74 @@ function arrowParameters(
   }
   const tokens: TokenCursor[] = [];
   collectAllTokens(cursor, tokens);
+  const singleParameter = tokens.find((token) =>
+    token.kind === "ARROW_PARAMETER"
+  );
+  if (singleParameter !== undefined) {
+    const span = sourceSpan(file, singleParameter);
+    return [{
+      text: singleParameter.text === "_"
+        ? `discarded_parameter_${span.start}`
+        : singleParameter.text,
+      span,
+    }];
+  }
+  const fusedList = tokens.find((token) =>
+    token.kind === "ARROW_PARAMETER_LIST" ||
+    token.kind === "BRACKET_PARAMETER_LIST"
+  );
+  if (fusedList !== undefined) {
+    const parameters = fusedList.text.slice(1, -1).split(",").filter((
+      parameter,
+    ) => parameter.trim().length > 0);
+    let searchStart = 1;
+    return parameters.map((parameter) => {
+      const match = parameter.trim().match(
+        /^(?:(const|!)\s*)?([A-Za-z][A-Za-z0-9_]*|_)(?:\s*:\s*(.+))?$/,
+      );
+      if (match === null) {
+        throw unsupported(
+          file,
+          fusedList,
+          `arrow parameter list ${JSON.stringify(fusedList.text)}`,
+        );
+      }
+      const nameOffset = fusedList.text.indexOf(match[2], searchStart);
+      if (nameOffset < 0) {
+        throw new Error(
+          `Ducklang arrow parameter ${match[2]} has no source span`,
+        );
+      }
+      searchStart = nameOffset + match[2].length;
+      const span = {
+        file,
+        start: fusedList.span.start + nameOffset,
+        end: fusedList.span.start + nameOffset + match[2].length,
+      };
+      if (match[2] === "_") {
+        return {
+          text: `discarded_parameter_${span.start}`,
+          span,
+        };
+      }
+      const annotation = match[3]?.trim();
+      const declaredType = annotation === undefined ||
+          annotation.includes("->")
+        ? undefined
+        : /^(?:&\s*)?([A-Za-z][A-Za-z0-9_]*)/.exec(annotation)?.[1];
+      return {
+        text: match[2],
+        ...(match[1] === "!" ? { linear: true } : {}),
+        ...(match[1] === "const" ? { compileTimeRecord: true } : {}),
+        ...(declaredType === undefined ? {} : { declaredType }),
+        span,
+      };
+    });
+  }
   const parameterTokens = tokens.filter((token) =>
     token.text !== "(" && token.text !== ")" && token.text !== "[" &&
-    token.text !== "]" && !/^\s+$/.test(token.text)
+    token.text !== "]" && token.kind !== "TRAILING_PRODUCT_CLOSE" &&
+    !/^\s+$/.test(token.text)
   );
   const groups: TokenCursor[][] = [[]];
   for (const token of parameterTokens) {
@@ -2536,13 +3953,18 @@ function arrowParameters(
       throw unsupported(
         file,
         group[0] ?? cursor,
-        "patterned parameter or unsupported type annotation",
+        `patterned parameter or unsupported type annotation ${
+          JSON.stringify(
+            group.map((token) => ({ kind: token.kind, text: token.text })),
+          )
+        }`,
       );
     }
     const parameterName = linear || compileTime ? separator : name;
     return {
       text: parameterName.text,
       ...(linear ? { linear: true } : {}),
+      ...(compileTime ? { compileTimeRecord: true } : {}),
       ...(annotation === undefined ? {} : {
         declaredType: annotation.text,
       }),
@@ -2661,6 +4083,13 @@ function descendSingleRule(
 ): SyntaxCursor {
   let cursor = input;
   while (cursor.type === "rule" && wrappers.has(cursor.name)) {
+    const ruleChildren = cursor.children().filter((
+      child,
+    ): child is RuleCursor => child.type === "rule");
+    if (ruleChildren.length === 1) {
+      cursor = ruleChildren[0];
+      continue;
+    }
     cursor = onlyRuleOrTokenChild(cursor);
   }
   return cursor;
@@ -2679,7 +4108,9 @@ function onlyRuleChild(cursor: RuleCursor): RuleCursor {
 function onlyRuleOrTokenChild(cursor: RuleCursor): SyntaxCursor {
   const children = cursor.children();
   if (children.length !== 1) {
-    throw new Error(`rule ${cursor.name} has ${children.length} children`);
+    throw new Error(
+      `rule ${cursor.name} at ${cursor.span.start} has ${children.length} children`,
+    );
   }
   return children[0];
 }

@@ -1,0 +1,8 @@
+module adder = capabilities => {
+  [.run = capabilities.base + capabilities.bonus]
+}
+
+const capabilities = [.base = 20, .bonus = 22]
+let application = adder capabilities
+
+application.run

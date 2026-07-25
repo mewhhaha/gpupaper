@@ -25,30 +25,14 @@ export function elaborateDucklangHandlers(
   );
   const handlers = collectHandlers(module, bindings);
   const removedBindings = new Set<string>();
-  let changed = false;
-  const statements = module.statements.map((statement): DucklangStatement => {
-    if (statement.kind !== "expression" && statement.kind !== "binding") {
-      return statement;
-    }
-    const expression = statement.kind === "expression"
-      ? statement.expression
-      : statement.value;
-    const elaborated = elaborateTryExpression(
-      expression,
+  const statements = module.statements.map((statement) =>
+    elaborateNestedTryExpressions(
+      statement,
       bindings,
       handlers,
       removedBindings,
-    );
-    if (elaborated === expression) return statement;
-    changed = true;
-    return statement.kind === "expression"
-      ? { ...statement, expression: elaborated }
-      : { ...statement, value: elaborated };
-  });
-  if (!changed) return module;
-  for (const handler of handlers.values()) {
-    removedBindings.add(handler.bindingName);
-  }
+    )
+  );
   return {
     ...module,
     statements: statements.filter((statement) =>
@@ -56,6 +40,85 @@ export function elaborateDucklangHandlers(
         removedBindings.has(statement.name.text))
     ),
   };
+}
+
+const expressionKinds = new Set<DucklangExpression["kind"]>([
+  "integer",
+  "integer64",
+  "float32",
+  "float64",
+  "boolean",
+  "unit",
+  "string",
+  "moduleImport",
+  "hostCall",
+  "optionDo",
+  "unionCase",
+  "product",
+  "field",
+  "recordUpdate",
+  "record",
+  "reference",
+  "function",
+  "recursiveCall",
+  "call",
+  "index",
+  "indexUpdate",
+  "binary",
+  "unary",
+  "if",
+  "ifUnion",
+  "block",
+  "comptime",
+  "scratch",
+  "loop",
+]);
+
+function elaborateNestedTryExpressions<T>(
+  value: T,
+  bindings: ReadonlyMap<
+    string,
+    Extract<DucklangStatement, { readonly kind: "binding" }>
+  >,
+  handlers: ReadonlyMap<string, Handler>,
+  removedBindings: Set<string>,
+): T {
+  if (Array.isArray(value)) {
+    return value.map((element) =>
+      elaborateNestedTryExpressions(
+        element,
+        bindings,
+        handlers,
+        removedBindings,
+      )
+    ) as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  const mapped = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      elaborateNestedTryExpressions(
+        child,
+        bindings,
+        handlers,
+        removedBindings,
+      ),
+    ]),
+  );
+  const kind = (mapped as { readonly kind?: unknown }).kind;
+  if (
+    typeof kind !== "string" || !expressionKinds.has(
+      kind as DucklangExpression["kind"],
+    )
+  ) {
+    return mapped as T;
+  }
+  return elaborateTryExpression(
+    mapped as DucklangExpression,
+    bindings,
+    handlers,
+    removedBindings,
+  ) as T;
 }
 
 function collectHandlers(
@@ -153,59 +216,61 @@ function elaborateTryExpression(
     expression.callee.name.text !== "$duck_try" ||
     expression.arguments.length !== 2
   ) return expression;
-  const bodyCall = expression.arguments[0];
-  if (
-    bodyCall.kind !== "call" || bodyCall.callee.kind !== "reference" ||
-    bodyCall.arguments.length !== 0
-  ) {
+  const bodyArgument = expression.arguments[0];
+  const bodyBinding = bodyArgument.kind === "call" &&
+      bodyArgument.callee.kind === "reference" &&
+      bodyArgument.arguments.length === 0
+    ? bindings.get(bodyArgument.callee.name.text)
+    : undefined;
+  const body = bodyArgument.kind === "block"
+    ? bodyArgument
+    : bodyBinding?.value.kind === "function" &&
+        bodyBinding.value.parameters.length === 0
+    ? bodyBinding.value.body
+    : undefined;
+  if (body === undefined) {
     throw new TypeError(
-      `${expression.span.file}:${expression.span.start}: Ducklang handled body must be a zero-argument function call`,
-    );
-  }
-  const bodyBinding = bindings.get(bodyCall.callee.name.text);
-  if (
-    bodyBinding?.value.kind !== "function" ||
-    bodyBinding.value.parameters.length !== 0
-  ) {
-    throw new TypeError(
-      `${bodyCall.span.file}:${bodyCall.span.start}: Ducklang handled function ${bodyCall.callee.name.text} is not a zero-argument function`,
+      `${bodyArgument.span.file}:${bodyArgument.span.start}: Ducklang handled body must be a block or zero-argument function call`,
     );
   }
   if (expression.arguments[1].kind === "unit") {
     const effects = new Set<string>();
-    collectHandledEffects(bodyBinding.value.body, effects);
+    collectHandledEffects(body, effects);
     if (effects.size === 0) {
       return {
         kind: "unionCase",
         caseName: "Some",
-        value: bodyCall,
+        value: bodyArgument,
         span: expression.span,
       };
     }
   }
-  removedBindings.add(bodyBinding.name.text);
+  if (bodyBinding !== undefined) removedBindings.add(bodyBinding.name.text);
   const selectedHandlers = selectHandlers(
     expression.arguments[1],
-    bodyBinding.value.body,
+    body,
     handlers,
+    bindings,
   );
-  let result = evaluateHandledBody(bodyBinding.value.body, selectedHandlers);
-  for (
-    const handler of selectedHandlers.toSorted((left, right) =>
-      left.order - right.order
-    )
-  ) {
-    const returnClause = handler.fields.get("return");
-    if (returnClause === undefined) continue;
-    result = applyClause(returnClause, [result], handler, expression.span);
+  for (const handler of selectedHandlers) {
+    removedBindings.add(handler.bindingName);
   }
-  return result;
+  return lowerHandledExpression(
+    body,
+    selectedHandlers,
+    bindings,
+    expression.span,
+  );
 }
 
 function selectHandlers(
   explicit: DucklangExpression,
   body: DucklangExpression,
   handlers: ReadonlyMap<string, Handler>,
+  bindings: ReadonlyMap<
+    string,
+    Extract<DucklangStatement, { readonly kind: "binding" }>
+  >,
 ): readonly Handler[] {
   if (explicit.kind === "reference") {
     const handler = [...handlers.values()].find((candidate) =>
@@ -215,6 +280,44 @@ function selectHandlers(
     throw new ReferenceError(
       `${explicit.span.file}:${explicit.span.start}: unknown Ducklang handler ${explicit.name.text}`,
     );
+  }
+  if (
+    explicit.kind === "call" && explicit.callee.kind === "reference"
+  ) {
+    const handlerName = explicit.callee.name.text;
+    const handler = [...handlers.values()].find((candidate) =>
+      candidate.bindingName === handlerName
+    );
+    const binding = bindings.get(handlerName);
+    if (
+      handler !== undefined && binding?.value.kind === "function" &&
+      binding.value.parameters.length === explicit.arguments.length
+    ) {
+      const substitutions = new Map(
+        binding.value.parameters.map((parameter, index) => [
+          parameter.text,
+          explicit.arguments[index],
+        ]),
+      );
+      return [{
+        ...cloneHandler(handler),
+        state: new Map(
+          [...handler.state].map(([name, value]) => [
+            name,
+            substituteTree(value, substitutions),
+          ]),
+        ),
+        fields: new Map(
+          [...handler.fields].map(([name, field]) => [
+            name,
+            {
+              ...field,
+              value: substituteTree(field.value, substitutions),
+            },
+          ]),
+        ),
+      }];
+    }
   }
   if (explicit.kind !== "unit") {
     throw new TypeError(
@@ -232,6 +335,302 @@ function selectHandlers(
     }
     return cloneHandler(handler);
   });
+}
+
+function lowerHandledExpression(
+  body: DucklangExpression,
+  handlers: readonly Handler[],
+  bindings: ReadonlyMap<
+    string,
+    Extract<DucklangStatement, { readonly kind: "binding" }>
+  >,
+  span: SourceSpan,
+): DucklangExpression {
+  const orderedHandlers = handlers.toSorted((left, right) =>
+    left.order - right.order
+  );
+  const effectNames = new Set(
+    orderedHandlers.map((handler) => handler.effectName),
+  );
+  const loweredBody = rewriteHandledEffects(
+    body,
+    orderedHandlers,
+    effectNames,
+    bindings,
+    new Set(),
+  );
+  const stateBindings: DucklangStatement[] = orderedHandlers.flatMap((
+    handler,
+  ) =>
+    [...handler.state].map(([name, value]): DucklangStatement => ({
+      kind: "binding",
+      declarationKind: "let",
+      recursive: false,
+      name: { text: name, span: value.span },
+      value,
+      span: value.span,
+    }))
+  );
+  const bodyStatements = flattenHandledStatements(
+    loweredBody.kind === "block" ? loweredBody.statements : [{
+      kind: "expression" as const,
+      expression: loweredBody,
+      span: loweredBody.span,
+    }],
+  );
+  const trailingStatement = bodyStatements.at(-1);
+  let result: DucklangExpression = trailingStatement?.kind === "expression"
+    ? trailingStatement.expression
+    : { kind: "unit", span };
+  const precedingStatements = trailingStatement?.kind === "expression"
+    ? bodyStatements.slice(0, -1)
+    : bodyStatements;
+  for (const handler of orderedHandlers) {
+    const returnClause = handler.fields.get("return");
+    if (returnClause === undefined) continue;
+    result = inlineHandlerClause(returnClause, [result], span);
+  }
+  return {
+    kind: "block",
+    statements: [
+      ...stateBindings,
+      ...precedingStatements,
+      { kind: "expression", expression: result, span: result.span },
+    ],
+    span,
+  };
+}
+
+function flattenHandledStatements(
+  statements: readonly DucklangStatement[],
+): readonly DucklangStatement[] {
+  return statements.flatMap((statement): readonly DucklangStatement[] => {
+    if (
+      statement.kind === "expression" &&
+      statement.expression.kind === "block"
+    ) {
+      return flattenHandledStatements(statement.expression.statements);
+    }
+    if (
+      (statement.kind === "binding" || statement.kind === "assignment") &&
+      statement.value.kind === "block"
+    ) {
+      const flattened = flattenHandledStatements(statement.value.statements);
+      const result = flattened.at(-1);
+      if (result?.kind !== "expression") {
+        throw new TypeError(
+          `${statement.span.file}:${statement.span.start}: Ducklang handler operation used as a value must produce an expression`,
+        );
+      }
+      return [
+        ...flattened.slice(0, -1),
+        { ...statement, value: result.expression },
+      ];
+    }
+    return [statement];
+  });
+}
+
+function rewriteHandledEffects(
+  expression: DucklangExpression,
+  handlers: readonly Handler[],
+  effectNames: ReadonlySet<string>,
+  bindings: ReadonlyMap<
+    string,
+    Extract<DucklangStatement, { readonly kind: "binding" }>
+  >,
+  inlining: ReadonlySet<string>,
+): DucklangExpression {
+  return mapExpressionTree(expression, (rewritten) => {
+    if (
+      rewritten.kind === "hostCall" && effectNames.has(rewritten.effectName)
+    ) {
+      const handler = handlers.find((candidate) =>
+        candidate.effectName === rewritten.effectName
+      );
+      const clause = handler?.fields.get(rewritten.operationName);
+      if (handler === undefined || clause === undefined) {
+        throw new ReferenceError(
+          `${rewritten.span.file}:${rewritten.span.start}: Ducklang handler ${rewritten.effectName} has no operation ${rewritten.operationName}`,
+        );
+      }
+      return inlineHandlerClause(
+        clause,
+        rewritten.arguments,
+        rewritten.span,
+      );
+    }
+    if (
+      rewritten.kind !== "call" || rewritten.callee.kind !== "reference"
+    ) {
+      return rewritten;
+    }
+    const functionName = rewritten.callee.name.text;
+    const binding = bindings.get(functionName);
+    if (
+      binding?.value.kind !== "function" ||
+      !functionContainsHandledEffect(
+        binding.value.body,
+        effectNames,
+        bindings,
+        new Set(),
+      )
+    ) {
+      return rewritten;
+    }
+    if (inlining.has(functionName)) {
+      throw new TypeError(
+        `${rewritten.span.file}:${rewritten.span.start}: recursive Ducklang function ${functionName} performs a locally handled effect`,
+      );
+    }
+    if (binding.value.parameters.length !== rewritten.arguments.length) {
+      throw new TypeError(
+        `${rewritten.span.file}:${rewritten.span.start}: handled Ducklang call ${functionName} expects ${binding.value.parameters.length} arguments; received ${rewritten.arguments.length}`,
+      );
+    }
+    const substitutions = new Map(
+      binding.value.parameters.map((parameter, index) => [
+        parameter.text,
+        rewritten.arguments[index],
+      ]),
+    );
+    return rewriteHandledEffects(
+      substituteTree(binding.value.body, substitutions),
+      handlers,
+      effectNames,
+      bindings,
+      new Set([...inlining, functionName]),
+    );
+  });
+}
+
+function functionContainsHandledEffect(
+  value: unknown,
+  effectNames: ReadonlySet<string>,
+  bindings: ReadonlyMap<
+    string,
+    Extract<DucklangStatement, { readonly kind: "binding" }>
+  >,
+  visiting: Set<string>,
+): boolean {
+  if (Array.isArray(value)) {
+    return value.some((child) =>
+      functionContainsHandledEffect(child, effectNames, bindings, visiting)
+    );
+  }
+  if (value === null || typeof value !== "object") return false;
+  const expression = value as Partial<DucklangExpression>;
+  if (
+    expression.kind === "hostCall" &&
+    effectNames.has(expression.effectName as string)
+  ) {
+    return true;
+  }
+  if (
+    expression.kind === "call" &&
+    expression.callee?.kind === "reference"
+  ) {
+    const functionName = expression.callee.name.text;
+    if (!visiting.has(functionName)) {
+      const binding = bindings.get(functionName);
+      if (binding?.value.kind === "function") {
+        visiting.add(functionName);
+        const contains = functionContainsHandledEffect(
+          binding.value.body,
+          effectNames,
+          bindings,
+          visiting,
+        );
+        visiting.delete(functionName);
+        if (contains) return true;
+      }
+    }
+  }
+  return Object.values(value).some((child) =>
+    functionContainsHandledEffect(child, effectNames, bindings, visiting)
+  );
+}
+
+function inlineHandlerClause(
+  field: DucklangRecordField,
+  arguments_: readonly DucklangExpression[],
+  span: SourceSpan,
+): DucklangExpression {
+  if (field.value.kind !== "function") {
+    throw new TypeError(
+      `${field.span.file}:${field.span.start}: Ducklang handler clause ${field.name} is not a function`,
+    );
+  }
+  const resume = field.value.parameters.at(-1)?.linear
+    ? field.value.parameters.at(-1)
+    : undefined;
+  const parameters = resume === undefined
+    ? field.value.parameters
+    : field.value.parameters.slice(0, -1);
+  if (parameters.length !== arguments_.length) {
+    throw new TypeError(
+      `${span.file}:${span.start}: Ducklang handler clause ${field.name} expects ${parameters.length} arguments; received ${arguments_.length}`,
+    );
+  }
+  const substitutions = new Map(
+    parameters.map((parameter, index) => [
+      parameter.text,
+      arguments_[index],
+    ]),
+  );
+  if (resume !== undefined) {
+    substitutions.set(resume.text, referenceResume(resume.span));
+  }
+  return replaceResumeCalls(
+    substituteTree(field.value.body, substitutions),
+  );
+}
+
+function replaceResumeCalls(
+  expression: DucklangExpression,
+): DucklangExpression {
+  return mapExpressionTree(expression, (candidate) => {
+    if (
+      candidate.kind === "call" && candidate.callee.kind === "reference" &&
+      candidate.callee.name.text === "$duck_resume" &&
+      candidate.arguments.length === 1
+    ) {
+      return candidate.arguments[0];
+    }
+    return candidate;
+  });
+}
+
+function substituteTree(
+  expression: DucklangExpression,
+  substitutions: ReadonlyMap<string, DucklangExpression>,
+): DucklangExpression {
+  return mapExpressionTree(
+    expression,
+    (candidate) =>
+      candidate.kind === "reference"
+        ? substitutions.get(candidate.name.text) ?? candidate
+        : candidate,
+  );
+}
+
+function mapExpressionTree(
+  expression: DucklangExpression,
+  transform: (expression: DucklangExpression) => DucklangExpression,
+): DucklangExpression {
+  const mapValue = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(mapValue);
+    if (value === null || typeof value !== "object") return value;
+    const mapped = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, mapValue(child)]),
+    );
+    const kind = (mapped as { readonly kind?: unknown }).kind;
+    return typeof kind === "string" &&
+        expressionKinds.has(kind as DucklangExpression["kind"])
+      ? transform(mapped as DucklangExpression)
+      : mapped;
+  };
+  return mapValue(expression) as DucklangExpression;
 }
 
 function cloneHandler(handler: Handler): Handler {
@@ -263,205 +662,10 @@ function isExpression(value: unknown): value is DucklangExpression {
     typeof (value as Record<string, unknown>).kind === "string";
 }
 
-function evaluateHandledBody(
-  body: DucklangExpression,
-  handlers: readonly Handler[],
-): DucklangExpression {
-  if (body.kind !== "block") return substitute(body, new Map());
-  const values = new Map<string, DucklangExpression>();
-  let result: DucklangExpression = { kind: "unit", span: body.span };
-  for (const statement of body.statements) {
-    if (statement.kind === "binding") {
-      const value = statement.value.kind === "hostCall"
-        ? evaluateOperation(statement.value, handlers, values)
-        : substitute(statement.value, values);
-      values.set(statement.name.text, value);
-      continue;
-    }
-    if (statement.kind === "expression") {
-      result = statement.expression.kind === "hostCall"
-        ? evaluateOperation(statement.expression, handlers, values)
-        : substitute(statement.expression, values);
-      continue;
-    }
-    throw new TypeError(
-      `${statement.span.file}:${statement.span.start}: unsupported statement ${statement.kind} in handled Ducklang function`,
-    );
-  }
-  return result;
-}
-
-function evaluateOperation(
-  operation: Extract<DucklangExpression, { readonly kind: "hostCall" }>,
-  handlers: readonly Handler[],
-  values: ReadonlyMap<string, DucklangExpression>,
-): DucklangExpression {
-  const handler = handlers.find((candidate) =>
-    candidate.effectName === operation.effectName
-  );
-  if (handler === undefined) {
-    throw new ReferenceError(
-      `${operation.span.file}:${operation.span.start}: Ducklang effect ${operation.effectName} is not handled`,
-    );
-  }
-  const clause = handler.fields.get(operation.operationName);
-  if (clause === undefined) {
-    throw new ReferenceError(
-      `${operation.span.file}:${operation.span.start}: Ducklang handler ${handler.effectName} has no operation ${operation.operationName}`,
-    );
-  }
-  return applyClause(
-    clause,
-    operation.arguments.map((argument) => substitute(argument, values)),
-    handler,
-    operation.span,
-  );
-}
-
-function applyClause(
-  field: DucklangRecordField,
-  arguments_: readonly DucklangExpression[],
-  handler: Handler,
-  span: SourceSpan,
-): DucklangExpression {
-  if (field.value.kind !== "function") {
-    throw new TypeError(
-      `${field.span.file}:${field.span.start}: Ducklang handler clause ${field.name} is not a function`,
-    );
-  }
-  const parameters = field.value.parameters;
-  const resume = parameters.at(-1)?.linear ? parameters.at(-1) : undefined;
-  const ordinaryParameters = resume === undefined
-    ? parameters
-    : parameters.slice(0, -1);
-  if (ordinaryParameters.length !== arguments_.length) {
-    throw new TypeError(
-      `${span.file}:${span.start}: Ducklang handler clause ${field.name} expects ${ordinaryParameters.length} arguments; received ${arguments_.length}`,
-    );
-  }
-  const values = new Map(handler.state);
-  ordinaryParameters.forEach((parameter, index) =>
-    values.set(parameter.text, arguments_[index])
-  );
-  if (resume !== undefined) {
-    values.set(resume.text, referenceResume(resume.span));
-  }
-  return evaluateClauseBody(field.value.body, values, handler, span);
-}
-
-function evaluateClauseBody(
-  body: DucklangExpression,
-  values: Map<string, DucklangExpression>,
-  handler: Handler,
-  span: SourceSpan,
-): DucklangExpression {
-  if (body.kind !== "block") return resumedValue(body, values, span);
-  let result: DucklangExpression = { kind: "unit", span };
-  for (const statement of body.statements) {
-    if (statement.kind === "assignment") {
-      const value = substitute(statement.value, values);
-      handler.state.set(statement.name.text, value);
-      values.set(statement.name.text, value);
-      continue;
-    }
-    if (statement.kind === "expression") {
-      result = resumedValue(statement.expression, values, span);
-      continue;
-    }
-    throw new TypeError(
-      `${statement.span.file}:${statement.span.start}: unsupported statement ${statement.kind} in Ducklang handler clause`,
-    );
-  }
-  return result;
-}
-
-function resumedValue(
-  expression: DucklangExpression,
-  values: ReadonlyMap<string, DucklangExpression>,
-  span: SourceSpan,
-): DucklangExpression {
-  const substituted = substitute(expression, values);
-  if (
-    substituted.kind === "call" && substituted.callee.kind === "reference" &&
-    substituted.callee.name.text === "$duck_resume" &&
-    substituted.arguments.length === 1
-  ) return substituted.arguments[0];
-  if (substituted.kind === "reference" || substituted.kind === "binary") {
-    return substituted;
-  }
-  throw new TypeError(
-    `${span.file}:${span.start}: Ducklang handler clause must resume exactly once or return a value`,
-  );
-}
-
 function referenceResume(span: SourceSpan): DucklangExpression {
   return {
     kind: "reference",
     name: { text: "$duck_resume", span },
     span,
   };
-}
-
-function substitute(
-  expression: DucklangExpression,
-  values: ReadonlyMap<string, DucklangExpression>,
-): DucklangExpression {
-  const descend = (child: DucklangExpression) => substitute(child, values);
-  switch (expression.kind) {
-    case "reference":
-      return values.get(expression.name.text) ?? expression;
-    case "binary":
-      return {
-        ...expression,
-        left: descend(expression.left),
-        right: descend(expression.right),
-      };
-    case "unary":
-      return { ...expression, operand: descend(expression.operand) };
-    case "call":
-      return {
-        ...expression,
-        callee: descend(expression.callee),
-        arguments: expression.arguments.map(descend),
-      };
-    case "field":
-      return { ...expression, product: descend(expression.product) };
-    case "index":
-      return {
-        ...expression,
-        collection: descend(expression.collection),
-        index: descend(expression.index),
-      };
-    case "product":
-      return { ...expression, values: expression.values.map(descend) };
-    case "record":
-      return {
-        ...expression,
-        fields: expression.fields.map((field) => ({
-          ...field,
-          value: descend(field.value),
-        })),
-      };
-    case "unionCase":
-      return { ...expression, value: descend(expression.value) };
-    case "integer":
-    case "integer64":
-    case "boolean":
-    case "unit":
-    case "string":
-    case "moduleImport":
-    case "hostCall":
-    case "optionDo":
-    case "recordUpdate":
-    case "function":
-    case "recursiveCall":
-    case "indexUpdate":
-    case "if":
-    case "ifUnion":
-    case "block":
-    case "comptime":
-    case "scratch":
-    case "loop":
-      return expression;
-  }
 }

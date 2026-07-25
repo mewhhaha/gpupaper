@@ -4,56 +4,68 @@ import type {
   TypedDucklangExpression,
   TypedDucklangModule,
 } from "./ducklang_types.ts";
+import { PrimitiveId } from "./ducklang_primitives.ts";
 
 export function specializeStaticDucklangClosures(
   module: TypedDucklangModule,
 ): TypedDucklangModule {
   const values = new Map<number, TypedDucklangExpression>();
-  const bindings = module.bindings.map((binding): TypedDucklangBinding => {
+  const rewrittenBindings = module.bindings.map((
+    binding,
+  ): TypedDucklangBinding => {
     const value = rewriteExpression(binding.value, values);
     values.set(binding.symbol.id, value);
     return { ...binding, value };
   });
-  let result = rewriteExpression(module.result, values);
-  if (result.kind === "block") {
-    const retainedSteps: TypedDucklangBlockStep[] = [];
-    for (const step of result.steps) {
-      if (
-        step.kind !== "binding" ||
-        !step.binding.symbol.text.startsWith("$range_loop_") ||
-        step.binding.value.kind !== "function"
-      ) {
-        retainedSteps.push(step);
-        continue;
-      }
-      const permittedSymbols = new Set([
-        step.binding.symbol.id,
-        ...step.binding.value.parameters.map((parameter) => parameter.id),
-      ]);
-      const pending = [step.binding.value.body];
-      let capturedSymbol: string | undefined;
-      while (pending.length > 0 && capturedSymbol === undefined) {
-        const expression = pending.pop();
-        if (expression === undefined) break;
+  const liftedBindings: TypedDucklangBinding[] = [];
+  const liftedFunctionSymbols = new Set<number>();
+  const rewrittenResult = rewriteExpression(module.result, values);
+  const directFunctionSymbols = new Set<number>();
+  const collectDirectFunctions = (
+    expression: TypedDucklangExpression,
+  ): void => {
+    if (expression.kind === "block") {
+      for (const step of expression.steps) {
         if (
-          expression.kind === "reference" &&
-          expression.symbol.scope !== "module" &&
-          !permittedSymbols.has(expression.symbol.id)
+          step.kind === "binding" && step.binding.value.kind === "function"
         ) {
-          capturedSymbol = expression.symbol.text;
-          break;
+          directFunctionSymbols.add(step.binding.symbol.id);
         }
-        visitChildren(expression, (child) => pending.push(child));
       }
-      if (capturedSymbol !== undefined) {
-        throw new TypeError(
-          `${module.file}:${step.binding.span.start}: generated Ducklang range function ${step.binding.symbol.text} captures ${capturedSymbol}`,
-        );
-      }
-      bindings.push(step.binding);
     }
-    result = { ...result, steps: retainedSteps };
+    visitChildren(expression, collectDirectFunctions);
+  };
+  for (const binding of rewrittenBindings) {
+    if (binding.value.kind === "function") {
+      directFunctionSymbols.add(binding.symbol.id);
+    }
+    collectDirectFunctions(binding.value);
   }
+  collectDirectFunctions(rewrittenResult);
+  let nextSymbolId = Math.max(0, ...module.symbolTypes.keys()) + 1;
+  const allocateSymbolId = (): number => {
+    const symbolId = nextSymbolId;
+    nextSymbolId += 1;
+    return symbolId;
+  };
+  const bindings = rewrittenBindings.map((binding) => ({
+    ...binding,
+    value: liftGeneratedFunctions(
+      binding.value,
+      liftedBindings,
+      liftedFunctionSymbols,
+      directFunctionSymbols,
+      allocateSymbolId,
+    ),
+  }));
+  const result = liftGeneratedFunctions(
+    rewrittenResult,
+    liftedBindings,
+    liftedFunctionSymbols,
+    directFunctionSymbols,
+    allocateSymbolId,
+  );
+  bindings.push(...liftedBindings);
 
   const bindingsBySymbol = new Map(
     bindings.map((binding) => [binding.symbol.id, binding]),
@@ -79,10 +91,258 @@ export function specializeStaticDucklangClosures(
   };
 }
 
+function liftGeneratedFunctions(
+  expression: TypedDucklangExpression,
+  liftedBindings: TypedDucklangBinding[],
+  liftedFunctionSymbols: Set<number>,
+  directFunctionSymbols: Set<number>,
+  allocateSymbolId: () => number,
+): TypedDucklangExpression {
+  if (expression.kind !== "block") {
+    return rewriteChildren(
+      expression,
+      (child) =>
+        liftGeneratedFunctions(
+          child,
+          liftedBindings,
+          liftedFunctionSymbols,
+          directFunctionSymbols,
+          allocateSymbolId,
+        ),
+    );
+  }
+  let block = expression;
+  for (const step of expression.steps) {
+    if (
+      step.kind !== "binding" ||
+      !isGeneratedControlFunction(step.binding) ||
+      step.binding.value.kind !== "function"
+    ) {
+      continue;
+    }
+    const originalSymbol = step.binding.symbol;
+    const functionSymbol = liftedFunctionSymbols.has(originalSymbol.id)
+      ? { ...originalSymbol, id: allocateSymbolId() }
+      : originalSymbol;
+    liftedFunctionSymbols.add(functionSymbol.id);
+    directFunctionSymbols.add(functionSymbol.id);
+    const functionValue = functionSymbol === originalSymbol
+      ? step.binding.value
+      : renameSymbolReferences(
+        step.binding.value,
+        originalSymbol.id,
+        functionSymbol,
+      ) as Extract<TypedDucklangExpression, { readonly kind: "function" }>;
+    const captures = collectFunctionCaptures(
+      functionSymbol.id,
+      functionValue,
+      directFunctionSymbols,
+    );
+    const captureReferences = captures.map((capture) => ({
+      kind: "reference" as const,
+      symbol: capture.symbol,
+      type: capture.type,
+      span: capture.symbol.span,
+    }));
+    const appendCaptures = (
+      candidate: TypedDucklangExpression,
+    ): TypedDucklangExpression =>
+      appendCallArguments(
+        candidate,
+        functionSymbol.id,
+        captureReferences,
+      );
+    const preparedFunction = {
+      ...functionValue,
+      parameters: [
+        ...functionValue.parameters,
+        ...captures.map((capture) => capture.symbol),
+      ],
+      body: appendCaptures(functionValue.body),
+    } satisfies Extract<
+      TypedDucklangExpression,
+      { readonly kind: "function" }
+    >;
+    const liftedFunction = liftGeneratedFunctions(
+      preparedFunction,
+      liftedBindings,
+      liftedFunctionSymbols,
+      directFunctionSymbols,
+      allocateSymbolId,
+    );
+    if (liftedFunction.kind !== "function") {
+      throw new TypeError(
+        `${step.binding.span.file}:${step.binding.span.start}: generated Ducklang control binding ${step.binding.symbol.text} stopped being a function during closure conversion`,
+      );
+    }
+    liftedBindings.push({
+      ...step.binding,
+      symbol: functionSymbol,
+      value: liftedFunction,
+    });
+    const remainingBlock = {
+      ...block,
+      steps: removeGeneratedFunctionStep(block.steps, step.binding),
+    } satisfies Extract<TypedDucklangExpression, { readonly kind: "block" }>;
+    block = appendCaptures(
+      functionSymbol === originalSymbol
+        ? remainingBlock
+        : renameSymbolReferences(
+          remainingBlock,
+          originalSymbol.id,
+          functionSymbol,
+        ),
+    ) as Extract<TypedDucklangExpression, { readonly kind: "block" }>;
+  }
+  return rewriteChildren(
+    block,
+    (child) =>
+      liftGeneratedFunctions(
+        child,
+        liftedBindings,
+        liftedFunctionSymbols,
+        directFunctionSymbols,
+        allocateSymbolId,
+      ),
+  );
+}
+
+function removeGeneratedFunctionStep(
+  steps: readonly TypedDucklangBlockStep[],
+  binding: TypedDucklangBinding,
+): readonly TypedDucklangBlockStep[] {
+  let removed = false;
+  return steps.filter((step) => {
+    if (
+      !removed && step.kind === "binding" &&
+      step.binding.symbol.id === binding.symbol.id &&
+      step.binding.span.start === binding.span.start
+    ) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+}
+
+function renameSymbolReferences(
+  expression: TypedDucklangExpression,
+  symbolId: number,
+  replacement: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "reference" }
+  >["symbol"],
+): TypedDucklangExpression {
+  if (
+    expression.kind === "reference" && expression.symbol.id === symbolId
+  ) {
+    return { ...expression, symbol: replacement };
+  }
+  return rewriteChildren(
+    expression,
+    (child) => renameSymbolReferences(child, symbolId, replacement),
+  );
+}
+
+function isGeneratedControlFunction(binding: TypedDucklangBinding): boolean {
+  return binding.symbol.text.startsWith("$loop_") ||
+    binding.symbol.text.startsWith("$range_loop_");
+}
+
+type FunctionCapture = {
+  readonly symbol: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "reference" }
+  >["symbol"];
+  readonly type: TypedDucklangExpression["type"];
+};
+
+function collectFunctionCaptures(
+  functionSymbolId: number,
+  function_: Extract<TypedDucklangExpression, { readonly kind: "function" }>,
+  directFunctionSymbols: ReadonlySet<number>,
+): readonly FunctionCapture[] {
+  const defined = new Set([
+    functionSymbolId,
+    ...function_.parameters.map((parameter) => parameter.id),
+    ...directFunctionSymbols,
+  ]);
+  collectDefinedSymbols(function_.body, defined);
+  const captures = new Map<number, FunctionCapture>();
+  const visit = (expression: TypedDucklangExpression): void => {
+    if (
+      expression.kind === "reference" &&
+      expression.symbol.scope !== "module" &&
+      !defined.has(expression.symbol.id) &&
+      !captures.has(expression.symbol.id)
+    ) {
+      captures.set(expression.symbol.id, {
+        symbol: expression.symbol,
+        type: expression.type,
+      });
+      return;
+    }
+    visitChildren(expression, visit);
+  };
+  visit(function_.body);
+  return [...captures.values()];
+}
+
+function collectDefinedSymbols(
+  expression: TypedDucklangExpression,
+  symbols: Set<number>,
+): void {
+  if (expression.kind === "function") {
+    for (const parameter of expression.parameters) symbols.add(parameter.id);
+  }
+  if (expression.kind === "ifUnion" && expression.payloadSymbol !== undefined) {
+    symbols.add(expression.payloadSymbol.id);
+  }
+  if (expression.kind === "block") {
+    for (const step of expression.steps) {
+      if (step.kind === "binding") symbols.add(step.binding.symbol.id);
+    }
+  }
+  visitChildren(expression, (child) => collectDefinedSymbols(child, symbols));
+}
+
+function appendCallArguments(
+  expression: TypedDucklangExpression,
+  functionSymbolId: number,
+  arguments_: readonly TypedDucklangExpression[],
+): TypedDucklangExpression {
+  const rewritten = rewriteChildren(
+    expression,
+    (child) => appendCallArguments(child, functionSymbolId, arguments_),
+  );
+  if (
+    rewritten.kind !== "call" || rewritten.callee.kind !== "reference" ||
+    rewritten.callee.symbol.id !== functionSymbolId
+  ) {
+    return rewritten;
+  }
+  return {
+    ...rewritten,
+    arguments: [...rewritten.arguments, ...arguments_],
+  };
+}
+
 function rewriteExpression(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression {
+  if (expression.kind === "reference") {
+    const value = values.get(expression.symbol.id);
+    if (
+      value?.kind === "reference" && value.symbol.id !== expression.symbol.id
+    ) {
+      return {
+        ...value,
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+  }
   if (expression.kind === "block") {
     return rewriteBlock(expression, values);
   }
@@ -90,6 +350,15 @@ function rewriteExpression(
     expression,
     (child) => rewriteExpression(child, values),
   );
+  if (
+    rewritten.kind === "comptime" &&
+    rewritten.context === "valuePattern"
+  ) {
+    return {
+      ...rewritten,
+      expression: staticValue(rewritten.expression, values),
+    };
+  }
   if (rewritten.kind === "ownership") {
     return rewritten.expression;
   }
@@ -334,7 +603,7 @@ function rewriteExpression(
     (rewritten.type.name === "tuple" || rewritten.type.name === "array");
   const specializesFunctionParameter = factory.parameters.some(
     (parameter, index) =>
-      isCalledParameter(factoryBody, parameter.id) &&
+      referencesSymbol(factoryBody, parameter.id) &&
       staticValue(rewritten.arguments[index], values).kind === "function",
   );
   const specializesTextParameter = factory.parameters.some(
@@ -388,28 +657,30 @@ function inlineableFunctionBody(
 }
 
 function containsReturn(expression: TypedDucklangExpression): boolean {
-  if (expression.kind === "return") return true;
-  let found = false;
-  visitChildren(expression, (child) => {
-    if (!found && containsReturn(child)) found = true;
-  });
-  return found;
+  const pending = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.kind === "return") return true;
+    visitChildren(current, (child) => pending.push(child));
+  }
+  return false;
 }
 
 function referencesSymbol(
   expression: TypedDucklangExpression,
   symbolId: number,
 ): boolean {
-  if (
-    expression.kind === "reference" && expression.symbol.id === symbolId
-  ) {
-    return true;
+  const pending = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (
+      current.kind === "reference" && current.symbol.id === symbolId
+    ) {
+      return true;
+    }
+    visitChildren(current, (child) => pending.push(child));
   }
-  let found = false;
-  visitChildren(expression, (child) => {
-    if (!found && referencesSymbol(child, symbolId)) found = true;
-  });
-  return found;
+  return false;
 }
 
 function rewriteBlock(
@@ -456,43 +727,96 @@ function collectReferences(
   expression: TypedDucklangExpression,
   references: Set<number>,
 ): void {
-  if (expression.kind === "reference") {
-    references.add(expression.symbol.id);
-    return;
+  const pending = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.kind === "reference") {
+      references.add(current.symbol.id);
+      continue;
+    }
+    visitChildren(current, (child) => pending.push(child));
   }
-  visitChildren(expression, (child) => collectReferences(child, references));
 }
 
 function isCalledParameter(
   expression: TypedDucklangExpression,
   parameterId: number,
 ): boolean {
-  if (
-    expression.kind === "call" && expression.callee.kind === "reference" &&
-    expression.callee.symbol.id === parameterId
-  ) {
-    return true;
+  const pending = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (
+      current.kind === "call" && current.callee.kind === "reference" &&
+      current.callee.symbol.id === parameterId
+    ) {
+      return true;
+    }
+    visitChildren(current, (child) => pending.push(child));
   }
-  let found = false;
-  visitChildren(expression, (child) => {
-    if (!found && isCalledParameter(child, parameterId)) found = true;
-  });
-  return found;
+  return false;
 }
 
 function foldStaticBinary(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression | undefined {
-  if (expression.kind !== "binary" || expression.operator !== "==") {
-    return undefined;
-  }
+  if (expression.kind !== "binary") return undefined;
   const left = staticValue(expression.left, values);
   const right = staticValue(expression.right, values);
-  if (left.kind !== "string" || right.kind !== "string") return undefined;
-  return {
-    kind: "boolean",
-    value: left.value === right.value,
+  if (
+    (expression.operator === "==" || expression.operator === "!=") &&
+    left.kind === "string" && right.kind === "string"
+  ) {
+    const equal = left.value === right.value;
+    return {
+      kind: "boolean",
+      value: expression.operator === "==" ? equal : !equal,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (left.kind !== "integer" || right.kind !== "integer") return undefined;
+  const comparison = expression.operator === "=="
+    ? left.value === right.value
+    : expression.operator === "!="
+    ? left.value !== right.value
+    : expression.operator === "<"
+    ? left.value < right.value
+    : expression.operator === "<="
+    ? left.value <= right.value
+    : expression.operator === ">"
+    ? left.value > right.value
+    : expression.operator === ">="
+    ? left.value >= right.value
+    : undefined;
+  if (comparison !== undefined) {
+    return {
+      kind: "boolean",
+      value: comparison,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (
+    (expression.operator === "/" || expression.operator === "%") &&
+    right.value === 0
+  ) {
+    return undefined;
+  }
+  const value = expression.operator === "+"
+    ? (left.value + right.value) | 0
+    : expression.operator === "-"
+    ? (left.value - right.value) | 0
+    : expression.operator === "*"
+    ? Math.imul(left.value, right.value)
+    : expression.operator === "/"
+    ? Math.trunc(left.value / right.value) | 0
+    : expression.operator === "%"
+    ? (left.value % right.value) | 0
+    : undefined;
+  return value === undefined ? undefined : {
+    kind: "integer",
+    value,
     type: expression.type,
     span: expression.span,
   };
@@ -504,14 +828,199 @@ function foldStaticIntrinsic(
 ): TypedDucklangExpression | undefined {
   if (expression.kind !== "call") return undefined;
   const callee = staticValue(expression.callee, values);
-  if (
-    callee.kind !== "intrinsic"
-  ) {
-    return undefined;
-  }
   const arguments_ = expression.arguments.map((argument) =>
     staticValue(argument, values)
   );
+  if (callee.kind === "primitive") {
+    if (
+      callee.primitiveId === PrimitiveId.bytesGenerate &&
+      arguments_.length === 2 && arguments_[0].kind === "integer" &&
+      arguments_[1].kind === "function"
+    ) {
+      expression = { ...expression, arguments: arguments_ };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.booleanNot &&
+      arguments_.length === 1
+    ) {
+      return {
+        kind: "binary",
+        operator: "==",
+        left: arguments_[0],
+        right: {
+          kind: "boolean",
+          value: false,
+          type: arguments_[0].type,
+          span: expression.span,
+        },
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bytesGenerate &&
+      arguments_.length === 2 && arguments_[1].kind === "function" &&
+      arguments_[1].parameters.length === 1 &&
+      !referencesSymbol(
+        arguments_[1].body,
+        arguments_[1].parameters[0].id,
+      )
+    ) {
+      return {
+        ...expression,
+        callee: {
+          ...callee,
+          primitiveId: PrimitiveId.bytesFill,
+          type: {
+            kind: "function",
+            parameter: arguments_[0].type,
+            result: {
+              kind: "function",
+              parameter: arguments_[1].body.type,
+              result: expression.type,
+            },
+          },
+        },
+        arguments: [arguments_[0], arguments_[1].body],
+      };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bytesGenerate &&
+      arguments_.length === 2 && arguments_[0].kind === "integer" &&
+      arguments_[1].kind === "function"
+    ) {
+      return expression;
+    }
+    if (
+      callee.primitiveId === PrimitiveId.panic && arguments_.length === 1 &&
+      arguments_[0].kind === "string"
+    ) {
+      return { ...expression, callee, arguments: [] };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bufferLength &&
+      arguments_.length === 1 && arguments_[0].kind === "if"
+    ) {
+      return rewriteExpression({
+        ...arguments_[0],
+        consequence: {
+          ...expression,
+          arguments: [arguments_[0].consequence],
+        },
+        alternative: {
+          ...expression,
+          arguments: [arguments_[0].alternative],
+        },
+        type: expression.type,
+        span: expression.span,
+      }, values);
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bufferLength &&
+      arguments_.length === 1 && arguments_[0].kind === "string"
+    ) {
+      return {
+        kind: "integer",
+        value: new TextEncoder().encode(arguments_[0].value).length,
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bufferAppend &&
+      arguments_.length === 2 && arguments_[0].kind === "string" &&
+      arguments_[1].kind === "string"
+    ) {
+      return {
+        kind: "string",
+        value: arguments_[0].value + arguments_[1].value,
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bufferGet &&
+      arguments_.length === 2 && arguments_[0].kind === "string" &&
+      arguments_[1].kind === "integer"
+    ) {
+      const bytes = new TextEncoder().encode(arguments_[0].value);
+      const index = arguments_[1].value;
+      if (index < 0 || index >= bytes.length) {
+        throw new RangeError(
+          `${expression.span.file}:${expression.span.start}: Ducklang text index ${index} is outside byte length ${bytes.length}`,
+        );
+      }
+      return {
+        kind: "integer",
+        value: bytes[index],
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (
+      callee.primitiveId === PrimitiveId.bufferGet &&
+      arguments_.length === 2 && arguments_[0].kind === "string"
+    ) {
+      return {
+        kind: "selectProductElement",
+        values: [...new TextEncoder().encode(arguments_[0].value)].map(
+          (value): TypedDucklangExpression => ({
+            kind: "integer",
+            value,
+            type: expression.type,
+            span: expression.span,
+          }),
+        ),
+        index: expression.arguments[1],
+        type: expression.type,
+        span: expression.span,
+      };
+    }
+    if (
+      callee.primitiveId !== PrimitiveId.bufferSlice ||
+      arguments_.length !== 3 || arguments_[0].kind !== "string" ||
+      arguments_[1].kind !== "integer" || arguments_[2].kind !== "integer"
+    ) {
+      return { ...expression, callee, arguments: arguments_ };
+    }
+    const bytes = new TextEncoder().encode(arguments_[0].value);
+    const start = arguments_[1].value;
+    const end = arguments_[2].value;
+    if (start < 0 || end < start || end > bytes.length) {
+      throw new RangeError(
+        `${expression.span.file}:${expression.span.start}: Ducklang slice range ${start}..${end} is outside text byte length ${bytes.length}`,
+      );
+    }
+    let value: string;
+    try {
+      value = new TextDecoder("utf-8", { fatal: true }).decode(
+        bytes.subarray(start, end),
+      );
+    } catch (cause) {
+      throw new TypeError(
+        `${expression.span.file}:${expression.span.start}: Ducklang static slice ${start}..${end} splits a UTF-8 sequence`,
+        { cause },
+      );
+    }
+    return {
+      kind: "string",
+      value,
+      type: expression.type,
+      span: expression.span,
+    };
+  }
+  if (callee.kind !== "intrinsic") return undefined;
+  if (
+    (callee.modulePath === "duck:prelude" ||
+      callee.modulePath === "duck:prelude/types") &&
+    callee.exportName === "cast" && arguments_.length === 2
+  ) {
+    return {
+      ...expression.arguments[0],
+      type: expression.type,
+      span: expression.span,
+    };
+  }
   if (
     callee.modulePath === "duck:prelude/testing" &&
     (callee.exportName === "assert" ||
@@ -526,9 +1035,8 @@ function foldStaticIntrinsic(
     const panic: TypedDucklangExpression = {
       kind: "call",
       callee: {
-        kind: "intrinsic",
-        modulePath: "duck:prelude/runtime",
-        exportName: "panic",
+        kind: "primitive",
+        primitiveId: PrimitiveId.panic,
         type: {
           kind: "function",
           parameter: { kind: "constructor", name: "text", arguments: [] },
@@ -549,13 +1057,6 @@ function foldStaticIntrinsic(
       type: expression.type,
       span: expression.span,
     }, values);
-  }
-  if (
-    callee.modulePath === "duck:prelude/runtime" &&
-    callee.exportName === "panic" && arguments_.length === 1 &&
-    arguments_[0].kind === "string"
-  ) {
-    return { ...expression, callee, arguments: [] };
   }
   if (
     callee.modulePath === "duck:compiler/string-pattern" &&
@@ -620,18 +1121,6 @@ function foldStaticIntrinsic(
       kind: "boolean",
       value: declarationKind === pattern.kind && fieldsMatch &&
         (pattern.open || declarationFields.length === pattern.fields.length),
-      type: expression.type,
-      span: expression.span,
-    };
-  }
-  if (
-    callee.modulePath === "duck:compiler/reflection" &&
-    callee.exportName === "length" && arguments_.length === 1 &&
-    arguments_[0].kind === "string"
-  ) {
-    return {
-      kind: "integer",
-      value: new TextEncoder().encode(arguments_[0].value).length,
       type: expression.type,
       span: expression.span,
     };
@@ -794,116 +1283,7 @@ function foldStaticIntrinsic(
       span: expression.span,
     };
   }
-  if (callee.modulePath !== "duck:prelude/runtime") return undefined;
-  if (
-    callee.exportName === "length" && arguments_.length === 1 &&
-    arguments_[0].kind === "if"
-  ) {
-    return rewriteExpression({
-      ...arguments_[0],
-      consequence: {
-        ...expression,
-        arguments: [arguments_[0].consequence],
-      },
-      alternative: {
-        ...expression,
-        arguments: [arguments_[0].alternative],
-      },
-      type: expression.type,
-      span: expression.span,
-    }, values);
-  }
-  if (
-    callee.exportName === "length" && arguments_.length === 1 &&
-    arguments_[0].kind === "string"
-  ) {
-    return {
-      kind: "integer",
-      value: new TextEncoder().encode(arguments_[0].value).length,
-      type: expression.type,
-      span: expression.span,
-    };
-  }
-  if (
-    callee.exportName === "append" && arguments_.length === 2 &&
-    arguments_[0].kind === "string" && arguments_[1].kind === "string"
-  ) {
-    return {
-      kind: "string",
-      value: arguments_[0].value + arguments_[1].value,
-      type: expression.type,
-      span: expression.span,
-    };
-  }
-  if (
-    callee.exportName === "get" && arguments_.length === 2 &&
-    arguments_[0].kind === "string" && arguments_[1].kind === "integer"
-  ) {
-    const bytes = new TextEncoder().encode(arguments_[0].value);
-    const index = arguments_[1].value;
-    if (index < 0 || index >= bytes.length) {
-      throw new RangeError(
-        `${expression.span.file}:${expression.span.start}: Ducklang text index ${index} is outside byte length ${bytes.length}`,
-      );
-    }
-    return {
-      kind: "integer",
-      value: bytes[index],
-      type: expression.type,
-      span: expression.span,
-    };
-  }
-  if (
-    callee.exportName === "get" && arguments_.length === 2 &&
-    arguments_[0].kind === "string"
-  ) {
-    return {
-      kind: "selectProductElement",
-      values: [...new TextEncoder().encode(arguments_[0].value)].map(
-        (value): TypedDucklangExpression => ({
-          kind: "integer",
-          value,
-          type: expression.type,
-          span: expression.span,
-        }),
-      ),
-      index: expression.arguments[1],
-      type: expression.type,
-      span: expression.span,
-    };
-  }
-  if (
-    callee.exportName !== "slice" || arguments_.length !== 3 ||
-    arguments_[0].kind !== "string" || arguments_[1].kind !== "integer" ||
-    arguments_[2].kind !== "integer"
-  ) {
-    return undefined;
-  }
-  const bytes = new TextEncoder().encode(arguments_[0].value);
-  const start = arguments_[1].value;
-  const end = arguments_[2].value;
-  if (start < 0 || end < start || end > bytes.length) {
-    throw new RangeError(
-      `${expression.span.file}:${expression.span.start}: Ducklang slice range ${start}..${end} is outside text byte length ${bytes.length}`,
-    );
-  }
-  let value: string;
-  try {
-    value = new TextDecoder("utf-8", { fatal: true }).decode(
-      bytes.subarray(start, end),
-    );
-  } catch (cause) {
-    throw new TypeError(
-      `${expression.span.file}:${expression.span.start}: Ducklang static slice ${start}..${end} splits a UTF-8 sequence`,
-      { cause },
-    );
-  }
-  return {
-    kind: "string",
-    value,
-    type: expression.type,
-    span: expression.span,
-  };
+  return undefined;
 }
 
 function staticValue(
@@ -930,13 +1310,42 @@ function substitute(
   expression: TypedDucklangExpression,
   substitutions: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression {
-  if (expression.kind === "reference") {
-    return substitutions.get(expression.symbol.id) ?? expression;
+  const rewritten = new WeakMap<object, TypedDucklangExpression>();
+  const pending: {
+    readonly expression: TypedDucklangExpression;
+    readonly childrenVisited: boolean;
+  }[] = [{ expression, childrenVisited: false }];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (rewritten.has(current.expression)) continue;
+    if (current.expression.kind === "reference") {
+      rewritten.set(
+        current.expression,
+        substitutions.get(current.expression.symbol.id) ?? current.expression,
+      );
+      continue;
+    }
+    if (!current.childrenVisited) {
+      pending.push({ ...current, childrenVisited: true });
+      visitChildren(current.expression, (child) => {
+        if (!rewritten.has(child)) {
+          pending.push({ expression: child, childrenVisited: false });
+        }
+      });
+      continue;
+    }
+    rewritten.set(
+      current.expression,
+      rewriteChildren(current.expression, (child) => {
+        const result = rewritten.get(child);
+        if (result !== undefined) return result;
+        throw new Error(
+          `${current.expression.span.file}:${current.expression.span.start}: Ducklang substitution visited a parent before its child`,
+        );
+      }),
+    );
   }
-  return rewriteChildren(
-    expression,
-    (child) => substitute(child, substitutions),
-  );
+  return rewritten.get(expression)!;
 }
 
 function collapseEmptyBlock(
@@ -955,10 +1364,13 @@ function rewriteChildren(
   switch (expression.kind) {
     case "integer":
     case "integer64":
+    case "float32":
+    case "float64":
     case "boolean":
     case "unit":
     case "string":
     case "intrinsic":
+    case "primitive":
     case "reference":
       return expression;
     case "unionCase":

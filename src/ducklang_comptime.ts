@@ -6,10 +6,15 @@ import {
   evaluateBytecodeOnGpu,
   type ScalarComptimeExpression,
 } from "./comptime.ts";
+import {
+  type DucklangConstValue,
+  evaluateDucklangConst,
+} from "./ducklang_const.ts";
 import type {
   TypedDucklangExpression,
   TypedDucklangModule,
 } from "./ducklang_types.ts";
+import type { Type } from "./types.ts";
 
 export async function evaluateDucklangComptime(
   module: TypedDucklangModule,
@@ -25,8 +30,15 @@ export async function evaluateDucklangComptime(
   }
   collectComptimeExpressions(module.result, expressions);
 
-  const programs = expressions.map((expression) =>
-    compileScalarComptimeExpression(scalarExpression(expression))
+  const constValues = expressions.map((expression) =>
+    evaluateDucklangConst(expression, { fuel: 1_000_000 })
+  );
+  const scalarExpressions = expressions.flatMap((expression, index) => {
+    const scalar = scalarExpression(expression);
+    return scalar === undefined ? [] : [{ expression: scalar, index }];
+  });
+  const programs = scalarExpressions.map(({ expression }) =>
+    compileScalarComptimeExpression(expression)
   );
   const cpu = evaluateBytecodeOnCpu(programs);
   const gpu = runGpu ? await evaluateBytecodeOnGpu(programs) : undefined;
@@ -42,10 +54,22 @@ export async function evaluateDucklangComptime(
       }
     }
   }
+  for (const [scalarIndex, candidate] of scalarExpressions.entries()) {
+    const constValue = constValues[candidate.index];
+    const cpuValue = cpu.values[scalarIndex];
+    if (
+      constValue === undefined || cpuValue === undefined ||
+      JSON.stringify(comptimeValue(constValue)) !== JSON.stringify(cpuValue)
+    ) {
+      throw new Error(
+        `Ducklang scalar/ConstValue comptime mismatch at job ${candidate.index}`,
+      );
+    }
+  }
 
   let valueIndex = 0;
   const replace = (expression: TypedDucklangExpression) =>
-    replaceComptimeExpressions(expression, cpu.values, () => valueIndex++);
+    replaceComptimeExpressions(expression, constValues, () => valueIndex++);
   return {
     module: {
       ...module,
@@ -72,10 +96,13 @@ function collectComptimeExpressions(
   switch (expression.kind) {
     case "integer":
     case "integer64":
+    case "float32":
+    case "float64":
     case "boolean":
     case "unit":
     case "string":
     case "intrinsic":
+    case "primitive":
     case "reference":
       return;
     case "unionCase":
@@ -168,48 +195,58 @@ function collectComptimeExpressions(
 
 function scalarExpression(
   expression: TypedDucklangExpression,
-): ScalarComptimeExpression {
+): ScalarComptimeExpression | undefined {
   switch (expression.kind) {
     case "integer":
     case "boolean":
       return expression;
     case "integer64":
-      throw new TypeError(
-        `${expression.span.file}:${expression.span.start}: Ducklang scalar comptime does not yet support i64`,
-      );
-    case "binary":
+    case "float32":
+    case "float64":
+      return undefined;
+    case "binary": {
+      const left = scalarExpression(expression.left);
+      const right = scalarExpression(expression.right);
+      if (left === undefined || right === undefined) return undefined;
       return {
         ...expression,
-        left: scalarExpression(expression.left),
-        right: scalarExpression(expression.right),
+        left,
+        right,
       };
-    case "if":
+    }
+    case "if": {
+      const condition = scalarExpression(expression.condition);
+      const thenBranch = scalarExpression(expression.consequence);
+      const elseBranch = scalarExpression(expression.alternative);
+      if (
+        condition === undefined || thenBranch === undefined ||
+        elseBranch === undefined
+      ) {
+        return undefined;
+      }
       return {
         kind: "if",
-        condition: scalarExpression(expression.condition),
-        thenBranch: scalarExpression(expression.consequence),
-        elseBranch: scalarExpression(expression.alternative),
+        condition,
+        thenBranch,
+        elseBranch,
         span: expression.span,
       };
+    }
     case "comptime":
       return scalarExpression(expression.expression);
     case "block":
       if (expression.steps.length === 0) {
         return scalarExpression(expression.result);
       }
-      throw new TypeError(
-        `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar block; found ${expression.steps.length} steps`,
-      );
+      return undefined;
     default:
-      throw new TypeError(
-        `${expression.span.file}:${expression.span.start}: Ducklang comptime requires a closed scalar expression; found ${expression.kind}`,
-      );
+      return undefined;
   }
 }
 
 function replaceComptimeExpressions(
   expression: TypedDucklangExpression,
-  values: readonly ComptimeValue[],
+  values: readonly DucklangConstValue[],
   nextValueIndex: () => number,
 ): TypedDucklangExpression {
   if (expression.kind === "comptime") {
@@ -222,27 +259,18 @@ function replaceComptimeExpressions(
         `${expression.span.file}:${expression.span.start}: missing Ducklang comptime result`,
       );
     }
-    return value.kind === "integer"
-      ? {
-        kind: "integer",
-        value: value.value,
-        type: expression.type,
-        span: expression.span,
-      }
-      : {
-        kind: "boolean",
-        value: value.value,
-        type: expression.type,
-        span: expression.span,
-      };
+    return constExpression(value, expression);
   }
   switch (expression.kind) {
     case "integer":
     case "integer64":
+    case "float32":
+    case "float64":
     case "boolean":
     case "unit":
     case "string":
     case "intrinsic":
+    case "primitive":
     case "reference":
       return expression;
     case "unionCase":
@@ -494,4 +522,159 @@ function replaceComptimeExpressions(
         ),
       };
   }
+}
+
+function comptimeValue(value: DucklangConstValue): ComptimeValue | undefined {
+  if (value.kind !== "scalar") return undefined;
+  if (value.scalar.kind === "i32") {
+    return { kind: "integer", value: value.scalar.value };
+  }
+  if (value.scalar.kind === "bool") {
+    return { kind: "boolean", value: value.scalar.value };
+  }
+  return undefined;
+}
+
+function constExpression(
+  value: DucklangConstValue,
+  template: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "comptime" }
+  >,
+): TypedDucklangExpression {
+  const span = template.span;
+  if (value.kind === "scalar") {
+    switch (value.scalar.kind) {
+      case "i32":
+        return {
+          kind: "integer",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "i64":
+        return {
+          kind: "integer64",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "f32":
+        return {
+          kind: "float32",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "f64":
+        return {
+          kind: "float64",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "bool":
+        return {
+          kind: "boolean",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "text":
+        return {
+          kind: "string",
+          value: value.scalar.value,
+          type: template.type,
+          span,
+        };
+      case "unit":
+        return { kind: "unit", type: template.type, span };
+      case "bytes":
+        throw new TypeError(
+          `${span.file}:${span.start}: compile-time Bytes require runtime buffer layout before materialization`,
+        );
+    }
+  }
+  if (value.kind === "product") {
+    return {
+      kind: "product",
+      productKind: "tuple",
+      values: value.fields.map((field, index) =>
+        materializeConstValue(
+          field.value,
+          productElementType(template.type, index),
+          span,
+        )
+      ),
+      type: template.type,
+      span,
+    };
+  }
+  if (value.kind === "sum") {
+    return {
+      kind: "unionCase",
+      unionName: value.unionName,
+      caseName: value.caseName,
+      value: materializeConstValue(
+        value.value,
+        constValueType(value.value),
+        span,
+      ),
+      type: template.type,
+      span,
+    };
+  }
+  throw new TypeError(
+    `${span.file}:${span.start}: compile-time ${value.kind} value escaped normalization`,
+  );
+}
+
+function materializeConstValue(
+  value: DucklangConstValue,
+  type: Type,
+  span: TypedDucklangExpression["span"],
+): TypedDucklangExpression {
+  return constExpression(value, {
+    kind: "comptime",
+    context: "explicit",
+    expression: { kind: "unit", type, span },
+    type,
+    span,
+  });
+}
+
+function productElementType(type: Type, index: number): Type {
+  return type.kind === "constructor" && type.arguments[index] !== undefined
+    ? type.arguments[index]
+    : { kind: "constructor", name: "unit", arguments: [] };
+}
+
+function constValueType(value: DucklangConstValue): Type {
+  if (value.kind === "scalar") {
+    const name = value.scalar.kind === "bool"
+      ? "bool"
+      : value.scalar.kind === "text"
+      ? "text"
+      : value.scalar.kind === "bytes"
+      ? "bytes"
+      : value.scalar.kind === "unit"
+      ? "unit"
+      : value.scalar.kind;
+    return { kind: "constructor", name, arguments: [] };
+  }
+  if (value.kind === "product") {
+    return {
+      kind: "constructor",
+      name: "tuple",
+      arguments: value.fields.map((field) => constValueType(field.value)),
+    };
+  }
+  if (value.kind === "sum") {
+    return {
+      kind: "constructor",
+      name: value.unionName,
+      arguments: [],
+    };
+  }
+  return { kind: "constructor", name: "unit", arguments: [] };
 }

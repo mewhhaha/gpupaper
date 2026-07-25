@@ -1,0 +1,6 @@
+module () where
+
+const captured = 40
+let add_captured = value => captured + value
+
+return { add_captured }

@@ -1,0 +1,451 @@
+module () where
+
+const { .struct } = import "duck:prelude/types" ();
+
+const { .saturating_add_i64 } = import "duck:prelude/numeric" ();
+const { .bit_xor, .panic, .text_get, .text_length, .unsafe_i32_wrap_i64, .unsafe_i64_extend_i32_signed } =
+  import "duck:prelude/runtime" ();
+const _ = import "duck:prelude/functional" ();
+
+type ByteOffset = `ByteOffset I32
+type ExitCode = `ExitCode I32
+type DurationMs = `DurationMs I64
+type UnixTimeMs = `UnixTimeMs I64
+type UnixTimeSeconds = `UnixTimeSeconds I64
+type MonotonicMs = `MonotonicMs I64
+type Fuel = `Fuel I32
+type Span = `Span I64
+
+type Decision rejection acceptance =
+  | `Accept acceptance
+  | `Reject rejection
+
+type TheseValues left right = [left, right]
+
+type These left right =
+  | `This left
+  | `That right
+  | `Both TheseValues left right
+
+type DiagnosticSeverity =
+  | `Note Unit
+  | `Warning Unit
+  | `Error Unit
+
+type Diagnostic = struct { .offset = I32, .message = Text, .severity = DiagnosticSeverity }
+type NonEmpty value = struct { .head = value, .tail = List value }
+type OnceClaim = struct { .state = Once, .granted = Bool }
+
+type Rounding =
+  | `Floor Unit
+  | `Ceiling Unit
+  | `Nearest Unit
+
+type Overflow =
+  | `Wrap Unit
+  | `Saturate Unit
+  | `Reject Unit
+
+type Authority capability = `Authority capability
+type Once = Bool
+type Comparison value = [value, value]
+type Reduction state value = [state, value]
+type TransitionInput state event = [state, event]
+type Iso left right = struct { .forward = left -> right, .backward = right -> left }
+type Codec value representation error = struct {
+  .encode = value -> representation,
+  .decode = representation -> Result error value,
+}
+
+duck Hash Self {
+  .hash = Self -> I32
+}
+
+const byte_offset: I32 -> ByteOffset = value => `ByteOffset value;
+const byte_offset_value: ByteOffset -> I32 = value => if let `ByteOffset offset = value { offset
+} else { panic "Invalid ByteOffset" };
+const exit_code: I32 -> ExitCode = value => `ExitCode value;
+const exit_code_value: ExitCode -> I32 = value => if let `ExitCode code = value { code } else {
+  panic "Invalid ExitCode" };
+const duration_ms: I64 -> DurationMs = value => `DurationMs value;
+const duration_ms_value: DurationMs -> I64 = value => if let `DurationMs milliseconds = value {
+  milliseconds } else { panic "Invalid DurationMs" };
+const read_duration_ms: &DurationMs -> I64 = (value: &DurationMs) => if let `DurationMs milliseconds = value { milliseconds } else { panic "Invalid DurationMs" };
+const unix_time_ms: I64 -> UnixTimeMs = value => `UnixTimeMs value;
+const unix_time_ms_value: UnixTimeMs -> I64 = value => if let `UnixTimeMs milliseconds = value {
+  milliseconds } else { panic "Invalid UnixTimeMs" };
+const unix_time_seconds: I64 -> UnixTimeSeconds = value => `UnixTimeSeconds value;
+const unix_time_seconds_value: UnixTimeSeconds -> I64 = value => if let `UnixTimeSeconds seconds = value { seconds } else { panic "Invalid UnixTimeSeconds" };
+const read_unix_time_seconds: &UnixTimeSeconds -> I64 = (value: &UnixTimeSeconds) => if let `UnixTimeSeconds seconds = value { seconds } else { panic "Invalid UnixTimeSeconds" };
+const unix_time_seconds_from_ms: UnixTimeMs -> UnixTimeSeconds = value => unix_time_seconds(
+  unix_time_ms_value value / 1000i64
+);
+const monotonic_ms: I64 -> MonotonicMs = value => if value > 0i64 { `MonotonicMs value } else {
+  `MonotonicMs 0i64 };
+const monotonic_ms_value: MonotonicMs -> I64 = value => if let `MonotonicMs milliseconds = value {
+  milliseconds } else { panic "Invalid MonotonicMs" };
+const read_monotonic_ms: &MonotonicMs -> I64 = (value: &MonotonicMs) => if let `MonotonicMs milliseconds = value { milliseconds } else { panic "Invalid MonotonicMs" };
+
+const duration_add: [DurationMs, DurationMs] -> DurationMs = (
+  left: DurationMs,
+  right: DurationMs,
+) => {
+    duration_ms(saturating_add_i64(duration_ms_value left, duration_ms_value right))
+  };
+
+const duration_between: [MonotonicMs, MonotonicMs] -> DurationMs = (
+  start: MonotonicMs,
+  finish: MonotonicMs,
+) => {
+  let start_ms: I64 = monotonic_ms_value start;
+  let finish_ms: I64 = monotonic_ms_value finish;
+  if finish_ms > start_ms { duration_ms(finish_ms - start_ms) } else { duration_ms 0i64 }
+};
+
+const exponential_backoff: [DurationMs, I64, I32] -> DurationMs = (
+  base: DurationMs,
+  attempt: I64,
+  jitter_per_mille: I32,
+) => {
+  let maximum: I64 = 9223372036854775807i64;
+  let delay: I64 = duration_ms_value base;
+  if delay < 0i64 { delay = 0i64 }
+  let remaining: I64 = if attempt > 1i64 { attempt - 1i64 } else { 0i64 };
+
+  loop {
+    if remaining <= 0i64 { break; }
+
+    if delay > maximum / 2i64 {
+      delay = maximum
+      remaining = 0i64
+    } else {
+      delay = delay * 2i64
+      remaining = remaining - 1i64
+    }
+  }
+
+  let jitter: I32 = jitter_per_mille;
+  if jitter < 0 { jitter = 0 }
+  let jitter_i64: I64 = unsafe_i64_extend_i32_signed jitter;
+  let whole: I64 = delay / 1000i64;
+  let remainder: I64 = delay - whole * 1000i64;
+  let scaled: I64 = 0i64;
+
+  if jitter_i64 > 0i64 {
+    if whole > maximum / jitter_i64 {
+      scaled = maximum
+    } else {
+      scaled = whole * jitter_i64
+      let fraction: I64 = remainder * jitter_i64 / 1000i64;
+      if scaled > maximum - fraction {
+        scaled = maximum
+      } else {
+        scaled = scaled + fraction
+      }
+    }
+  }
+
+  duration_ms scaled
+};
+
+const fuel: I32 -> Fuel = amount => `Fuel amount;
+
+const fuel_remaining: Fuel -> I32 = value => if let `Fuel remaining = value {
+  remaining
+} else {
+  panic "Invalid Fuel"
+};
+
+const consume_fuel: Fuel -> I32 = value => if let `Fuel remaining = value {
+  if remaining > 0 {
+    remaining - 1
+  } else {
+    0
+  }
+} else {
+  panic "Invalid Fuel"
+};
+
+const fuel_is_exhausted: Fuel -> Bool = value => fuel_remaining value == 0;
+const fuel_is_valid: Fuel -> Bool = value => fuel_remaining value >= 0;
+
+const encode_span: [I32, I32] -> I64 = (start, end) => {
+  let low = unsafe_i64_extend_i32_signed start;
+  let high = unsafe_i64_extend_i32_signed end * 4294967296i64;
+  low + high
+};
+
+const span: [I32, I32] -> Span = (start, end) => {
+  `Span (encode_span(start, end))
+};
+
+const span_is_valid: [I32, I32] -> Bool = (start, end) => start >= 0 && start <= end;
+
+const span_start: Span -> I32 = value => if let `Span encoded = value {
+  unsafe_i32_wrap_i64 encoded
+} else {
+  panic "Invalid Span"
+};
+
+const span_end: Span -> I32 = value => if let `Span encoded = value {
+  unsafe_i32_wrap_i64(encoded / 4294967296i64)
+} else {
+  panic "Invalid Span"
+};
+
+const span_length: Span -> I32 = value => span_end value - span_start value;
+
+const span_contains = (value: Span, position: I32) => position >= span_start value && position < span_end value;
+
+const span_overlaps: [Span, Span] -> Bool = (left, right) => {
+  span_start left < span_end right && span_start right < span_end left
+};
+
+const span_intersection: [Span, Span] -> Span = (left, right) => {
+  let left_start = span_start left;
+  let left_end = span_end left;
+  let right_start = span_start right;
+  let right_end = span_end right;
+  let start = if left_start > right_start { left_start } else { right_start };
+  let candidate_end = if left_end < right_end { left_end } else { right_end };
+  let end = if candidate_end < start { start } else { candidate_end };
+
+  `Span (encode_span(start, end))
+};
+
+const decision_is_accept = value => if let `Accept _ = value { true } else { false };
+const decision_is_reject = value => if let `Reject _ = value { true } else { false };
+const decision_fold = [on_reject, on_accept] => value => if let `Accept accepted = value {
+  on_accept accepted
+} else if let `Reject rejected = value {
+  on_reject rejected
+} else {
+  panic "Invalid Decision"
+};
+
+const these_is_both = value => if let `Both _ = value { true } else { false };
+const these_fold = [on_this, on_that, on_both] => value => if let `This left = value {
+  on_this left
+} else if let `That right = value {
+  on_that right
+} else if let `Both values = value {
+  let [left, right] = values;
+  on_both(left, right)
+} else {
+  panic "Invalid These"
+};
+
+const diagnostic = [offset, message, severity] => [
+  .offset = offset,
+  .message = message,
+  .severity = severity,
+];
+const non_empty = [head, tail] => [.head = head, .tail = tail];
+const non_empty_singleton = [head, empty] => [.head = head, .tail = empty];
+const non_empty_head = values => values.head;
+const non_empty_tail = values => values.tail;
+const authority = capability => `Authority capability;
+const with_authority = [authorized, use] => if let `Authority capability = authorized {
+  use capability
+} else {
+  panic "Invalid Authority"
+};
+
+const once = () => false;
+
+const once_is_claimed: Once -> Bool = value => value;
+
+const once_claim: Once -> OnceClaim = value => [.state = true, .granted = !(value)];
+
+const predicate: forall value.(value -> Bool) -> (value -> Bool) =
+  (const test) => test;
+
+const predicate_test: forall value.[value -> Bool, value] -> Bool =
+  (const condition, value) => condition value;
+
+const predicate_not: forall value.(value -> Bool) -> (value -> Bool) =
+  (const condition) => value => if condition value { false } else { true };
+
+const predicate_and: forall value.[value -> Bool, value -> Bool] -> (value -> Bool) =
+  (const left, const right) => value => if left value { right value } else { false };
+
+const predicate_or: forall value.[value -> Bool, value -> Bool] -> (value -> Bool) =
+  (const left, const right) => value => if left value { true } else { right value };
+const comparator: forall value.([value, value] -> Ordering) -> ([value, value] -> Ordering) =
+  (const compare) => compare;
+
+const comparing: forall value key.[value -> key, [key, key] -> Ordering] -> (
+  [value, value] -> Ordering
+) =
+  (const project, const ordering) => (left, right) => ordering(project left, project right);
+
+const reverse_comparator: forall value.([value, value] -> Ordering) -> ([value, value] -> Ordering) =
+  (const ordering) => (left, right) => ordering(right, left);
+
+const then_comparator: forall value.[[value, value] -> Ordering, [value, value] -> Ordering] -> (
+  [value, value] -> Ordering
+) =
+  (const first_comparator, const second_comparator) => (left, right) => {
+    let ordering = first_comparator(left, right);
+
+    if let `Equal () = ordering {
+      second_comparator(left, right)
+    } else {
+      ordering
+    }
+  };
+
+const reducer: forall state value.([state, value] -> state) -> ([state, value] -> state) =
+  (const reduce) => reduce;
+
+const reducer_run: forall state value.[[state, value] -> state, state, value] -> state =
+  (const accumulator, state, value) => accumulator(state, value);
+
+const reducer_map_input: forall state input value.[[state, input] -> state, value -> input] -> (
+  [state, value] -> state
+) =
+  (const accumulator, const transform) => (state, value) => accumulator(state, transform value);
+const patch: forall value.(value -> value) -> (value -> value) =
+  (const apply_patch) => apply_patch;
+
+const patch_identity: forall value.() -> (value -> value) =
+  () => value => value;
+
+const patch_compose: forall value.[value -> value, value -> value] -> (value -> value) =
+  (const outer, const inner) => value => outer(inner value);
+
+const patch_apply: forall value.[value -> value, value] -> value =
+  (const change, value) => change value;
+const transition: forall state event error.([state, event] -> Result error state) -> (
+  [state, event] -> Result error state
+) =
+  (const run) => run;
+
+const transition_run: forall state event error.[[state, event] -> Result error state, state,
+  event] -> Result error state =
+  (const state_transition, state, event) => state_transition(state, event);
+const iso = [forward, backward] => [.forward = forward, .backward = backward];
+const codec = [encode, decode] => [.encode = encode, .decode = decode];
+
+const iso_reverse = iso => [.forward = iso.backward, .backward = iso.forward];
+
+const codec_iso = iso => [
+  .encode = iso.forward,
+  .decode = representation => `Ok (iso.backward(representation)),
+];
+
+const hash_i32: I32 -> I32 = value => value * 16777619;
+
+const hash_text: Text -> I32 = text => {
+  let hash = -2128831035;
+  let index = 0;
+  let length = text_length text;
+
+  loop {
+    if index >= length {
+      break;
+    }
+
+    hash = bit_xor(hash, text_get [text, index]) * 16777619
+    index = index + 1
+  }
+
+  hash
+};
+
+extend I32 {
+  .hash = value => value * 16777619,
+}
+
+extend Text {
+  .hash = text => {
+    let hash = -2128831035;
+    let index = 0;
+    let byte_length = @len text;
+
+    loop {
+      if index >= byte_length {
+        break;
+      }
+
+      hash = @bit_xor(hash, @get(text, index)) * 16777619
+      index = index + 1
+    }
+
+    hash
+  },
+}
+
+return {
+  .byte_offset,
+  .byte_offset_value,
+  .exit_code,
+  .exit_code_value,
+  .duration_ms,
+  .duration_ms_value,
+  .read_duration_ms,
+  .exponential_backoff,
+  .unix_time_ms,
+  .unix_time_ms_value,
+  .unix_time_seconds,
+  .unix_time_seconds_value,
+  .read_unix_time_seconds,
+  .unix_time_seconds_from_ms,
+  .monotonic_ms,
+  .monotonic_ms_value,
+  .read_monotonic_ms,
+  .duration_add,
+  .duration_between,
+  .fuel,
+  .fuel_remaining,
+  .consume_fuel,
+  .fuel_is_exhausted,
+  .fuel_is_valid,
+  .span,
+  .span_is_valid,
+  .span_start,
+  .span_end,
+  .span_length,
+  .span_contains,
+  .span_overlaps,
+  .span_intersection,
+  .decision_is_accept,
+  .decision_is_reject,
+  .decision_fold,
+  .these_is_both,
+  .these_fold,
+  .diagnostic,
+  .non_empty,
+  .non_empty_singleton,
+  .non_empty_head,
+  .non_empty_tail,
+  .authority,
+  .with_authority,
+  .once,
+  .once_is_claimed,
+  .once_claim,
+  .predicate,
+  .predicate_test,
+  .predicate_not,
+  .predicate_and,
+  .predicate_or,
+  .comparator,
+  .comparing,
+  .reverse_comparator,
+  .then_comparator,
+  .reducer,
+  .reducer_run,
+  .reducer_map_input,
+  .patch,
+  .patch_identity,
+  .patch_compose,
+  .patch_apply,
+  .transition,
+  .transition_run,
+  .iso,
+  .iso_reverse,
+  .codec,
+  .codec_iso,
+  .hash_i32,
+  .hash_text,
+};

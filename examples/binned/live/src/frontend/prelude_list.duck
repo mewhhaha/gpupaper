@@ -1,0 +1,321 @@
+module () where
+
+const {} = import "duck:prelude/types" ();
+
+const list_empty = (const value_type) => () => {
+  let values: List value_type = `Nil ();
+  values
+};
+
+const list_prepend = (const value_type) => (value: value_type, values: List value_type) => {
+  let node: ListNode value_type = [value, values];
+  `Cons node
+};
+
+const list_singleton = (const value_type) => {
+  const empty = list_empty value_type;
+  const prepend = list_prepend value_type;
+  const singleton = (value: value_type) => prepend(value, empty());
+  singleton
+};
+
+const list_reverse = (const value_type) => {
+  const empty = list_empty value_type;
+  const prepend = list_prepend value_type;
+  const reverse = (values: List value_type) => {
+    let current = values;
+    let reversed: List value_type = empty();
+
+    loop {
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        reversed = prepend(head, reversed)
+        current = tail
+      } else {
+        break;
+      }
+    }
+
+    reversed
+  };
+  reverse
+};
+
+const list_append = (const value_type) => {
+  const prepend = list_prepend value_type;
+  const reverse = list_reverse value_type;
+  const append = (left: List value_type, right: List value_type) => {
+    let reversed = reverse left;
+    let result = right;
+
+    loop {
+      if let `Cons node = reversed {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        result = prepend(head, result)
+        reversed = tail
+      } else {
+        break;
+      }
+    }
+
+    result
+  };
+  append
+};
+
+const list_length = (const value_type) => (values: List value_type) => {
+  let current = values;
+  let count = 0;
+
+  loop {
+    if let `Cons node = current {
+      let typed_node: ListNode value_type = node;
+      let [_, tail] = typed_node;
+      count = count + 1
+      current = tail
+    } else {
+      break;
+    }
+  }
+
+  count
+};
+
+const list_take = (const value_type) => {
+  const empty = list_empty value_type;
+  const prepend = list_prepend value_type;
+  const reverse = list_reverse value_type;
+  const take = (count: I32, values: List value_type) => {
+    let current = values;
+    let remaining = count;
+    let reversed: List value_type = empty();
+
+    loop {
+      if remaining <= 0 { break; }
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        reversed = prepend(head, reversed)
+        current = tail
+        remaining = remaining - 1
+      } else {
+        break;
+      }
+    }
+
+    reverse reversed
+  };
+  take
+};
+
+const list_drop = (const value_type) => (count: I32, values: List value_type) => {
+  let current = values;
+  let remaining = count;
+
+  loop {
+    if remaining <= 0 { break; }
+    if let `Cons node = current {
+      let typed_node: ListNode value_type = node;
+      let [_, tail] = typed_node;
+      current = tail
+      remaining = remaining - 1
+    } else {
+      break;
+    }
+  }
+
+  current
+};
+
+const list_nth_or = (const value_type) => (
+  fallback: value_type,
+  index: I32,
+  values: List value_type,
+) => {
+  let current = values;
+  let result = fallback;
+  let position = 0;
+
+  loop {
+    if let `Cons node = current {
+      let typed_node: ListNode value_type = node;
+      let [head, tail] = typed_node;
+      if position == index {
+        result = head
+        break;
+      }
+      position = position + 1
+      current = tail
+    } else {
+      break;
+    }
+  }
+
+  result
+};
+
+const list = (const value_type) => {
+  const empty = () => {
+    let values: List value_type = `Nil ();
+    values
+  };
+
+  const prepend = (value: value_type, values: List value_type) => {
+    let node: ListNode value_type = [value, values];
+    `Cons node
+  };
+
+  const singleton = (value: value_type) => prepend(value, empty());
+
+  const reverse = (values: List value_type) => {
+    let current = values;
+    let reversed: List value_type = empty();
+
+    loop {
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        reversed = prepend(head, reversed)
+        current = tail
+      } else {
+        break;
+      }
+    }
+
+    reversed
+  };
+
+  const append = (left: List value_type, right: List value_type) => {
+    let reversed = reverse left;
+    let result = right;
+
+    loop {
+      if let `Cons node = reversed {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        result = prepend(head, result)
+        reversed = tail
+      } else {
+        break;
+      }
+    }
+
+    result
+  };
+
+  const length = (values: List value_type) => {
+    let current = values;
+    let count = 0;
+    let done = false;
+
+    loop {
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [_, tail] = typed_node;
+        count = count + 1
+        current = tail
+      } else {
+        done = true
+      }
+
+      if done { break; }
+    }
+
+    count
+  };
+
+  const take = (count: I32, values: List value_type) => {
+    let current = values;
+    let remaining = count;
+    let reversed: List value_type = empty();
+
+    loop {
+      if remaining <= 0 { break; }
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+        reversed = prepend(head, reversed)
+        current = tail
+        remaining = remaining - 1
+      } else {
+        break;
+      }
+    }
+
+    reverse reversed
+  };
+
+  const drop = (count: I32, values: List value_type) => {
+    let current = values;
+    let remaining = count;
+
+    loop {
+      if remaining <= 0 { break; }
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [_, tail] = typed_node;
+        current = tail
+        remaining = remaining - 1
+      } else {
+        break;
+      }
+    }
+
+    current
+  };
+
+  const nth_or = (fallback: value_type, index: I32, values: List value_type) => {
+    let current = values;
+    let result = fallback;
+    let position = 0;
+    let done = false;
+
+    loop {
+      if let `Cons node = current {
+        let typed_node: ListNode value_type = node;
+        let [head, tail] = typed_node;
+
+        if position == index {
+          result = head
+          done = true
+        } else {
+          position = position + 1
+          current = tail
+        }
+      } else {
+        done = true
+      }
+
+      if done { break; }
+    }
+
+    result
+  };
+
+  {
+    .empty = empty,
+    .prepend = prepend,
+    .singleton = singleton,
+    .reverse = reverse,
+    .append = append,
+    .length = length,
+    .take = take,
+    .drop = drop,
+    .nth_or = nth_or,
+  }
+};
+
+return {
+  .list,
+  .list_empty,
+  .list_prepend,
+  .list_singleton,
+  .list_reverse,
+  .list_append,
+  .list_length,
+  .list_take,
+  .list_drop,
+  .list_nth_or,
+};

@@ -1,61 +1,63 @@
-import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
+import { parseDucklangModule } from "../src/ducklang_parser.ts";
 
-const parserWasmUrl = new URL(
-  "../grammar/generated/parser.wasm",
-  import.meta.url,
-);
-const parserPlanUrl = new URL(
-  "../grammar/generated/parser.plan",
-  import.meta.url,
-);
 const corpusUrl = new URL("../examples/binned/", import.meta.url);
+const liveTargetUrl = new URL("../examples/binned/live/", import.meta.url);
 
-Deno.test("Baba generated Wasm accepts every Ducklang source file", async () => {
-  const parser = createParser({
-    bytes: await Deno.readFile(parserWasmUrl),
-    plan: await Deno.readFile(parserPlanUrl),
-  });
+Deno.test("Ducklang frontend parses every vendored source file", async () => {
+  const sources = (await collectDuckSources(corpusUrl)).filter((source) =>
+    !source.pathname.startsWith(liveTargetUrl.pathname)
+  );
+  assertEquals(sources.length, 121, "vendored Duck source count");
 
-  try {
-    const sources = await collectDuckSources(corpusUrl);
-    assertEquals(sources.length, 118, "vendored Duck source count");
-
-    const failures: string[] = [];
-    for (const sourceUrl of sources) {
-      const source = await Deno.readTextFile(sourceUrl);
-      const result = parser.parse(source, { maxTraceActions: 10_000_000 });
-      if (result.ok) continue;
-
-      const diagnostics = result.diagnostics.map((diagnostic) => {
-        const start = diagnostic.span.start;
-        const excerpt = source.slice(Math.max(0, start - 24), start + 32)
-          .replaceAll("\n", "\\n");
-        const lexed = parser.lex(source);
-        const nearbyTokens: string[] = [];
-        for (let index = 0; index < lexed.tokenTape.length; index++) {
-          const token = lexed.tokenTape.token(index);
-          if (token === undefined || token.channel === "trivia") continue;
-          if (token.span.end < start - 24 || token.span.start > start + 32) {
-            continue;
-          }
-          const kind = token.type === "named" ? token.kind : token.type;
-          nearbyTokens.push(`${kind}:${JSON.stringify(token.text)}`);
-        }
-        return `${diagnostic.code} at ${start}: ${diagnostic.message}; near ${excerpt}; tokens ${
-          nearbyTokens.join(" ")
-        }; details ${JSON.stringify(diagnostic)}`;
-      }).join("; ");
-      failures.push(`${sourceUrl.pathname}: ${diagnostics}`);
-    }
-    if (failures.length > 0) {
-      throw new Error(
-        `Baba rejected ${failures.length} Ducklang sources:\n${
-          failures.join("\n")
+  const failures: string[] = [];
+  for (const sourceUrl of sources) {
+    try {
+      await parseDucklangModule(
+        sourceUrl.pathname,
+        await Deno.readTextFile(sourceUrl),
+      );
+    } catch (error) {
+      failures.push(
+        `${sourceUrl.pathname}: ${
+          error instanceof Error ? error.message : String(error)
         }`,
       );
     }
-  } finally {
-    parser.dispose();
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `Ducklang rejected ${failures.length} vendored sources:\n${
+        failures.join("\n")
+      }`,
+    );
+  }
+});
+
+Deno.test("Ducklang frontend parses every frozen live Binned target", async () => {
+  const sources = await collectDuckSources(liveTargetUrl);
+  assertEquals(sources.length, 35, "frozen live Duck source count");
+
+  const failures: string[] = [];
+  for (const sourceUrl of sources) {
+    try {
+      await parseDucklangModule(
+        sourceUrl.pathname,
+        await Deno.readTextFile(sourceUrl),
+      );
+    } catch (error) {
+      failures.push(
+        `${sourceUrl.pathname}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `Ducklang rejected ${failures.length} frozen live sources:\n${
+        failures.join("\n")
+      }`,
+    );
   }
 });
 

@@ -1,4 +1,7 @@
-import type { DucklangEffectReference } from "./ducklang_ast.ts";
+import type {
+  DucklangEffectReference,
+  DucklangTypeReference,
+} from "./ducklang_ast.ts";
 import {
   formatDucklangType,
   type TypedDucklangModule,
@@ -10,7 +13,39 @@ export type DucklangAbiValueType =
   | "i64"
   | "bool"
   | "unit"
-  | "text";
+  | "text"
+  | "bytes"
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly DucklangAbiValueType[];
+  };
+
+export type DucklangAbiLayout =
+  | {
+    readonly kind: "sum";
+    readonly name: string;
+    readonly parameters: readonly string[];
+    readonly cases: readonly {
+      readonly name: string;
+      readonly payload: DucklangAbiValueType;
+    }[];
+  }
+  | {
+    readonly kind: "product";
+    readonly name: string;
+    readonly parameters: readonly string[];
+    readonly fields: readonly {
+      readonly name: string;
+      readonly type: DucklangAbiValueType;
+    }[];
+  }
+  | {
+    readonly kind: "alias";
+    readonly name: string;
+    readonly parameters: readonly string[];
+    readonly target: DucklangAbiValueType;
+  };
 
 export type DucklangAbiEffectOperation = {
   readonly name: string;
@@ -30,6 +65,7 @@ export type DucklangAbiEffectReference = {
 
 export type DucklangManagedAbi = {
   readonly version: 1;
+  readonly layouts: readonly DucklangAbiLayout[];
   readonly effects: readonly DucklangAbiEffect[];
   readonly init: readonly {
     readonly fieldName: string;
@@ -71,18 +107,40 @@ export function createDucklangManagedAbi(
   }
   return {
     version: 1,
+    layouts: [
+      ...module.unionTypes.map((declaration): DucklangAbiLayout => ({
+        kind: "sum",
+        name: declaration.name,
+        parameters: declaration.parameters,
+        cases: declaration.cases.map((unionCase) => ({
+          name: unionCase.name,
+          payload: abiTypeReference(unionCase.payloadType),
+        })),
+      })),
+      ...module.structTypes.map((declaration): DucklangAbiLayout => ({
+        kind: "product",
+        name: declaration.name,
+        parameters: declaration.parameters,
+        fields: declaration.fields.map((field) => ({
+          name: field.name,
+          type: abiTypeReference(field.type),
+        })),
+      })),
+      ...module.typeAliases.map((declaration): DucklangAbiLayout => ({
+        kind: "alias",
+        name: declaration.name,
+        parameters: declaration.parameters,
+        target: abiTypeReference(declaration.target),
+      })),
+    ],
     effects: [...module.effectDeclarations].map(([name, operations]) => ({
       name,
       operations: operations.map((operation) => ({
         name: operation.name,
         parameters: operation.parameterTypes.map((type) =>
-          abiTypeReference(type.name, module.file, type.span.start)
+          abiTypeReference(type)
         ),
-        result: abiTypeReference(
-          operation.resultType.name,
-          module.file,
-          operation.resultType.span.start,
-        ),
+        result: abiTypeReference(operation.resultType),
       })),
     })),
     init: module.initFields.map((field) => ({
@@ -111,10 +169,9 @@ function abiEffectReference(
 }
 
 function abiTypeReference(
-  name: string,
-  file: string,
-  sourceStart: number,
+  reference: DucklangTypeReference,
 ): DucklangAbiValueType {
+  const name = reference.name;
   if (name === "Int" || name === "I32" || /^U[1-9][0-9]*$/.test(name)) {
     return "i32";
   }
@@ -122,9 +179,12 @@ function abiTypeReference(
   if (name === "Bool") return "bool";
   if (name === "Unit") return "unit";
   if (name === "Text") return "text";
-  throw new TypeError(
-    `${file}:${sourceStart}: managed Ducklang ABI cannot represent ${name}`,
-  );
+  if (name === "Bytes") return "bytes";
+  return {
+    kind: "named",
+    name,
+    arguments: reference.arguments.map(abiTypeReference),
+  };
 }
 
 function abiType(
@@ -132,12 +192,20 @@ function abiType(
   file: string,
   sourceStart: number,
 ): DucklangAbiValueType {
-  if (type.kind === "constructor" && type.arguments.length === 0) {
-    if (type.name === "i32") return "i32";
-    if (type.name === "i64") return "i64";
-    if (type.name === "bool") return "bool";
-    if (type.name === "unit") return "unit";
-    if (type.name === "text") return "text";
+  if (type.kind === "constructor") {
+    if (type.arguments.length === 0 && type.name === "i32") return "i32";
+    if (type.arguments.length === 0 && type.name === "i64") return "i64";
+    if (type.arguments.length === 0 && type.name === "bool") return "bool";
+    if (type.arguments.length === 0 && type.name === "unit") return "unit";
+    if (type.arguments.length === 0 && type.name === "text") return "text";
+    if (type.arguments.length === 0 && type.name === "bytes") return "bytes";
+    return {
+      kind: "named",
+      name: type.name,
+      arguments: type.arguments.map((argument) =>
+        abiType(argument, file, sourceStart)
+      ),
+    };
   }
   throw new TypeError(
     `${file}:${sourceStart}: managed Ducklang ABI cannot export ${

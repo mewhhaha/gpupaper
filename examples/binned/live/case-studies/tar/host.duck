@@ -1,0 +1,11 @@
+module () where
+
+declare effect Archive {
+  read: () => ArchiveResult
+}
+
+declare Init {
+  archive: Archive
+}
+
+return {};

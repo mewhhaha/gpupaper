@@ -1,4 +1,8 @@
 import type { EqualityConstraint, Type } from "./types.ts";
+import {
+  acquireCompilerGpuErrorScope,
+  requestCompilerGpuDevice,
+} from "./gpu_device.ts";
 
 export type GpuSolveResult =
   | {
@@ -7,6 +11,7 @@ export type GpuSolveResult =
     readonly termCount: number;
     readonly equalityCount: number;
     readonly unionRounds: number;
+    readonly decompositionCount: number;
   }
   | {
     readonly status: "constructorClash";
@@ -29,9 +34,30 @@ type FlatConstraints = {
   readonly sourceStarts: readonly number[];
 };
 
-type DeviceRequest =
-  | { readonly status: "available"; readonly device: GPUDevice }
+type ConstructorDecomposition =
+  | {
+    readonly status: "completed";
+    readonly clash: readonly [number, number] | undefined;
+    readonly equalities: readonly {
+      readonly equality: [number, number];
+      readonly constructors: readonly [number, number];
+    }[];
+  }
   | { readonly status: "unavailable"; readonly reason: string };
+
+type UnionPipelines = {
+  readonly union: GPUComputePipeline;
+  readonly compression: GPUComputePipeline;
+};
+
+type DecompositionPipelines = {
+  readonly count: GPUComputePipeline;
+  readonly scan: GPUComputePipeline;
+  readonly emit: GPUComputePipeline;
+};
+
+const maximumDecomposedEqualityCount = 1_048_576;
+const maximumQuadraticGpuTermCount = 512;
 
 const unionShader = `
 @group(0) @binding(0) var<storage, read_write> parents: array<atomic<u32>>;
@@ -90,14 +116,109 @@ fn close_reachability(@builtin(global_invocation_id) invocation: vec3<u32>) {
 }
 `;
 
-let devicePromise: Promise<DeviceRequest> | undefined;
+const constructorCountShader = `
+struct Parameters { term_count: u32, equality_capacity: u32 }
+@group(0) @binding(0) var<storage, read> representatives: array<u32>;
+@group(0) @binding(1) var<storage, read> term_kinds: array<u32>;
+@group(0) @binding(2) var<storage, read> label_ids: array<u32>;
+@group(0) @binding(3) var<storage, read> child_counts: array<u32>;
+@group(0) @binding(4) var<storage, read_write> pair_counts: array<u32>;
+@group(0) @binding(5) var<storage, read_write> clash_pair: atomic<u32>;
+@group(0) @binding(6) var<uniform> parameters: Parameters;
+
+@compute @workgroup_size(64)
+fn count_constructor_pairs(
+  @builtin(global_invocation_id) invocation: vec3<u32>
+) {
+  let pair_index = invocation.x;
+  let pair_count = parameters.term_count * parameters.term_count;
+  if (pair_index >= pair_count) { return; }
+  let left = pair_index / parameters.term_count;
+  let right = pair_index % parameters.term_count;
+  if (left >= right || term_kinds[left] == 0u || term_kinds[right] == 0u) {
+    return;
+  }
+  if (representatives[left] != representatives[right]) { return; }
+  if (
+    label_ids[left] != label_ids[right] ||
+    child_counts[left] != child_counts[right]
+  ) {
+    atomicMin(&clash_pair, pair_index);
+    return;
+  }
+  pair_counts[pair_index] = child_counts[left];
+}
+`;
+
+const constructorScanShader = `
+struct Parameters { count: u32, distance: u32 }
+@group(0) @binding(0) var<storage, read> input_prefixes: array<u32>;
+@group(0) @binding(1) var<storage, read_write> output_prefixes: array<u32>;
+@group(0) @binding(2) var<uniform> parameters: Parameters;
+
+@compute @workgroup_size(64)
+fn scan_step(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let index = invocation.x;
+  if (index >= parameters.count) { return; }
+  var prefix = input_prefixes[index];
+  if (index >= parameters.distance) {
+    prefix += input_prefixes[index - parameters.distance];
+  }
+  output_prefixes[index] = prefix;
+}
+`;
+
+const constructorEmitShader = `
+struct Parameters { term_count: u32, equality_capacity: u32 }
+@group(0) @binding(0) var<storage, read> child_starts: array<u32>;
+@group(0) @binding(1) var<storage, read> children: array<u32>;
+@group(0) @binding(2) var<storage, read> pair_counts: array<u32>;
+@group(0) @binding(3) var<storage, read> inclusive_offsets: array<u32>;
+@group(0) @binding(4) var<storage, read_write> output_equalities: array<u32>;
+@group(0) @binding(5) var<storage, read_write> output_parent_pairs: array<u32>;
+@group(0) @binding(6) var<storage, read_write> overflow_count: atomic<u32>;
+@group(0) @binding(7) var<uniform> parameters: Parameters;
+
+@compute @workgroup_size(64)
+fn emit_child_equalities(
+  @builtin(global_invocation_id) invocation: vec3<u32>
+) {
+  let pair_index = invocation.x;
+  let pair_slot_count = parameters.term_count * parameters.term_count;
+  if (pair_index >= pair_slot_count) { return; }
+  let count = pair_counts[pair_index];
+  if (count == 0u) { return; }
+  let output_start = inclusive_offsets[pair_index] - count;
+  if (output_start + count > parameters.equality_capacity) {
+    atomicMax(&overflow_count, output_start + count);
+    return;
+  }
+  let left = pair_index / parameters.term_count;
+  let right = pair_index % parameters.term_count;
+  let left_start = child_starts[left];
+  let right_start = child_starts[right];
+  for (var child_index = 0u; child_index < count; child_index += 1u) {
+    let output_index = output_start + child_index;
+    output_equalities[output_index * 2u] = children[left_start + child_index];
+    output_equalities[output_index * 2u + 1u] =
+      children[right_start + child_index];
+    output_parent_pairs[output_index] = pair_index;
+  }
+}
+`;
+
+let pipelineDevice: GPUDevice | undefined;
+let unionPipelinesPromise: Promise<UnionPipelines> | undefined;
+let decompositionPipelinesPromise: Promise<DecompositionPipelines> | undefined;
+let reachabilityPipelinePromise: Promise<GPUComputePipeline> | undefined;
 
 export async function solveTypeEqualitiesOnGpu(
   equalities: readonly EqualityConstraint[],
 ): Promise<GpuSolveResult> {
-  const deviceRequest = await requestDevice();
+  const deviceRequest = await requestCompilerGpuDevice();
   if (deviceRequest.status === "unavailable") return deviceRequest;
   const device = deviceRequest.device;
+  selectPipelineDevice(device);
   const flat = flattenEqualities(equalities);
   if (flat.terms.length === 0) {
     return {
@@ -106,76 +227,61 @@ export async function solveTypeEqualitiesOnGpu(
       termCount: 0,
       equalityCount: 0,
       unionRounds: 0,
+      decompositionCount: 0,
     };
   }
-  if (flat.terms.length > 512) {
-    return {
-      status: "unavailable",
-      reason:
-        `proof-of-concept GPU solver limit is 512 terms; received ${flat.terms.length}`,
-    };
+  if (flat.terms.length > maximumQuadraticGpuTermCount) {
+    return await solveLargeFlatConstraintsOnGpu(device, flat);
   }
-
   const allEqualities = [...flat.equalities];
   const allSourceStarts = [...flat.sourceStarts];
   const seenEqualities = new Set(allEqualities.map(equalityKey));
   let representatives = flat.terms.map((_, index) => index);
   let unionRounds = 0;
+  let decompositionCount = 0;
 
   while (true) {
     const union = await unionOnGpu(device, representatives, allEqualities);
     representatives = union.representatives;
     unionRounds += union.rounds;
-    const constructorByRepresentative = new Map<number, number[]>();
-    for (const [termIndex, term] of flat.terms.entries()) {
-      if (term.kind !== "constructor") continue;
-      const representative = representatives[termIndex];
-      const constructors = constructorByRepresentative.get(representative) ??
-        [];
-      constructors.push(termIndex);
-      constructorByRepresentative.set(representative, constructors);
+    const decomposition = await decomposeConstructorsOnGpu(
+      device,
+      flat.terms,
+      representatives,
+    );
+    if (decomposition.status === "unavailable") {
+      return { status: "unavailable", reason: decomposition.reason };
     }
-
+    decompositionCount += decomposition.equalities.length;
+    if (decomposition.clash !== undefined) {
+      const [leftIndex, rightIndex] = decomposition.clash;
+      const left = flat.terms[leftIndex];
+      const right = flat.terms[rightIndex];
+      return {
+        status: "constructorClash",
+        left: left.label,
+        right: right.label,
+        sourceStart: sourceForClass(
+          [leftIndex, rightIndex],
+          allEqualities,
+          allSourceStarts,
+        ),
+      };
+    }
     let added = false;
-    for (const constructors of constructorByRepresentative.values()) {
-      const first = flat.terms[constructors[0]];
-      for (const constructorIndex of constructors.slice(1)) {
-        const next = flat.terms[constructorIndex];
-        if (
-          first.label !== next.label ||
-          first.children.length !== next.children.length
-        ) {
-          const sourceStart = sourceForClass(
-            constructors,
-            allEqualities,
-            allSourceStarts,
-          );
-          return {
-            status: "constructorClash",
-            left: first.label,
-            right: next.label,
-            sourceStart,
-          };
-        }
-        for (
-          let childIndex = 0;
-          childIndex < first.children.length;
-          childIndex += 1
-        ) {
-          const equality: [number, number] = [
-            first.children[childIndex],
-            next.children[childIndex],
-          ];
-          const key = equalityKey(equality);
-          if (seenEqualities.has(key)) continue;
-          seenEqualities.add(key);
-          allEqualities.push(equality);
-          allSourceStarts.push(
-            sourceForClass(constructors, allEqualities, allSourceStarts),
-          );
-          added = true;
-        }
-      }
+    for (const generated of decomposition.equalities) {
+      const key = equalityKey(generated.equality);
+      if (seenEqualities.has(key)) continue;
+      seenEqualities.add(key);
+      allEqualities.push(generated.equality);
+      allSourceStarts.push(
+        sourceForClass(
+          generated.constructors,
+          allEqualities,
+          allSourceStarts,
+        ),
+      );
+      added = true;
     }
     if (!added) break;
   }
@@ -194,6 +300,7 @@ export async function solveTypeEqualitiesOnGpu(
     termCount: flat.terms.length,
     equalityCount: allEqualities.length,
     unionRounds,
+    decompositionCount,
   };
 }
 
@@ -201,9 +308,12 @@ export async function unionPairsOnGpu(
   termCount: number,
   equalities: readonly [number, number][],
 ): Promise<readonly number[] | undefined> {
-  if (!Number.isSafeInteger(termCount) || termCount < 0 || termCount > 512) {
+  if (
+    !Number.isSafeInteger(termCount) || termCount < 0 ||
+    termCount > 0xffff_ffff
+  ) {
     throw new RangeError(
-      `GPU union term count must be an integer from 0 through 512; received ${termCount}`,
+      `GPU union term count must be an integer from 0 through 4294967295; received ${termCount}`,
     );
   }
   for (const [equalityIndex, equality] of equalities.entries()) {
@@ -219,54 +329,16 @@ export async function unionPairsOnGpu(
     }
   }
   if (termCount === 0) return [];
-  const deviceRequest = await requestDevice();
+  const deviceRequest = await requestCompilerGpuDevice();
   if (deviceRequest.status === "unavailable") return undefined;
   const device = deviceRequest.device;
+  selectPipelineDevice(device);
   const initialRepresentatives = Array.from(
     { length: termCount },
     (_, index) => index,
   );
   return (await unionOnGpu(device, initialRepresentatives, equalities))
     .representatives;
-}
-
-async function requestDevice(): Promise<DeviceRequest> {
-  if (devicePromise !== undefined) return await devicePromise;
-  const pendingRequest: Promise<DeviceRequest> = (async () => {
-    if (navigator.gpu === undefined) {
-      return {
-        status: "unavailable",
-        reason: "WebGPU is unavailable in this runtime",
-      };
-    }
-    try {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (adapter === null) {
-        return {
-          status: "unavailable",
-          reason: "WebGPU adapter is unavailable",
-        };
-      }
-      return { status: "available", device: await adapter.requestDevice() };
-    } catch (error) {
-      return {
-        status: "unavailable",
-        reason: `WebGPU device request failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      };
-    }
-  })();
-  devicePromise = pendingRequest;
-  const result = await pendingRequest;
-  if (result.status === "unavailable") {
-    if (devicePromise === pendingRequest) devicePromise = undefined;
-    return result;
-  }
-  void result.device.lost.then(() => {
-    if (devicePromise === pendingRequest) devicePromise = undefined;
-  });
-  return result;
 }
 
 function flattenEqualities(
@@ -305,6 +377,471 @@ function flattenEqualities(
   return { terms, equalities: pairs, sourceStarts };
 }
 
+async function solveLargeFlatConstraintsOnGpu(
+  device: GPUDevice,
+  flat: FlatConstraints,
+): Promise<GpuSolveResult> {
+  const allEqualities = [...flat.equalities];
+  const allSourceStarts = [...flat.sourceStarts];
+  const seenEqualities = new Set(allEqualities.map(equalityKey));
+  const parents = flat.terms.map((_, index) => index);
+  const classSourceStarts = flat.terms.map(() => Number.MAX_SAFE_INTEGER);
+  const find = (term: number): number => {
+    let root = term;
+    while (parents[root] !== root) root = parents[root];
+    let current = term;
+    while (parents[current] !== current) {
+      const parent = parents[current];
+      parents[current] = root;
+      current = parent;
+    }
+    return root;
+  };
+  const union = (
+    [left, right]: readonly [number, number],
+    sourceStart: number,
+  ): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot === rightRoot) {
+      classSourceStarts[leftRoot] = Math.min(
+        classSourceStarts[leftRoot],
+        sourceStart,
+      );
+      return;
+    }
+    const lower = Math.min(leftRoot, rightRoot);
+    const higher = Math.max(leftRoot, rightRoot);
+    parents[higher] = lower;
+    classSourceStarts[lower] = Math.min(
+      classSourceStarts[leftRoot],
+      classSourceStarts[rightRoot],
+      sourceStart,
+    );
+  };
+  for (const [equalityIndex, equality] of allEqualities.entries()) {
+    union(equality, allSourceStarts[equalityIndex]);
+  }
+
+  let decompositionCount = 0;
+  while (true) {
+    const representatives = parents.map((_, index) => find(index));
+    const decomposition = decomposeConstructorsByRepresentative(
+      flat.terms,
+      representatives,
+    );
+    decompositionCount += decomposition.equalities.length;
+    if (decomposition.clash !== undefined) {
+      const [leftIndex, rightIndex] = decomposition.clash;
+      return {
+        status: "constructorClash",
+        left: flat.terms[leftIndex].label,
+        right: flat.terms[rightIndex].label,
+        sourceStart: classSourceStarts[find(leftIndex)] ===
+            Number.MAX_SAFE_INTEGER
+          ? 0
+          : classSourceStarts[find(leftIndex)],
+      };
+    }
+    let added = false;
+    for (const generated of decomposition.equalities) {
+      const key = equalityKey(generated.equality);
+      if (seenEqualities.has(key)) continue;
+      seenEqualities.add(key);
+      const generatedSource =
+        classSourceStarts[find(generated.constructors[0])] ===
+            Number.MAX_SAFE_INTEGER
+          ? 0
+          : classSourceStarts[find(generated.constructors[0])];
+      allSourceStarts.push(generatedSource);
+      allEqualities.push(generated.equality);
+      union(generated.equality, generatedSource);
+      added = true;
+    }
+    if (!added) break;
+  }
+
+  const expectedRepresentatives = parents.map((_, index) => find(index));
+  const gpuUnion = await unionOnGpu(
+    device,
+    flat.terms.map((_, index) => index),
+    allEqualities,
+  );
+  for (
+    let termIndex = 0;
+    termIndex < expectedRepresentatives.length;
+    termIndex += 1
+  ) {
+    if (
+      gpuUnion.representatives[termIndex] !==
+        expectedRepresentatives[termIndex]
+    ) {
+      throw new Error(
+        `WebGPU union representative mismatch at term ${termIndex}: expected ${
+          expectedRepresentatives[termIndex]
+        }, received ${gpuUnion.representatives[termIndex]}`,
+      );
+    }
+  }
+  const infiniteRepresentative = findInfiniteTypeInRepresentativeGraph(
+    flat.terms,
+    gpuUnion.representatives,
+  );
+  if (infiniteRepresentative !== undefined) {
+    return { status: "infiniteType", representative: infiniteRepresentative };
+  }
+  return {
+    status: "solved",
+    representatives: gpuUnion.representatives,
+    termCount: flat.terms.length,
+    equalityCount: allEqualities.length,
+    unionRounds: gpuUnion.rounds,
+    decompositionCount,
+  };
+}
+
+function decomposeConstructorsByRepresentative(
+  terms: readonly FlatTerm[],
+  representatives: readonly number[],
+): Extract<ConstructorDecomposition, { readonly status: "completed" }> {
+  const constructorByRepresentative = new Map<number, number>();
+  const equalities: Extract<
+    ConstructorDecomposition,
+    { readonly status: "completed" }
+  >["equalities"][number][] = [];
+  for (const [termIndex, term] of terms.entries()) {
+    if (term.kind !== "constructor") continue;
+    const representative = representatives[termIndex];
+    const previousIndex = constructorByRepresentative.get(representative);
+    if (previousIndex === undefined) {
+      constructorByRepresentative.set(representative, termIndex);
+      continue;
+    }
+    const previous = terms[previousIndex];
+    if (
+      previous.label !== term.label ||
+      previous.children.length !== term.children.length
+    ) {
+      return {
+        status: "completed",
+        clash: [previousIndex, termIndex],
+        equalities: [],
+      };
+    }
+    for (const [childIndex, child] of term.children.entries()) {
+      equalities.push({
+        equality: [previous.children[childIndex], child],
+        constructors: [previousIndex, termIndex],
+      });
+    }
+  }
+  return { status: "completed", clash: undefined, equalities };
+}
+
+async function decomposeConstructorsOnGpu(
+  device: GPUDevice,
+  terms: readonly FlatTerm[],
+  representatives: readonly number[],
+): Promise<ConstructorDecomposition> {
+  const termCount = terms.length;
+  if (terms.filter((term) => term.kind === "constructor").length < 2) {
+    return { status: "completed", clash: undefined, equalities: [] };
+  }
+  const pairSlotCount = termCount * termCount;
+  const labels = [...new Set(terms.map((term) => term.label))].sort();
+  const labelIds = new Map(labels.map((label, index) => [label, index]));
+  const termKinds = new Uint32Array(
+    terms.map((term) => term.kind === "constructor" ? 1 : 0),
+  );
+  const termLabelIds = new Uint32Array(
+    terms.map((term) => labelIds.get(term.label)!),
+  );
+  const childStarts: number[] = [];
+  const childCounts: number[] = [];
+  const children: number[] = [];
+  for (const term of terms) {
+    childStarts.push(children.length);
+    childCounts.push(term.children.length);
+    children.push(...term.children);
+  }
+  const maximumChildCount = Math.max(1, ...childCounts);
+  const equalityCapacity = Math.max(
+    1,
+    Math.min(
+      maximumDecomposedEqualityCount,
+      pairSlotCount * maximumChildCount,
+    ),
+  );
+
+  const representativeBuffer = createBuffer(
+    device,
+    new Uint32Array(representatives),
+    GPUBufferUsage.STORAGE,
+  );
+  const termKindBuffer = createBuffer(
+    device,
+    termKinds,
+    GPUBufferUsage.STORAGE,
+  );
+  const labelBuffer = createBuffer(
+    device,
+    termLabelIds,
+    GPUBufferUsage.STORAGE,
+  );
+  const childStartBuffer = createBuffer(
+    device,
+    new Uint32Array(childStarts),
+    GPUBufferUsage.STORAGE,
+  );
+  const childCountBuffer = createBuffer(
+    device,
+    new Uint32Array(childCounts),
+    GPUBufferUsage.STORAGE,
+  );
+  const childBuffer = createBuffer(
+    device,
+    new Uint32Array(children),
+    GPUBufferUsage.STORAGE,
+  );
+  const pairCountBuffer = device.createBuffer({
+    size: Math.max(4, pairSlotCount * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const firstPrefixBuffer = device.createBuffer({
+    size: Math.max(4, pairSlotCount * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const secondPrefixBuffer = device.createBuffer({
+    size: Math.max(4, pairSlotCount * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const clashBuffer = createBuffer(
+    device,
+    new Uint32Array([0xffff_ffff]),
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  );
+  const overflowBuffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const outputEqualityBuffer = device.createBuffer({
+    size: equalityCapacity * 8,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const outputParentBuffer = device.createBuffer({
+    size: equalityCapacity * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const decompositionParameterBuffer = createBuffer(
+    device,
+    new Uint32Array([termCount, equalityCapacity]),
+    GPUBufferUsage.UNIFORM,
+  );
+  const metadataReadback = device.createBuffer({
+    size: 12,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const scanParameterBuffers: GPUBuffer[] = [];
+  const buffers = [
+    representativeBuffer,
+    termKindBuffer,
+    labelBuffer,
+    childStartBuffer,
+    childCountBuffer,
+    childBuffer,
+    pairCountBuffer,
+    firstPrefixBuffer,
+    secondPrefixBuffer,
+    clashBuffer,
+    overflowBuffer,
+    outputEqualityBuffer,
+    outputParentBuffer,
+    decompositionParameterBuffer,
+    metadataReadback,
+  ];
+  let metadataMapped = false;
+  let outputReadback: GPUBuffer | undefined;
+  let outputMapped = false;
+  let releaseErrorScope: (() => void) | undefined;
+  let validationScopePending = false;
+  try {
+    const pipelines = await requestDecompositionPipelines(device);
+    releaseErrorScope = await acquireCompilerGpuErrorScope();
+    device.pushErrorScope("validation");
+    validationScopePending = true;
+    const encoder = device.createCommandEncoder();
+    const countBindGroup = device.createBindGroup({
+      layout: pipelines.count.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: representativeBuffer } },
+        { binding: 1, resource: { buffer: termKindBuffer } },
+        { binding: 2, resource: { buffer: labelBuffer } },
+        { binding: 3, resource: { buffer: childCountBuffer } },
+        { binding: 4, resource: { buffer: pairCountBuffer } },
+        { binding: 5, resource: { buffer: clashBuffer } },
+        { binding: 6, resource: { buffer: decompositionParameterBuffer } },
+      ],
+    });
+    const countPass = encoder.beginComputePass();
+    countPass.setPipeline(pipelines.count);
+    countPass.setBindGroup(0, countBindGroup);
+    countPass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+    countPass.end();
+
+    let inputPrefixBuffer = pairCountBuffer;
+    let outputPrefixBuffer = firstPrefixBuffer;
+    for (let distance = 1; distance < pairSlotCount; distance *= 2) {
+      const parameterBuffer = createBuffer(
+        device,
+        new Uint32Array([pairSlotCount, distance]),
+        GPUBufferUsage.UNIFORM,
+      );
+      scanParameterBuffers.push(parameterBuffer);
+      const bindGroup = device.createBindGroup({
+        layout: pipelines.scan.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: inputPrefixBuffer } },
+          { binding: 1, resource: { buffer: outputPrefixBuffer } },
+          { binding: 2, resource: { buffer: parameterBuffer } },
+        ],
+      });
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipelines.scan);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+      pass.end();
+      [inputPrefixBuffer, outputPrefixBuffer] = [
+        outputPrefixBuffer,
+        outputPrefixBuffer === firstPrefixBuffer
+          ? secondPrefixBuffer
+          : firstPrefixBuffer,
+      ];
+    }
+
+    const emitBindGroup = device.createBindGroup({
+      layout: pipelines.emit.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: childStartBuffer } },
+        { binding: 1, resource: { buffer: childBuffer } },
+        { binding: 2, resource: { buffer: pairCountBuffer } },
+        { binding: 3, resource: { buffer: inputPrefixBuffer } },
+        { binding: 4, resource: { buffer: outputEqualityBuffer } },
+        { binding: 5, resource: { buffer: outputParentBuffer } },
+        { binding: 6, resource: { buffer: overflowBuffer } },
+        { binding: 7, resource: { buffer: decompositionParameterBuffer } },
+      ],
+    });
+    const emitPass = encoder.beginComputePass();
+    emitPass.setPipeline(pipelines.emit);
+    emitPass.setBindGroup(0, emitBindGroup);
+    emitPass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+    emitPass.end();
+    encoder.copyBufferToBuffer(clashBuffer, 0, metadataReadback, 0, 4);
+    encoder.copyBufferToBuffer(
+      inputPrefixBuffer,
+      (pairSlotCount - 1) * 4,
+      metadataReadback,
+      4,
+      4,
+    );
+    encoder.copyBufferToBuffer(overflowBuffer, 0, metadataReadback, 8, 4);
+    device.queue.submit([encoder.finish()]);
+    await metadataReadback.mapAsync(GPUMapMode.READ);
+    metadataMapped = true;
+    const metadata = new Uint32Array(
+      metadataReadback.getMappedRange().slice(0),
+    );
+    const validationError = await device.popErrorScope();
+    validationScopePending = false;
+    if (validationError !== null) {
+      throw new Error(
+        `WebGPU constructor decomposition validation failed: ${validationError.message}`,
+      );
+    }
+    const clashPair = metadata[0];
+    if (clashPair !== 0xffff_ffff) {
+      return {
+        status: "completed",
+        clash: [
+          Math.floor(clashPair / termCount),
+          clashPair % termCount,
+        ],
+        equalities: [],
+      };
+    }
+    const equalityCount = metadata[1];
+    const overflowCount = metadata[2];
+    if (overflowCount !== 0 || equalityCount > equalityCapacity) {
+      return {
+        status: "unavailable",
+        reason:
+          `proof-of-concept GPU constructor decomposition limit is ${equalityCapacity} generated equalities; requested ${
+            Math.max(equalityCount, overflowCount)
+          }`,
+      };
+    }
+    if (equalityCount === 0) {
+      return { status: "completed", clash: undefined, equalities: [] };
+    }
+
+    outputReadback = device.createBuffer({
+      size: equalityCount * 12,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    const outputEncoder = device.createCommandEncoder();
+    outputEncoder.copyBufferToBuffer(
+      outputEqualityBuffer,
+      0,
+      outputReadback,
+      0,
+      equalityCount * 8,
+    );
+    outputEncoder.copyBufferToBuffer(
+      outputParentBuffer,
+      0,
+      outputReadback,
+      equalityCount * 8,
+      equalityCount * 4,
+    );
+    device.queue.submit([outputEncoder.finish()]);
+    await outputReadback.mapAsync(GPUMapMode.READ);
+    outputMapped = true;
+    const mapped = outputReadback.getMappedRange();
+    const equalityWords = new Uint32Array(mapped, 0, equalityCount * 2);
+    const parentPairs = new Uint32Array(
+      mapped,
+      equalityCount * 8,
+      equalityCount,
+    );
+    const equalities = Array.from(
+      { length: equalityCount },
+      (_, equalityIndex) => {
+        const parentPair = parentPairs[equalityIndex];
+        return {
+          equality: [
+            equalityWords[equalityIndex * 2],
+            equalityWords[equalityIndex * 2 + 1],
+          ] as [number, number],
+          constructors: [
+            Math.floor(parentPair / termCount),
+            parentPair % termCount,
+          ] as const,
+        };
+      },
+    );
+    return { status: "completed", clash: undefined, equalities };
+  } finally {
+    if (validationScopePending) await device.popErrorScope();
+    releaseErrorScope?.();
+    if (metadataMapped) metadataReadback.unmap();
+    if (outputMapped) outputReadback?.unmap();
+    outputReadback?.destroy();
+    for (const buffer of [...buffers, ...scanParameterBuffers]) {
+      buffer.destroy();
+    }
+  }
+}
+
 async function unionOnGpu(
   device: GPUDevice,
   initialRepresentatives: readonly number[],
@@ -328,45 +865,9 @@ async function unionOnGpu(
   });
   let readbackMapped = false;
   try {
-    const shader = device.createShaderModule({ code: unionShader });
-    const compilation = await shader.getCompilationInfo();
-    const shaderErrors = compilation.messages.filter((message) =>
-      message.type === "error"
-    );
-    if (shaderErrors.length > 0) {
-      throw new Error(
-        `WebGPU union shader failed: ${
-          shaderErrors.map((message) => message.message).join("; ")
-        }`,
-      );
-    }
-    const bindGroupLayout = device.createBindGroupLayout({
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "storage" },
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "read-only-storage" },
-        },
-      ],
-    });
-    const pipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [bindGroupLayout],
-    });
-    const unionPipeline = await device.createComputePipelineAsync({
-      layout: pipelineLayout,
-      compute: { module: shader, entryPoint: "union_equalities" },
-    });
-    const compressionPipeline = await device.createComputePipelineAsync({
-      layout: pipelineLayout,
-      compute: { module: shader, entryPoint: "compress_paths" },
-    });
+    const pipelines = await requestUnionPipelines(device);
     const bindGroup = device.createBindGroup({
-      layout: bindGroupLayout,
+      layout: pipelines.union.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: parentBuffer } },
         {
@@ -380,14 +881,14 @@ async function unionOnGpu(
     });
     const encoder = device.createCommandEncoder();
     const unionPass = encoder.beginComputePass();
-    unionPass.setPipeline(unionPipeline);
+    unionPass.setPipeline(pipelines.union);
     unionPass.setBindGroup(0, bindGroup);
     unionPass.dispatchWorkgroups(
       Math.max(1, Math.ceil(equalities.length / 64)),
     );
     unionPass.end();
     const compressionPass = encoder.beginComputePass();
-    compressionPass.setPipeline(compressionPipeline);
+    compressionPass.setPipeline(pipelines.compression);
     compressionPass.setBindGroup(0, bindGroup);
     compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
     compressionPass.end();
@@ -427,6 +928,85 @@ async function unionOnGpu(
   }
 }
 
+function findInfiniteTypeInRepresentativeGraph(
+  terms: readonly FlatTerm[],
+  representatives: readonly number[],
+): number | undefined {
+  const successors = new Map<number, Set<number>>();
+  for (const [termIndex, term] of terms.entries()) {
+    if (term.kind !== "constructor") continue;
+    const source = representatives[termIndex];
+    const targets = successors.get(source) ?? new Set<number>();
+    for (const child of term.children) {
+      targets.add(representatives[child]);
+    }
+    successors.set(source, targets);
+  }
+  const roots = [...new Set(representatives)].sort((left, right) =>
+    left - right
+  );
+  const colour = new Map<number, 0 | 1 | 2>();
+  const path: number[] = [];
+  const pathIndex = new Map<number, number>();
+  let minimumCycleRoot: number | undefined;
+  for (const root of roots) {
+    if ((colour.get(root) ?? 0) !== 0) continue;
+    const stack: {
+      readonly root: number;
+      readonly successors: readonly number[];
+      nextSuccessor: number;
+    }[] = [{
+      root,
+      successors: [...(successors.get(root) ?? [])].sort((left, right) =>
+        left - right
+      ),
+      nextSuccessor: 0,
+    }];
+    colour.set(root, 1);
+    pathIndex.set(root, path.length);
+    path.push(root);
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const successor = frame.successors[frame.nextSuccessor];
+      if (successor === undefined) {
+        colour.set(frame.root, 2);
+        pathIndex.delete(frame.root);
+        path.pop();
+        stack.pop();
+        continue;
+      }
+      frame.nextSuccessor += 1;
+      const successorColour = colour.get(successor) ?? 0;
+      if (successorColour === 1) {
+        const cycleStart = pathIndex.get(successor);
+        if (cycleStart === undefined) {
+          throw new Error(
+            `type dependency root ${successor} is active but absent from its DFS path`,
+          );
+        }
+        for (let index = cycleStart; index < path.length; index += 1) {
+          minimumCycleRoot = minimumCycleRoot === undefined
+            ? path[index]
+            : Math.min(minimumCycleRoot, path[index]);
+        }
+        continue;
+      }
+      if (successorColour === 2) continue;
+      colour.set(successor, 1);
+      pathIndex.set(successor, path.length);
+      path.push(successor);
+      stack.push({
+        root: successor,
+        successors: [...(successors.get(successor) ?? [])].sort(
+          (left, right) => left - right,
+        ),
+        nextSuccessor: 0,
+      });
+    }
+  }
+  return minimumCycleRoot;
+}
+
 async function findInfiniteTypeOnGpu(
   device: GPUDevice,
   terms: readonly FlatTerm[],
@@ -439,14 +1019,19 @@ async function findInfiniteTypeOnGpu(
   const count = roots.length;
   if (count === 0) return undefined;
   const matrix = new Uint32Array(count * count);
+  let edgeCount = 0;
   for (const [termIndex, term] of terms.entries()) {
     if (term.kind !== "constructor") continue;
     const row = rootPosition.get(representatives[termIndex])!;
     for (const child of term.children) {
       const column = rootPosition.get(representatives[child])!;
-      matrix[row * count + column] = 1;
+      const index = row * count + column;
+      if (matrix[index] !== 0) continue;
+      matrix[index] = 1;
+      edgeCount += 1;
     }
   }
+  if (edgeCount === 0) return undefined;
 
   const matrixBuffer = createBuffer(
     device,
@@ -463,22 +1048,7 @@ async function findInfiniteTypeOnGpu(
   });
   let readbackMapped = false;
   try {
-    const shader = device.createShaderModule({ code: reachabilityShader });
-    const compilation = await shader.getCompilationInfo();
-    const shaderErrors = compilation.messages.filter((message) =>
-      message.type === "error"
-    );
-    if (shaderErrors.length > 0) {
-      throw new Error(
-        `WebGPU reachability shader failed: ${
-          shaderErrors.map((message) => message.message).join("; ")
-        }`,
-      );
-    }
-    const pipeline = await device.createComputePipelineAsync({
-      layout: "auto",
-      compute: { module: shader, entryPoint: "close_reachability" },
-    });
+    const pipeline = await requestReachabilityPipeline(device);
     const bindGroup = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: matrixBuffer } }, {
@@ -516,6 +1086,155 @@ async function findInfiniteTypeOnGpu(
     parameterBuffer.destroy();
     readback.destroy();
   }
+}
+
+function selectPipelineDevice(device: GPUDevice): void {
+  if (pipelineDevice === device) return;
+  pipelineDevice = device;
+  unionPipelinesPromise = undefined;
+  decompositionPipelinesPromise = undefined;
+  reachabilityPipelinePromise = undefined;
+  void device.lost.then(() => {
+    if (pipelineDevice !== device) return;
+    pipelineDevice = undefined;
+    unionPipelinesPromise = undefined;
+    decompositionPipelinesPromise = undefined;
+    reachabilityPipelinePromise = undefined;
+  });
+}
+
+function requestUnionPipelines(device: GPUDevice): Promise<UnionPipelines> {
+  if (unionPipelinesPromise !== undefined) return unionPipelinesPromise;
+  const pendingPipelines = (async () => {
+    const shader = device.createShaderModule({ code: unionShader });
+    await requireShaderCompilation("union", [shader]);
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
+        },
+      ],
+    });
+    const pipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    });
+    const [union, compression] = await Promise.all([
+      device.createComputePipelineAsync({
+        layout: pipelineLayout,
+        compute: { module: shader, entryPoint: "union_equalities" },
+      }),
+      device.createComputePipelineAsync({
+        layout: pipelineLayout,
+        compute: { module: shader, entryPoint: "compress_paths" },
+      }),
+    ]);
+    return { union, compression };
+  })();
+  unionPipelinesPromise = pendingPipelines;
+  void pendingPipelines.catch(() => {
+    if (unionPipelinesPromise === pendingPipelines) {
+      unionPipelinesPromise = undefined;
+    }
+  });
+  return pendingPipelines;
+}
+
+function requestDecompositionPipelines(
+  device: GPUDevice,
+): Promise<DecompositionPipelines> {
+  if (decompositionPipelinesPromise !== undefined) {
+    return decompositionPipelinesPromise;
+  }
+  const pendingPipelines = (async () => {
+    const countModule = device.createShaderModule({
+      code: constructorCountShader,
+    });
+    const scanModule = device.createShaderModule({
+      code: constructorScanShader,
+    });
+    const emitModule = device.createShaderModule({
+      code: constructorEmitShader,
+    });
+    await requireShaderCompilation(
+      "constructor decomposition",
+      [countModule, scanModule, emitModule],
+    );
+    const [count, scan, emit] = await Promise.all([
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: countModule,
+          entryPoint: "count_constructor_pairs",
+        },
+      }),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module: scanModule, entryPoint: "scan_step" },
+      }),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: emitModule,
+          entryPoint: "emit_child_equalities",
+        },
+      }),
+    ]);
+    return { count, scan, emit };
+  })();
+  decompositionPipelinesPromise = pendingPipelines;
+  void pendingPipelines.catch(() => {
+    if (decompositionPipelinesPromise === pendingPipelines) {
+      decompositionPipelinesPromise = undefined;
+    }
+  });
+  return pendingPipelines;
+}
+
+function requestReachabilityPipeline(
+  device: GPUDevice,
+): Promise<GPUComputePipeline> {
+  if (reachabilityPipelinePromise !== undefined) {
+    return reachabilityPipelinePromise;
+  }
+  const pendingPipeline = (async () => {
+    const shader = device.createShaderModule({ code: reachabilityShader });
+    await requireShaderCompilation("reachability", [shader]);
+    return await device.createComputePipelineAsync({
+      layout: "auto",
+      compute: { module: shader, entryPoint: "close_reachability" },
+    });
+  })();
+  reachabilityPipelinePromise = pendingPipeline;
+  void pendingPipeline.catch(() => {
+    if (reachabilityPipelinePromise === pendingPipeline) {
+      reachabilityPipelinePromise = undefined;
+    }
+  });
+  return pendingPipeline;
+}
+
+async function requireShaderCompilation(
+  subject: string,
+  modules: readonly GPUShaderModule[],
+): Promise<void> {
+  const errors = (await Promise.all(
+    modules.map((module) => module.getCompilationInfo()),
+  )).flatMap((compilation) =>
+    compilation.messages.filter((message) => message.type === "error")
+  );
+  if (errors.length === 0) return;
+  throw new Error(
+    `WebGPU ${subject} shader failed: ${
+      errors.map((message) => message.message).join("; ")
+    }`,
+  );
 }
 
 function createBuffer(

@@ -1,0 +1,75 @@
+module () where
+
+const { .generate_bytes } = import "duck:prelude/runtime" ();
+
+const header_bytes = 44;
+const sample_rate = 8000;
+const note_samples = 1000;
+const phrase_samples = 8000;
+const pcm_bytes = phrase_samples * 2;
+const wav_bytes = header_bytes + pcm_bytes;
+
+let little_endian_byte = (value: I32, byte_position: I32) => {
+  (value >> (byte_position * 8)) &&& 0xff
+};
+
+let header_byte = (index: I32) => {
+  if index < 4 {
+    little_endian_byte(0x46464952, index)
+  } else if index < 8 {
+    little_endian_byte(wav_bytes - 8, index - 4)
+  } else if index < 12 {
+    little_endian_byte(0x45564157, index - 8)
+  } else if index < 16 {
+    little_endian_byte(0x20746d66, index - 12)
+  } else if index < 20 {
+    little_endian_byte(16, index - 16)
+  } else if index < 22 {
+    little_endian_byte(1, index - 20)
+  } else if index < 24 {
+    little_endian_byte(1, index - 22)
+  } else if index < 28 {
+    little_endian_byte(sample_rate, index - 24)
+  } else if index < 32 {
+    little_endian_byte(sample_rate * 2, index - 28)
+  } else if index < 34 {
+    little_endian_byte(2, index - 32)
+  } else if index < 36 {
+    little_endian_byte(16, index - 34)
+  } else if index < 40 {
+    little_endian_byte(0x61746164, index - 36)
+  } else if index < 44 {
+    little_endian_byte(pcm_bytes, index - 40)
+  } else {
+    0
+  }
+};
+
+let square_wave = (sample: I32, period: I32) => {
+  if sample % period < period / 2 {
+    1
+  } else {
+    -1
+  }
+};
+
+let sample_value = (sample: I32) => {
+  square_wave(
+    sample,
+    if sample % (note_samples * 4) < note_samples { 31 } else if sample % (note_samples *
+      4) < note_samples * 2 { 28 } else if sample % (
+        note_samples * 4
+      ) < note_samples * 3 { 24 } else { 21 },
+  ) * 0x2328 + square_wave(sample + 7, 17) * 0x0fa0
+};
+
+let wav_byte = (index: I32) => {
+  if index < header_bytes {
+    header_byte index
+  } else {
+    little_endian_byte(sample_value((index - header_bytes) / 2) &&& 0xffff, index % 2)
+  }
+};
+
+let wav: Bytes = generate_bytes [wav_bytes, wav_byte];
+return { .wav = wav };

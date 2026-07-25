@@ -1,0 +1,1243 @@
+module () where
+
+const {} = import "duck:prelude/types" ();
+
+type RuntimeTexts = List Text
+type RuntimeTextNode = ListNode Text
+
+infixr 20 || = @syntax.or
+infixr 30 && = @syntax.and
+infix 40 == = @syntax.eq
+infix 40 != = @syntax.ne
+infix 40 < = @syntax.lt
+infix 40 <= = @syntax.le
+infix 40 > = @syntax.gt
+infix 40 >= = @syntax.ge
+infixl 60 + = @syntax.add
+infixl 60 - = @syntax.sub
+infixl 65 ++ = @append
+infixl 65 <& = @merge
+infixl 65 &> = @merge_into
+infixl 70 * = @syntax.mul
+infixl 70 / = @syntax.div
+infixl 70 % = @syntax.rem
+prefix 80 ! = @syntax.not
+prefix 80 - = @syntax.negate
+
+const append = [left, right] => @append(left, right);
+const text_append = [left: Text, right: Text] => @append(left, right);
+const append_text = (left: Text) => (right: Text) => @append(left, right);
+const length = value => @len value;
+const get = [value, index] => @get(value, index);
+const slice = [value, start, end] => @slice(value, start, end);
+const text_length = (value: Text) => @len value;
+const text_get = [value: Text, index: I32] => @get(value, index);
+const text_slice = [value: Text, start: I32, end: I32] => @slice(value, start, end);
+
+const text_starts_with_at = [text: Text, prefix: Text, start: I32] => {
+  let pattern_length = text_length prefix;
+  let source_length = text_length text;
+
+  if start < 0 || start + pattern_length > source_length {
+    false
+  } else {
+    let matches = true;
+    let offset = 0;
+
+    loop {
+      if offset >= pattern_length { break; }
+      if text_get [text, start + offset] != text_get [prefix, offset] {
+        matches = false
+        break;
+      }
+      offset = offset + 1
+    }
+
+    matches
+  }
+};
+
+const text_starts_with = [text: Text, prefix: Text] => {
+  text_starts_with_at [text, prefix, 0]
+};
+
+const text_ends_with = [text: Text, suffix: Text] => {
+  let start = text_length text - text_length suffix;
+  text_starts_with_at [text, suffix, start]
+};
+
+const text_find_from = [text: Text, needle: Text, start: I32] => {
+  let source_length = text_length text;
+  let needle_length = text_length needle;
+  let found = -1;
+
+  if start >= 0 && start + needle_length <= source_length {
+    let index = start;
+    let end = source_length - needle_length + 1;
+
+    loop {
+      if index >= end { break; }
+      if text_starts_with_at [text, needle, index] {
+        found = index
+        break;
+      }
+      index = index + 1
+    }
+  }
+
+  found
+};
+
+const text_find = [text: Text, needle: Text] => {
+  text_find_from [text, needle, 0]
+};
+
+const text_contains = [text: Text, needle: Text] => {
+  text_find [text, needle] >= 0
+};
+
+const text_split = [text: Text, separator: Text] => {
+  let reversed: RuntimeTexts = `Nil ();
+
+  if separator == "" {
+    let node: RuntimeTextNode = [text, reversed];
+    reversed = `Cons node
+  } else {
+    let start = 0;
+    let done = false;
+
+    loop {
+      let found = text_find_from [text, separator, start];
+
+      if found < 0 {
+        let node: RuntimeTextNode = [text_slice [text, start, text_length text], reversed];
+        reversed = `Cons node
+        done = true
+      } else {
+        let node: RuntimeTextNode = [text_slice [text, start, found], reversed];
+        reversed = `Cons node
+        start = found + text_length separator
+      }
+
+      if done { break; }
+    }
+  }
+
+  let parts: RuntimeTexts = `Nil ();
+  let current = reversed;
+  let done = false;
+
+  loop {
+    if let `Cons node = current {
+      let typed_node: RuntimeTextNode = node;
+      let [part, tail] = typed_node;
+      let result_node: RuntimeTextNode = [part, parts];
+      parts = `Cons result_node
+      current = tail
+    } else {
+      done = true
+    }
+
+    if done { break; }
+  }
+
+  parts
+};
+
+const text_replace_all = [text: Text, needle: Text, replacement: Text] => {
+  if needle == "" {
+    text
+  } else {
+    let output: Text = "";
+    let start = 0;
+    let found = text_find_from [text, needle, start];
+
+    loop {
+      if found < 0 {
+        output = text_append [output, text_slice [text, start, text_length text]]
+        break;
+      }
+
+      output = text_append [output, text_slice [text, start, found]]
+      output = text_append [output, replacement]
+      start = found + text_length needle
+      found = text_find_from [text, needle, start]
+    }
+
+    output
+  }
+};
+
+const text_escape_xml = (text: Text) => {
+  let output: Text = "";
+
+  for index in 0..text_length text {
+    let byte = text_get [text, index];
+    let escaped: Text = "";
+
+    if byte == 38 {
+      escaped = "&amp;"
+    } else if byte == 60 {
+      escaped = "&lt;"
+    } else if byte == 62 {
+      escaped = "&gt;"
+    } else if byte == 34 {
+      escaped = "&quot;"
+    } else if byte == 39 {
+      escaped = "&apos;"
+    }
+
+    if escaped == "" {
+      output = text_append [output, text_slice [text, index, index + 1]]
+    } else {
+      output = text_append [output, escaped]
+    }
+  }
+
+  output
+};
+
+const text_compare = [left: Text, right: Text] => {
+  let common_length = text_length left;
+
+  if text_length right < common_length {
+    common_length = text_length right
+  }
+
+  let comparison = 0;
+  let index = 0;
+
+  loop {
+    if comparison != 0 || index >= common_length {
+      break;
+    }
+
+    let left_byte = text_get [left, index];
+    let right_byte = text_get [right, index];
+
+    if left_byte < right_byte {
+      comparison = -1
+    } else if left_byte > right_byte {
+      comparison = 1
+    } else {
+      index = index + 1
+    }
+  }
+
+  if comparison != 0 {
+    comparison
+  } else if text_length left < text_length right {
+    -1
+  } else if text_length left > text_length right {
+    1
+  } else {
+    0
+  }
+};
+
+const text_less_than = [left: Text, right: Text] => {
+  text_compare [left, right] < 0
+};
+
+const text_byte_is_ascii_whitespace = (byte: I32) => {
+  byte == 32 || byte == 9 || byte == 10 || byte == 13
+};
+
+const text_byte_is_ascii_digit = (byte: I32) => if byte >= 48 { byte <= 57 } else { false };
+
+const text_byte_is_ascii_lower = (byte: I32) => if byte >= 97 { byte <= 122 } else { false };
+
+const text_byte_is_ascii_upper = (byte: I32) => if byte >= 65 { byte <= 90 } else { false };
+
+const text_byte_is_ascii_alpha = (byte: I32) => {
+  text_byte_is_ascii_lower byte || text_byte_is_ascii_upper byte
+};
+
+const text_byte_is_ascii_alphanumeric = (byte: I32) => {
+  text_byte_is_ascii_alpha byte || text_byte_is_ascii_digit byte
+};
+
+const text_byte_is_ascii_hex_digit = (byte: I32) => {
+  if text_byte_is_ascii_digit byte {
+    true
+  } else if byte >= 97 {
+    byte <= 102
+  } else if byte >= 65 {
+    byte <= 70
+  } else {
+    false
+  }
+};
+
+const text_ascii_words: Text -> RuntimeTexts = text => {
+  let reversed: RuntimeTexts = `Nil ();
+  let index = 0;
+
+  loop {
+    loop {
+      if index >= text_length text { break; }
+      if text_byte_is_ascii_alphanumeric(text_get [text, index]) { break; }
+      index = index + 1
+    }
+
+    if index >= text_length text { break; }
+    let start = index;
+
+    loop {
+      if index >= text_length text { break; }
+      if !(text_byte_is_ascii_alphanumeric(text_get [text, index])) { break; }
+      index = index + 1
+    }
+
+    let node: RuntimeTextNode = [text_slice [text, start, index], reversed];
+    reversed = `Cons node
+  }
+
+  let words: RuntimeTexts = `Nil ();
+  let current = reversed;
+  let done = false;
+
+  loop {
+    if let `Cons node = current {
+      let typed_node: RuntimeTextNode = node;
+      let [word, tail] = typed_node;
+      let result_node: RuntimeTextNode = [word, words];
+      words = `Cons result_node
+      current = tail
+    } else {
+      done = true
+    }
+
+    if done { break; }
+  }
+
+  words
+};
+
+const text_longest_suffix_prefix_length = [text: Text, prefix: Text] => {
+  let maximum = text_length text;
+
+  if maximum >= text_length prefix {
+    maximum = text_length prefix - 1
+  }
+
+  let matched = 0;
+
+  if maximum > 0 {
+    let candidate = 1;
+
+    loop {
+      if candidate > maximum { break; }
+      let candidate_matches = true;
+      let candidate_offset = 0;
+
+      loop {
+        if candidate_offset >= candidate { break; }
+        let text_index = text_length text - candidate + candidate_offset;
+
+        if text_get [text, text_index] != text_get [prefix, candidate_offset] {
+          candidate_matches = false
+          break;
+        }
+        candidate_offset = candidate_offset + 1
+      }
+
+      if candidate_matches {
+        matched = candidate
+      }
+      candidate = candidate + 1
+    }
+  }
+
+  matched
+};
+
+const text_fold_i32 = (text: Text, initial: I32, const combine) => {
+  let state = initial;
+
+  for byte in text {
+    state = combine(state, byte)
+  }
+
+  state
+};
+
+const text_any = (text: Text, const predicate) => {
+  let matched = false;
+
+  for byte in text {
+    if predicate byte {
+      matched = true
+    }
+  }
+
+  matched
+};
+
+const text_all = (text: Text, const predicate) => {
+  let matched = true;
+
+  for byte in text {
+    if predicate byte {
+      ()
+    } else {
+      matched = false
+    }
+  }
+
+  matched
+};
+
+const text_count = (text: Text, const predicate) => {
+  let count = 0;
+
+  for byte in text {
+    if predicate byte {
+      count = count + 1
+    }
+  }
+
+  count
+};
+
+const text_is_blank = (text: Text) => {
+  text_all(text, text_byte_is_ascii_whitespace)
+};
+
+const text_trim_ascii_whitespace = (text: Text) => {
+  let start = 0;
+  let end = text_length text;
+
+  loop {
+    if start < end && text_byte_is_ascii_whitespace(text_get [text, start]) {
+      start = start + 1
+    } else {
+      break;
+    }
+  }
+
+  loop {
+    if end > start && text_byte_is_ascii_whitespace(text_get [text, end - 1]) {
+      end = end - 1
+    } else {
+      break;
+    }
+  }
+
+  text_slice [text, start, end]
+};
+
+const text_whitespace_width_at = (text: Text, index: I32) => {
+  let remaining = text_length text - index;
+  let first = text_get [text, index];
+
+  if text_byte_is_ascii_whitespace first || first == 11 || first == 12 {
+    1
+  } else if remaining >= 2 && first == 194 {
+    let second = text_get [text, index + 1];
+    if second == 133 || second == 160 { 2 } else { 0 }
+  } else if remaining >= 3 && first == 225 && text_get [text, index + 1] == 154 && text_get [
+    text,
+    index + 2,
+  ] == 128 {
+    3
+  } else if remaining >= 3 && first == 226 && text_get [text, index + 1] == 128 {
+    let third = text_get [text, index + 2];
+    if third >= 128 && third <= 138 || third == 168 || third == 169 || third == 175 { 3 } else { 0 }
+  } else if remaining >= 3 && first == 226 && text_get [text, index + 1] == 129 && text_get [
+    text,
+    index + 2,
+  ] == 159 {
+    3
+  } else if remaining >= 3 && first == 227 && text_get [text, index + 1] == 128 && text_get [
+    text,
+    index + 2,
+  ] == 128 {
+    3
+  } else {
+    0
+  }
+};
+
+const text_trim_whitespace = (text: Text) => {
+  let start = 0;
+  let end = text_length text;
+  let width = 0;
+
+  loop {
+    if start >= end { break; }
+    width = text_whitespace_width_at(text, start)
+    if width == 0 { break; }
+    start = start + width
+  }
+
+  loop {
+    if end <= start { break; }
+    width = text_whitespace_width_at(text, end - 1)
+    if width == 0 && end - start >= 2 {
+      let candidate = text_whitespace_width_at(text, end - 2);
+      if candidate == 2 { width = candidate }
+    }
+    if width == 0 && end - start >= 3 {
+      let candidate = text_whitespace_width_at(text, end - 3);
+      if candidate == 3 { width = candidate }
+    }
+    if width == 0 { break; }
+    end = end - width
+  }
+
+  text_slice [text, start, end]
+};
+
+const text_trim_start_whitespace = (text: Text) => {
+  let start = 0;
+
+  loop {
+    if start >= text_length text { break; }
+    let width = text_whitespace_width_at(text, start);
+    if width == 0 { break; }
+    start = start + width
+  }
+
+  text_slice [text, start, text_length text]
+};
+
+const text_repeat = (text: Text, count: I32) => {
+  let output: Text = "";
+
+  if count > 0 {
+    for iteration in 0..count {
+      output = text_append [output, text]
+    }
+  }
+
+  output
+};
+
+const text_collapse_ascii_whitespace = (text: Text) => {
+  let output: Text = "";
+  let segment_start = 0;
+  let index = 0;
+  let pending_space = false;
+
+  loop {
+    if index >= text_length text {
+      break;
+    }
+
+    if text_byte_is_ascii_whitespace(text_get [text, index]) {
+      if segment_start < index {
+        if pending_space && output != "" {
+          output = text_append [output, " "]
+        }
+
+        output = text_append [output, text_slice [text, segment_start, index]]
+      }
+
+      pending_space = output != "" || segment_start < index
+      index = index + 1
+      segment_start = index
+    } else {
+      index = index + 1
+    }
+  }
+
+  if segment_start < text_length text {
+    if pending_space && output != "" {
+      output = text_append [output, " "]
+    }
+
+    output = text_append [output, text_slice [text, segment_start, text_length text]]
+  }
+
+  output
+};
+
+const path_join = [directory: Text, name: Text] => {
+  if directory == "" {
+    name
+  } else if text_get [directory, text_length directory - 1] == 47 {
+    text_append [directory, name]
+  } else {
+    text_append [directory, text_append ["/", name]]
+  }
+};
+
+const path_parent = (path: Text) => {
+  let end = text_length path;
+  let trimming = end > 1;
+
+  loop {
+    if trimming {
+      if text_get [path, end - 1] == 47 {
+        end = end - 1
+        trimming = end > 1
+      } else {
+        trimming = false
+      }
+    } else {
+      break;
+    }
+  }
+
+  let separator = -1;
+
+  if end > 0 {
+    for index in 0..end {
+      if text_get [path, index] == 47 {
+        separator = index
+      }
+    }
+  }
+
+  if separator < 0 {
+    text_slice [path, 0, end]
+  } else if separator == 0 {
+    "/"
+  } else {
+    text_slice [path, 0, separator]
+  }
+};
+
+const path_basename = (path: Text) => {
+  let end = text_length path;
+  let trimming = end > 1;
+
+  loop {
+    if trimming {
+      if text_get [path, end - 1] == 47 {
+        end = end - 1
+        trimming = end > 1
+      } else {
+        trimming = false
+      }
+    } else {
+      break;
+    }
+  }
+
+  let separator = -1;
+
+  if end > 0 {
+    for index in 0..end {
+      if text_get [path, index] == 47 {
+        separator = index
+      }
+    }
+  }
+
+  text_slice [path, separator + 1, end]
+};
+
+const i32_decimal_digit_count = (value: I32) => {
+  let remaining = value;
+
+  if remaining > 0 {
+    remaining = 0 - remaining
+  }
+
+  let count = 1;
+  let done = remaining > -10;
+
+  loop {
+    if done {
+      break;
+    }
+
+    remaining = remaining / 10
+    count = count + 1
+
+    if remaining > -10 {
+      done = true
+    }
+  }
+
+  count
+};
+
+const i32_power_of_ten = (exponent: I32) => {
+  let power = 1;
+  let remaining_exponent = exponent;
+  loop {
+    if remaining_exponent <= 0 { break; }
+    power = power * 10
+    remaining_exponent = remaining_exponent - 1
+  }
+
+  power
+};
+
+const format_i32: I32 -> Text = value => {
+  let digit_count = i32_decimal_digit_count value;
+  let negative = value < 0;
+  let output_length = digit_count;
+
+  if negative {
+    output_length = output_length + 1
+  }
+
+  let encoded = @Bytes.generate(output_length, index => {
+    if negative && index == 0 {
+      45
+    } else {
+      let digit_index = output_length - index - 1;
+      let divisor = i32_power_of_ten digit_index;
+      let digit = (value / divisor) % 10;
+
+      if digit < 0 {
+        digit = 0 - digit
+      }
+
+      48 + digit
+    }
+  });
+  @Utf8.decode encoded
+};
+
+const i64_decimal_digit_count = (value: I64) => {
+  let remaining = value;
+  let count = 1;
+  let done = false;
+
+  if remaining < 0i64 {
+    done = remaining > -10i64
+  } else {
+    done = remaining < 10i64
+  }
+
+  loop {
+    if done {
+      break;
+    }
+
+    remaining = remaining / 10i64
+    count = count + 1
+
+    if remaining < 0i64 {
+      if remaining > -10i64 { done = true }
+    } else {
+      if remaining < 10i64 { done = true }
+    }
+  }
+
+  count
+};
+
+let i64_decimal_digit_at: [I64, I32] -> I32 = (value: I64, index: I32) => {
+  let digit = if index == 0 {
+    @unsafe_i32_wrap_i64(value % 10i64)
+  } else if index == 1 {
+    @unsafe_i32_wrap_i64((value / 10i64) % 10i64)
+  } else if index == 2 {
+    @unsafe_i32_wrap_i64((value / 100i64) % 10i64)
+  } else if index == 3 {
+    @unsafe_i32_wrap_i64((value / 1000i64) % 10i64)
+  } else if index == 4 {
+    @unsafe_i32_wrap_i64((value / 10000i64) % 10i64)
+  } else if index == 5 {
+    @unsafe_i32_wrap_i64((value / 100000i64) % 10i64)
+  } else if index == 6 {
+    @unsafe_i32_wrap_i64((value / 1000000i64) % 10i64)
+  } else if index == 7 {
+    @unsafe_i32_wrap_i64((value / 10000000i64) % 10i64)
+  } else if index == 8 {
+    @unsafe_i32_wrap_i64((value / 100000000i64) % 10i64)
+  } else if index == 9 {
+    @unsafe_i32_wrap_i64((value / 1000000000i64) % 10i64)
+  } else if index == 10 {
+    @unsafe_i32_wrap_i64((value / 10000000000i64) % 10i64)
+  } else if index == 11 {
+    @unsafe_i32_wrap_i64((value / 100000000000i64) % 10i64)
+  } else if index == 12 {
+    @unsafe_i32_wrap_i64((value / 1000000000000i64) % 10i64)
+  } else if index == 13 {
+    @unsafe_i32_wrap_i64((value / 10000000000000i64) % 10i64)
+  } else if index == 14 {
+    @unsafe_i32_wrap_i64((value / 100000000000000i64) % 10i64)
+  } else if index == 15 {
+    @unsafe_i32_wrap_i64((value / 1000000000000000i64) % 10i64)
+  } else if index == 16 {
+    @unsafe_i32_wrap_i64((value / 10000000000000000i64) % 10i64)
+  } else if index == 17 {
+    @unsafe_i32_wrap_i64((value / 100000000000000000i64) % 10i64)
+  } else {
+    @unsafe_i32_wrap_i64((value / 1000000000000000000i64) % 10i64)
+  };
+
+  if digit < 0 {
+    digit = 0 - digit
+  }
+
+  digit
+};
+
+let format_i64: I64 -> Text = value => {
+  let digit_count = i64_decimal_digit_count value;
+  let negative = value < 0i64;
+  let output_length = digit_count;
+
+  if negative {
+    output_length = output_length + 1
+  }
+
+  let encoded = @Bytes.generate(output_length, index => {
+    if negative && index == 0 {
+      45
+    } else {
+      let digit_index = output_length - index - 1;
+      48 + i64_decimal_digit_at(value, digit_index)
+    }
+  });
+  @Utf8.decode encoded
+};
+
+const text_approx_token_count: Text -> I32 = text => {
+  let bytes = text_length text;
+
+  if bytes <= 0 {
+    0
+  } else {
+    (bytes + 3) / 4
+  }
+};
+
+const text_line_count: Text -> I32 = text => {
+  let bytes = text_length text;
+  let lines = 0;
+
+  if bytes > 0 {
+    let index = 0;
+    loop {
+      if index >= bytes { break; }
+      if text_get [text, index] == 10 { lines = lines + 1 }
+      index = index + 1
+    }
+
+    if text_get [text, bytes - 1] != 10 {
+      lines = lines + 1
+    }
+  }
+
+  lines
+};
+
+const text_is_utf8_continuation_at = (text: Text, index: I32) => {
+  @bit_and(text_get [text, index], 192) == 128
+};
+
+const text_floor_utf8_boundary = (text: Text, requested: I32) => {
+  let index = requested;
+
+  if index < 0 {
+    index = 0
+  } else if index > text_length text {
+    index = text_length text
+  }
+
+  let done = index == 0 || index == text_length text;
+
+  loop {
+    if done {
+      break;
+    }
+
+    if text_is_utf8_continuation_at(text, index) {
+      index = index - 1
+
+      if index == 0 {
+        done = true
+      }
+    } else {
+      done = true
+    }
+  }
+
+  index
+};
+
+const text_truncate_end_bytes = (text: Text, maximum_bytes: I32) => {
+  if text_length text <= maximum_bytes {
+    text
+  } else {
+    let requested = maximum_bytes;
+
+    if requested < 0 {
+      requested = 0
+    }
+
+    text_slice [text, 0, text_floor_utf8_boundary(text, requested)]
+  }
+};
+
+const text_ceil_utf8_boundary = (text: Text, requested: I32) => {
+  let index = requested;
+
+  if index < 0 {
+    index = 0
+  } else if index > text_length text {
+    index = text_length text
+  }
+
+  let done = index == text_length text;
+
+  loop {
+    if done {
+      break;
+    }
+
+    if text_is_utf8_continuation_at(text, index) {
+      index = index + 1
+
+      if index == text_length text {
+        done = true
+      }
+    } else {
+      done = true
+    }
+  }
+
+  index
+};
+
+const text_utf8_character_count = (text: Text, start: I32, end: I32) => {
+  let count = 0;
+
+  if start < end {
+    for index in start..end {
+      if text_is_utf8_continuation_at(text, index) {
+        ()
+      } else {
+        count = count + 1
+      }
+    }
+  }
+
+  count
+};
+
+const text_utf8_length = (text: Text) => {
+  text_utf8_character_count(text, 0, text_length text)
+};
+
+const text_take_utf8_characters = (text: Text, maximum_characters: I32) => {
+  let end = 0;
+  let characters = 0;
+
+  loop {
+    if end >= text_length text || characters >= maximum_characters {
+      break;
+    }
+
+    end = end + 1
+
+    if end >= text_length text {
+      characters = characters + 1
+    } else if text_is_utf8_continuation_at(text, end) {
+      ()
+    } else {
+      characters = characters + 1
+    }
+  }
+
+  text_slice [text, 0, end]
+};
+
+const text_truncate_middle_bytes: [Text, I32] -> Text = (text, maximum_bytes) => {
+  let source_bytes = text_length text;
+
+  if source_bytes == 0 || source_bytes <= maximum_bytes {
+    text
+  } else {
+    let budget = maximum_bytes;
+
+    if budget < 0 {
+      budget = 0
+    }
+
+    let left_budget = budget / 2;
+    let right_budget = budget - left_budget;
+    let prefix_end = text_floor_utf8_boundary(text, left_budget);
+    let suffix_start = text_ceil_utf8_boundary(text, source_bytes - right_budget);
+
+    if suffix_start < prefix_end {
+      suffix_start = prefix_end
+    }
+
+    let removed_characters = text_utf8_character_count(text, prefix_end, suffix_start);
+    let marker = text_append ["…", text_append [format_i32 removed_characters, " chars truncated…"]];
+    let prefix = text_slice [text, 0, prefix_end];
+    let suffix = text_slice [text, suffix_start, source_bytes];
+    text_append [prefix, text_append [marker, suffix]]
+  }
+};
+
+const text_truncate_middle_tokens: [Text, I32] -> Text = (text, maximum_tokens) => {
+  let source_bytes = text_length text;
+  let budget_bytes = maximum_tokens * 4;
+
+  if maximum_tokens > 0 && source_bytes <= budget_bytes {
+    text
+  } else {
+    let budget = budget_bytes;
+
+    if budget < 0 {
+      budget = 0
+    }
+
+    let left_budget = budget / 2;
+    let right_budget = budget - left_budget;
+    let prefix_end = text_floor_utf8_boundary(text, left_budget);
+    let suffix_start = text_ceil_utf8_boundary(text, source_bytes - right_budget);
+
+    if suffix_start < prefix_end {
+      suffix_start = prefix_end
+    }
+
+    let removed_bytes = suffix_start - prefix_end;
+    let removed_tokens = if removed_bytes <= 0 { 0 } else { (removed_bytes + 3) / 4 };
+    let marker = text_append ["…", text_append [format_i32 removed_tokens, " tokens truncated…"]];
+    let prefix = text_slice [text, 0, prefix_end];
+    let suffix = text_slice [text, suffix_start, source_bytes];
+    text_append [prefix, text_append [marker, suffix]]
+  }
+};
+
+const bytes_fold_i32 = (bytes: Bytes, initial: I32, const combine) => {
+  let state = initial;
+
+  for byte in bytes {
+    state = combine(state, byte)
+  }
+
+  state
+};
+
+const bytes_any = (bytes: Bytes, const predicate) => {
+  let matched = false;
+
+  for byte in bytes {
+    if predicate byte {
+      matched = true
+    }
+  }
+
+  matched
+};
+
+const bytes_all = (bytes: Bytes, const predicate) => {
+  let matched = true;
+
+  for byte in bytes {
+    if predicate byte {
+      ()
+    } else {
+      matched = false
+    }
+  }
+
+  matched
+};
+
+const bytes_count = (bytes: Bytes, const predicate) => {
+  let count = 0;
+
+  for byte in bytes {
+    if predicate byte {
+      count = count + 1
+    }
+  }
+
+  count
+};
+
+const bit_and = [left, right] => @bit_and(left, right);
+const bit_or = [left, right] => @bit_or(left, right);
+const bit_xor = [left, right] => @bit_xor(left, right);
+const shift_left = [value, amount] => @shift_left(value, amount);
+const shift_right_unsigned = [value, amount] => @shift_right_u(value, amount);
+
+const sqrt_f32 = value => @f32_sqrt value;
+const f32_from_i32 = value => @f32_from_i32 value;
+const i32_from_f32 = value => @i32_from_f32 value;
+const f64_from_i32 = value => @f64_from_i32 value;
+const i32_from_f64 = value => @i32_from_f64 value;
+const unsafe_i32_wrap_i64 = value => @unsafe_i32_wrap_i64 value;
+const unsafe_i64_extend_i32_signed = value => @unsafe_i64_extend_i32_signed value;
+const unsafe_i64_extend_i32_unsigned = value => @unsafe_i64_extend_i32_unsigned value;
+const unsafe_i32_reinterpret_f32 = value => @unsafe_i32_reinterpret_f32 value;
+const unsafe_f32_reinterpret_i32 = value => @unsafe_f32_reinterpret_i32 value;
+const format_f32: [F32, I32] -> Text = [value, fractional_digits] => @format_f32(
+  value,
+  fractional_digits,
+);
+
+const generate_bytes = [length: I32, generate: I32 -> I32] => @Bytes.generate(length, generate);
+const encode_utf8 = text => @Utf8.encode text;
+const decode_utf8 = bytes => @Utf8.decode bytes;
+
+const text_byte_ascii_lowercase = (byte: I32) => {
+  if text_byte_is_ascii_upper byte { byte + 32 } else { byte }
+};
+
+const text_starts_with_ascii_case_insensitive_at = [text: Text, prefix: Text, start: I32] => {
+  let pattern_length = text_length prefix;
+  let source_length = text_length text;
+
+  if start < 0 || start + pattern_length > source_length {
+    false
+  } else {
+    let matches = true;
+
+    for offset in 0..pattern_length {
+      let source_byte = text_get [text, start + offset];
+      let pattern_byte = text_get [prefix, offset];
+
+      if source_byte >= 65 && source_byte <= 90 {
+        source_byte = source_byte + 32
+      }
+
+      if pattern_byte >= 65 && pattern_byte <= 90 {
+        pattern_byte = pattern_byte + 32
+      }
+
+      if source_byte != pattern_byte {
+        matches = false
+      }
+    }
+
+    matches
+  }
+};
+
+const text_find_ascii_case_insensitive = [text: Text, needle: Text] => {
+  let source_length = text_length text;
+  let needle_length = text_length needle;
+  let found = -1;
+
+  if needle_length <= source_length {
+    for index in 0..(source_length - needle_length + 1) {
+      if found < 0 && text_starts_with_ascii_case_insensitive_at [text, needle, index] {
+        found = index
+      }
+    }
+  }
+
+  found
+};
+
+const text_contains_ascii_case_insensitive = [text: Text, needle: Text] => {
+  text_find_ascii_case_insensitive [text, needle] >= 0
+};
+
+const text_equal_ascii_case_insensitive = [left: Text, right: Text] => {
+  text_length left == text_length right && text_find_ascii_case_insensitive [left, right] == 0
+};
+
+const min_i32 = [left: I32, right: I32] => {
+  if left < right { left } else { right }
+};
+
+const max_i32 = [left: I32, right: I32] => {
+  if left > right { left } else { right }
+};
+
+const panic = value => @panic value;
+
+const f32x4 = [x, y, z, w] => @f32x4(x, y, z, w);
+const f32x4_splat = value => @f32x4_splat value;
+const f32x4_add = [left, right] => @f32x4_add(left, right);
+const f32x4_subtract = [left, right] => @f32x4_sub(left, right);
+const f32x4_multiply = [left, right] => @f32x4_mul(left, right);
+const f32x4_divide = [left, right] => @f32x4_div(left, right);
+
+return {
+  .append,
+  .text_append,
+  .append_text,
+  .length,
+  .get,
+  .slice,
+  .text_length,
+  .text_get,
+  .text_slice,
+  .text_starts_with_at,
+  .text_starts_with,
+  .text_ends_with,
+  .text_find_from,
+  .text_find,
+  .text_contains,
+  .text_split,
+  .text_ascii_words,
+  .text_replace_all,
+  .text_escape_xml,
+  .text_compare,
+  .text_less_than,
+  .text_byte_ascii_lowercase,
+  .text_find_ascii_case_insensitive,
+  .text_contains_ascii_case_insensitive,
+  .text_equal_ascii_case_insensitive,
+  .min_i32,
+  .max_i32,
+  .text_byte_is_ascii_whitespace,
+  .text_byte_is_ascii_digit,
+  .text_byte_is_ascii_lower,
+  .text_byte_is_ascii_upper,
+  .text_byte_is_ascii_alpha,
+  .text_byte_is_ascii_alphanumeric,
+  .text_byte_is_ascii_hex_digit,
+  .text_longest_suffix_prefix_length,
+  .text_fold_i32,
+  .text_any,
+  .text_all,
+  .text_count,
+  .text_is_blank,
+  .text_trim_whitespace,
+  .text_trim_start_whitespace,
+  .text_trim_ascii_whitespace,
+  .text_repeat,
+  .text_collapse_ascii_whitespace,
+  .path_join,
+  .path_parent,
+  .path_basename,
+  .text_approx_token_count,
+  .text_line_count,
+  .text_utf8_length,
+  .text_take_utf8_characters,
+  .text_floor_utf8_boundary,
+  .text_ceil_utf8_boundary,
+  .text_truncate_end_bytes,
+  .text_truncate_middle_bytes,
+  .text_truncate_middle_tokens,
+  .bytes_fold_i32,
+  .bytes_any,
+  .bytes_all,
+  .bytes_count,
+  .bit_and,
+  .bit_or,
+  .bit_xor,
+  .shift_left,
+  .shift_right_unsigned,
+  .sqrt_f32,
+  .f32_from_i32,
+  .i32_from_f32,
+  .f64_from_i32,
+  .i32_from_f64,
+  .unsafe_i32_wrap_i64,
+  .unsafe_i64_extend_i32_signed,
+  .unsafe_i64_extend_i32_unsigned,
+  .unsafe_i32_reinterpret_f32,
+  .unsafe_f32_reinterpret_i32,
+  .format_i32,
+  .format_i64,
+  .format_f32,
+  .generate_bytes,
+  .encode_utf8,
+  .decode_utf8,
+  .panic,
+  .f32x4,
+  .f32x4_splat,
+  .f32x4_add,
+  .f32x4_subtract,
+  .f32x4_multiply,
+  .f32x4_divide,
+};

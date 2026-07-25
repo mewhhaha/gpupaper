@@ -14,24 +14,34 @@ import { elaborateDucklangExtensions } from "./ducklang_extensions.ts";
 import { elaborateDucklangHandlers } from "./ducklang_handlers.ts";
 import { validateDucklangOwnership } from "./ducklang_ownership.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
-import { lowerDucklangToFcgAndWasm } from "./ducklang_fcg.ts";
+import {
+  ducklangTextLiteralsSectionName,
+  lowerDucklangToFcgAndWasm,
+} from "./ducklang_fcg.ts";
 import {
   applyDucklangHostInterface,
-  expandDucklangIncludes,
-  lowerDucklangEmptyModuleExports,
+  lowerDucklangModuleExports,
   resolveDucklangLocalImports,
 } from "./ducklang_modules.ts";
-import { parseDucklangModule } from "./ducklang_parser.ts";
+import { expandDucklangIncludes } from "./ducklang_module_graph.ts";
+import { parseDucklangModuleWithTimings } from "./ducklang_parser.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
 import { elaborateDucklangSourceTests } from "./ducklang_tests.ts";
 import { expandStaticDucklangLoops } from "./ducklang_static_loops.ts";
+import {
+  createDucklangRuntimeHeap,
+  createDucklangRuntimeImports,
+} from "./ducklang_runtime.ts";
+import { ducklangRuntimeImportModule } from "./ducklang_primitives.ts";
 import {
   formatDucklangType,
   inferDucklangModule,
   type TypedDucklangModule,
 } from "./ducklang_types.ts";
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
+import type { FlatFcgPackage } from "./flat_fcg.ts";
 import { type GpuSolveResult, solveTypeEqualitiesOnGpu } from "./gpu_solver.ts";
+import { emitWasmPlanOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
 import {
   evaluateModuleInteractionComptime,
   type InteractionResult,
@@ -49,20 +59,29 @@ export type CompilationOptions = {
 
 export type CompilationTimings = {
   readonly parseMilliseconds: number;
+  readonly includeMilliseconds: number;
+  readonly parserInitializationMilliseconds: number;
+  readonly syntaxMilliseconds: number;
+  readonly astLoweringMilliseconds: number;
+  readonly elaborationMilliseconds: number;
+  readonly resolutionMilliseconds: number;
   readonly macroMilliseconds: number;
   readonly initialTypeMilliseconds: number;
   readonly gpuTypeMilliseconds: number;
   readonly comptimeMilliseconds: number;
   readonly finalTypeMilliseconds: number;
   readonly wasmMilliseconds: number;
+  readonly gpuWasmMilliseconds: number;
 };
 
 type SharedCompilationArtifact = {
   readonly wasm: Uint8Array;
   readonly fcg: FcgModule;
+  readonly flatFcg: FlatFcgPackage;
   readonly initialTypes: readonly string[];
   readonly finalTypes: readonly string[];
   readonly gpuTypeResult: GpuSolveResult | undefined;
+  readonly gpuWasmResult: GpuWasmEmissionResult | undefined;
   readonly comptimeCpuValues: readonly ComptimeValue[];
   readonly comptimeGpuResult: ComptimeBatchResult | undefined;
   readonly interactionResults: readonly InteractionResult[];
@@ -171,10 +190,19 @@ async function compileHaskellModuleSource(
   const wasmStart = performance.now();
   const lowered = lowerToFcgAndWasm(finalInference);
   const wasmMilliseconds = performance.now() - wasmStart;
+  const gpuWasmStart = performance.now();
+  const gpuWasmResult = gpuMode === "off"
+    ? undefined
+    : await emitWasmPlanOnGpu(lowered.wasmPlan);
+  const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
+  requireMatchingGpuWasm(file, lowered.wasm, gpuWasmResult, gpuMode);
   return {
     language: "haskell",
-    wasm: lowered.wasm,
+    wasm: gpuWasmResult?.status === "completed"
+      ? gpuWasmResult.bytes
+      : lowered.wasm,
     fcg: lowered.fcg,
+    flatFcg: lowered.flatFcg,
     inferred: finalInference,
     initialTypes: initialInference.declarations.map((typed) =>
       `${typed.declaration.name.text} :: ${formatScheme(typed.scheme)}`
@@ -183,6 +211,7 @@ async function compileHaskellModuleSource(
       `${typed.declaration.name.text} :: ${formatScheme(typed.scheme)}`
     ),
     gpuTypeResult,
+    gpuWasmResult,
     comptimeCpuValues: comptime.cpuValues,
     comptimeGpuResult: comptime.gpu,
     interactionResults: interaction.results,
@@ -193,12 +222,19 @@ async function compileHaskellModuleSource(
     },
     timings: {
       parseMilliseconds,
+      includeMilliseconds: 0,
+      parserInitializationMilliseconds: 0,
+      syntaxMilliseconds: parseMilliseconds,
+      astLoweringMilliseconds: 0,
+      elaborationMilliseconds: 0,
+      resolutionMilliseconds: 0,
       macroMilliseconds,
       initialTypeMilliseconds,
       gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds,
       wasmMilliseconds,
+      gpuWasmMilliseconds,
     },
   };
 }
@@ -210,10 +246,15 @@ async function compileDucklangModuleSource(
 ): Promise<DucklangCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
-  const parsedSource = await parseDucklangModule(
+  const includeStart = performance.now();
+  const expandedSource = await expandDucklangIncludes(file, source);
+  const includeMilliseconds = performance.now() - includeStart;
+  const parsedResult = await parseDucklangModuleWithTimings(
     file,
-    await expandDucklangIncludes(file, source),
+    expandedSource,
   );
+  const parsedSource = parsedResult.module;
+  const elaborationStart = performance.now();
   const parsedWithHost = options.hostInterface === undefined
     ? parsedSource
     : await applyDucklangHostInterface(parsedSource, options.hostInterface);
@@ -223,9 +264,10 @@ async function compileDucklangModuleSource(
         elaborateDucklangDerivations(
           elaborateDucklangHandlers(
             validateDucklangOwnership(
-              lowerDucklangEmptyModuleExports(
+              lowerDucklangModuleExports(
                 await resolveDucklangLocalImports(
                   elaborateDucklangSourceTests(parsedWithHost),
+                  expandedSource,
                 ),
               ),
             ),
@@ -234,10 +276,13 @@ async function compileDucklangModuleSource(
       ),
     ),
   );
+  const elaborationMilliseconds = performance.now() - elaborationStart;
   const parseMilliseconds = performance.now() - parseStart;
 
-  const initialTypeStart = performance.now();
+  const resolutionStart = performance.now();
   const resolved = resolveDucklangModule(parsed);
+  const resolutionMilliseconds = performance.now() - resolutionStart;
+  const initialTypeStart = performance.now();
   const initialInference = inferDucklangModule(resolved);
   const initialTypeMilliseconds = performance.now() - initialTypeStart;
   const initialTypes = initialInference.bindings.map((binding) =>
@@ -282,15 +327,25 @@ async function compileDucklangModuleSource(
   const specialized = specializeStaticDucklangClosures(comptime.module);
   const lowered = lowerDucklangToFcgAndWasm(specialized);
   const wasmMilliseconds = performance.now() - wasmStart;
+  const gpuWasmStart = performance.now();
+  const gpuWasmResult = gpuMode === "off"
+    ? undefined
+    : await emitWasmPlanOnGpu(lowered.wasmPlan);
+  const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
+  requireMatchingGpuWasm(file, lowered.wasm, gpuWasmResult, gpuMode);
   return {
     language: "ducklang",
-    wasm: lowered.wasm,
+    wasm: gpuWasmResult?.status === "completed"
+      ? gpuWasmResult.bytes
+      : lowered.wasm,
     fcg: lowered.fcg,
+    flatFcg: lowered.flatFcg,
     inferred: specialized,
     abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
     initialTypes,
     finalTypes: initialTypes,
     gpuTypeResult,
+    gpuWasmResult,
     comptimeCpuValues: comptime.cpuValues,
     comptimeGpuResult: comptime.gpu,
     interactionResults: [],
@@ -301,14 +356,48 @@ async function compileDucklangModuleSource(
     },
     timings: {
       parseMilliseconds,
+      includeMilliseconds,
+      parserInitializationMilliseconds:
+        parsedResult.timings.parserInitializationMilliseconds,
+      syntaxMilliseconds: parsedResult.timings.syntaxMilliseconds,
+      astLoweringMilliseconds: parsedResult.timings.astLoweringMilliseconds,
+      elaborationMilliseconds,
+      resolutionMilliseconds,
       macroMilliseconds: 0,
       initialTypeMilliseconds,
       gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds: 0,
       wasmMilliseconds,
+      gpuWasmMilliseconds,
     },
   };
+}
+
+function requireMatchingGpuWasm(
+  file: string,
+  cpuWasm: Uint8Array,
+  gpuResult: GpuWasmEmissionResult | undefined,
+  gpuMode: GpuMode,
+): void {
+  if (gpuResult?.status === "unavailable") {
+    if (gpuMode === "required") throw new Error(gpuResult.reason);
+    return;
+  }
+  if (gpuResult === undefined) return;
+  if (gpuResult.bytes.length !== cpuWasm.length) {
+    throw new Error(
+      `${file}: CPU/GPU Wasm length mismatch: CPU emitted ${cpuWasm.length} bytes; GPU emitted ${gpuResult.bytes.length}`,
+    );
+  }
+  for (let index = 0; index < cpuWasm.length; index += 1) {
+    if (cpuWasm[index] === gpuResult.bytes[index]) continue;
+    throw new Error(
+      `${file}: CPU/GPU Wasm mismatch at byte ${index}: CPU emitted ${
+        cpuWasm[index]
+      }; GPU emitted ${gpuResult.bytes[index]}`,
+    );
+  }
 }
 
 export async function runMain(
@@ -318,13 +407,29 @@ export async function runMain(
   const module = await WebAssembly.compile(
     new Uint8Array(wasm).buffer as ArrayBuffer,
   );
+  const textSections = WebAssembly.Module.customSections(
+    module,
+    ducklangTextLiteralsSectionName,
+  );
+  if (textSections.length > 1) {
+    throw new TypeError(
+      `main runner received ${textSections.length} Ducklang text literal sections`,
+    );
+  }
+  const textLiterals = textSections.length === 0
+    ? []
+    : parseDucklangTextLiterals(textSections[0]);
   const imports: WebAssembly.Imports = {};
+  imports[ducklangRuntimeImportModule] = createDucklangRuntimeImports(
+    createDucklangRuntimeHeap(textLiterals),
+  );
   for (const descriptor of WebAssembly.Module.imports(module)) {
     if (descriptor.kind !== "function") {
       throw new TypeError(
         `main runner cannot provide ${descriptor.kind} import ${descriptor.module}.${descriptor.name}`,
       );
     }
+    if (descriptor.module === ducklangRuntimeImportModule) continue;
     const value = readHostInput(hostInputs, descriptor.module, descriptor.name);
     const namespace = imports[descriptor.module] ?? {};
     namespace[descriptor.name] = () => value;
@@ -340,6 +445,29 @@ export async function runMain(
     throw new Error(`main returned ${typeof result}; expected i32 or i64`);
   }
   return result;
+}
+
+function parseDucklangTextLiterals(section: ArrayBuffer): readonly string[] {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(new TextDecoder().decode(section));
+  } catch (cause) {
+    throw new TypeError(
+      "main runner received malformed Ducklang text literals",
+      {
+        cause,
+      },
+    );
+  }
+  if (
+    !Array.isArray(decoded) ||
+    !decoded.every((value) => typeof value === "string")
+  ) {
+    throw new TypeError(
+      "main runner expected the Ducklang text literal section to contain a string array",
+    );
+  }
+  return decoded;
 }
 
 function readHostInput(
