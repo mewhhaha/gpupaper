@@ -514,6 +514,7 @@ failure hidden behind it. Re-run and update it after each phase.
 | Extension dictionaries      | editor reaches type-directed `IntoIterator.iterator` selection                                                                                                                                        |
 | CFG and loop edges          | Codex citation parser reaches branch-local `next_parser`; attributes, Base64, JSON, JSON encode, time, grep, and tar                                                                                  |
 | Staged types and literals   | collections, iterators, JSON values, numeric, numeric parse                                                                                                                                           |
+| Nominal type identity       | same-named declarations in different files are file-qualified before elaboration, so an import no longer changes a struct field offset; a colliding name that is also a value name is rejected        |
 | Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations; legacy intrinsic dispatch remains                                                                                                  |
 | ABI and layout              | effects prelude                                                                                                                                                                                       |
 

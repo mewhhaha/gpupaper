@@ -25,6 +25,7 @@ import {
 } from "./ducklang_modules.ts";
 import { expandDucklangIncludes } from "./ducklang_module_graph.ts";
 import { parseDucklangModuleWithTimings } from "./ducklang_parser.ts";
+import { qualifyDucklangTypeCollisions } from "./ducklang_type_identity.ts";
 import { resolveDucklangModule } from "./ducklang_resolution.ts";
 import { elaborateDucklangSourceTests } from "./ducklang_tests.ts";
 import { expandStaticDucklangLoops } from "./ducklang_static_loops.ts";
@@ -258,18 +259,20 @@ async function compileDucklangModuleSource(
   const parsedWithHost = options.hostInterface === undefined
     ? parsedSource
     : await applyDucklangHostInterface(parsedSource, options.hostInterface);
+  const linked = await resolveDucklangLocalImports(
+    elaborateDucklangSourceTests(parsedWithHost),
+    expandedSource,
+  );
+  // Nominal type identity must be unambiguous before any pass looks a type up by
+  // name, so this runs on the fully linked program and ahead of elaboration.
+  const qualified = qualifyDucklangTypeCollisions(linked);
   const parsed = lowerDucklangControlFlow(
     expandStaticDucklangLoops(
       elaborateDucklangExtensions(
         elaborateDucklangDerivations(
           elaborateDucklangHandlers(
             validateDucklangOwnership(
-              lowerDucklangModuleExports(
-                await resolveDucklangLocalImports(
-                  elaborateDucklangSourceTests(parsedWithHost),
-                  expandedSource,
-                ),
-              ),
+              lowerDucklangModuleExports(qualified.module),
             ),
           ),
         ),
