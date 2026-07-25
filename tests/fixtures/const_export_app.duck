@@ -1,0 +1,4 @@
+const const_export_module = import "./const_export_module.duck"
+let instance = const_export_module()
+
+instance.base + instance.doubled

@@ -63,6 +63,19 @@ Deno.test("Ducklang module parameter records accept non-integer fields", async (
   assertEquals(await runFixture("text_parameter_app.duck"), 5);
 });
 
+/**
+ * A module instance bound to a local, then projected, must keep working.
+ *
+ * The specialized export path folds `namespace.member` and
+ * `namespace(...).member` directly and drops the namespace binding, so it only
+ * applies where every export is a function. Widening it to constant exports
+ * without teaching the folder about an instance bound to a local silently
+ * removes the namespace binding and leaves this program with an unknown name.
+ */
+Deno.test("Ducklang namespace instances survive being bound to a local", async () => {
+  assertEquals(await runFixture("const_export_app.duck"), 21);
+});
+
 Deno.test("Ducklang module graph shares a transitive dependency", async () => {
   const sources = new Map([
     [

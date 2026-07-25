@@ -1,0 +1,6 @@
+module () where
+
+const base = 7
+const doubled = 14
+
+return { base, doubled }

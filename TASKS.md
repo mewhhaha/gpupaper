@@ -319,7 +319,24 @@ than interpreting source names repeatedly.
       cover all four components; the argument component stays empty until
       parameterized modules become compile-time functions.
 - [ ] Delete the exported-function hoisting path after all callers use the
-      module graph.
+      module graph. Measured blocker: the module graph is not what keeps this
+      path alive. Deleting it routes the frozen Codex, grep, and
+      effects/multi_file targets onto the general namespace path, which is
+      strictly weaker in three ways, each reproduced by deleting the block and
+      running the suite: -
+      `main.duck:84: Ducklang Wasm backend cannot represent text -> unit` -- the
+      general path binds a module as a value whose export record holds
+      functions, which needs Phase 6 closure conversion; -
+      `codex.duck:255: Ducklang struct declarations must be module-level` -- the
+      general path wraps a module in a `block`, and resolution admits type
+      declarations only at module scope; -
+      `grep.duck:860: unknown Ducklang name cast` -- block scoping loses a
+      module-level name the hoisting path kept. Generalizing the path to
+      non-function exports instead of deleting it is also not sufficient on its
+      own: the folder handles only `namespace.member` and
+      `namespace(...).member`, so widening the path drops the namespace binding
+      for a module instance bound to a local. That shape is now covered by the
+      const_export_app fixture.
 - [x] Test that `citation_parser.duck` retains the captured `texts` binding.
 - [x] Test that importing `duck:prelude/iterators` makes `IntoIterator` and its
       extensions visible to the editor.
