@@ -40,12 +40,22 @@ Deno.test("Ducklang still rejects two consumptions on one path", async () => {
   );
 });
 
-Deno.test("Ducklang still rejects a consumption after a branch consumed it", async () => {
-  // The merge keeps a value consumed in one arm consumed afterwards, so this is
-  // the case that fails if a fix forgets to carry branch consumption out.
+Deno.test("Ducklang still rejects a consumption after every arm consumed it", async () => {
+  // Both arms consume, so the join agrees and the value is consumed afterwards.
+  // This is the case that fails if a fix forgets to carry consumption out of a
+  // branch.
   await assertRejects(
-    `${consume}let flag = 1\nlet !token = 41\nlet first = if flag == 1 {\n  consume(!token)\n} else {\n  0\n}\nfirst + consume(!token)\n`,
+    `${consume}let flag = 1\nlet !token = 41\nlet first = if flag == 1 {\n  consume(!token)\n} else {\n  consume(!token)\n}\nfirst + consume(!token)\n`,
     /linear Ducklang value token was already consumed/,
+  );
+});
+
+Deno.test("Ducklang rejects a join whose arms disagree about consumption", async () => {
+  // One arm consumes and the other does not, so the state after the join would
+  // depend on which arm ran, which a linear obligation forbids.
+  await assertRejects(
+    `${consume}let flag = 1\nlet !token = 41\nlet first = if flag == 1 {\n  consume(!token)\n} else {\n  0\n}\nfirst\n`,
+    /linear Ducklang value token is consumed on some paths but not branch/,
   );
 });
 

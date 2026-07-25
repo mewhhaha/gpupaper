@@ -616,9 +616,16 @@ nested source functions.
       so exclusive arms may each consume an incoming linear value once. Merging
       by maximum keeps a value consumed in one arm consumed afterwards, so a
       later use is still rejected, as are two consumptions on one path and two
-      inside one arm. It does not yet require every arm to consume, which would
-      be stricter than before and is the join-agreement item below.
-- [ ] Require compatible resource states at CFG joins.
+      inside one arm. Requiring every arm to agree is the join-agreement item
+      below, now also done.
+- [x] Require compatible resource states at CFG joins. A join must agree on what
+      each linear value has become, so an `if` or match where one arm consumes a
+      value and another does not is rejected: the state after the join would
+      otherwise depend on which arm ran. Landing this changed no corpus program.
+      The only test it moved was one asserting a later reuse was rejected, which
+      is now rejected earlier and for the better reason, so that case was split
+      into a join-disagreement test and a both-arms-consume test that still
+      proves consumption carries out of a branch.
 - [ ] Insert explicit drops on every owning exit edge.
 - [ ] Lower borrow lifetimes to checked regions.
 - [ ] Prove freeze transitions and erase or lower them according to layout.

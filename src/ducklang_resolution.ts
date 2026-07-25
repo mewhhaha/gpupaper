@@ -345,14 +345,33 @@ class DucklangResolver {
     const entry = new Map(this.#linearUseCounts);
     const results: T[] = [];
     const merged = new Map(entry);
+    const branchStates: Map<number, number>[] = [];
     for (const branch of branches) {
       this.#linearUseCounts.clear();
       for (const [symbol, count] of entry) {
         this.#linearUseCounts.set(symbol, count);
       }
       results.push(branch());
+      branchStates.push(new Map(this.#linearUseCounts));
       for (const [symbol, count] of this.#linearUseCounts) {
         merged.set(symbol, Math.max(merged.get(symbol) ?? 0, count));
+      }
+    }
+    // A join must agree on what each linear value has become. If one branch
+    // consumed a value and another did not, the state after the join depends on
+    // which arm ran, which is exactly what a linear obligation forbids.
+    for (const [symbol, count] of merged) {
+      if (count === (entry.get(symbol) ?? 0)) continue;
+      for (const [index, branchCounts] of branchStates.entries()) {
+        if ((branchCounts.get(symbol) ?? 0) === count) continue;
+        const declared = this.#symbols.find((candidate) =>
+          candidate.id === symbol
+        );
+        throw new TypeError(
+          `${this.#file}:${declared?.span.start ?? 0}: linear Ducklang value ${
+            declared?.text ?? symbol
+          } is consumed on some paths but not branch ${index + 1}`,
+        );
       }
     }
     this.#linearUseCounts.clear();
