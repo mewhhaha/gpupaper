@@ -1,4 +1,4 @@
-import { compileModuleSource } from "../src/compiler.ts";
+import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
   canonicalDucklangTypeId,
   type DucklangConstProduct,
@@ -203,35 +203,65 @@ function assertEquals(actual: unknown, expected: unknown): void {
 }
 
 /**
- * Recursive compile-time evaluation is not supported: references to module
- * bindings are substituted away before evaluation, and that substitution cannot
- * terminate for a recursive binding. The diagnostic must say so in terms of the
- * source program. Before this was checked, the leftover reference surfaced as
- * "missing compile-time value for down#0", which names an internal symbol ID and
- * never mentions recursion.
+ * Recursive compile-time evaluation.
+ *
+ * Module-level function bindings are supplied as closures that can see the
+ * environment holding them, so a recursive function finds itself. Reference
+ * substitution alone could not express that, and recursion previously failed with
+ * "missing compile-time value for down#0".
+ *
+ * The values are chosen so a wrong recursion would give a different answer rather
+ * than coincidentally the same one: a countdown returns 0, but a sum returns 36 and a
+ * factorial 120.
  */
-Deno.test("Ducklang comptime rejects a recursive binding by name", async () => {
-  const file = await Deno.realPath("tests/fixtures/recursive_comptime.duck");
+Deno.test("Ducklang evaluates recursive compile-time functions", async () => {
+  assertEquals(
+    await runComptime(
+      "let rec down = value => if value == 0 { 0 } else { down(value - 1) }\ncomptime down(3)\n",
+    ),
+    0,
+  );
+  assertEquals(
+    await runComptime(
+      "let rec total = value => if value == 0 { 0 } else { value + total(value - 1) }\ncomptime total(8)\n",
+    ),
+    36,
+  );
+  assertEquals(
+    await runComptime(
+      "let rec fact = value => if value == 0 { 1 } else { value * fact(value - 1) }\ncomptime fact(5)\n",
+    ),
+    120,
+  );
+});
+
+Deno.test("Ducklang reports non-terminating recursion at the source", async () => {
+  // Fuel does not bound depth: each level costs a JavaScript frame, so before the
+  // depth guard this exhausted the host stack and reported "Maximum call stack size
+  // exceeded" with no source location.
   let message = "";
   try {
-    await compileModuleSource(
-      file as `${string}.duck`,
-      await Deno.readTextFile(file),
-      { gpuMode: "off" },
+    await runComptime(
+      "let rec forever = value => forever(value + 1)\ncomptime forever(0)\n",
     );
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
   }
   if (
-    !/Ducklang compile-time evaluation cannot use the recursive binding down/
-      .test(message)
+    !/Ducklang compile-time evaluation exceeded 2000 nested calls/.test(message)
   ) {
     throw new Error(
-      `expected a recursion diagnostic, received ${JSON.stringify(message)}`,
+      `expected a depth diagnostic, received ${JSON.stringify(message)}`,
     );
   }
-  // The old internal-sounding failure must not be what a user sees.
-  if (/missing compile-time value/.test(message)) {
-    throw new Error("diagnostic still exposes the compile-time environment");
+  if (/Maximum call stack/.test(message)) {
+    throw new Error("host stack overflow still reaches the user");
   }
 });
+
+async function runComptime(source: string): Promise<number | bigint> {
+  const artifact = await compileModuleSource("recursive.duck", source, {
+    gpuMode: "off",
+  });
+  return await runMain(artifact.wasm);
+}

@@ -459,16 +459,19 @@ behavior no longer depends on statement concatenation order.
       everything into oblivion would fail rather than pass quietly.
 - [x] Add explicit fuel and recursion diagnostics for non-terminating
       compile-time evaluation. Fuel rejects a non-positive budget and reports
-      exhaustion at the source span. Recursion is reported at the reference:
-      `Ducklang compile-time evaluation cannot use the recursive binding <name>`.
-      Recursive compile-time evaluation is still unsupported, because references
-      to module bindings are substituted away before evaluation and that
-      substitution cannot terminate for a recursive binding; supporting it needs
-      the compile-time environment work in this phase. Until then the case is
-      rejected by name instead of surfacing
-      `missing compile-time value for
-      down#0`, which named an internal
-      symbol ID and never mentioned recursion.
+      exhaustion at the source span. Recursive compile-time evaluation now works
+      rather than being rejected: module-level function bindings are supplied as
+      closures that can see the environment holding them, so a recursive
+      function finds itself, which reference substitution alone could not
+      express. A countdown returns 0, a sum returns 36, and a factorial 120.
+
+      Enabling it exposed the hazard that made the depth guard necessary. Fuel does
+      not bound depth, because each level costs a host stack frame, so
+      `let rec forever = value => forever(value + 1)` exhausted the JavaScript stack
+      and reported "Maximum call stack size exceeded" with no source location long
+      before a million units of fuel ran out. Evaluation now refuses beyond 2000
+      nested calls with a source-located diagnostic, and the test also asserts the
+      host stack message no longer reaches the user.
 
 - [x] Erase all compile-time-only bindings and values before Core construction.
       A binding read only at compile time is gone from the typed module

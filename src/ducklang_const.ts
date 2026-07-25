@@ -64,6 +64,14 @@ export type DucklangConstValue =
     readonly exports: DucklangConstProduct;
   };
 
+/**
+ * Nested compile-time calls allowed before evaluation is refused.
+ *
+ * Each level costs a JavaScript frame, so this has to sit well under the host stack
+ * budget for the diagnostic to arrive before a stack overflow does.
+ */
+const maximumConstCallDepth = 2_000;
+
 export const emptyDucklangConstEnvironment: DucklangConstEnvironment = {
   parent: undefined,
   bindings: [],
@@ -92,6 +100,37 @@ export function canonicalDucklangTypeId(type: Type): TypeId {
         ])
       }` as TypeId;
   }
+}
+
+/**
+ * Builds an environment whose closures can see the environment itself.
+ *
+ * A recursive compile-time function has to find its own binding while evaluating its
+ * body, which `extendDucklangConstEnvironment` cannot express because it maps its
+ * bindings before the environment exists. This ties the knot: the environment is
+ * created first and each closure is given it, so a self-reference resolves.
+ */
+export function recursiveDucklangConstEnvironment(
+  bindings: readonly {
+    readonly symbol: DucklangSymbol;
+    readonly code: DucklangConstCode;
+  }[],
+): DucklangConstEnvironment {
+  const entries: {
+    readonly symbol: string;
+    readonly value: DucklangConstValue;
+  }[] = [];
+  const environment: DucklangConstEnvironment = {
+    parent: undefined,
+    bindings: entries,
+  };
+  for (const binding of bindings) {
+    entries.push({
+      symbol: qualifiedSymbol(binding.symbol),
+      value: { kind: "closure", code: binding.code, environment },
+    });
+  }
+  return environment;
 }
 
 export function extendDucklangConstEnvironment(
@@ -172,6 +211,7 @@ export function evaluateDucklangConst(
 
 class DucklangConstEvaluator {
   #remainingFuel: number;
+  #callDepth = 0;
 
   constructor(fuel: number) {
     this.#remainingFuel = fuel;
@@ -367,6 +407,17 @@ class DucklangConstEvaluator {
     expression: Extract<TypedDucklangExpression, { readonly kind: "call" }>,
     environment: DucklangConstEnvironment,
   ): DucklangConstValue {
+    // Fuel alone does not bound recursion depth: a self-call nests a JavaScript
+    // frame per level, so unbounded recursion exhausted the host stack and reported
+    // "Maximum call stack size exceeded" with no source location, long before a
+    // million units of fuel ran out.
+    if (this.#callDepth >= maximumConstCallDepth) {
+      throw new RangeError(
+        `${
+          source(expression)
+        }: Ducklang compile-time evaluation exceeded ${maximumConstCallDepth} nested calls`,
+      );
+    }
     const callee = this.evaluate(expression.callee, environment);
     if (callee.kind !== "closure") {
       throw new TypeError(
@@ -392,16 +443,21 @@ class DucklangConstEvaluator {
         }: compile-time closure expects ${callee.code.parameters.length} arguments; received ${arguments_.length}`,
       );
     }
-    return this.evaluate(
-      callee.code.body,
-      extendDucklangConstEnvironment(
-        callee.environment,
-        callee.code.parameters.map((symbol, index) => ({
-          symbol,
-          value: arguments_[index],
-        })),
-      ),
-    );
+    this.#callDepth += 1;
+    try {
+      return this.evaluate(
+        callee.code.body,
+        extendDucklangConstEnvironment(
+          callee.environment,
+          callee.code.parameters.map((symbol, index) => ({
+            symbol,
+            value: arguments_[index],
+          })),
+        ),
+      );
+    } finally {
+      this.#callDepth -= 1;
+    }
   }
 
   #primitive(

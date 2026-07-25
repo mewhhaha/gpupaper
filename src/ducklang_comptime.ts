@@ -9,8 +9,8 @@ import {
 import {
   type DucklangConstValue,
   evaluateDucklangConst,
+  recursiveDucklangConstEnvironment,
 } from "./ducklang_const.ts";
-import type { DucklangSymbol } from "./ducklang_resolution.ts";
 import type {
   TypedDucklangExpression,
   TypedDucklangModule,
@@ -31,14 +31,26 @@ export async function evaluateDucklangComptime(
   }
   collectComptimeExpressions(module.result, expressions);
 
-  // References to module bindings are substituted away before evaluation, which
-  // cannot terminate for a recursive binding. Without this check the leftover
-  // reference surfaces as "missing compile-time value for <name>#<id>", which
-  // names an internal symbol ID and says nothing about recursion.
-  requireNonRecursiveComptime(module, expressions);
-
+  // Module-level function bindings are supplied as closures that can see the
+  // environment holding them, so a recursive compile-time function finds itself.
+  // Reference substitution alone cannot express that, which is why recursion used to
+  // surface as "missing compile-time value for <name>#<id>".
+  const environment = recursiveDucklangConstEnvironment(
+    module.bindings.flatMap((binding) =>
+      binding.value.kind === "function"
+        ? [{
+          symbol: binding.symbol,
+          code: {
+            kind: "source" as const,
+            parameters: binding.value.parameters,
+            body: binding.value.body,
+          },
+        }]
+        : []
+    ),
+  );
   const constValues = expressions.map((expression) =>
-    evaluateDucklangConst(expression, { fuel: 1_000_000 })
+    evaluateDucklangConst(expression, { fuel: 1_000_000, environment })
   );
   const scalarExpressions = expressions.flatMap((expression, index) => {
     const scalar = scalarExpression(expression);
@@ -89,44 +101,6 @@ export async function evaluateDucklangComptime(
     cpuValues: cpu.values,
     gpu,
   };
-}
-
-/**
- * Rejects a compile-time expression that depends on a recursive binding.
- *
- * Recursive compile-time evaluation is not supported yet. Reporting it here, at
- * the reference, keeps the diagnostic in terms of the source program instead of
- * the compile-time environment's internals.
- */
-function requireNonRecursiveComptime(
-  module: TypedDucklangModule,
-  expressions: readonly TypedDucklangExpression[],
-): void {
-  const recursive = new Map<number, DucklangSymbol>();
-  for (const binding of module.bindings) {
-    if (binding.recursive) recursive.set(binding.symbol.id, binding.symbol);
-  }
-  if (recursive.size === 0) return;
-  for (const expression of expressions) {
-    const pending: unknown[] = [expression];
-    while (pending.length > 0) {
-      const current = pending.pop();
-      if (current === null || typeof current !== "object") continue;
-      const node = current as Record<string, unknown>;
-      const symbol = node.symbol as { readonly id?: unknown } | undefined;
-      if (node.kind === "reference" && typeof symbol?.id === "number") {
-        const declared = recursive.get(symbol.id);
-        if (declared !== undefined) {
-          throw new TypeError(
-            `${declared.span.file}:${
-              (node.span as { readonly start: number }).start
-            }: Ducklang compile-time evaluation cannot use the recursive binding ${declared.text}`,
-          );
-        }
-      }
-      pending.push(...Object.values(node));
-    }
-  }
 }
 
 function collectComptimeExpressions(
