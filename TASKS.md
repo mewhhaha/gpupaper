@@ -871,7 +871,12 @@ host-boundary plans before flattening.
       Only the overlapping-range case had a test, so a validator that checked overlap alone
       would have passed. Each remaining check now has one, made by breaking exactly one
       field of a package the validator accepts, with the accepting case asserted alongside.
-- [ ] Preserve deterministic source order for initial IDs.
+- [x] Preserve deterministic source order for initial IDs. Functions keep
+      declaration order, each one's operations occupy a contiguous range
+      beginning where the previous function's ended, and the recorded source
+      positions come out ascending rather than permuted. Flattening the same
+      module twice produces identical columns, compared across every column
+      rather than a spot check, so a difference in any one of them shows up.
 - [ ] Represent successor arguments explicitly rather than through region IDs.
 - [ ] Round-trip structured Core to flat Core and back in tests.
 - [ ] Port rewrite matching from adjacent stack instructions to value-use
@@ -884,7 +889,12 @@ host-boundary plans before flattening.
       change the result. The existing test only covered differing profits
       despite its name, so a resolver that took the first proposal it saw would
       have passed it; the tie and stability cases are covered now.
-- [ ] Rebuild immutable snapshots after accepted rewrite batches.
+- [x] Rebuild immutable snapshots after accepted rewrite batches.
+      `rebuildFlatFcg` returns a new package and leaves the snapshot it was
+      given untouched, compared by column values rather than by object identity,
+      since a rewriter could hand back a fresh object while still writing
+      through arrays it shares with the snapshot. Rewriting the same module
+      twice accepts the same proposals and produces the same columns.
 - [ ] Add GPU differential validation against the CPU Core validator and
       rewriter.
 - [ ] Structure reducible CFGs into Wasm regions and diagnose or dispatch-lower
