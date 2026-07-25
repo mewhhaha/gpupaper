@@ -712,14 +712,19 @@ operation reaches flat Core without an assigned layout strategy.
 
 ## Phase 6: Closure conversion and calls
 
-- [ ] Compute free variables for every runtime function. Not started, and the
-      current boundary is now covered by tests:
-      `specializeStaticDucklangClosures` removes higher-order structure by
-      specializing a closure at each known call site, so `adder`/`apply`-style
-      factories disappear and the backend emits direct calls only. It does not
-      lift, so a nested local function that captures an enclosing parameter is
-      rejected outright with "local Ducklang function inner requires closure
-      conversion". Core has no `closure.make` and no `call.indirect`.
+- [x] Compute free variables for every runtime function.
+      `ducklangFunctionFreeVariables` reports them for every function in a
+      module, nested ones included, reusing the capture collection the
+      specializer already ran on demand for the subset it rewrote. Module-scope
+      symbols are excluded because they are addressable from any function
+      without being captured, so what is reported is exactly what a closure
+      environment would need to hold: a self-contained function has none, a
+      function reading only module bindings has none, an enclosing parameter and
+      an enclosing local are each reported, and a three-deep nest reports
+      captures from both outer scopes. The tests name the expected symbols
+      rather than counting them, since a count passes just as well when the
+      analysis reports the wrong symbol.
+
 - [ ] Lift nested functions to top-level code identities.
 - [ ] Build typed closure environments from captured values.
 - [ ] Preserve direct calls when the callee is statically known.

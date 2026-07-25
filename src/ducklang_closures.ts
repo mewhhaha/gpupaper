@@ -5,6 +5,8 @@ import type {
   TypedDucklangModule,
 } from "./ducklang_types.ts";
 import { PrimitiveId } from "./ducklang_primitives.ts";
+import type { DucklangSymbol } from "./ducklang_resolution.ts";
+import type { SourceSpan } from "./syntax.ts";
 
 export function specializeStaticDucklangClosures(
   module: TypedDucklangModule,
@@ -256,6 +258,58 @@ type FunctionCapture = {
   >["symbol"];
   readonly type: TypedDucklangExpression["type"];
 };
+
+export type DucklangFunctionFreeVariables = {
+  /** Where the function appears, so nested functions stay distinguishable. */
+  readonly span: SourceSpan;
+  readonly parameters: readonly DucklangSymbol[];
+  /** Symbols the body reads that the function neither declares nor parameterises. */
+  readonly freeVariables: readonly DucklangSymbol[];
+};
+
+/**
+ * Free variables of every runtime function in a module, including nested ones.
+ *
+ * Module-scope symbols are excluded: they are addressable from any function without
+ * being captured, so a closure environment never has to carry one. What remains is
+ * exactly what an environment would need to hold.
+ *
+ * The specializer computes the same thing on demand for the functions it rewrites.
+ * This exposes it for every function so closure conversion has the whole picture
+ * rather than the subset one pass happened to need.
+ */
+export function ducklangFunctionFreeVariables(
+  module: TypedDucklangModule,
+): readonly DucklangFunctionFreeVariables[] {
+  const moduleFunctions = new Set(
+    module.bindings.flatMap((binding) =>
+      binding.value.kind === "function" ? [binding.symbol.id] : []
+    ),
+  );
+  const results: DucklangFunctionFreeVariables[] = [];
+  const visit = (
+    expression: TypedDucklangExpression,
+    owner: number | undefined,
+  ): void => {
+    if (expression.kind === "function") {
+      results.push({
+        span: expression.span,
+        parameters: expression.parameters,
+        freeVariables: collectFunctionCaptures(
+          owner ?? -1,
+          expression,
+          moduleFunctions,
+        ).map((capture) => capture.symbol),
+      });
+    }
+    visitChildren(expression, (child) => visit(child, owner));
+  };
+  for (const binding of module.bindings) {
+    visit(binding.value, binding.symbol.id);
+  }
+  visit(module.result, undefined);
+  return results;
+}
 
 function collectFunctionCaptures(
   functionSymbolId: number,
