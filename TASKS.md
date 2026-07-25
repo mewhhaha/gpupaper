@@ -608,7 +608,16 @@ nested source functions.
 
 ## Phase 7: Ownership, regions, effects, and ABI
 
-- [ ] Replace global linear-use counting with path-sensitive resource states.
+- [x] Replace global linear-use counting with path-sensitive resource states.
+      Linear use was counted once per reference across the whole module, so a
+      value consumed once in each arm of an `if` or a match counted twice and
+      was rejected although only one arm runs. Branches now resolve from a
+      shared entry state and merge by taking the highest consumption per value,
+      so exclusive arms may each consume an incoming linear value once. Merging
+      by maximum keeps a value consumed in one arm consumed afterwards, so a
+      later use is still rejected, as are two consumptions on one path and two
+      inside one arm. It does not yet require every arm to consume, which would
+      be stricter than before and is the join-agreement item below.
 - [ ] Require compatible resource states at CFG joins.
 - [ ] Insert explicit drops on every owning exit edge.
 - [ ] Lower borrow lifetimes to checked regions.

@@ -324,6 +324,43 @@ class DucklangResolver {
   readonly #initFields: DucklangInitField[] = [];
   readonly #structTypes: ResolvedDucklangStructType[] = [];
   readonly #linearUseCounts = new Map<number, number>();
+
+  /**
+   * Resolves mutually exclusive branches so each starts from the same linear
+   * state, then keeps the highest consumption per value.
+   *
+   * Linear use was counted once per reference across the whole module, so a value
+   * consumed once in each arm of an `if` counted twice and was rejected even
+   * though only one arm runs. The roadmap's rule is that exclusive branches may
+   * each consume an incoming linear value once.
+   *
+   * Merging by maximum keeps a value consumed in one arm consumed afterwards, so a
+   * later use is still rejected. It deliberately does not require every arm to
+   * consume, which would be stricter than the current checker and is a separate
+   * question.
+   */
+  #resolveExclusiveBranches<T>(
+    branches: readonly (() => T)[],
+  ): readonly T[] {
+    const entry = new Map(this.#linearUseCounts);
+    const results: T[] = [];
+    const merged = new Map(entry);
+    for (const branch of branches) {
+      this.#linearUseCounts.clear();
+      for (const [symbol, count] of entry) {
+        this.#linearUseCounts.set(symbol, count);
+      }
+      results.push(branch());
+      for (const [symbol, count] of this.#linearUseCounts) {
+        merged.set(symbol, Math.max(merged.get(symbol) ?? 0, count));
+      }
+    }
+    this.#linearUseCounts.clear();
+    for (const [symbol, count] of merged) {
+      this.#linearUseCounts.set(symbol, count);
+    }
+    return results;
+  }
   readonly #bindingStages = new Map<
     number,
     ResolvedDucklangBinding["stage"]
@@ -1511,27 +1548,34 @@ class DucklangResolver {
             currentRecursive,
           ),
         };
-      case "if":
-        return {
-          ...expression,
-          condition: this.#resolveExpression(
-            expression.condition,
-            environment,
-            currentRecursive,
-          ),
-          consequence: this.#resolveExpression(
-            expression.consequence,
-            environment,
-            currentRecursive,
-          ),
-          alternative: expression.alternative === undefined
-            ? undefined
-            : this.#resolveExpression(
-              expression.alternative,
+      case "if": {
+        const condition = this.#resolveExpression(
+          expression.condition,
+          environment,
+          currentRecursive,
+        );
+        const [consequence, alternative] = this.#resolveExclusiveBranches([
+          () =>
+            this.#resolveExpression(
+              expression.consequence,
               environment,
               currentRecursive,
             ),
+          () =>
+            expression.alternative === undefined ? undefined : this
+              .#resolveExpression(
+                expression.alternative,
+                environment,
+                currentRecursive,
+              ),
+        ]);
+        return {
+          ...expression,
+          condition,
+          consequence: consequence as ResolvedDucklangExpression,
+          alternative: alternative as ResolvedDucklangExpression | undefined,
         };
+      }
       case "ifUnion": {
         const consequenceEnvironment = new Map(environment);
         const payloadSymbol = expression.payloadName === undefined
@@ -1540,27 +1584,35 @@ class DucklangResolver {
         if (payloadSymbol !== undefined) {
           consequenceEnvironment.set(payloadSymbol.text, payloadSymbol);
         }
+        const value = this.#resolveExpression(
+          expression.value,
+          environment,
+          currentRecursive,
+        );
+        // A matched arm and its alternative are mutually exclusive, exactly like
+        // the arms of an `if`, so each starts from the same linear state.
+        const [consequence, alternative] = this.#resolveExclusiveBranches([
+          () =>
+            this.#resolveExpression(
+              expression.consequence,
+              consequenceEnvironment,
+              currentRecursive,
+            ),
+          () =>
+            expression.alternative === undefined ? undefined : this
+              .#resolveExpression(
+                expression.alternative,
+                environment,
+                currentRecursive,
+              ),
+        ]);
         return {
           kind: "ifUnion",
           caseName: expression.caseName,
           payloadSymbol,
-          value: this.#resolveExpression(
-            expression.value,
-            environment,
-            currentRecursive,
-          ),
-          consequence: this.#resolveExpression(
-            expression.consequence,
-            consequenceEnvironment,
-            currentRecursive,
-          ),
-          alternative: expression.alternative === undefined
-            ? undefined
-            : this.#resolveExpression(
-              expression.alternative,
-              environment,
-              currentRecursive,
-            ),
+          value,
+          consequence: consequence as ResolvedDucklangExpression,
+          alternative: alternative as ResolvedDucklangExpression | undefined,
           span: expression.span,
         };
       }
