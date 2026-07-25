@@ -1,6 +1,9 @@
 import type { DucklangCoreModule } from "../src/ducklang_core.ts";
 import { lowerDucklangToCore } from "../src/ducklang_core.ts";
-import { planDucklangCoreLayouts } from "../src/ducklang_layout.ts";
+import {
+  ducklangBufferRepresentation,
+  planDucklangCoreLayouts,
+} from "../src/ducklang_layout.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
@@ -166,6 +169,46 @@ Deno.test("Ducklang layout planning is deterministic for a real program", async 
     true,
   );
   assertEquals(first.layouts.length > 0, true);
+});
+
+/**
+ * The chosen physical representations for owned and frozen buffers.
+ *
+ * These assert the decision itself, so changing it is a deliberate edit to a
+ * rule with a test rather than a quiet change to whichever pass happened to
+ * assume a size.
+ */
+Deno.test("Ducklang owned buffers are managed handles", () => {
+  const owned = ducklangBufferRepresentation("owned");
+
+  // Ownership transfer and release need a runtime identity, so an owned buffer
+  // stays a four-byte managed table index.
+  assertEquals(owned.kind, "handle");
+  assertEquals(owned.size, 4);
+  assertEquals(owned.alignment, 4);
+});
+
+Deno.test("Ducklang frozen buffers are linear-memory slices", () => {
+  const frozen = ducklangBufferRepresentation("frozen");
+
+  // Immutable bytes can be shared without a runtime owner, so a frozen buffer is
+  // an (offset, length) pair addressing linear memory directly.
+  assertEquals(frozen.kind, "slice");
+  assertEquals(frozen.size, 8);
+  assertEquals(frozen.alignment, 4);
+  if (frozen.kind !== "slice") throw new Error("expected a slice");
+  assertEquals(frozen.offsetField, 0);
+  assertEquals(frozen.lengthField, 4);
+});
+
+Deno.test("Ducklang buffer representations differ by ownership", () => {
+  // If the two states ever collapsed to the same representation, the distinction
+  // would be decorative and this would say so.
+  assertEquals(
+    JSON.stringify(ducklangBufferRepresentation("owned")) ===
+      JSON.stringify(ducklangBufferRepresentation("frozen")),
+    false,
+  );
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {

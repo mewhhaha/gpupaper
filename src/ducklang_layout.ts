@@ -61,6 +61,65 @@ const tagAlignment = 4;
 const handleSize = 4;
 const handleAlignment = 4;
 
+export type DucklangBufferOwnership = "owned" | "frozen";
+
+export type DucklangBufferRepresentation =
+  | {
+    /** A four-byte managed table index. The runtime owns the bytes. */
+    readonly kind: "handle";
+    readonly size: number;
+    readonly alignment: number;
+  }
+  | {
+    /** An (offset, length) pair of `i32`s addressing linear memory. */
+    readonly kind: "slice";
+    readonly size: number;
+    readonly alignment: number;
+    readonly offsetField: number;
+    readonly lengthField: number;
+  };
+
+/**
+ * The chosen physical representation for a `Text` or `Bytes` value.
+ *
+ * An owned buffer stays a managed handle. Ownership transfer and release need a
+ * runtime identity that a raw address cannot provide, and the managed table is
+ * what gives the host an object to free, so an owned buffer is four bytes.
+ *
+ * A frozen buffer becomes a linear-memory slice: an offset and a length, eight
+ * bytes aligned to four. Freezing is what makes that safe, because immutable
+ * bytes can be shared and interned without a runtime owner, and a slice lets the
+ * GPU path address the bytes directly instead of calling through the managed
+ * table.
+ *
+ * `Text` and `Bytes` share a representation at each ownership state. They stay
+ * distinct semantic buffer kinds, and this function is where that would change if
+ * one of them ever needed different storage.
+ *
+ * Nothing emits the slice form yet: the backend uses managed handles throughout,
+ * and replacing them is the separate roadmap item about linear-memory text.
+ * Encoding the decision here keeps it a single reviewable rule rather than an
+ * assumption spread across passes.
+ */
+export function ducklangBufferRepresentation(
+  ownership: DucklangBufferOwnership,
+): DucklangBufferRepresentation {
+  if (ownership === "owned") {
+    return {
+      kind: "handle",
+      size: handleSize,
+      alignment: handleAlignment,
+    };
+  }
+  return {
+    kind: "slice",
+    size: 8,
+    alignment: 4,
+    offsetField: 0,
+    lengthField: 4,
+  };
+}
+
 export function planDucklangCoreLayouts(
   module: DucklangCoreModule,
 ): DucklangCoreLayoutPlan {
@@ -126,15 +185,18 @@ function computeLayout(
   switch (entry.kind) {
     case "scalar":
       return { kind: "scalar", ...scalarLayout(entry.scalar) };
-    case "buffer":
-      // Text and Bytes are distinct semantic kinds that currently share one
-      // physical representation: a managed handle. Choosing a linear-memory
-      // representation for them is a separate roadmap item.
+    case "buffer": {
+      // Core carries no ownership state on a buffer type, so layout planning
+      // assumes the owned representation. A frozen buffer's slice form is
+      // available from ducklangBufferRepresentation and becomes reachable once
+      // ownership reaches Core.
+      const representation = ducklangBufferRepresentation("owned");
       return {
         kind: "handle",
-        size: handleSize,
-        alignment: handleAlignment,
+        size: representation.size,
+        alignment: representation.alignment,
       };
+    }
     case "function":
       return {
         kind: "handle",

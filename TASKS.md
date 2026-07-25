@@ -499,8 +499,18 @@ terminators, and edge arguments.
       derived from the Core type table in index order, so a program plans
       identically on repeated runs, and a type that contains itself is rejected
       rather than looped on.
-- [ ] Choose and document physical representations for owned and frozen `Text`
-      and `Bytes`.
+- [x] Choose and document physical representations for owned and frozen `Text`
+      and `Bytes`. `ducklangBufferRepresentation` in `src/ducklang_layout.ts` is
+      the single rule, with tests on the decision itself. Owned stays a
+      four-byte managed table index, because ownership transfer and release need
+      a runtime identity that a raw address cannot give the host. Frozen becomes
+      an (offset, length) pair in linear memory, eight bytes aligned to four,
+      because immutable bytes can be shared without a runtime owner and a slice
+      lets the GPU path address them directly. `Text` and `Bytes` share a
+      representation at each ownership state while staying distinct semantic
+      kinds. Nothing emits the slice form yet: Core carries no ownership on a
+      buffer type, so layout planning assumes owned, and actually replacing the
+      handles is the separate item below.
 - [ ] Lower semantic buffer operations to allocation, length, bounds checks,
       loads, stores, and copies.
 - [ ] Implement UTF-8 encode/decode at the runtime boundary or from buffer
