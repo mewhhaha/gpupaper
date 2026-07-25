@@ -759,16 +759,33 @@ The real fix is to compute such a binding once, which means lowering it to a
 local or a global instead of a thunk, and that is the change to make before the
 Phase 7 host-boundary items.
 
-Two attempts failed and are recorded so they are not repeated. Rejecting an
-effectful binding read more than once fires on correct corpus programs, so it
-trades a silent miscompile for a false rejection. Hoisting the effectful
-bindings into `main` as a block, which is what fixed the equivalent problem in
-Core lowering, makes this worse rather than better: `main` then performs the
+Two attempts failed, and the reason is now established by evidence rather than
+guessed at.
+
+Rejecting an effectful binding read more than once fires on correct corpus
+programs, so it trades a silent miscompile for a false rejection.
+
+Hoisting the effectful bindings into `main` as a block, which is what fixed the
+equivalent problem in Core lowering, makes this worse: a two-read program went
+from two host calls to three and from 101 to 200, because `main` performs the
 effect once in the block while every reference still calls the zero-argument
-shape, so a two-read program went from two host calls to three and from 101
-to 200. The block lowering does register a local and `case "reference"` checks
-locals before shapes, so those references are not matching the block binding's
-symbol. Establishing why is the prerequisite for a third attempt.
+shape.
+
+Why it cannot work: symbol identity is consistent. For `value <- Input.read()`
+followed by `let total = value + value`, the module has `value#1` whose value is
+the `hostCall` and `total#2` whose value is the sum, and `value#1` is referenced
+twice. Those two references live in the body of `total#2`, which is emitted as
+its own zero-argument function and compiled by its own `DucklangFcgCompiler`.
+Locals that `main` allocates are therefore invisible to them, so no amount of
+hoisting into `main` helps.
+
+The fix shape follows: an effectful module-level binding must be computed once
+into storage that every function can read, which means a Wasm global written in
+a prologue and `global.get` at each reference. `WasmModuleBuilder` in
+`src/wasm.ts` currently supports only function types, imports, functions,
+exports, and custom sections, so this needs a globals section in the builder,
+global get and set instructions in the FCG instruction set and the emitter, and
+reference lowering that prefers a global over a shape call.
 
 Recorded by the failing tests in `tests/ducklang_effect_binding.test.ts`, which
 must not be made green by weakening their assertions.
