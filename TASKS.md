@@ -471,24 +471,15 @@ protocol search, extension search, or compile-time closures.
       function with a `return` terminator instead of edging into the join that
       the fall-through path uses.
 - [ ] Preserve nested loop and match control boundaries.
-- [ ] Lower dynamic ranges after evaluating start, end, and step once. Confirmed
-      defect, reproduced by counting host calls. `start` and `end` are evaluated
-      once, but the step is evaluated twice, and the loop then uses the second
-      result. With `step <- Input.step()` returning 1 then 100,
-      `for value in
-      0..bound by step` performed the effect twice and ran
-      with step 100, giving 0 where a single evaluation gives 10. A host effect
-      in a step position is therefore performed twice and its first result
-      discarded.
+- [x] Lower dynamic ranges after evaluating start, end, and step once. `start`
+      and `end` were already evaluated once. The step appeared to be evaluated
+      twice, but the cause was not range lowering: a step bound with `<-` was
+      re-performed at every read, like any effectful module-level binding. With
+      that fixed, a step read three times performs its effect once, and
+      `for value in 0..bound by
+      step` runs with the value the binding took
+      rather than a later one.
 
-      Cause: in `lowerDynamicLoop` the step expression is placed in three spots
-      that each evaluate it -- the `step == 0` guard, the initial call's argument
-      list, and `parameterTypeSources`. Hoisting it into one `let` binding and
-      referencing that fixes the guard and the argument but not
-      `parameterTypeSources`, which needs a source expression carrying a declared
-      type rather than a plain reference and fails to type check. So the fix needs
-      the parameter-type-source mechanism understood first, and the attempt was
-      reverted rather than left half-applied.
 - [x] Reject a static zero range step and emit a dynamic zero-step trap edge. A
       literal zero step is rejected by `expandStaticDucklangLoops` with
       "Ducklang static range step cannot be zero"; a step known only at runtime
@@ -727,68 +718,35 @@ failure hidden behind it. Re-run and update it after each phase.
 | Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations; legacy intrinsic dispatch remains                                                                                                                                                                                                                |
 | ABI and layout              | effects prelude                                                                                                                                                                                                                                                                                                     |
 
-### Confirmed effect-binding defect
+### Fixed: effect bindings re-performed their effect
 
-`value <- Input.read()` re-performs its effect at every use of `value`, so two
-uses call the host twice and three uses three times. Because successive calls
-can differ, `value + value` is not twice `value`: with a host returning 1 then
-100 the program answers 101 where a single performance answers 2. No diagnostic
-is reported.
+`value <- Input.read()` re-performed its effect at every read of `value`,
+because a module-level binding was emitted as a zero-argument function and each
+reference called it. Two reads meant two host calls, three meant three, and
+since successive calls can differ, `value + value` was not twice `value`: with a
+host returning 1 then 100 the program answered 101 where one performance
+answers 2.
 
-Counting `hostCall` nodes after every elaboration stage gives 1 throughout, from
-parsing through resolution, inference, and closure specialization, so the
-duplication is in `lowerDucklangToFcgAndWasm` rather than the frontend. This is
-also why the dynamic range step is evaluated twice: a step bound with `<-` is
-re-performed.
+Fixed by giving each effectful module-level binding a mutable Wasm global that
+`main` fills once in a prologue, so every reference is a `global.get` of an
+already-computed value. Locals cannot express this, because the readers are
+separate functions with their own local space; that is why hoisting into `main`
+as a block made it worse rather than better.
 
-Cause found: a module-level binding is lowered as a zero-argument function, and
-`case "reference"` in `src/ducklang_fcg.ts` emits a call to it whenever the
-symbol is not a local. So the binding's value is recomputed at every read. For a
-pure binding that is only wasteful; for an effectful one it re-performs the
-effect.
+This required a globals section in `WasmModuleBuilder`, `global.get` and
+`global.set` in the FCG instruction set and both emitters, and reference
+lowering that prefers a global over a shape call.
 
-The defect is live in the corpus, masked by idempotent test hosts. A check that
-rejects an effectful module-level binding read more than once fires on
-`examples/data/04_dynamic_struct_branch.duck`, where `flag` is read twice, and
-on `examples/failures/traps/04_zero_range_step.duck`, where `step` is read three
-times. Both pass today only because their recorded hosts return a constant. The
-check was therefore reverted rather than landed: those programs are correct and
-the compiler is not, so rejecting them would be the wrong trade.
+Two corpus programs were affected and are now correct rather than accidentally
+passing: `examples/data/04_dynamic_struct_branch.duck` read `flag` twice and
+`examples/failures/traps/04_zero_range_step.duck` read `step` three times, each
+masked by a host returning a constant.
 
-The real fix is to compute such a binding once, which means lowering it to a
-local or a global instead of a thunk, and that is the change to make before the
-Phase 7 host-boundary items.
+Each of the four host-interface targets grew by exactly 12 bytes, the global
+declaration plus one store and the load. wav and raytracer are unchanged,
+because neither binds an effect at module level.
 
-Two attempts failed, and the reason is now established by evidence rather than
-guessed at.
-
-Rejecting an effectful binding read more than once fires on correct corpus
-programs, so it trades a silent miscompile for a false rejection.
-
-Hoisting the effectful bindings into `main` as a block, which is what fixed the
-equivalent problem in Core lowering, makes this worse: a two-read program went
-from two host calls to three and from 101 to 200, because `main` performs the
-effect once in the block while every reference still calls the zero-argument
-shape.
-
-Why it cannot work: symbol identity is consistent. For `value <- Input.read()`
-followed by `let total = value + value`, the module has `value#1` whose value is
-the `hostCall` and `total#2` whose value is the sum, and `value#1` is referenced
-twice. Those two references live in the body of `total#2`, which is emitted as
-its own zero-argument function and compiled by its own `DucklangFcgCompiler`.
-Locals that `main` allocates are therefore invisible to them, so no amount of
-hoisting into `main` helps.
-
-The fix shape follows: an effectful module-level binding must be computed once
-into storage that every function can read, which means a Wasm global written in
-a prologue and `global.get` at each reference. `WasmModuleBuilder` in
-`src/wasm.ts` currently supports only function types, imports, functions,
-exports, and custom sections, so this needs a globals section in the builder,
-global get and set instructions in the FCG instruction set and the emitter, and
-reference lowering that prefers a global over a shape call.
-
-Recorded by the failing tests in `tests/ducklang_effect_binding.test.ts`, which
-must not be made green by weakening their assertions.
+Covered by `tests/ducklang_effect_binding.test.ts`.
 
 ## Completion rule
 

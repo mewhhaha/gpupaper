@@ -27,6 +27,7 @@ export class WasmModuleBuilder {
   readonly #functions: number[] = [];
   readonly #exports: WasmNode[][] = [];
   readonly #exportNames = new Set<string>();
+  readonly #globals: WasmNode[][] = [];
   readonly #codes: WasmNode[][] = [];
   readonly #customSections: {
     readonly name: string;
@@ -93,6 +94,31 @@ export class WasmModuleBuilder {
     return functionIndex;
   }
 
+  /**
+   * Declares a mutable global initialised to zero for its type.
+   *
+   * Used for a value that must be computed once and then read from several
+   * functions, which locals cannot express because each function compiles with its
+   * own local space.
+   */
+  addMutableGlobal(valueType: number): number {
+    const index = this.#globals.length;
+    const zero = valueType === 0x7e
+      ? [byte(0x42), { kind: "signed64" as const, value: 0n }]
+      : valueType === 0x7d
+      ? [byte(0x43), ...[0, 0, 0, 0].map(byte)]
+      : valueType === 0x7c
+      ? [byte(0x44), ...[0, 0, 0, 0, 0, 0, 0, 0].map(byte)]
+      : [byte(0x41), { kind: "signed32" as const, value: 0 }];
+    this.#globals.push([
+      byte(valueType),
+      byte(0x01),
+      ...zero,
+      byte(0x0b),
+    ]);
+    return index;
+  }
+
   exportFunction(name_: string, functionIndex: number): void {
     const functionCount = this.#imports.length + this.#functions.length;
     if (
@@ -135,6 +161,9 @@ export class WasmModuleBuilder {
       module.push(
         ...section(3, this.#functions.map((index) => [unsigned(index)])),
       );
+    }
+    if (this.#globals.length > 0) {
+      module.push(...section(6, this.#globals));
     }
     if (this.#exports.length > 0) {
       module.push(...section(7, this.#exports));
@@ -323,6 +352,12 @@ export const wasmInstruction = {
   },
   localSet(index: number): readonly WasmInstruction[] {
     return [byte(0x21), unsigned(index)];
+  },
+  globalGet(index: number): readonly WasmInstruction[] {
+    return [byte(0x23), unsigned(index)];
+  },
+  globalSet(index: number): readonly WasmInstruction[] {
+    return [byte(0x24), unsigned(index)];
   },
   call(index: number): readonly WasmInstruction[] {
     return [byte(0x10), unsigned(index)];

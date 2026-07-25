@@ -33,10 +33,10 @@ All times are milliseconds.
 
 | Target    | Source bytes | Cold parser | Warm parser | First CPU compile | Warm CPU compile | First GPU compile | Warm GPU compile | Wasm bytes |
 | --------- | -----------: | ----------: | ----------: | ----------------: | ---------------: | ----------------: | ---------------: | ---------: |
-| Editor    |       25,256 |      223.75 |       41.66 |            319.44 |           131.88 |            553.76 |           191.43 |      8,373 |
-| Codex     |        3,573 |      124.94 |        4.63 |            525.77 |           321.25 |            546.36 |           401.32 |    26,930¹ |
-| grep      |        2,856 |      117.90 |        2.64 |            209.26 |            66.60 |            218.32 |            91.83 |      1,416 |
-| tar       |        6,587 |      121.12 |        9.86 |            242.25 |           101.92 |            385.19 |           197.67 |      8,449 |
+| Editor    |       25,256 |      223.75 |       41.66 |            319.44 |           131.88 |            553.76 |           191.43 |     8,385² |
+| Codex     |        3,573 |      124.94 |        4.63 |            525.77 |           321.25 |            546.36 |           401.32 |  26,942¹ ² |
+| grep      |        2,856 |      117.90 |        2.64 |            209.26 |            66.60 |            218.32 |            91.83 |     1,428² |
+| tar       |        6,587 |      121.12 |        9.86 |            242.25 |           101.92 |            385.19 |           197.67 |     8,461² |
 | wav       |        2,047 |      134.13 |        3.29 |            913.09 |           734.93 |          1,058.20 |         1,110.00 |    802,312 |
 | raytracer |        3,952 |      144.16 |        7.00 |            413.58 |           253.75 |            444.71 |           285.71 |    183,403 |
 
@@ -44,6 +44,12 @@ All times are milliseconds.
 hygiene stopped the linker from silently dropping a dependency's private binding
 whose name collided with one of the importer's, so bindings that were previously
 discarded are now retained. The other five targets emit byte-identical output.
+
+² Grew by 12 bytes when an effectful module-level binding moved from a
+zero-argument function that each reference called into a mutable global computed
+once in main's prologue, which fixed a re-performed host effect. The 12 bytes
+are the global declaration plus one store and the load. wav and raytracer are
+unchanged, because neither binds an effect at module level.
 
 The cold parser cost is dominated by loading and instantiating the generated
 Baba parser. Its warm initialization component is below 0.003 ms for every

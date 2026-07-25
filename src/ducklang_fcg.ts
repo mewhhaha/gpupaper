@@ -49,6 +49,16 @@ type DucklangFcgInstruction =
     readonly span: SourceSpan;
   }
   | {
+    readonly kind: "globalGet";
+    readonly global: number;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "globalSet";
+    readonly global: number;
+    readonly span: SourceSpan;
+  }
+  | {
     readonly kind: "localSet";
     readonly local: number;
     readonly span: SourceSpan;
@@ -307,6 +317,31 @@ export function lowerDucklangToFcgAndWasm(
       [shape.resultType],
     )
   );
+  // A module-level binding is emitted as a zero-argument function that each
+  // reference calls, so its value is recomputed per read. For a binding that
+  // performs an effect that re-performs the effect, which is a miscompile rather
+  // than merely wasteful. Locals cannot fix it, because the readers are separate
+  // functions with their own local space, so each effectful binding gets a mutable
+  // global that `main` computes once in a prologue.
+  const effectGlobals = new Map<number, number>();
+  const effectPrologue: {
+    readonly binding: TypedDucklangBinding;
+    readonly global: number;
+  }[] = [];
+  for (const binding of module.bindings) {
+    if (binding.value.kind === "function") continue;
+    const calls: Extract<
+      TypedDucklangExpression,
+      { readonly kind: "hostCall" }
+    >[] = [];
+    visitHostCalls(binding.value, calls);
+    if (calls.length === 0) continue;
+    const global = builder.addMutableGlobal(
+      wasmValueType(module.file, binding.span, binding.type, unionNames),
+    );
+    effectGlobals.set(binding.symbol.id, global);
+    effectPrologue.push({ binding, global });
+  }
   const analyzedFunctions = orderedShapes.map((shape) => {
     const expression = shape.binding?.value ?? module.result;
     const parameters = expression.kind === "function"
@@ -324,8 +359,16 @@ export function lowerDucklangToFcgAndWasm(
       unionNames,
       unionTags,
       textHandles,
+      effectGlobals,
     );
-    const compiled = compiler.compile(body);
+    // The owning shape's body is the effect performance itself and cannot
+    // reference the binding, so no special case is needed here.
+    //
+    // `main` gets a prologue that performs each effect once and stores it, so
+    // every later read is a global.get of an already-computed value.
+    const compiled = shape.binding === undefined && effectPrologue.length > 0
+      ? compiler.compileWithPrologue(body, effectPrologue)
+      : compiler.compile(body);
     return { shape, parameters, compiled };
   });
   const analyzedFcg = {
@@ -873,6 +916,7 @@ class DucklangFcgCompiler {
   readonly #unionNames: ReadonlySet<string>;
   readonly #unionTags: ReadonlyMap<string, number>;
   readonly #textHandles: ReadonlyMap<string, number>;
+  readonly #effectGlobals: ReadonlyMap<number, number>;
   readonly #locals = new Map<number, number>();
   readonly #localTypes: number[] = [];
   #nextLocal: number;
@@ -888,6 +932,7 @@ class DucklangFcgCompiler {
     unionNames: ReadonlySet<string>,
     unionTags: ReadonlyMap<string, number>,
     textHandles: ReadonlyMap<string, number>,
+    effectGlobals: ReadonlyMap<number, number> = new Map(),
   ) {
     this.#file = file;
     this.#shapes = shapes;
@@ -898,10 +943,42 @@ class DucklangFcgCompiler {
     this.#unionNames = unionNames;
     this.#unionTags = unionTags;
     this.#textHandles = textHandles;
+    this.#effectGlobals = effectGlobals;
     parameters.forEach((parameter, index) =>
       this.#locals.set(parameter.id, index)
     );
     this.#nextLocal = parameters.length;
+  }
+
+  /**
+   * Compiles a body after performing each effectful module-level binding once and
+   * storing it in its global. Used for `main` only.
+   */
+  compileWithPrologue(
+    body: TypedDucklangExpression,
+    prologue: readonly {
+      readonly binding: TypedDucklangBinding;
+      readonly global: number;
+    }[],
+  ): {
+    readonly instructions: readonly DucklangFcgInstruction[];
+    readonly localCount: number;
+    readonly localTypes: readonly number[];
+  } {
+    const instructions: DucklangFcgInstruction[] = [];
+    for (const entry of prologue) {
+      instructions.push(...this.#compileExpression(entry.binding.value));
+      instructions.push({
+        kind: "globalSet",
+        global: entry.global,
+        span: entry.binding.span,
+      });
+    }
+    const compiled = this.compile(body);
+    return {
+      ...compiled,
+      instructions: [...instructions, ...compiled.instructions],
+    };
   }
 
   compile(expression: TypedDucklangExpression): {
@@ -1069,6 +1146,13 @@ class DucklangFcgCompiler {
         const local = this.#locals.get(expression.symbol.id);
         if (local !== undefined) {
           return [{ kind: "localGet", local, span: expression.span }];
+        }
+        // An effectful module-level binding lives in a global that a prologue
+        // computed once. Falling through to the shape call would re-perform its
+        // effect at every read, and every function reads it from the same global.
+        const global = this.#effectGlobals.get(expression.symbol.id);
+        if (global !== undefined) {
+          return [{ kind: "globalGet", global, span: expression.span }];
         }
         const shape = this.#shapes.get(expression.symbol.id);
         if (shape === undefined) {
@@ -1811,6 +1895,10 @@ function emitInstructions(
         return wasmInstruction.localGet(instruction.local);
       case "localSet":
         return wasmInstruction.localSet(instruction.local);
+      case "globalGet":
+        return wasmInstruction.globalGet(instruction.global);
+      case "globalSet":
+        return wasmInstruction.globalSet(instruction.global);
       case "call":
         return wasmInstruction.call(instruction.functionIndex);
       case "return":
@@ -2052,6 +2140,10 @@ function publicOperations(
         return [operation("local.get", [instruction.local])];
       case "localSet":
         return [operation("local.set", [instruction.local])];
+      case "globalGet":
+        return [operation("global.get", [instruction.global])];
+      case "globalSet":
+        return [operation("global.set", [instruction.global])];
       case "call":
         return [operation("call", [instruction.functionName])];
       case "return":
