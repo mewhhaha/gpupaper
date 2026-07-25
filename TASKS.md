@@ -899,7 +899,19 @@ host-boundary plans before flattening.
       rewriter.
 - [ ] Structure reducible CFGs into Wasm regions and diagnose or dispatch-lower
       irreducible CFGs.
-- [ ] Stackify values, assign locals, and calculate branch signatures.
+- [x] Stackify values, assign locals, and calculate branch signatures. An
+      expression tree becomes one flat postfix sequence whose operands are
+      immediates rather than nested operations, locals are declared only where
+      bindings need them, and each branch is emitted with a block signature
+      chosen from its type. The signature is asserted at the byte level because
+      it survives nowhere else: the public FcgModule operation drops
+      `resultType`, so reading the graph would find nothing. Mutation testing
+      established that all four arms carry weight rather than only the default —
+      disabling the i64 arm alone fails the corpus contract, disabling both
+      float arms alone fails the raytracer, and forcing every branch to i32
+      fails both. The non-i32 arms are unreachable from source, since Ducklang
+      has no float literals and no return-type annotation on the arrow form, so
+      only the i32 arm is pinned directly and the rest end to end.
 - [x] Calculate binary sizes and offsets with count-scan-write passes. The plan
       carries `length` atoms with a dependency level, and `emitWasmPlanOnCpu`
       resolves them level by level before writing any byte, so a nested length
