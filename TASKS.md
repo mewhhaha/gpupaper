@@ -480,9 +480,21 @@ terminators, and edge arguments.
       only function bindings: a module-level value binding reports "Core
       lowering has no runtime value for <name>", which is one of the gaps to
       close before Core can be wired into the pipeline.
-- [ ] Define `LayoutId` independently from `TypeId`.
-- [ ] Calculate size, alignment, field offsets, union tags, and payload storage
-      deterministically.
+- [x] Define `LayoutId` independently from `TypeId`. `src/ducklang_layout.ts`
+      brands `LayoutId` separately and interns layouts structurally, so distinct
+      semantic types share one layout when their storage agrees: `i32` and `f32`
+      resolve to the same `LayoutId` from two different `CoreTypeId`s. Keeping
+      the identities separate is what stops a layout decision from becoming a
+      type decision.
+- [x] Calculate size, alignment, field offsets, union tags, and payload storage
+      deterministically. Scalars take their Wasm storage (4/4, 8/8, 16/16, and
+      unit as 0/1). A product pads each field to its own alignment and rounds
+      its size up to the product's alignment. A sum reserves a four-byte tag at
+      offset zero, places the payload at the next offset its widest case can
+      accept, and sizes itself to hold the widest payload. Quantities are
+      derived from the Core type table in index order, so a program plans
+      identically on repeated runs, and a type that contains itself is rejected
+      rather than looped on.
 - [ ] Choose and document physical representations for owned and frozen `Text`
       and `Bytes`.
 - [ ] Lower semantic buffer operations to allocation, length, bounds checks,
