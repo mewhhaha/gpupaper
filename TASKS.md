@@ -625,8 +625,20 @@ terminators, and edge arguments.
       handles is the separate item below.
 - [ ] Lower semantic buffer operations to allocation, length, bounds checks,
       loads, stores, and copies.
-- [ ] Implement UTF-8 encode/decode at the runtime boundary or from buffer
-      primitives with equivalent validation.
+- [x] Implement UTF-8 encode/decode at the runtime boundary or from buffer
+      primitives with equivalent validation. Both stages encode and decode, and
+      both validate. At runtime a lone continuation byte and a truncated
+      two-byte sequence are each rejected with "Ducklang UTF-8 decode received
+      invalid bytes"; at compile time the const evaluator decodes with a fatal
+      decoder and reports "compile-time UTF-8 decode received invalid bytes", so
+      the validation is equivalent rather than merely present on one path. Round
+      trips preserve multi-byte content on both.
+
+      Invalid input is built by mutating an encoded buffer, because encoding alone
+      only ever produces valid bytes and a round-trip test would pass against a
+      decoder that checked nothing. Noted while testing: `@len` on `Text` is a byte
+      count, so "żółw" is four characters and reports 7, consistent with `Text` being
+      byte-indexed as the out-of-bounds tests assume.
 - [x] Lower generic source `List` through ordinary sum/product layout; do not
       add list opcodes. A `Cell value` struct plus a recursive `List value` sum
       compiles and runs: a two-cell list sums to 42, a weighted traversal gives
