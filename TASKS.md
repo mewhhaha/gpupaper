@@ -741,6 +741,24 @@ duplication is in `lowerDucklangToFcgAndWasm` rather than the frontend. This is
 also why the dynamic range step is evaluated twice: a step bound with `<-` is
 re-performed.
 
+Cause found: a module-level binding is lowered as a zero-argument function, and
+`case "reference"` in `src/ducklang_fcg.ts` emits a call to it whenever the
+symbol is not a local. So the binding's value is recomputed at every read. For a
+pure binding that is only wasteful; for an effectful one it re-performs the
+effect.
+
+The defect is live in the corpus, masked by idempotent test hosts. A check that
+rejects an effectful module-level binding read more than once fires on
+`examples/data/04_dynamic_struct_branch.duck`, where `flag` is read twice, and
+on `examples/failures/traps/04_zero_range_step.duck`, where `step` is read three
+times. Both pass today only because their recorded hosts return a constant. The
+check was therefore reverted rather than landed: those programs are correct and
+the compiler is not, so rejecting them would be the wrong trade.
+
+The real fix is to compute such a binding once, which means lowering it to a
+local or a global instead of a thunk, and that is the change to make before the
+Phase 7 host-boundary items.
+
 Recorded by the failing tests in `tests/ducklang_effect_binding.test.ts`, which
 must not be made green by weakening their assertions.
 
