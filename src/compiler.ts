@@ -8,7 +8,10 @@ import {
   createDucklangManagedAbi,
   type DucklangManagedAbi,
 } from "./ducklang_abi.ts";
-import { lowerDucklangControlFlow } from "./ducklang_control_flow.ts";
+import {
+  lowerDucklangControlFlow,
+  requireConsistentDucklangLoopExits,
+} from "./ducklang_control_flow.ts";
 import { elaborateDucklangDerivations } from "./ducklang_derivations.ts";
 import { elaborateDucklangExtensions } from "./ducklang_extensions.ts";
 import { elaborateDucklangHandlers } from "./ducklang_handlers.ts";
@@ -266,6 +269,9 @@ async function compileDucklangModuleSource(
   // Nominal type identity must be unambiguous before any pass looks a type up by
   // name, so this runs on the fully linked program and ahead of elaboration.
   const qualified = qualifyDucklangTypeCollisions(linked);
+  // Ahead of static loop expansion, which would otherwise fold a
+  // constant-conditioned loop away before its exits can be checked.
+  requireConsistentDucklangLoopExits(qualified.module.statements);
   const parsed = lowerDucklangControlFlow(
     expandStaticDucklangLoops(
       elaborateDucklangExtensions(

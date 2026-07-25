@@ -446,7 +446,17 @@ protocol search, extension search, or compile-time closures.
       increment, so it needs its own design pass rather than an incremental
       attempt.
 - [ ] Pass every carried binding on loop back-edges and exits.
-- [ ] Lower bare and valued `break` without mixing their result signatures.
+- [x] Lower bare and valued `break` without mixing their result signatures. A
+      loop whose value is taken must supply one on every exit, and mixing is now
+      rejected with "Ducklang loop mixes a valued break with a bare break". It
+      was accepted before, and the bare path fabricated an `i32` zero: a loop
+      yielding 7 on its valued exit returned 0 through the bare one, and a
+      `Text`-yielding loop passed that zero on as a buffer handle, failing at
+      runtime with "unknown handle 0" rather than being diagnosed. The check
+      runs before static loop expansion; placed after it, a constant-conditioned
+      loop was already folded to the fabricated zero. A loop whose every exit is
+      valued, and a bare break in a `for` statement, both still compile.
+      Core-level header and exit block lowering is separate and still open.
 - [ ] Lower `continue` to the nearest loop header.
 - [x] Lower early `return` to a function terminator. The early arm ends the
       function with a `return` terminator instead of edging into the join that

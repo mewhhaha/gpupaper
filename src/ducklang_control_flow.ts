@@ -11,6 +11,45 @@ export function lowerDucklangControlFlow(
   return { ...module, statements: lowerStatements(module.statements) };
 }
 
+/**
+ * Rejects a loop that mixes a valued `break` with a bare one.
+ *
+ * A loop whose value is taken must supply one on every exit. Mixing left the bare
+ * path fabricating an `i32` zero: a loop yielding 7 on its valued exit returned 0
+ * through the bare one, and a `Text`-yielding loop passed that zero on as a buffer
+ * handle, failing at runtime with "unknown handle 0" instead of being diagnosed.
+ *
+ * This walks the whole module rather than hooking one lowering site, because a
+ * loop reaches lowering by several paths depending on whether it appears as a
+ * statement or as a binding's value. It must also run before static loop
+ * expansion, which folds a constant-conditioned loop away and produced the zero
+ * before any later pass could object.
+ */
+export function requireConsistentDucklangLoopExits(value: unknown): void {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const node = current as Record<string, unknown>;
+    if (node.kind === "loop") {
+      const body = node.body as DucklangExpression;
+      if (
+        hasValuedBreakTargetingLoop(body) && hasBareBreakTargetingLoop(body)
+      ) {
+        const span = node.span as
+          | { readonly file: string; readonly start: number }
+          | undefined;
+        throw new TypeError(
+          `${span?.file ?? "?"}:${
+            span?.start ?? 0
+          }: Ducklang loop mixes a valued break with a bare break`,
+        );
+      }
+    }
+    pending.push(...Object.values(node));
+  }
+}
+
 function lowerStatements(
   statements: readonly DucklangStatement[],
 ): readonly DucklangStatement[] {
@@ -169,6 +208,36 @@ function containsLoopControl(value: unknown): boolean {
     if (current === null || typeof current !== "object") continue;
     const node = current as Record<string, unknown>;
     if (node.kind === "break" || node.kind === "continue") return true;
+    pending.push(...Object.values(node));
+  }
+  return false;
+}
+
+/**
+ * Whether a bare `break` targets this loop, ignoring nested loops and functions.
+ *
+ * Mirrors hasValuedBreakTargetingLoop so the two can be compared: a loop whose
+ * value is taken must supply one on every exit, and a bare break supplies none.
+ */
+function hasBareBreakTargetingLoop(body: DucklangExpression): boolean {
+  const pending: unknown[] = [body];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const node = current as Record<string, unknown>;
+    if (node.kind === "break") {
+      if (node.value === undefined) return true;
+      continue;
+    }
+    if (
+      node !== body &&
+      (node.kind === "loop" ||
+        node.kind === "forRange" ||
+        node.kind === "forCollection" ||
+        node.kind === "function")
+    ) {
+      continue;
+    }
     pending.push(...Object.values(node));
   }
   return false;
