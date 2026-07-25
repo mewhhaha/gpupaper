@@ -727,6 +727,23 @@ failure hidden behind it. Re-run and update it after each phase.
 | Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations; legacy intrinsic dispatch remains                                                                                                                                                                                                                |
 | ABI and layout              | effects prelude                                                                                                                                                                                                                                                                                                     |
 
+### Confirmed effect-binding defect
+
+`value <- Input.read()` re-performs its effect at every use of `value`, so two
+uses call the host twice and three uses three times. Because successive calls
+can differ, `value + value` is not twice `value`: with a host returning 1 then
+100 the program answers 101 where a single performance answers 2. No diagnostic
+is reported.
+
+Counting `hostCall` nodes after every elaboration stage gives 1 throughout, from
+parsing through resolution, inference, and closure specialization, so the
+duplication is in `lowerDucklangToFcgAndWasm` rather than the frontend. This is
+also why the dynamic range step is evaluated twice: a step bound with `<-` is
+re-performed.
+
+Recorded by the failing tests in `tests/ducklang_effect_binding.test.ts`, which
+must not be made green by weakening their assertions.
+
 ## Completion rule
 
 A feature is complete only when:
