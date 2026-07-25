@@ -133,6 +133,68 @@ Deno.test("Core preserves a nested branch boundary", async () => {
  * examples/failures/traps/04_zero_range_step.duck; this asserts the static half,
  * which had no test.
  */
+/**
+ * Aggregate operations must reach Core as value primitives rather than as
+ * anything source-shaped. Each case asserts the specific primitive appears, so a
+ * lowering that fell back to memory loads or kept a source field name would fail
+ * rather than pass on "it produced some operations".
+ *
+ * Every value lives inside a function: lowerDucklangToCore only lowers function
+ * bindings, and a module-level value binding reports "Core lowering has no
+ * runtime value for <name>".
+ */
+const aggregateCases:
+  readonly (readonly [string, string, readonly string[]])[] = [
+    [
+      "product construction and projection",
+      "type Point = struct { .x = Int, .y = Int }\nlet make = () => {\n  let p: Point = [1, 2]\n  p.x\n}\nmake()\n",
+      ["product.make", "product.project"],
+    ],
+    [
+      "a functional product update",
+      "type Point = struct { .x = Int, .y = Int }\nlet move = () => {\n  let p: Point = [1, 2]\n  let moved = Point.with_y(p, 9)\n  moved.y\n}\nmove()\n",
+      ["product.make", "product.update", "product.project"],
+    ],
+    [
+      "sum construction, tag access, and payload access",
+      "type Result = | `Ok Int | `Err Text\nlet make = () => {\n  let r: Result = `Ok (7)\n  if let `Ok value = r { value } else { 0 }\n}\nmake()\n",
+      ["sum.make", "sum.tag", "sum.payload"],
+    ],
+  ];
+
+for (const [description, source, expected] of aggregateCases) {
+  Deno.test(`Core lowers ${description} to value primitives`, async () => {
+    const parsed = await parseDucklangModule("aggregates.duck", source);
+    const module = lowerDucklangToCore(
+      inferDucklangModule(resolveDucklangModule(parsed)),
+    );
+    validateDucklangCore(module);
+    const kinds = new Set<string>(
+      module.functions.flatMap((function_) =>
+        function_.blocks.flatMap((block) =>
+          block.operations.map((operation) => operation.kind as string)
+        )
+      ),
+    );
+    for (const primitive of expected) {
+      if (!kinds.has(primitive)) {
+        throw new Error(
+          `expected ${primitive}; Core used ${[...kinds].sort().join(", ")}`,
+        );
+      }
+    }
+    // No operation may carry a source field name: projection is positional.
+    assertEquals(
+      module.functions.flatMap((function_) =>
+        function_.blocks.flatMap((block) =>
+          block.operations.filter((operation) => "fieldName" in operation)
+        )
+      ).length,
+      0,
+    );
+  });
+}
+
 async function lower(
   source: string,
   functionName: string,

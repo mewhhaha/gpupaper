@@ -461,8 +461,15 @@ terminators, and edge arguments.
 ## Phase 5: Aggregate and buffer semantics
 
 - [ ] Assign canonical semantic types to tuples, records, arrays, and unions.
-- [ ] Lower construction, projection, functional update, tag access, and payload
-      access to Core value primitives.
+- [x] Lower construction, projection, functional update, tag access, and payload
+      access to Core value primitives. A declared struct lowers to
+      `product.make` with positional `product.project`, a `with_` update lowers
+      to `product.update`, and a union lowers to `sum.make`, `sum.tag`, and
+      `sum.payload`. No Core operation carries a source field name, so
+      projection really is positional. Note that `lowerDucklangToCore` lowers
+      only function bindings: a module-level value binding reports "Core
+      lowering has no runtime value for <name>", which is one of the gaps to
+      close before Core can be wired into the pipeline.
 - [ ] Define `LayoutId` independently from `TypeId`.
 - [ ] Calculate size, alignment, field offsets, union tags, and payload storage
       deterministically.
