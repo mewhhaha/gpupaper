@@ -655,11 +655,23 @@ nested source functions.
       allocations.
 - [ ] Elaborate source-defined handlers through handler passing or CPS.
 - [ ] Enforce affine or linear use of resumptions.
-- [ ] Lower unresolved module-boundary effects to typed host calls.
+- [x] Lower unresolved module-boundary effects to typed host calls. A declared
+      effect operation that no source handler resolves becomes a host call, and
+      the boundary is typed rather than merely reached: a `Text` parameter given
+      an integer is rejected with "cannot unify Ducklang text with i32", a
+      zero-arity operation given an argument is rejected by arity, and an
+      operation the module never declared is rejected by name. Each rejection is
+      its own case, because the accepting one alone would pass against a
+      boundary that accepted anything.
 - [ ] Extend the managed ABI to aggregate arguments and results only after their
       layouts and ownership transfers are explicit.
-- [ ] Keep asynchronous effects reserved until a portable task/poll contract
-      exists.
+- [x] Keep asynchronous effects reserved until a portable task/poll contract
+      exists. There is no asynchronous surface to reserve accidentally: the
+      grammar admits no `async` or `await`, no effect declaration can be marked
+      asynchronous, and `async`, `await`, `task`, and `poll` appear nowhere in
+      the AST, the effects pass, or the handlers pass. Asserted by tests that
+      reject an `async` lambda and an `async` effect operation, so introducing
+      one becomes a deliberate change that fails here first.
 
 Exit criterion: every Core function has validated resource, cleanup, effect, and
 host-boundary plans before flattening.
