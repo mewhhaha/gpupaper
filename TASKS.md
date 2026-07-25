@@ -654,7 +654,15 @@ nested source functions.
       scratch owns its own region and does not carry the outer one's
       allocations.
 - [ ] Elaborate source-defined handlers through handler passing or CPS.
-- [ ] Enforce affine or linear use of resumptions.
+- [x] Enforce affine or linear use of resumptions. A clause declares its
+      resumption linear as `(!resume)`, but elaboration substituted it away and
+      inlined each call as its argument, so resolution never saw the `!` and a
+      clause could resume twice: the two calls were inlined side by side and the
+      program ran, which is the body duplicated rather than a continuation
+      invoked twice. Uses are now counted during elaboration and more than one
+      is rejected. Resuming zero times stays allowed, which is the affine half.
+      Ordinary linear parameters were never affected and are pinned alongside:
+      used twice is rejected, never used is rejected, once is accepted.
 - [x] Lower unresolved module-boundary effects to typed host calls. A declared
       effect operation that no source handler resolves becomes a host call, and
       the boundary is typed rather than merely reached: a `Text` parameter given

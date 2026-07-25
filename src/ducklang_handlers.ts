@@ -579,11 +579,36 @@ function inlineHandlerClause(
     ]),
   );
   if (resume !== undefined) {
+    // The resumption is declared linear, but elaboration substitutes it away and
+    // inlines each call as its argument, so resolution never sees the `!` and a
+    // clause could resume twice. Counting the uses here is what keeps the declared
+    // discipline: at most one resumption per clause.
+    const uses = countReferences(field.value.body, resume.text);
+    if (uses > 1) {
+      throw new TypeError(
+        `${field.span.file}:${field.span.start}: Ducklang handler clause ${field.name} resumes ${uses} times; a resumption may be used at most once`,
+      );
+    }
     substitutions.set(resume.text, referenceResume(resume.span));
   }
   return replaceResumeCalls(
     substituteTree(field.value.body, substitutions),
   );
+}
+
+/** Counts references to a name, so a resumption's declared linearity survives. */
+function countReferences(value: unknown, name: string): number {
+  let count = 0;
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const node = current as Record<string, unknown>;
+    const reference = node.name as Record<string, unknown> | undefined;
+    if (node.kind === "reference" && reference?.text === name) count += 1;
+    pending.push(...Object.values(node));
+  }
+  return count;
 }
 
 function replaceResumeCalls(
