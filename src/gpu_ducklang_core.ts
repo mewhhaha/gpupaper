@@ -76,16 +76,32 @@ struct Parameters {
   operand_count: u32,
   attribute_count: u32,
   value_count: u32,
-  block_count: u32,
+  type_count: u32,
 }
 @group(0) @binding(0) var<storage, read> operations: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> operation_ranges: array<vec4<u32>>;
 @group(0) @binding(2) var<storage, read> operands: array<u32>;
 @group(0) @binding(3) var<storage, read> attributes: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read> values: array<vec4<u32>>;
-@group(0) @binding(5) var<storage, read_write> rules: array<u32>;
-@group(0) @binding(6) var<storage, read_write> replacements: array<u32>;
-@group(0) @binding(7) var<uniform> parameters: Parameters;
+@group(0) @binding(5) var<storage, read> type_kinds: array<u32>;
+@group(0) @binding(6) var<storage, read> type_auxiliaries: array<u32>;
+@group(0) @binding(7) var<storage, read_write> rules: array<u32>;
+@group(0) @binding(8) var<storage, read_write> replacements: array<u32>;
+@group(0) @binding(9) var<uniform> parameters: Parameters;
+
+fn has_integer_scalar_result(operation: vec4<u32>) -> bool {
+  let type_id = operation.w;
+  if (
+    type_id >= parameters.type_count ||
+    type_kinds[type_id] != ${FlatDucklangCoreKind.type.scalar}u
+  ) {
+    return false;
+  }
+  let scalar = type_auxiliaries[type_id];
+  return
+    scalar == ${FlatDucklangCoreKind.scalar.i32}u ||
+    scalar == ${FlatDucklangCoreKind.scalar.i64}u;
+}
 
 fn constant_equals(value_id: u32, expected_high: u32) -> bool {
   if (value_id >= parameters.value_count) { return false; }
@@ -125,7 +141,8 @@ fn propose_rewrites(@builtin(global_invocation_id) invocation: vec3<u32>) {
     ranges.w != 1u ||
     ranges.x > parameters.operand_count ||
     ranges.y > parameters.operand_count - ranges.x ||
-    ranges.z >= parameters.attribute_count
+    ranges.z >= parameters.attribute_count ||
+    !has_integer_scalar_result(operation)
   ) {
     return;
   }
@@ -243,6 +260,16 @@ export async function runDucklangCoreGpuPass(
     GPUBufferUsage.STORAGE,
   );
   const valueBuffer = createBuffer(device, values, GPUBufferUsage.STORAGE);
+  const typeKindBuffer = createBuffer(
+    device,
+    snapshot.typeKinds,
+    GPUBufferUsage.STORAGE,
+  );
+  const typeAuxiliaryBuffer = createBuffer(
+    device,
+    snapshot.typeAuxiliaries,
+    GPUBufferUsage.STORAGE,
+  );
   const ruleBuffer = device.createBuffer({
     size: Math.max(4, snapshot.operationKinds.byteLength),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
@@ -258,7 +285,7 @@ export async function runDucklangCoreGpuPass(
       snapshot.operandValueIds.length,
       snapshot.attributeKinds.length,
       snapshot.valueLocalIds.length,
-      snapshot.blockFunctionIds.length,
+      snapshot.typeKinds.length,
     ]),
     GPUBufferUsage.UNIFORM,
   );
@@ -277,6 +304,8 @@ export async function runDucklangCoreGpuPass(
     operandBuffer,
     attributeBuffer,
     valueBuffer,
+    typeKindBuffer,
+    typeAuxiliaryBuffer,
     ruleBuffer,
     replacementBuffer,
     rewriteParameters,
@@ -313,9 +342,11 @@ export async function runDucklangCoreGpuPass(
         { binding: 2, resource: { buffer: operandBuffer } },
         { binding: 3, resource: { buffer: attributeBuffer } },
         { binding: 4, resource: { buffer: valueBuffer } },
-        { binding: 5, resource: { buffer: ruleBuffer } },
-        { binding: 6, resource: { buffer: replacementBuffer } },
-        { binding: 7, resource: { buffer: rewriteParameters } },
+        { binding: 5, resource: { buffer: typeKindBuffer } },
+        { binding: 6, resource: { buffer: typeAuxiliaryBuffer } },
+        { binding: 7, resource: { buffer: ruleBuffer } },
+        { binding: 8, resource: { buffer: replacementBuffer } },
+        { binding: 9, resource: { buffer: rewriteParameters } },
       ],
     });
     const rewritePass = encoder.beginComputePass();

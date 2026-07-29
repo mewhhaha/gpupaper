@@ -8,7 +8,13 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
 
 Deno.test("WebGPU validates and proposes the same Core rewrites as the CPU", async () => {
   const snapshot = await flat(
-    "let value = 21\nlet first = value + 0\nfirst * 1\n",
+    `let value = 21
+let first = value + 0
+let integer_result = first * 1
+let float_value = 2.0f32
+let float_result = float_value * 1.0f32
+integer_result
+`,
   );
   const expected = rewriteFlatDucklangCore(snapshot);
 
@@ -19,6 +25,7 @@ Deno.test("WebGPU validates and proposes the same Core rewrites as the CPU", asy
     throw new Error(`GPU rejected accepted Core: ${result.reason}`);
   }
   assertEquals(result.proposals, expected.proposals);
+  assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
   assertEquals(columns(result.package), columns(expected.package));
   assertEquals(

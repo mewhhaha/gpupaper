@@ -71,7 +71,8 @@ function proposeValidatedDucklangCoreRewrites(
       snapshot.operationKinds[operationId] !==
         FlatDucklangCoreKind.operation.scalarBinary ||
       snapshot.operationOperandCounts[operationId] !== 2 ||
-      snapshot.operationAttributeCounts[operationId] !== 1
+      snapshot.operationAttributeCounts[operationId] !== 1 ||
+      !hasIntegerScalarResult(snapshot, operationId)
     ) {
       continue;
     }
@@ -110,6 +111,21 @@ function proposeValidatedDucklangCoreRewrites(
     });
   }
   return proposals;
+}
+
+function hasIntegerScalarResult(
+  snapshot: FlatDucklangCore,
+  operationId: number,
+): boolean {
+  const typeId = snapshot.operationTypeIds[operationId];
+  if (
+    snapshot.typeKinds[typeId] !== FlatDucklangCoreKind.type.scalar
+  ) {
+    return false;
+  }
+  const scalar = snapshot.typeAuxiliaries[typeId];
+  return scalar === FlatDucklangCoreKind.scalar.i32 ||
+    scalar === FlatDucklangCoreKind.scalar.i64;
 }
 
 export function resolveDucklangCoreRewriteConflicts(

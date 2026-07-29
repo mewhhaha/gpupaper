@@ -188,6 +188,13 @@ const attributeKinds = [
 type AttributeKind = typeof attributeKinds[number];
 
 export const FlatDucklangCoreKind = {
+  type: {
+    scalar: 0,
+  },
+  scalar: {
+    i32: 0,
+    i64: 1,
+  },
   operation: {
     constant: 0,
     scalarBinary: 1,

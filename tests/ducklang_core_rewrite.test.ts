@@ -49,6 +49,21 @@ Deno.test("Core rewrites rebuild a new valid snapshot and preserve the original"
   inflateFlatDucklangCore(rewritten.package);
 });
 
+Deno.test("Core identity rewrites preserve observable floating-point values", async () => {
+  const snapshot = await flat(
+    `let zero = 0.0f32
+let one = 1.0f32
+let value = 2.0f32
+let sum = value + zero
+sum * one
+`,
+  );
+
+  const proposals = proposeDucklangCoreRewrites(snapshot);
+
+  assertEquals(proposals, []);
+});
+
 async function flat(source: string) {
   const parsed = await parseDucklangModule("rewrite_core.duck", source);
   return flattenDucklangCore(
