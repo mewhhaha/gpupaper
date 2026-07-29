@@ -63,60 +63,32 @@ const handleAlignment = 4;
 
 export type DucklangBufferOwnership = "owned" | "frozen";
 
-export type DucklangBufferRepresentation =
-  | {
-    /** A four-byte managed table index. The runtime owns the bytes. */
-    readonly kind: "handle";
-    readonly size: number;
-    readonly alignment: number;
-  }
-  | {
-    /** An (offset, length) pair of `i32`s addressing linear memory. */
-    readonly kind: "slice";
-    readonly size: number;
-    readonly alignment: number;
-    readonly offsetField: number;
-    readonly lengthField: number;
-  };
+export type DucklangBufferRepresentation = {
+  /** A four-byte managed table index. The runtime owns the bytes. */
+  readonly kind: "handle";
+  readonly size: number;
+  readonly alignment: number;
+};
 
 /**
  * The chosen physical representation for a `Text` or `Bytes` value.
  *
- * An owned buffer stays a managed handle. Ownership transfer and release need a
- * runtime identity that a raw address cannot provide, and the managed table is
- * what gives the host an object to free, so an owned buffer is four bytes.
+ * Both ownership states use a managed handle at the Wasm/host ABI. Ownership
+ * transfer, release, and host string adaptation require stable runtime identity;
+ * freezing changes which operations are legal, not where the bytes live.
  *
- * A frozen buffer becomes a linear-memory slice: an offset and a length, eight
- * bytes aligned to four. Freezing is what makes that safe, because immutable
- * bytes can be shared and interned without a runtime owner, and a slice lets the
- * GPU path address the bytes directly instead of calling through the managed
- * table.
- *
- * `Text` and `Bytes` share a representation at each ownership state. They stay
- * distinct semantic buffer kinds, and this function is where that would change if
- * one of them ever needed different storage.
- *
- * Nothing emits the slice form yet: the backend uses managed handles throughout,
- * and replacing them is the separate roadmap item about linear-memory text.
- * Encoding the decision here keeps it a single reviewable rule rather than an
- * assumption spread across passes.
+ * This follows the compiler-execution separation: GPU kernels transform flat
+ * compiler IR, while the payload program executes as Wasm. A future payload ABI
+ * that executes buffer operations in linear memory can introduce a slice layout
+ * at that boundary without changing Ducklang's semantic buffer kinds.
  */
 export function ducklangBufferRepresentation(
-  ownership: DucklangBufferOwnership,
+  _ownership: DucklangBufferOwnership,
 ): DucklangBufferRepresentation {
-  if (ownership === "owned") {
-    return {
-      kind: "handle",
-      size: handleSize,
-      alignment: handleAlignment,
-    };
-  }
   return {
-    kind: "slice",
-    size: 8,
-    alignment: 4,
-    offsetField: 0,
-    lengthField: 4,
+    kind: "handle",
+    size: handleSize,
+    alignment: handleAlignment,
   };
 }
 

@@ -465,6 +465,10 @@ function rewriteHandledEffects(
   >,
   inlining: ReadonlySet<string>,
 ): DucklangExpression {
+  // This is selective one-shot CPS normalization. The surrounding expression
+  // tree is the delimited continuation: replacing a performance with its clause
+  // leaves that context in place, while a resume supplies the value consumed by
+  // the context. Calls that hide a handled performance are exposed first.
   return mapExpressionTree(expression, (rewritten) => {
     if (
       rewritten.kind === "hostCall" && effectNames.has(rewritten.effectName)

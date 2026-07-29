@@ -39,7 +39,19 @@ try run() with counter
 `;
 
 Deno.test("Ducklang allows a handler clause to resume once", async () => {
-  assertEquals(await run(program("!resume(count)")), 42);
+  const artifact = await compile(program("!resume(count)"));
+  assertEquals(await runMain(artifact.wasm), 42);
+  assertEquals(
+    artifact.core.functions.some((function_) =>
+      function_.blocks.some((block) =>
+        block.operations.some((operation) =>
+          operation.kind === "host.call" &&
+          operation.effectName === "Counter"
+        )
+      )
+    ),
+    false,
+  );
 });
 
 Deno.test("Ducklang allows a handler clause to answer without resuming", async () => {
@@ -73,10 +85,12 @@ Deno.test("Ducklang enforces linearity on ordinary parameters too", async () => 
 });
 
 async function run(source: string): Promise<number | bigint> {
-  const artifact = await compileModuleSource("resume.duck", source, {
-    gpuMode: "off",
-  });
+  const artifact = await compile(source);
   return await runMain(artifact.wasm);
+}
+
+function compile(source: string) {
+  return compileModuleSource("resume.duck", source, { gpuMode: "off" });
 }
 
 async function assertRejects(

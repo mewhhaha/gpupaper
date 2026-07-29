@@ -184,26 +184,19 @@ Deno.test("Ducklang owned buffers are managed handles", () => {
   assertEquals(owned.alignment, 4);
 });
 
-Deno.test("Ducklang frozen buffers are linear-memory slices", () => {
+Deno.test("Ducklang frozen buffers retain managed runtime identity", () => {
   const frozen = ducklangBufferRepresentation("frozen");
 
-  // Immutable bytes can be shared without a runtime owner, so a frozen buffer is
-  // an (offset, length) pair addressing linear memory directly.
-  assertEquals(frozen.kind, "slice");
-  assertEquals(frozen.size, 8);
+  assertEquals(frozen.kind, "handle");
+  assertEquals(frozen.size, 4);
   assertEquals(frozen.alignment, 4);
-  if (frozen.kind !== "slice") throw new Error("expected a slice");
-  assertEquals(frozen.offsetField, 0);
-  assertEquals(frozen.lengthField, 4);
 });
 
-Deno.test("Ducklang buffer representations differ by ownership", () => {
-  // If the two states ever collapsed to the same representation, the distinction
-  // would be decorative and this would say so.
+Deno.test("Ducklang buffer ownership does not change physical type identity", () => {
   assertEquals(
     JSON.stringify(ducklangBufferRepresentation("owned")) ===
       JSON.stringify(ducklangBufferRepresentation("frozen")),
-    false,
+    true,
   );
 });
 

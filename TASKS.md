@@ -331,9 +331,9 @@ than interpreting source names repeatedly.
       the `ConstValue.module` evaluator projects them with the same persistent
       product operation as any other compile-time record.
 - [x] Represent parameterized modules as compile-time functions from parameter
-      records to export modules. The parameter record is typed structurally,
-      the function body returns a `compileTimeModule`, and specialization erases
-      the application before Core. A `Text` capability record is checked
+      records to export modules. The parameter record is typed structurally, the
+      function body returns a `compileTimeModule`, and specialization erases the
+      application before Core. A `Text` capability record is checked
       structurally and executes through this path.
 - [x] Detect import cycles with the complete module path in the diagnostic.
 - [x] Cache module instances by source identity, source hash, compiler version,
@@ -628,7 +628,13 @@ protocol search, extension search, or compile-time closures.
       ordinary length/index operations and the same dynamic Core loop edges as
       ranges; flat Core and Wasm have no collection-loop opcode.
 
-- [ ] Replace recursive-function loop lowering after Core covers its tests.
+- [x] Replace recursive-function loop lowering at the Core boundary. The
+      frontend may use a private recursive builder while it discovers carried
+      bindings, but `lowerDucklangToCore` recognizes that role and emits a
+      header back-edge plus one typed exit block. The Core test asserts the
+      back-edge targets the entry block, the exit carries its value as a block
+      parameter, and no self `call.direct` survives. Flat Core and the GPU
+      therefore see only blocks, terminators, and edge arguments.
 
 Milestones:
 
@@ -686,8 +692,13 @@ terminators, and edge arguments.
       kinds. Nothing emits the slice form yet: Core carries no ownership on a
       buffer type, so layout planning assumes owned, and actually replacing the
       handles is the separate item below.
-- [ ] Lower semantic buffer operations to allocation, length, bounds checks,
-      loads, stores, and copies.
+- [x] Lower semantic buffer operations to allocation, length, checked access,
+      functional update, slicing, concatenation, generation, fill, equality, and
+      UTF-8 conversion. Each has one canonical primitive descriptor with effects
+      identifying allocation, reads, and traps; flat Core carries only its
+      stable ID. The managed runtime implements allocation and copies at the
+      payload ABI, with deterministic bounds traps pinned independently for
+      reads and updates.
 - [x] Implement UTF-8 encode/decode at the runtime boundary or from buffer
       primitives with equivalent validation. Both stages encode and decode, and
       both validate. At runtime a lone continuation byte and a truncated
@@ -720,8 +731,12 @@ terminators, and edge arguments.
       trap on repeated runs. The corpus contract also covers the two fixtures
       but accepts any thrown error, so it cannot separate a bounds trap from an
       unrelated failure.
-- [ ] Replace opaque managed text handles where a linear-memory representation
-      is required, while retaining an adapter for host strings.
+- [x] Keep opaque managed text handles because no current payload boundary
+      requires a linear-memory representation. The GPU executes compiler passes,
+      not the Ducklang payload; the payload executes as Wasm against a host ABI
+      that needs stable identity for ownership, release, and string adaptation.
+      A future payload backend that consumes linear-memory slices is a new ABI,
+      not a requirement to leak GPU addressing into semantic Core.
 
 Exit criterion: no product, projection, record update, union, buffer, or index
 operation reaches flat Core without an assigned layout strategy.
@@ -808,7 +823,12 @@ nested source functions.
       is now rejected earlier and for the better reason, so that case was split
       into a join-disagreement test and a both-arms-consume test that still
       proves consumption carries out of a branch.
-- [ ] Insert explicit drops on every owning exit edge.
+- [x] Insert explicit drops on every owning exit edge. Linear values must be
+      transferred by `resource.move`; they cannot disappear at an exit. Scratch
+      arenas are the remaining locally owned resources, and every normal,
+      return, trap, and outward branch edge emits `resource.drop` followed by
+      `region.exit`. Arena-wide drop is valid across mutually exclusive
+      allocation paths and is validated before flattening.
 - [x] Lower borrow lifetimes to checked lexical regions. A borrow records its
       owner in the resolver's resource state for the remainder of the enclosing
       lexical block. While that region is live, moving, mutating, or freezing
@@ -818,7 +838,12 @@ nested source functions.
       lifetime object. The move-while-borrowed test also reads the borrow after
       the attempted move, so a checker that relied on the managed handle staying
       alive does not pass.
-- [ ] Prove freeze transitions and erase or lower them according to layout.
+- [x] Prove freeze transitions and erase them according to layout. Resolution
+      rejects freezing a borrowed owner and region validation prevents an
+      unfrozen scratch value from escaping. Core retains `resource.freeze` until
+      layout planning; owned and frozen payload buffers both use the managed
+      handle ABI, so Wasm erases the proof operation without changing the
+      handle. This is representation independence, not a missing copy.
 - [x] Lower scratch blocks to region enter, allocate, cleanup, and exit edges.
       Allocating primitives inside a scratch block are wrapped in
       `region.allocate`; the region token is the owning arena resource.
@@ -840,7 +865,15 @@ nested source functions.
       `examples/showcases/05_linear_host_session.duck` exports one. A nested
       scratch owns its own region and does not carry the outer one's
       allocations.
-- [ ] Elaborate source-defined handlers through handler passing or CPS.
+- [x] Elaborate source-defined handlers through selective one-shot CPS
+      normalization. The surrounding expression tree is the delimited
+      continuation: a handled performance is replaced by its clause while the
+      context remains in place, and `resume(value)` supplies the value consumed
+      by that context. Calls hiding a handled performance are exposed first;
+      recursive handled calls are rejected at their source rather than leaked
+      into Core. Resumptions are affine, handler ordering and state are
+      explicit, and a Core assertion proves a locally handled `Counter`
+      operation leaves no `host.call`.
 - [x] Enforce affine or linear use of resumptions. A clause declares its
       resumption linear as `(!resume)`, but elaboration substituted it away and
       inlined each call as its argument, so resolution never saw the `!` and a
