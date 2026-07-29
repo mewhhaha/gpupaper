@@ -6,10 +6,9 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
 /**
  * Which `ConstValue` variants a source program can actually produce.
  *
- * The domain declares six: scalar, type, product, sum, closure, and module. Five are
- * reachable from source and pinned here. `module` is declared and consumed by
- * `projectDucklangConst` but constructed nowhere, which is the gap the roadmap item
- * still carries.
+ * The expression evaluator produces scalar, type, product, sum, and closure.
+ * Module values are constructed by the module normalization boundary and covered
+ * separately because they are not expression values.
  *
  * Each case asserts the variant rather than a value, because the point is the shape of
  * the domain. A test that only checked results would pass with several variants
@@ -71,6 +70,19 @@ Deno.test("Ducklang compile-time products and sums keep their contents", async (
     kind: "scalar",
     scalar: { kind: "i32", value: 42 },
   });
+});
+
+Deno.test("Ducklang compile-time type applications have canonical identities", async () => {
+  const first = await evaluate("comptime I32 I64\n");
+  const second = await evaluate("comptime I32 I64\n");
+  if (first.kind !== "type" || second.kind !== "type") {
+    throw new Error("expected canonical type values");
+  }
+  assertEquals(first.typeId, second.typeId);
+  assertEquals(
+    JSON.parse(first.typeId),
+    ["apply", "duck:type/builtin:I32", ["duck:type/builtin:I64"]],
+  );
 });
 
 async function evaluate(source: string) {

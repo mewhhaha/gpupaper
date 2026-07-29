@@ -61,6 +61,7 @@ export const PrimitiveId = {
   bufferSet: 44,
   bytesFill: 45,
   bufferEqual: 46,
+  f32Format: 47,
 } as const;
 
 export type PrimitiveId = typeof PrimitiveId[keyof typeof PrimitiveId];
@@ -512,6 +513,19 @@ export const primitiveDescriptors: readonly PrimitiveDescriptor[] = [
     lowering: "utf8.decode",
     sourceNames: ["@Utf8.decode"],
     imports: runtimeImports(["decode_utf8"]),
+  },
+  {
+    id: PrimitiveId.f32Format,
+    name: "f32.format",
+    signature: {
+      operands: [BuiltinTypeId.f32, BuiltinTypeId.i32],
+      result: BuiltinTypeId.text,
+    },
+    stages: bothStages,
+    effects: ["allocate", "trap"],
+    lowering: "buffer.format_f32",
+    sourceNames: ["@format_f32"],
+    imports: runtimeImports(["format_f32"]),
   },
   {
     id: PrimitiveId.panic,

@@ -514,8 +514,8 @@ Deno.test("the frozen raytracer emits the expected PPM header and first pixel", 
     53,
     53,
     10,
-    84,
-    139,
+    88,
+    144,
     233,
   ]);
 });

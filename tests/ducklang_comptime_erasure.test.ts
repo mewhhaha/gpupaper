@@ -40,10 +40,11 @@ for (const [description, source, expected] of programs) {
     });
 
     assertEquals(await runMain(artifact.wasm), expected);
-    // The result is scalar, so both its inputs and the final name disappear.
+    // The compile-time inputs disappear. The runtime result binding remains as
+    // the module's observable value.
     assertEquals(
       artifact.inferred.bindings.map((binding) => binding.symbol.text),
-      [],
+      ["total"],
     );
     assertEquals(comptimeNodes(artifact.inferred), 0);
   });

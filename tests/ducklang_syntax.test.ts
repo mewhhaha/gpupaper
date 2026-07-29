@@ -91,6 +91,37 @@ result
   }
 });
 
+Deno.test("mixed boolean and comparison operators use language precedence", async () => {
+  const module = await parseDucklangModule(
+    "mixed_precedence.duck",
+    `let output = ""
+let segment_start = 0
+let index = 1
+let pending_space = output != "" || segment_start < index
+pending_space
+`,
+  );
+  const binding = module.statements[3];
+  if (binding?.kind !== "binding") {
+    throw new Error(`expected binding, received ${binding?.kind}`);
+  }
+  assertBinaryShape(binding.value, "||", "!=", "<");
+});
+
+Deno.test("explicit parentheses override binary operator precedence", async () => {
+  const module = await parseDucklangModule(
+    "parenthesized_precedence.duck",
+    `let grouped = (true || false) == true
+grouped
+`,
+  );
+  const binding = module.statements[0];
+  if (binding?.kind !== "binding") {
+    throw new Error(`expected binding, received ${binding?.kind}`);
+  }
+  assertBinaryShape(binding.value, "==", "||", undefined);
+});
+
 async function collectDuckSources(directory: URL): Promise<URL[]> {
   const sources: URL[] = [];
   for await (const entry of Deno.readDir(directory)) {
@@ -107,6 +138,34 @@ async function collectDuckSources(directory: URL): Promise<URL[]> {
   return sources.sort((left, right) =>
     left.pathname.localeCompare(right.pathname)
   );
+}
+
+function assertBinaryShape(
+  expression: import("../src/ducklang_ast.ts").DucklangExpression,
+  operator: string,
+  leftOperator: string | undefined,
+  rightOperator: string | undefined,
+): void {
+  if (expression.kind !== "binary" || expression.operator !== operator) {
+    throw new Error(
+      `expected ${operator} expression, received ${
+        expression.kind === "binary" ? expression.operator : expression.kind
+      }`,
+    );
+  }
+  const actualLeft = expression.left.kind === "binary"
+    ? expression.left.operator
+    : undefined;
+  const actualRight = expression.right.kind === "binary"
+    ? expression.right.operator
+    : undefined;
+  if (actualLeft !== leftOperator || actualRight !== rightOperator) {
+    throw new Error(
+      `expected ${String(leftOperator)} ${operator} ${
+        String(rightOperator)
+      }, received ${String(actualLeft)} ${operator} ${String(actualRight)}`,
+    );
+  }
 }
 
 function assertEquals(actual: number, expected: number, subject: string): void {

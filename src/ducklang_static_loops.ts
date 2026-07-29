@@ -315,22 +315,6 @@ function expandStatements(
       }
     }
     if (statement.kind === "unionBinding") values.delete(statement.name.text);
-    if (
-      statement.kind === "import" &&
-      statement.path === "duck:prelude/runtime"
-    ) {
-      for (const selection of statement.selections) {
-        if (selection.localName === undefined) continue;
-        values.set(selection.localName.text, {
-          kind: "reference",
-          name: {
-            text: `$duck_runtime_${selection.exportName}`,
-            span: selection.span,
-          },
-          span: selection.span,
-        });
-      }
-    }
     if (statement.kind === "recursiveGroup") {
       for (const binding of statement.bindings) {
         values.delete(binding.name.text);
@@ -995,68 +979,6 @@ function evaluateStaticValue(
     return expression;
   }
   if (expression.kind === "function") return expression;
-  if (
-    expression.kind === "call" && expression.callee.kind === "reference" &&
-    expression.callee.name.text.startsWith("$duck_runtime_")
-  ) {
-    const arguments_: DucklangExpression[] = [];
-    for (const argument of expression.arguments) {
-      const evaluated = evaluateStaticValue(argument);
-      if (evaluated === undefined) return undefined;
-      arguments_.push(evaluated);
-    }
-    const operation = expression.callee.name.text.slice(
-      "$duck_runtime_".length,
-    );
-    if (
-      operation === "length" && arguments_.length === 1 &&
-      arguments_[0].kind === "string"
-    ) {
-      return {
-        kind: "integer",
-        value: new TextEncoder().encode(arguments_[0].value).length,
-        span: expression.span,
-      };
-    }
-    if (
-      operation === "append" && arguments_.length === 2 &&
-      arguments_[0].kind === "string" && arguments_[1].kind === "string"
-    ) {
-      return {
-        kind: "string",
-        value: arguments_[0].value + arguments_[1].value,
-        span: expression.span,
-      };
-    }
-    if (
-      operation === "slice" && arguments_.length === 3 &&
-      arguments_[0].kind === "string" && arguments_[1].kind === "integer" &&
-      arguments_[2].kind === "integer"
-    ) {
-      const bytes = new TextEncoder().encode(arguments_[0].value);
-      const start = arguments_[1].value;
-      const end = arguments_[2].value;
-      if (start < 0 || end < start || end > bytes.length) {
-        throw new RangeError(
-          `${expression.span.file}:${expression.span.start}: Ducklang static slice range ${start}..${end} is outside text byte length ${bytes.length}`,
-        );
-      }
-      try {
-        return {
-          kind: "string",
-          value: new TextDecoder("utf-8", { fatal: true }).decode(
-            bytes.subarray(start, end),
-          ),
-          span: expression.span,
-        };
-      } catch (cause) {
-        throw new TypeError(
-          `${expression.span.file}:${expression.span.start}: Ducklang static slice ${start}..${end} splits a UTF-8 sequence`,
-          { cause },
-        );
-      }
-    }
-  }
   if (expression.kind === "product") {
     const values: DucklangExpression[] = [];
     for (const value of expression.values) {

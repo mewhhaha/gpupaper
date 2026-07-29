@@ -695,11 +695,11 @@ function normalizeExpressionStatementBoundaries(
         value: normalize(expression.value),
       };
     case "binary":
-      return {
+      return reassociateBinaryExpression({
         ...expression,
         left: normalize(expression.left),
         right: normalize(expression.right),
-      };
+      }, source);
     case "unary":
       return { ...expression, operand: normalize(expression.operand) };
     case "if":
@@ -2438,10 +2438,7 @@ function lowerExpression(
       for (let index = 1; index < operators.length; index += 1) {
         const operator = operatorText(operators[index]);
         const next = lowerExpression(file, rightOperands[index]);
-        if (
-          (operator === ":+" || operator === "<&") &&
-          next.kind === "record"
-        ) {
+        if (operator === "<&" && next.kind === "record") {
           right = {
             kind: "recordUpdate",
             product: right,
@@ -2473,8 +2470,7 @@ function lowerExpression(
 
     if (
       operators.length === 1 &&
-      (operatorText(operators[0]) === ":+" ||
-        operatorText(operators[0]) === "<&")
+      operatorText(operators[0]) === "<&"
     ) {
       const fields = lowerExpression(file, rightOperands[0]);
       if (fields.kind === "record") {
@@ -2507,22 +2503,12 @@ function lowerExpression(
         lowerBinaryExpression(operatorText(operator), left, right),
       );
     };
-    const precedence = (operator: string): number => {
-      if (operator === "$" || operator === "|>") return 10;
-      if (operator === "||") return 20;
-      if (operator === "&&") return 30;
-      if (["==", "!=", "<", ">", "<=", ">="].includes(operator)) {
-        return 40;
-      }
-      if (operator === "+" || operator === "-") return 60;
-      return 70;
-    };
     for (let index = 0; index < operators.length; index += 1) {
       const operator = operators[index];
       while (
         operatorStack.length > 0 &&
-        precedence(operatorText(operatorStack.at(-1)!)) >=
-          precedence(operatorText(operator))
+        binaryOperatorPrecedence(operatorText(operatorStack.at(-1)!)) >=
+          binaryOperatorPrecedence(operatorText(operator))
       ) {
         reduce();
       }
@@ -2997,13 +2983,9 @@ function lowerExpression(
         : {
           kind: "product",
           productKind: "array",
-          values: value.type === "rule"
-            ? value.children().flatMap((child) =>
-              child.type === "rule" && child.name === "_expression"
-                ? [lowerExpression(file, child)]
-                : []
-            )
-            : [],
+          ...(value.type === "rule"
+            ? lowerArrayElements(file, value)
+            : { values: [] }),
           span: sourceSpan(file, value),
         },
       span: sourceSpan(file, cursor),
@@ -3116,16 +3098,37 @@ function lowerExpression(
     return {
       kind: "product",
       productKind: "array",
-      values: cursor.children().flatMap((child) =>
-        child.type === "rule" && child.name === "_expression"
-          ? [lowerExpression(file, child)]
-          : []
-      ),
+      ...lowerArrayElements(file, cursor),
       span: sourceSpan(file, cursor),
     };
   }
 
   throw unsupported(file, cursor, cursor.name);
+}
+
+function lowerArrayElements(
+  file: string,
+  cursor: RuleCursor,
+): {
+  readonly values: readonly DucklangExpression[];
+  readonly spreadValues?: readonly boolean[];
+} {
+  const elements = cursor.children().flatMap((child) => {
+    if (child.type !== "rule") return [];
+    if (child.name === "_expression") {
+      return [{ value: lowerExpression(file, child), spread: false }];
+    }
+    if (child.name !== "array_spread") return [];
+    return [{
+      value: lowerExpression(file, requiredField(child, "value")),
+      spread: true,
+    }];
+  });
+  const spreadValues = elements.map((element) => element.spread);
+  return {
+    values: elements.map((element) => element.value),
+    ...(spreadValues.some(Boolean) ? { spreadValues } : {}),
+  };
 }
 
 type MatchArm = {
@@ -3537,6 +3540,88 @@ function operatorText(operator: TokenCursor): string {
     : operator.text;
 }
 
+function binaryOperatorPrecedence(operator: string): number {
+  if (operator === "$" || operator === "|>") return 10;
+  if (operator === "||") return 20;
+  if (operator === "&&") return 30;
+  if (["==", "!=", "<", ">", "<=", ">="].includes(operator)) return 40;
+  if (operator === "+" || operator === "-") return 60;
+  return 70;
+}
+
+function reassociateBinaryExpression(
+  expression: Extract<DucklangExpression, { readonly kind: "binary" }>,
+  source: string,
+): DucklangExpression {
+  const operands: DucklangExpression[] = [];
+  const operators: string[] = [];
+  const collect = (
+    current: DucklangExpression,
+    preserveParentheses: boolean,
+  ): void => {
+    if (
+      current.kind !== "binary" ||
+      (preserveParentheses && isDirectlyParenthesized(current, source))
+    ) {
+      operands.push(current);
+      return;
+    }
+    collect(current.left, true);
+    operators.push(current.operator);
+    collect(current.right, true);
+  };
+  collect(expression, false);
+  if (operators.length < 2) return expression;
+
+  const expressionStack: DucklangExpression[] = [operands[0]];
+  const operatorStack: string[] = [];
+  const reduce = (): void => {
+    const operator = operatorStack.pop();
+    const right = expressionStack.pop();
+    const left = expressionStack.pop();
+    if (operator === undefined || left === undefined || right === undefined) {
+      throw new Error("invalid Ducklang binary expression");
+    }
+    expressionStack.push({
+      kind: "binary",
+      operator,
+      left,
+      right,
+      span: spanFrom(left.span, right.span),
+    });
+  };
+  for (let index = 0; index < operators.length; index += 1) {
+    const operator = operators[index];
+    while (
+      operatorStack.length > 0 &&
+      binaryOperatorPrecedence(operatorStack.at(-1)!) >=
+        binaryOperatorPrecedence(operator)
+    ) {
+      reduce();
+    }
+    operatorStack.push(operator);
+    expressionStack.push(operands[index + 1]);
+  }
+  while (operatorStack.length > 0) reduce();
+  if (expressionStack.length !== 1) {
+    throw new Error(
+      `Ducklang binary reassociation produced ${expressionStack.length} expressions`,
+    );
+  }
+  return expressionStack[0];
+}
+
+function isDirectlyParenthesized(
+  expression: DucklangExpression,
+  source: string,
+): boolean {
+  let before = expression.span.start - 1;
+  while (before >= 0 && /\s/.test(source[before])) before -= 1;
+  let after = expression.span.end;
+  while (after < source.length && /\s/.test(source[after])) after += 1;
+  return source[before] === "(" && source[after] === ")";
+}
+
 function lowerBinaryExpression(
   operator: string,
   left: DucklangExpression,
@@ -3549,7 +3634,6 @@ function lowerBinaryExpression(
   if (operator === "|>") {
     return { kind: "call", callee: right, arguments: [left], span };
   }
-  if (operator === ":>" || operator === ":<") return left;
   if (operator === "=>" && left.kind === "reference") {
     return {
       kind: "function",

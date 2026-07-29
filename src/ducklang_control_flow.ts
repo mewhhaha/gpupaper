@@ -4,12 +4,59 @@ import {
   type DucklangName,
   ducklangNamedType,
   type DucklangStatement,
+  type DucklangTypeReference,
 } from "./ducklang_ast.ts";
 
 export function lowerDucklangControlFlow(
   module: DucklangModule,
 ): DucklangModule {
-  return { ...module, statements: lowerStatements(module.statements) };
+  let lowered = module;
+  for (let iteration = 0; iteration < 32; iteration += 1) {
+    lowered = {
+      ...lowered,
+      statements: lowerStatements(lowered.statements),
+      extensions: lowered.extensions.map((extension) => ({
+        ...extension,
+        methods: extension.methods.map((method) => ({
+          ...method,
+          value: lowerExpression(method.value),
+        })),
+      })),
+    };
+    const remaining = firstSourceControlFlow(lowered);
+    if (remaining === undefined) return lowered;
+    if (iteration === 31) {
+      throw new TypeError(
+        `${remaining.span.file}:${remaining.span.start}: Ducklang control-flow lowering did not converge for ${remaining.kind}`,
+      );
+    }
+  }
+  throw new Error(`${module.file}: unreachable control-flow lowering state`);
+}
+
+function firstSourceControlFlow(
+  module: DucklangModule,
+): {
+  readonly kind: "loop" | "forRange" | "forCollection";
+  readonly span: DucklangExpression["span"];
+} | undefined {
+  const pending: unknown[] = [module.statements, module.extensions];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const node = current as Record<string, unknown>;
+    if (
+      node.kind === "loop" || node.kind === "forRange" ||
+      node.kind === "forCollection"
+    ) {
+      return node as {
+        readonly kind: "loop" | "forRange" | "forCollection";
+        readonly span: DucklangExpression["span"];
+      };
+    }
+    pending.push(...Object.values(node));
+  }
+  return undefined;
 }
 
 /**
@@ -53,6 +100,7 @@ export function requireConsistentDucklangLoopExits(value: unknown): void {
 
 function lowerStatements(
   statements: readonly DucklangStatement[],
+  expectedResultType?: DucklangTypeReference,
 ): readonly DucklangStatement[] {
   const result: DucklangStatement[] = [];
   for (const [index, statement] of statements.entries()) {
@@ -60,31 +108,26 @@ function lowerStatements(
       statement.kind === "expression" &&
       (statement.expression.kind === "if" ||
         statement.expression.kind === "ifUnion") &&
+      statement.expression.stateThreaded !== true &&
       !containsLoopControl(statement.expression) &&
       collectBranchAssignments(statement.expression).size > 0 &&
       index + 1 < statements.length
     ) {
       const remaining = statements.slice(index + 1);
-      result.push({
-        kind: "expression",
-        expression: lowerExpression({
-          ...statement.expression,
-          consequence: appendBranchContinuation(
-            statement.expression.consequence,
-            remaining,
-            statement.expression.span,
-          ),
-          alternative: appendBranchContinuation(
-            statement.expression.alternative,
-            remaining,
-            statement.expression.span,
-          ),
-        }),
-        span: statement.span,
-      });
+      result.push(
+        ...lowerBranchContinuation(
+          statement.expression,
+          remaining,
+          visibleBindingNames(result),
+          expectedResultType,
+        ),
+      );
       return result;
     }
-    const lowered = lowerStatementExpressions(statement);
+    const lowered = lowerStatementExpressions(
+      statement,
+      index === statements.length - 1 ? expectedResultType : undefined,
+    );
     if (lowered.kind === "forRange") {
       const range = lowerDynamicRange(
         lowered,
@@ -102,7 +145,10 @@ function lowerStatements(
       continue;
     }
     if (lowered.kind === "expression" && lowered.expression.kind === "loop") {
-      const remaining = lowerStatements(statements.slice(index + 1));
+      const remaining = lowerStatements(
+        statements.slice(index + 1),
+        expectedResultType,
+      );
       const continuation: DucklangExpression = remaining.length === 0
         ? { kind: "unit", span: lowered.span }
         : {
@@ -121,6 +167,7 @@ function lowerStatements(
           visibleBindingNames(result),
           remaining.length === 0 &&
             hasValuedBreakTargetingLoop(lowered.expression.body),
+          expectedResultType,
         ),
       );
       return result;
@@ -137,69 +184,126 @@ function lowerStatements(
       result.push(lowered);
       continue;
     }
+    if (lowered.expression.stateThreaded === true) {
+      result.push(lowered);
+      continue;
+    }
     const assignments = collectBranchAssignments(lowered.expression);
-    const [name] = assignments.values();
-    const value = name === undefined
-      ? undefined
-      : lowerAssignmentCondition(lowered.expression, name);
     if (
       assignments.size > 0 && index + 1 < statements.length
     ) {
       const remaining = statements.slice(index + 1);
-      result.push({
-        kind: "expression",
-        expression: lowerExpression({
-          ...lowered.expression,
-          consequence: appendBranchContinuation(
-            lowered.expression.consequence,
-            remaining,
-            lowered.expression.span,
-          ),
-          alternative: appendBranchContinuation(
-            lowered.expression.alternative,
-            remaining,
-            lowered.expression.span,
-          ),
-        }),
-        span: lowered.span,
-      });
+      result.push(
+        ...lowerBranchContinuation(
+          lowered.expression,
+          remaining,
+          visibleBindingNames(result),
+          expectedResultType,
+        ),
+      );
       return result;
     }
-    if (name === undefined || value === undefined) {
-      result.push(lowered);
-      continue;
-    }
-    result.push({
-      kind: "assignment",
-      operator: "=",
-      name,
-      value,
-      span: lowered.span,
-    });
+    result.push(lowered);
   }
   return result;
 }
 
-function appendBranchContinuation(
-  branch: DucklangExpression | undefined,
+function lowerBranchContinuation(
+  branch: BranchExpression,
   remaining: readonly DucklangStatement[],
-  fallbackSpan: DucklangExpression["span"],
-): DucklangExpression {
-  if (branch?.kind === "block") {
-    return { ...branch, statements: [...branch.statements, ...remaining] };
-  }
-  return {
-    kind: "block",
-    statements: [
-      ...(branch === undefined ? [] : [{
-        kind: "expression" as const,
-        expression: branch,
-        span: branch.span,
-      }]),
-      ...remaining,
-    ],
-    span: branch?.span ?? fallbackSpan,
+  visibleBindings: ReadonlyMap<string, DucklangName>,
+  expectedResultType?: DucklangTypeReference,
+): readonly DucklangStatement[] {
+  const parameters = [...collectBranchAssignments(branch).values()].map(
+    (assignment) =>
+      preserveBindingType(
+        assignment,
+        visibleBindings.get(assignment.text),
+      ),
+  );
+  const continuationName: DucklangName = {
+    text: `$branch_${branch.span.start}`,
+    span: branch.span,
   };
+  const continuationCall = (): DucklangExpression => ({
+    kind: "call",
+    callee: {
+      kind: "reference",
+      name: continuationName,
+      span: continuationName.span,
+    },
+    arguments: parameters.map(bindingReference),
+    span: branch.span,
+  });
+  const appendCall = (
+    expression: DucklangExpression | undefined,
+  ): DucklangExpression => {
+    const call = continuationCall();
+    if (expression?.kind === "block") {
+      return {
+        ...expression,
+        statements: [
+          ...expression.statements,
+          { kind: "expression", expression: call, span: call.span },
+        ],
+      };
+    }
+    return {
+      kind: "block",
+      statements: [
+        ...(expression === undefined ? [] : [{
+          kind: "expression" as const,
+          expression,
+          span: expression.span,
+        }]),
+        { kind: "expression", expression: call, span: call.span },
+      ],
+      span: expression?.span ?? branch.span,
+    };
+  };
+  const continuationBody: DucklangExpression = {
+    kind: "block",
+    statements: remaining,
+    span: {
+      file: remaining[0].span.file,
+      start: Math.min(...remaining.map((statement) => statement.span.start)),
+      end: Math.max(...remaining.map((statement) => statement.span.end)),
+    },
+  };
+  const continuationBinding: DucklangStatement = {
+    kind: "binding",
+    declarationKind: "let",
+    recursive: false,
+    name: continuationName,
+    value: {
+      kind: "function",
+      recursive: false,
+      parameters,
+      parameterTypeSources: parameters.map(bindingReference),
+      ...(expectedResultType === undefined
+        ? {}
+        : { declaredResultType: expectedResultType }),
+      body: lowerExpression(continuationBody, expectedResultType),
+      span: branch.span,
+    },
+    span: branch.span,
+  };
+  return [
+    continuationBinding,
+    {
+      kind: "expression",
+      expression: lowerExpression(
+        {
+          ...branch,
+          stateThreaded: true,
+          consequence: appendCall(branch.consequence),
+          alternative: appendCall(branch.alternative),
+        },
+        expectedResultType,
+      ),
+      span: branch.span,
+    },
+  ];
 }
 
 function containsLoopControl(value: unknown): boolean {
@@ -274,6 +378,7 @@ type LoopLoweringContext = {
   readonly breakContinuation: DucklangExpression;
   readonly breakValueIsResult: boolean;
   readonly recursiveArguments: readonly DucklangExpression[];
+  readonly resultType?: DucklangTypeReference;
   readonly span: DucklangExpression["span"];
 };
 
@@ -282,6 +387,7 @@ function lowerDynamicLoop(
   breakContinuation: DucklangExpression,
   visibleBindings: ReadonlyMap<string, DucklangName>,
   breakValueIsResult = false,
+  resultType?: DucklangTypeReference,
 ): readonly DucklangStatement[] {
   if (loop.body.kind !== "block") {
     throw new TypeError(
@@ -295,12 +401,27 @@ function lowerDynamicLoop(
     text: `$loop_${loop.span.start}`,
     span: loop.span,
   };
+  const exitName: DucklangName = {
+    text: `$loop_exit_${loop.span.start}`,
+    span: loop.span,
+  };
+  const exitCall: DucklangExpression = {
+    kind: "call",
+    callee: {
+      kind: "reference",
+      name: exitName,
+      span: exitName.span,
+    },
+    arguments: carriedBindings.map(bindingReference),
+    span: loop.span,
+  };
   const context = {
     functionName,
     carriedBindings,
-    breakContinuation,
+    breakContinuation: breakValueIsResult ? breakContinuation : exitCall,
     breakValueIsResult,
     recursiveArguments: carriedBindings.map(bindingReference),
+    resultType,
     span: loop.span,
   } satisfies LoopLoweringContext;
   const recursiveCall = loopRecursiveCall(context);
@@ -315,6 +436,7 @@ function lowerDynamicLoop(
       loweringRole: "loop",
       parameters: carriedBindings,
       parameterTypeSources: carriedBindings.map(bindingReference),
+      ...(resultType === undefined ? {} : { declaredResultType: resultType }),
       body: lowerLoopStatementSequence(
         loop.body.statements,
         recursiveCall,
@@ -334,7 +456,24 @@ function lowerDynamicLoop(
     arguments: carriedBindings.map(bindingReference),
     span: loop.span,
   };
+  const exitBinding: DucklangStatement = {
+    kind: "binding",
+    declarationKind: "let",
+    recursive: false,
+    name: exitName,
+    value: {
+      kind: "function",
+      recursive: false,
+      parameters: carriedBindings,
+      parameterTypeSources: carriedBindings.map(bindingReference),
+      ...(resultType === undefined ? {} : { declaredResultType: resultType }),
+      body: breakContinuation,
+      span: loop.span,
+    },
+    span: loop.span,
+  };
   return [
+    ...(breakValueIsResult ? [] : [exitBinding]),
     functionBinding,
     {
       kind: "expression",
@@ -415,6 +554,7 @@ function lowerLoopStatementSequence(
       remainingExpression,
       new Map(),
       false,
+      context.resultType,
     );
     return {
       kind: "block",
@@ -428,6 +568,7 @@ function lowerLoopStatementSequence(
   ) {
     return {
       kind: "ifUnion",
+      stateThreaded: true,
       caseName: statement.caseName,
       payloadName: statement.name,
       value: statement.value,
@@ -512,6 +653,7 @@ function appendLoopContinuation(
   if (expression.kind === "if") {
     return {
       ...expression,
+      stateThreaded: true,
       consequence: appendLoopContinuation(
         expression.consequence,
         continuation,
@@ -529,6 +671,7 @@ function appendLoopContinuation(
   if (expression.kind === "ifUnion") {
     return {
       ...expression,
+      stateThreaded: true,
       consequence: appendLoopContinuation(
         expression.consequence,
         continuation,
@@ -1126,14 +1269,12 @@ function lowerIndexedCollectionLoop(
         kind: "binding",
         declarationKind: "let",
         recursive: false,
-        name: {
-          ...statement.value,
-          declaredType: ducklangNamedType("I32", statement.value.span),
-        },
+        name: statement.value,
         value: {
           kind: "index",
           collection: collectionReference,
           index: indexReference,
+          entryProjection: true,
           span: statement.span,
         },
         span: statement.span,
@@ -1179,6 +1320,7 @@ function lowerIndexedCollectionLoop(
 
 function lowerStatementExpressions(
   statement: DucklangStatement,
+  expectedResultType?: DucklangTypeReference,
 ): DucklangStatement {
   switch (statement.kind) {
     case "binding":
@@ -1230,7 +1372,7 @@ function lowerStatementExpressions(
     case "expression":
       return {
         ...statement,
-        expression: lowerExpression(statement.expression),
+        expression: lowerExpression(statement.expression, expectedResultType),
       };
     case "effectDeclaration":
     case "initDeclaration":
@@ -1243,7 +1385,10 @@ function lowerStatementExpressions(
   }
 }
 
-function lowerExpression(expression: DucklangExpression): DucklangExpression {
+function lowerExpression(
+  expression: DucklangExpression,
+  expectedResultType?: DucklangTypeReference,
+): DucklangExpression {
   switch (expression.kind) {
     case "integer":
     case "integer64":
@@ -1258,14 +1403,19 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
     case "hostCall":
       return {
         ...expression,
-        arguments: expression.arguments.map(lowerExpression),
+        arguments: expression.arguments.map((argument) =>
+          lowerExpression(argument)
+        ),
       };
     case "optionDo":
       return { ...expression, option: lowerExpression(expression.option) };
     case "unionCase":
       return { ...expression, value: lowerExpression(expression.value) };
     case "product":
-      return { ...expression, values: expression.values.map(lowerExpression) };
+      return {
+        ...expression,
+        values: expression.values.map((value) => lowerExpression(value)),
+      };
     case "field":
       return { ...expression, product: lowerExpression(expression.product) };
     case "recordUpdate":
@@ -1286,17 +1436,27 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
         })),
       };
     case "function":
-      return { ...expression, body: lowerExpression(expression.body) };
+      return {
+        ...expression,
+        body: lowerExpression(
+          expression.body,
+          expression.declaredResultType,
+        ),
+      };
     case "recursiveCall":
       return {
         ...expression,
-        arguments: expression.arguments.map(lowerExpression),
+        arguments: expression.arguments.map((argument) =>
+          lowerExpression(argument)
+        ),
       };
     case "call":
       return {
         ...expression,
         callee: lowerExpression(expression.callee),
-        arguments: expression.arguments.map(lowerExpression),
+        arguments: expression.arguments.map((argument) =>
+          lowerExpression(argument)
+        ),
       };
     case "index":
       return {
@@ -1323,32 +1483,47 @@ function lowerExpression(expression: DucklangExpression): DucklangExpression {
       return {
         ...expression,
         condition: lowerExpression(expression.condition),
-        consequence: lowerExpression(expression.consequence),
+        consequence: lowerExpression(
+          expression.consequence,
+          expectedResultType,
+        ),
         alternative: expression.alternative === undefined
           ? undefined
-          : lowerExpression(expression.alternative),
+          : lowerExpression(expression.alternative, expectedResultType),
       };
     case "ifUnion":
       return {
         ...expression,
         value: lowerExpression(expression.value),
-        consequence: lowerExpression(expression.consequence),
+        consequence: lowerExpression(
+          expression.consequence,
+          expectedResultType,
+        ),
         alternative: expression.alternative === undefined
           ? undefined
-          : lowerExpression(expression.alternative),
+          : lowerExpression(expression.alternative, expectedResultType),
       };
     case "block":
       return {
         ...expression,
-        statements: lowerStatements(expression.statements),
+        statements: lowerStatements(
+          expression.statements,
+          expectedResultType,
+        ),
       };
     case "comptime":
       return {
         ...expression,
-        expression: lowerExpression(expression.expression),
+        expression: lowerExpression(
+          expression.expression,
+          expectedResultType,
+        ),
       };
     case "scratch":
-      return { ...expression, body: lowerExpression(expression.body) };
+      return {
+        ...expression,
+        body: lowerExpression(expression.body, expectedResultType),
+      };
     case "loop":
       return expression;
   }
@@ -1368,93 +1543,74 @@ function collectBranchAssignments(
 function collectAssignments(
   expression: DucklangExpression,
   assignments: Map<string, DucklangName>,
+  localBindings: ReadonlySet<string> = new Set(),
 ): void {
-  if (expression.kind !== "block") return;
-  for (const statement of expression.statements) {
-    if (statement.kind === "assignment") {
-      assignments.set(statement.name.text, statement.name);
-      continue;
+  if (expression.kind === "if" || expression.kind === "ifUnion") {
+    if (expression.stateThreaded === true) return;
+    collectAssignments(expression.consequence, assignments, localBindings);
+    if (expression.alternative !== undefined) {
+      collectAssignments(expression.alternative, assignments, localBindings);
     }
-    if (
-      statement.kind === "expression" &&
-      (statement.expression.kind === "if" ||
-        statement.expression.kind === "ifUnion")
-    ) {
-      collectAssignments(statement.expression.consequence, assignments);
-      if (statement.expression.alternative !== undefined) {
-        collectAssignments(statement.expression.alternative, assignments);
-      }
+    return;
+  }
+  if (expression.kind === "scratch") {
+    collectAssignments(expression.body, assignments, localBindings);
+    return;
+  }
+  if (expression.kind !== "block") return;
+  const blockBindings = new Set(localBindings);
+  for (const statement of expression.statements) {
+    switch (statement.kind) {
+      case "assignment":
+        if (!blockBindings.has(statement.name.text)) {
+          assignments.set(statement.name.text, statement.name);
+        }
+        collectAssignments(statement.value, assignments, blockBindings);
+        break;
+      case "expression":
+        collectAssignments(statement.expression, assignments, blockBindings);
+        break;
+      case "return":
+        collectAssignments(statement.expression, assignments, blockBindings);
+        break;
+      case "binding":
+        blockBindings.add(statement.name.text);
+        break;
+      case "unionBinding":
+        blockBindings.add(statement.name.text);
+        break;
+      case "productBinding":
+        for (const name of statement.names) {
+          if (name !== undefined) blockBindings.add(name.text);
+        }
+        break;
+      case "recordBinding":
+        for (const field of statement.fields) {
+          blockBindings.add(field.localName.text);
+        }
+        break;
+      case "recursiveGroup":
+        for (const binding of statement.bindings) {
+          blockBindings.add(binding.name.text);
+        }
+        break;
+      case "forRange":
+      case "forCollection":
+      case "break":
+      case "continue":
+      case "effectDeclaration":
+      case "initDeclaration":
+      case "unionType":
+      case "structType":
+      case "typeAlias":
+      case "typePattern":
+      case "import":
+        break;
     }
   }
-}
-
-function lowerAssignmentCondition(
-  expression: BranchExpression,
-  name: DucklangName,
-): DucklangExpression | undefined {
-  const fallback: DucklangExpression = {
-    kind: "reference",
-    name,
-    span: name.span,
-  };
-  const consequence = lowerAssignmentBranch(
-    expression.consequence,
-    name.text,
-    fallback,
-  );
-  if (consequence === undefined) return undefined;
-  const alternative = expression.alternative === undefined
-    ? fallback
-    : lowerAssignmentBranch(expression.alternative, name.text, fallback);
-  if (alternative === undefined) return undefined;
-  return {
-    ...expression,
-    consequence,
-    alternative,
-  };
 }
 
 type BranchExpression = Extract<
   DucklangExpression,
   { readonly kind: "if" | "ifUnion" }
 >;
-
-function lowerAssignmentBranch(
-  expression: DucklangExpression,
-  target: string,
-  fallback: DucklangExpression,
-): DucklangExpression | undefined {
-  if (expression.kind !== "block") return undefined;
-  const matching = expression.statements.flatMap((statement, index) =>
-    statement.kind === "assignment" && statement.name.text === target
-      ? [{ statement, index }]
-      : []
-  );
-  if (matching.length === 0) {
-    return {
-      ...expression,
-      statements: [
-        ...expression.statements,
-        { kind: "expression", expression: fallback, span: fallback.span },
-      ],
-    };
-  }
-  const assignment = matching[0];
-  if (
-    matching.length !== 1 ||
-    assignment.index !== expression.statements.length - 1
-  ) {
-    return undefined;
-  }
-  return {
-    ...expression,
-    statements: [
-      ...expression.statements.slice(0, -1),
-      {
-        kind: "expression",
-        expression: assignment.statement.value,
-        span: assignment.statement.span,
-      },
-    ],
-  };
-}

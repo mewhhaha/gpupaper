@@ -358,6 +358,22 @@ export function createDucklangRuntimeImports(
       }
       return resultHandle;
     },
+    [primitiveRuntimeImportName(PrimitiveId.f32Format)]: (
+      value: number,
+      fractionalDigits: number,
+    ) => {
+      if (
+        !Number.isInteger(fractionalDigits) ||
+        fractionalDigits < 0 || fractionalDigits > 100
+      ) {
+        throw new RangeError(
+          `Ducklang F32 fractional digit count ${fractionalDigits} is outside 0..100`,
+        );
+      }
+      const resultHandle = allocateHandle();
+      texts.set(resultHandle, Math.fround(value).toFixed(fractionalDigits));
+      return resultHandle;
+    },
   };
   const requireProduct = (handle: number): readonly (number | bigint)[] => {
     const product = products.get(handle);

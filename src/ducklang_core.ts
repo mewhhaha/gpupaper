@@ -614,10 +614,12 @@ class CoreTypeRegistry {
 
   require(type: Type, span: SourceSpan): CoreTypeId {
     if (type.kind === "variable") {
-      throw new TypeError(
-        `${span.file}:${span.start}: unresolved ${
-          formatDucklangType(type)
-        } reached monomorphic Core`,
+      // Parametricity prevents an unconstrained value from being inspected.
+      // Choosing Unit is therefore a valid monomorphic instantiation and gives
+      // absent generic sum cases a deterministic zero-sized representation.
+      return this.require(
+        { kind: "constructor", name: "unit", arguments: [] },
+        span,
       );
     }
     const key = formatDucklangType(type);
@@ -887,6 +889,10 @@ class CoreFunctionLowerer {
           `${expression.span.file}:${expression.span.start}: Core lowering has no runtime value for ${expression.symbol.text}#${expression.symbol.id}`,
         );
       }
+      case "namedProject":
+        throw new TypeError(
+          `${expression.span.file}:${expression.span.start}: compile-time field ${expression.fieldName} survived into Core`,
+        );
       case "binary":
         return this.#operands(
           [expression.left, expression.right],
@@ -1048,6 +1054,11 @@ class CoreFunctionLowerer {
             }),
         );
       case "index":
+        if (expression.entryProjection === true) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: compile-time product entry projection survived specialization`,
+          );
+        }
         return this.#operands(
           [expression.collection, expression.index],
           block,

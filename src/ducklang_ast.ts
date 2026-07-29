@@ -191,6 +191,7 @@ export type DucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly DucklangExpression[];
+    readonly spreadValues?: readonly boolean[];
     readonly nominalType?: string;
     readonly span: SourceSpan;
   }
@@ -243,6 +244,7 @@ export type DucklangExpression =
     readonly kind: "index";
     readonly collection: DucklangExpression;
     readonly index: DucklangExpression;
+    readonly entryProjection?: boolean;
     readonly span: SourceSpan;
   }
   | {
@@ -267,6 +269,7 @@ export type DucklangExpression =
   }
   | {
     readonly kind: "if";
+    readonly stateThreaded?: true;
     readonly condition: DucklangExpression;
     readonly consequence: DucklangExpression;
     readonly alternative: DucklangExpression | undefined;
@@ -274,6 +277,7 @@ export type DucklangExpression =
   }
   | {
     readonly kind: "ifUnion";
+    readonly stateThreaded?: true;
     readonly caseName: string;
     readonly payloadName: DucklangName | undefined;
     readonly value: DucklangExpression;

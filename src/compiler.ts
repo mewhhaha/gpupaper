@@ -5,6 +5,10 @@ import {
 } from "./comptime.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
 import {
+  type DucklangConstValue,
+  evaluateDucklangConstModule,
+} from "./ducklang_const.ts";
+import {
   createDucklangManagedAbi,
   type DucklangManagedAbi,
 } from "./ducklang_abi.ts";
@@ -133,6 +137,13 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
 export type CompilationArtifact =
   | HaskellCompilationArtifact
   | DucklangCompilationArtifact;
+
+export type DucklangModuleNormalizationArtifact = {
+  readonly language: "ducklang";
+  readonly stage: "compileTimeModule";
+  readonly module: TypedDucklangModule;
+  readonly value: Extract<DucklangConstValue, { readonly kind: "module" }>;
+};
 
 export function compileModuleSource(
   file: `${string}.hs`,
@@ -275,11 +286,49 @@ async function compileHaskellModuleSource(
   };
 }
 
-async function compileDucklangModuleSource(
+export async function normalizeDucklangModuleSource(
+  file: string,
+  source: string,
+  options: CompilationOptions = {},
+): Promise<DucklangModuleNormalizationArtifact> {
+  const frontend = await elaborateDucklangModuleSource(file, source, options);
+  return {
+    language: "ducklang",
+    stage: "compileTimeModule",
+    module: frontend.module,
+    value: evaluateDucklangConstModule(frontend.module, {
+      fuel: 1_000_000,
+    }),
+  };
+}
+
+type DucklangFrontendResult = {
+  readonly module: TypedDucklangModule;
+  readonly initialTypes: readonly string[];
+  readonly gpuTypeResult: GpuSolveResult | undefined;
+  readonly comptime: {
+    readonly cpuValues: readonly ComptimeValue[];
+    readonly gpu: ComptimeBatchResult | undefined;
+  };
+  readonly timings: {
+    readonly parseMilliseconds: number;
+    readonly includeMilliseconds: number;
+    readonly parserInitializationMilliseconds: number;
+    readonly syntaxMilliseconds: number;
+    readonly astLoweringMilliseconds: number;
+    readonly elaborationMilliseconds: number;
+    readonly resolutionMilliseconds: number;
+    readonly initialTypeMilliseconds: number;
+    readonly gpuTypeMilliseconds: number;
+    readonly comptimeMilliseconds: number;
+  };
+};
+
+async function elaborateDucklangModuleSource(
   file: string,
   source: string,
   options: CompilationOptions,
-): Promise<DucklangCompilationArtifact> {
+): Promise<DucklangFrontendResult> {
   const gpuMode = options.gpuMode ?? "auto";
   const parseStart = performance.now();
   const includeStart = performance.now();
@@ -366,7 +415,35 @@ async function compileDucklangModuleSource(
   }
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
-  const specialized = specializeStaticDucklangClosures(comptime.module);
+  return {
+    module: specializeStaticDucklangClosures(comptime.module),
+    initialTypes,
+    gpuTypeResult,
+    comptime,
+    timings: {
+      parseMilliseconds,
+      includeMilliseconds,
+      parserInitializationMilliseconds:
+        parsedResult.timings.parserInitializationMilliseconds,
+      syntaxMilliseconds: parsedResult.timings.syntaxMilliseconds,
+      astLoweringMilliseconds: parsedResult.timings.astLoweringMilliseconds,
+      elaborationMilliseconds,
+      resolutionMilliseconds,
+      initialTypeMilliseconds,
+      gpuTypeMilliseconds,
+      comptimeMilliseconds,
+    },
+  };
+}
+
+async function compileDucklangModuleSource(
+  file: string,
+  source: string,
+  options: CompilationOptions,
+): Promise<DucklangCompilationArtifact> {
+  const gpuMode = options.gpuMode ?? "auto";
+  const frontend = await elaborateDucklangModuleSource(file, source, options);
+  const specialized = frontend.module;
   const coreStart = performance.now();
   const core = lowerDucklangToCore(specialized);
   const coreMilliseconds = performance.now() - coreStart;
@@ -414,12 +491,12 @@ async function compileDucklangModuleSource(
     optimizedCore,
     gpuCoreResult,
     abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
-    initialTypes,
-    finalTypes: initialTypes,
-    gpuTypeResult,
+    initialTypes: frontend.initialTypes,
+    finalTypes: frontend.initialTypes,
+    gpuTypeResult: frontend.gpuTypeResult,
     gpuWasmResult,
-    comptimeCpuValues: comptime.cpuValues,
-    comptimeGpuResult: comptime.gpu,
+    comptimeCpuValues: frontend.comptime.cpuValues,
+    comptimeGpuResult: frontend.comptime.gpu,
     interactionResults: [],
     macros: {
       invocationCount: 0,
@@ -427,18 +504,8 @@ async function compileDucklangModuleSource(
       wasmByteCount: 0,
     },
     timings: {
-      parseMilliseconds,
-      includeMilliseconds,
-      parserInitializationMilliseconds:
-        parsedResult.timings.parserInitializationMilliseconds,
-      syntaxMilliseconds: parsedResult.timings.syntaxMilliseconds,
-      astLoweringMilliseconds: parsedResult.timings.astLoweringMilliseconds,
-      elaborationMilliseconds,
-      resolutionMilliseconds,
+      ...frontend.timings,
       macroMilliseconds: 0,
-      initialTypeMilliseconds,
-      gpuTypeMilliseconds,
-      comptimeMilliseconds,
       finalTypeMilliseconds: 0,
       coreMilliseconds,
       flatCoreMilliseconds,

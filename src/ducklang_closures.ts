@@ -92,7 +92,10 @@ export function specializeStaticDucklangClosures(
 
   return {
     ...module,
-    bindings: bindings.filter((binding) => reachable.has(binding.symbol.id)),
+    bindings: bindings.filter((binding) =>
+      reachable.has(binding.symbol.id) ||
+      (binding.stage === "runtime" && binding.value.kind !== "function")
+    ),
     result,
   };
 }
@@ -118,9 +121,14 @@ function liftGeneratedFunctions(
     );
   }
   let block = expression;
-  for (const step of expression.steps) {
+  for (const originalStep of expression.steps) {
+    if (originalStep.kind !== "binding") continue;
+    const step = block.steps.find((candidate) =>
+      candidate.kind === "binding" &&
+      candidate.binding.symbol.id === originalStep.binding.symbol.id
+    );
     if (
-      step.kind !== "binding" ||
+      step?.kind !== "binding" ||
       step.binding.value.kind !== "function" ||
       (!isGeneratedControlFunction(step.binding) &&
         !isOnlyDirectlyCalled(expression, step.binding.symbol.id))
@@ -753,12 +761,15 @@ function rewriteExpression(
             referencesSymbol(factoryBody, parameter.id)));
     },
   );
+  const specializesCompileTimeParameter = factory.parameters.some(
+    (parameter) => parameter.compileTimeRecord === true,
+  );
   const inlinesFunctionLiteral = rewritten.callee.kind === "function";
   if (
     !returnsFunction && !returnsAggregate && !inlinesFunctionLiteral &&
     !specializesFunctionParameter && !specializesTextParameter &&
     !specializesUnionParameter && !specializesProductParameter &&
-    !specializesIntrinsicParameter
+    !specializesIntrinsicParameter && !specializesCompileTimeParameter
   ) {
     return collapseEmptyBlock(rewritten);
   }
@@ -835,7 +846,8 @@ function rewriteBlock(
       retained.push(step);
       continue;
     }
-    if (!live.delete(step.binding.symbol.id)) continue;
+    const referenced = live.delete(step.binding.symbol.id);
+    if (!referenced && step.binding.stage === "compileTime") continue;
     collectReferences(step.binding.value, live);
     retained.push(step);
   }
@@ -1599,6 +1611,8 @@ export function rewriteChildren(
     case "product":
       return { ...expression, values: expression.values.map(rewrite) };
     case "project":
+      return { ...expression, product: rewrite(expression.product) };
+    case "namedProject":
       return { ...expression, product: rewrite(expression.product) };
     case "recordUpdate":
       return {

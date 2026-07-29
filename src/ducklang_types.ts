@@ -106,6 +106,8 @@ export type TypedDucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly TypedDucklangExpression[];
+    readonly spreadValues?: readonly boolean[];
+    readonly fieldNames?: readonly string[];
     readonly nominalType?: string;
     readonly type: Type;
     readonly span: SourceSpan;
@@ -115,6 +117,13 @@ export type TypedDucklangExpression =
     readonly product: TypedDucklangExpression;
     readonly index: number;
     readonly arity?: number;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "namedProject";
+    readonly product: TypedDucklangExpression;
+    readonly fieldName: string;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -159,6 +168,7 @@ export type TypedDucklangExpression =
     readonly kind: "index";
     readonly collection: TypedDucklangExpression;
     readonly index: TypedDucklangExpression;
+    readonly entryProjection?: boolean;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -258,7 +268,13 @@ export type DucklangBinaryOperator =
   | ">"
   | ">="
   | "&&"
-  | "||";
+  | "||"
+  | ":>"
+  | ":<"
+  | ":+"
+  | ":|"
+  | ":&"
+  | ":-";
 
 export type TypedDucklangBinding = {
   readonly symbol: DucklangSymbol;
@@ -334,6 +350,20 @@ const binaryOperators = new Set([
   ">=",
   "&&",
   "||",
+  ":>",
+  ":<",
+  ":+",
+  ":|",
+  ":&",
+  ":-",
+]);
+const compileTimeBinaryOperators = new Set([
+  ":>",
+  ":<",
+  ":+",
+  ":|",
+  ":&",
+  ":-",
 ]);
 
 export function inferDucklangModule(
@@ -374,6 +404,8 @@ class DucklangInference {
   readonly #substitutions = new Map<number, Type>();
   readonly #symbolTypes = new Map<number, Type>();
   readonly #productConstraints = new Map<number, Type[]>();
+  readonly #indexedElementTypes = new Map<number, Type>();
+  readonly #namedFieldConstraints = new Map<number, Map<string, Type>>();
   readonly #numericVariables = new Set<number>();
   readonly #bottomVariables = new Set<number>();
   readonly #unionTypes: readonly ResolvedDucklangUnionType[];
@@ -1029,11 +1061,69 @@ class DucklangInference {
         };
       }
       case "product": {
-        const values = expression.values.map((value) =>
-          this.inferExpression(value, environment)
+        const expectedProductType = expectedType === undefined
+          ? undefined
+          : this.#apply(expectedType);
+        const expectedTupleFields =
+          expectedProductType?.kind === "constructor" &&
+            expectedProductType.name === "tuple" &&
+            expectedProductType.arguments.length === expression.values.length
+            ? expectedProductType.arguments
+            : undefined;
+        const expectedArrayElement =
+          expectedProductType?.kind === "constructor" &&
+            expectedProductType.name === "array" &&
+            expectedProductType.arguments.length === 1
+            ? expectedProductType.arguments[0]
+            : undefined;
+        const values = expression.values.map((value, index) =>
+          this.inferExpression(
+            value,
+            environment,
+            expectedTupleFields?.[index] ?? expectedArrayElement,
+          )
         );
         let type: Type;
-        if (expression.nominalType !== undefined) {
+        if (expectedTupleFields !== undefined) {
+          for (const [index, value] of values.entries()) {
+            this.#unify(
+              value.type,
+              expectedTupleFields[index],
+              value.expression.span,
+            );
+          }
+          type = {
+            kind: "constructor",
+            name: "tuple",
+            arguments: values.map((value) => value.type),
+          };
+        } else if (expectedArrayElement !== undefined) {
+          for (const [index, value] of values.entries()) {
+            const expected = expression.spreadValues?.[index] === true
+              ? {
+                kind: "constructor" as const,
+                name: "array",
+                arguments: [expectedArrayElement],
+              }
+              : expectedArrayElement;
+            this.#unify(expected, value.type, value.expression.span);
+          }
+          type = {
+            kind: "constructor",
+            name: "array",
+            arguments: [expectedArrayElement],
+          };
+        } else if (
+          expression.nominalType === undefined &&
+          (expression.values.length === 0 ||
+            expression.spreadValues?.some((spread) => spread))
+        ) {
+          type = {
+            kind: "constructor",
+            name: "compileTimeProduct",
+            arguments: [],
+          };
+        } else if (expression.nominalType !== undefined) {
           const nominalType = this.#declaredType(
             expression.nominalType,
             expression.span,
@@ -1079,29 +1169,26 @@ class DucklangInference {
       }
       case "field": {
         const product = this.inferExpression(expression.product, environment);
-        let productType = this.#apply(product.type);
+        const productType = this.#apply(product.type);
         if (productType.kind === "variable") {
-          const candidates = this.#structTypes.filter((declaration) =>
-            declaration.fields.some((field) =>
-              field.name === expression.fieldName
-            )
-          );
-          if (candidates.length !== 1) {
-            const candidateNames = candidates.map((candidate) => candidate.name)
-              .join(", ");
-            throw new TypeError(
-              `${this.#file}:${expression.span.start}: Ducklang field ${expression.fieldName} does not uniquely identify a struct; candidates: ${
-                candidateNames || "none"
-              }`,
-            );
+          let fields = this.#namedFieldConstraints.get(productType.id);
+          if (fields === undefined) {
+            fields = new Map();
+            this.#namedFieldConstraints.set(productType.id, fields);
           }
-          const declaration = candidates[0];
-          this.#unify(productType, {
-            kind: "constructor",
-            name: declaration.name,
-            arguments: declaration.parameters.map(() => this.#freshVariable()),
-          }, expression.product.span);
-          productType = this.#apply(product.type);
+          const type = fields.get(expression.fieldName) ??
+            this.#freshVariable();
+          fields.set(expression.fieldName, type);
+          return {
+            expression: {
+              kind: "namedProject",
+              product: product.expression,
+              fieldName: expression.fieldName,
+              type,
+              span: expression.span,
+            },
+            type,
+          };
         }
         if (productType.kind !== "constructor") {
           throw new TypeError(
@@ -1109,6 +1196,41 @@ class DucklangInference {
               formatDucklangType(productType)
             }`,
           );
+        }
+        if (productType.name === "compileTimeProduct") {
+          const type = this.#freshVariable();
+          return {
+            expression: {
+              kind: "namedProject",
+              product: product.expression,
+              fieldName: expression.fieldName,
+              type,
+              span: expression.span,
+            },
+            type,
+          };
+        }
+        const structuralFields = structuralRecordFieldNames(productType.name);
+        if (structuralFields !== undefined) {
+          const index = structuralFields.indexOf(expression.fieldName);
+          if (index < 0) {
+            throw new TypeError(
+              `${this.#file}:${expression.span.start}: Ducklang record has no field ${expression.fieldName}; available fields are ${
+                structuralFields.join(", ")
+              }`,
+            );
+          }
+          const type = productType.arguments[index];
+          return {
+            expression: {
+              kind: "project",
+              product: product.expression,
+              index,
+              type,
+              span: expression.span,
+            },
+            type,
+          };
         }
         const declaration = this.#structTypes.find((candidate) =>
           candidate.name === productType.name
@@ -1182,6 +1304,28 @@ class DucklangInference {
               : undefined;
           })();
         if (declaration === undefined) {
+          if (expression.nominalType === undefined) {
+            const values = expression.fields.map((field) =>
+              this.inferExpression(field.value, environment)
+            );
+            const fieldNames = expression.fields.map((field) => field.name);
+            const type: Type = {
+              kind: "constructor",
+              name: structuralRecordTypeName(fieldNames),
+              arguments: values.map((value) => value.type),
+            };
+            return {
+              expression: {
+                kind: "product",
+                productKind: "tuple",
+                values: values.map((value) => value.expression),
+                fieldNames,
+                type,
+                span: expression.span,
+              },
+              type,
+            };
+          }
           const requested = expression.nominalType === undefined
             ? [...fields.keys()].join(", ")
             : expression.nominalType;
@@ -1231,6 +1375,7 @@ class DucklangInference {
             kind: "product",
             productKind: "tuple",
             values,
+            fieldNames: declaration.fields.map((field) => field.name),
             nominalType: declaration.name,
             type,
             span: expression.span,
@@ -1430,6 +1575,35 @@ class DucklangInference {
       }
       case "call": {
         const callee = this.inferExpression(expression.callee, environment);
+        const appliedCalleeType = this.#apply(callee.type);
+        if (
+          appliedCalleeType.kind === "constructor" &&
+          appliedCalleeType.name === "typeDescriptor" &&
+          appliedCalleeType.arguments.length === 0
+        ) {
+          const arguments_ = expression.arguments.map((argumentExpression) => {
+            const argument = this.inferExpression(
+              argumentExpression,
+              environment,
+              typeDescriptorType,
+            );
+            this.#unify(
+              argument.type,
+              typeDescriptorType,
+              argumentExpression.span,
+            );
+            return argument;
+          });
+          return {
+            expression: {
+              ...expression,
+              callee: callee.expression,
+              arguments: arguments_.map((argument) => argument.expression),
+              type: typeDescriptorType,
+            },
+            type: typeDescriptorType,
+          };
+        }
         const arguments_: InferredExpression[] = [];
         let result = callee.type;
         let calleeResult = callee.type;
@@ -1485,6 +1659,21 @@ class DucklangInference {
         const collectionType = this.#apply(collection.type);
         let type: Type;
         if (
+          expression.entryProjection === true &&
+          collectionType.kind === "constructor" &&
+          (collectionType.name === "compileTimeProduct" ||
+            structuralRecordFieldNames(collectionType.name) !== undefined)
+        ) {
+          type = {
+            kind: "constructor",
+            name: structuralRecordTypeName(["name", "value"]),
+            arguments: [textType, this.#freshVariable()],
+          };
+        } else if (collectionType.kind === "variable") {
+          type = this.#indexedElementTypes.get(collectionType.id) ??
+            this.#freshVariable();
+          this.#indexedElementTypes.set(collectionType.id, type);
+        } else if (
           collectionType.kind === "constructor" &&
           (collectionType.name === "text" ||
             collectionType.name === "bytes")
@@ -1656,9 +1845,71 @@ class DucklangInference {
         const operator = expression.operator as DucklangBinaryOperator;
         const left = this.inferExpression(expression.left, environment);
         const right = this.inferExpression(expression.right, environment);
+        if (compileTimeBinaryOperators.has(operator)) {
+          let type = left.type;
+          if (operator === ":|" || operator === ":&" || operator === ":-") {
+            type = typeDescriptorType;
+          } else if (operator === ":+") {
+            const appliedLeft = this.#apply(left.type);
+            const appliedRight = this.#apply(right.type);
+            const leftFields = appliedLeft.kind === "constructor"
+              ? structuralRecordFieldNames(appliedLeft.name)
+              : undefined;
+            const rightFields = appliedRight.kind === "constructor"
+              ? structuralRecordFieldNames(appliedRight.name)
+              : undefined;
+            if (
+              appliedLeft.kind === "constructor" &&
+              appliedLeft.name === "compileTimeProduct"
+            ) {
+              type = appliedLeft;
+            } else if (
+              rightFields !== undefined && leftFields === undefined
+            ) {
+              type = appliedRight;
+            } else if (
+              appliedLeft.kind === "constructor" &&
+              appliedRight.kind === "constructor" &&
+              leftFields !== undefined && rightFields !== undefined
+            ) {
+              type = {
+                kind: "constructor",
+                name: structuralRecordTypeName([
+                  ...leftFields,
+                  ...rightFields,
+                ]),
+                arguments: [
+                  ...appliedLeft.arguments,
+                  ...appliedRight.arguments,
+                ],
+              };
+            }
+          }
+          return {
+            expression: {
+              ...expression,
+              operator,
+              left: left.expression,
+              right: right.expression,
+              type,
+            },
+            type,
+          };
+        }
         if (operator === "&&" || operator === "||") {
-          this.#unify(left.type, booleanType, expression.left.span);
-          this.#unify(right.type, booleanType, expression.right.span);
+          try {
+            this.#unify(left.type, booleanType, expression.left.span);
+            this.#unify(right.type, booleanType, expression.right.span);
+          } catch (cause) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: Ducklang operator ${operator} requires Bool operands; received ${
+                formatDucklangType(this.#apply(left.type))
+              } at ${expression.left.span.start} and ${
+                formatDucklangType(this.#apply(right.type))
+              } at ${expression.right.span.start}`,
+              { cause },
+            );
+          }
         } else {
           const leftType = this.#apply(left.type);
           const rightType = this.#apply(right.type);
@@ -2588,6 +2839,20 @@ class DucklangInference {
           product: this.#normalizeExpression(expression.product),
           type,
         };
+      case "namedProject": {
+        const product = this.#normalizeExpression(expression.product);
+        const index = this.#namedFieldIndex(
+          this.#apply(product.type),
+          expression.fieldName,
+        );
+        return index === undefined ? { ...expression, product, type } : {
+          kind: "project",
+          product,
+          index,
+          type,
+          span: expression.span,
+        };
+      }
       case "recordUpdate":
         return {
           ...expression,
@@ -2613,13 +2878,27 @@ class DucklangInference {
           ),
           type,
         };
-      case "index":
+      case "index": {
+        const collection = this.#normalizeExpression(expression.collection);
+        const namedFields = type.kind === "variable"
+          ? this.#namedFieldConstraints.get(type.id)
+          : undefined;
+        const structuralFields = type.kind === "constructor"
+          ? structuralRecordFieldNames(type.name)
+          : undefined;
+        const entryProjection = expression.entryProjection === true &&
+          (namedFields?.has("name") === true &&
+              namedFields.has("value") ||
+            structuralFields?.includes("name") === true &&
+              structuralFields.includes("value"));
         return {
           ...expression,
-          collection: this.#normalizeExpression(expression.collection),
+          collection,
           index: this.#normalizeExpression(expression.index),
+          entryProjection,
           type,
         };
+      }
       case "selectProductElement":
         return {
           ...expression,
@@ -2820,6 +3099,61 @@ class DucklangInference {
           }
         }
       }
+      const indexedElement = this.#indexedElementTypes.get(left.id);
+      if (indexedElement !== undefined) {
+        if (right.kind === "variable") {
+          const rightElement = this.#indexedElementTypes.get(right.id);
+          if (rightElement === undefined) {
+            this.#indexedElementTypes.set(right.id, indexedElement);
+          } else {
+            this.#unify(indexedElement, rightElement, span);
+          }
+        } else {
+          const rightElement = this.#indexElementType(
+            right,
+            span,
+            indexedElement,
+          );
+          if (rightElement === undefined) {
+            throw new TypeError(
+              `${span.file}:${span.start}: Ducklang indexing requires a buffer or homogeneous product; received ${
+                formatDucklangType(right)
+              }`,
+            );
+          }
+          this.#unify(indexedElement, rightElement, span);
+        }
+      }
+      const namedFields = this.#namedFieldConstraints.get(left.id);
+      if (namedFields !== undefined) {
+        if (right.kind === "variable") {
+          let rightFields = this.#namedFieldConstraints.get(right.id);
+          if (rightFields === undefined) {
+            rightFields = new Map();
+            this.#namedFieldConstraints.set(right.id, rightFields);
+          }
+          for (const [name, fieldType] of namedFields) {
+            const rightFieldType = rightFields.get(name);
+            if (rightFieldType === undefined) {
+              rightFields.set(name, fieldType);
+            } else {
+              this.#unify(fieldType, rightFieldType, span);
+            }
+          }
+        } else {
+          for (const [name, fieldType] of namedFields) {
+            const concreteFieldType = this.#namedFieldType(right, name);
+            if (concreteFieldType === undefined) {
+              throw new TypeError(
+                `${span.file}:${span.start}: Ducklang value of type ${
+                  formatDucklangType(right)
+                } has no field ${name}`,
+              );
+            }
+            this.#unify(fieldType, concreteFieldType, span);
+          }
+        }
+      }
       this.#substitutions.set(left.id, right);
       return;
     }
@@ -2872,6 +3206,98 @@ class DucklangInference {
     );
   }
 
+  #indexElementType(
+    type: Type,
+    span: SourceSpan,
+    expectedElement?: Type,
+  ): Type | undefined {
+    const applied = this.#apply(type);
+    const appliedExpected = expectedElement === undefined
+      ? undefined
+      : this.#apply(expectedElement);
+    const expectedFields = appliedExpected?.kind === "variable"
+      ? this.#namedFieldConstraints.get(appliedExpected.id)
+      : undefined;
+    const expectedFieldNames = appliedExpected?.kind === "constructor"
+      ? structuralRecordFieldNames(appliedExpected.name)
+      : undefined;
+    if (
+      applied.kind === "constructor" &&
+      (applied.name === "compileTimeProduct" ||
+        structuralRecordFieldNames(applied.name) !== undefined ||
+        (expectedFields?.has("name") === true &&
+          expectedFields.has("value")) ||
+        (expectedFieldNames?.includes("name") === true &&
+          expectedFieldNames.includes("value")))
+    ) {
+      return {
+        kind: "constructor",
+        name: structuralRecordTypeName(["name", "value"]),
+        arguments: [textType, this.#freshVariable()],
+      };
+    }
+    if (
+      applied.kind === "constructor" &&
+      (applied.name === "text" || applied.name === "bytes")
+    ) {
+      return i32Type;
+    }
+    if (
+      applied.kind === "constructor" && applied.name === "array" &&
+      applied.arguments.length === 1
+    ) {
+      return applied.arguments[0];
+    }
+    const fields = this.#productFieldTypes(
+      applied,
+      applied.kind === "constructor" && applied.name === "tuple"
+        ? applied.arguments.length
+        : this.#structTypes.find((candidate) =>
+          applied.kind === "constructor" && candidate.name === applied.name
+        )?.fields.length ?? 0,
+    );
+    if (fields === undefined || fields.length === 0) return undefined;
+    const first = fields[0];
+    for (const field of fields.slice(1)) this.#unify(first, field, span);
+    return first;
+  }
+
+  #namedFieldType(type: Type, fieldName: string): Type | undefined {
+    const applied = this.#apply(type);
+    if (applied.kind !== "constructor") return undefined;
+    const structuralNames = structuralRecordFieldNames(applied.name);
+    if (structuralNames !== undefined) {
+      const index = structuralNames.indexOf(fieldName);
+      return index < 0 ? undefined : applied.arguments[index];
+    }
+    const declaration = this.#structTypes.find((candidate) =>
+      candidate.name === applied.name
+    );
+    const field = declaration?.fields.find((candidate) =>
+      candidate.name === fieldName
+    );
+    return declaration === undefined || field === undefined
+      ? undefined
+      : this.#structFieldType(declaration, applied, field.type);
+  }
+
+  #namedFieldIndex(type: Type, fieldName: string): number | undefined {
+    const applied = this.#apply(type);
+    if (applied.kind !== "constructor") return undefined;
+    const structuralNames = structuralRecordFieldNames(applied.name);
+    if (structuralNames !== undefined) {
+      const index = structuralNames.indexOf(fieldName);
+      return index < 0 ? undefined : index;
+    }
+    const declaration = this.#structTypes.find((candidate) =>
+      candidate.name === applied.name
+    );
+    const index = declaration?.fields.findIndex((candidate) =>
+      candidate.name === fieldName
+    );
+    return index === undefined || index < 0 ? undefined : index;
+  }
+
   #apply(type: Type): Type {
     if (type.kind === "variable") {
       const substitution = this.#substitutions.get(type.id);
@@ -2915,6 +3341,28 @@ function functionType(parameters: readonly Type[], result: Type): Type {
     }),
     result,
   );
+}
+
+const structuralRecordPrefix = "$record:";
+
+function structuralRecordTypeName(fieldNames: readonly string[]): string {
+  return structuralRecordPrefix + JSON.stringify(fieldNames);
+}
+
+function structuralRecordFieldNames(
+  typeName: string,
+): readonly string[] | undefined {
+  if (!typeName.startsWith(structuralRecordPrefix)) return undefined;
+  const parsed: unknown = JSON.parse(
+    typeName.slice(structuralRecordPrefix.length),
+  );
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((fieldName) => typeof fieldName === "string")
+  ) {
+    throw new TypeError(`invalid structural record type ${typeName}`);
+  }
+  return parsed;
 }
 
 function sourceTypeName(type: Type): string {

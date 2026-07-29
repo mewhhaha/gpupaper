@@ -85,7 +85,9 @@ Deno.test("Ducklang generated names are stable across runs", async () => {
   // Guard against a vacuous pass: each program must actually carry a generated
   // name, one hygienic binding and one file-qualified type.
   assertEquals(
-    firstCollision.some((entry) => /^helper\$[0-9a-f]{8}#/.test(entry)),
+    firstCollision.some((entry) =>
+      /helper(?:\$[0-9a-f]{8})+#/.test(entry)
+    ),
     true,
   );
   assertEquals(
@@ -116,22 +118,22 @@ const recordedWasmBytes:
     [
       "examples/binned/live/case-studies/editor/editor.duck",
       "examples/binned/live/case-studies/editor/host.duck",
-      21966,
+      22242,
     ],
     [
       "examples/binned/live/case-studies/codex/codex.duck",
       "examples/binned/live/case-studies/codex/host.duck",
-      97172,
+      278489,
     ],
     [
       "examples/binned/live/case-studies/grep/grep.duck",
       "examples/binned/live/case-studies/grep/host.duck",
-      3677,
+      3887,
     ],
     [
       "examples/binned/live/case-studies/tar/tar.duck",
       "examples/binned/live/case-studies/tar/host.duck",
-      23855,
+      26106,
     ],
   ];
 

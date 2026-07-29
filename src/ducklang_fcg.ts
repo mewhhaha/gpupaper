@@ -602,7 +602,8 @@ function isManagedRuntimePrimitive(primitiveId: PrimitiveIdType): boolean {
     primitiveId === PrimitiveId.bytesFill ||
     primitiveId === PrimitiveId.bufferEqual ||
     primitiveId === PrimitiveId.utf8Encode ||
-    primitiveId === PrimitiveId.utf8Decode;
+    primitiveId === PrimitiveId.utf8Decode ||
+    primitiveId === PrimitiveId.f32Format;
 }
 
 function isIntegerConversion(

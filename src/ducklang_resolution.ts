@@ -102,6 +102,7 @@ export type ResolvedDucklangExpression =
     readonly kind: "product";
     readonly productKind: "tuple" | "array";
     readonly values: readonly ResolvedDucklangExpression[];
+    readonly spreadValues?: readonly boolean[];
     readonly nominalType?: string;
     readonly span: SourceSpan;
   }
@@ -164,6 +165,7 @@ export type ResolvedDucklangExpression =
     readonly kind: "index";
     readonly collection: ResolvedDucklangExpression;
     readonly index: ResolvedDucklangExpression;
+    readonly entryProjection?: boolean;
     readonly span: SourceSpan;
   }
   | {
@@ -1254,6 +1256,17 @@ class DucklangResolver {
                   type: field.type.name,
                 })),
               }),
+              span: expression.span,
+            };
+          }
+          const typeAlias = this.#typeAliases.find((alias) =>
+            alias.name === expression.name.text
+          );
+          if (typeAlias !== undefined) {
+            return {
+              kind: "intrinsic",
+              modulePath: "duck:type/alias",
+              exportName: typeAlias.name,
               span: expression.span,
             };
           }

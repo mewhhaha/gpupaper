@@ -105,6 +105,35 @@ export function createDucklangManagedAbi(
       abiEffectReference,
     );
   }
+  const moduleRequirements = new Map(
+    module.requiredEffects.map((effect) => [
+      `${effect.effectName}.${effect.operationName}`,
+      abiEffectReference(effect),
+    ]),
+  );
+  const pending: unknown[] = [
+    module.result,
+    ...module.bindings.map((binding) => binding.value),
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const node = current as Record<string, unknown>;
+    if (
+      node.kind === "hostCall" &&
+      typeof node.effectName === "string" &&
+      typeof node.operationName === "string"
+    ) {
+      moduleRequirements.set(
+        `${node.effectName}.${node.operationName}`,
+        {
+          effectName: node.effectName,
+          operationName: node.operationName,
+        },
+      );
+    }
+    pending.push(...Object.values(node));
+  }
   return {
     version: 1,
     layouts: [
@@ -148,7 +177,7 @@ export function createDucklangManagedAbi(
       effectName: field.effectName,
     })),
     requirements: {
-      module: module.requiredEffects.map(abiEffectReference),
+      module: [...moduleRequirements.values()],
       functions: functionRequirements,
     },
     exports: module.exportNames.map((name) => ({

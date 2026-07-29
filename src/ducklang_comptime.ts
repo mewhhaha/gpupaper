@@ -135,6 +135,9 @@ function collectComptimeExpressions(
     case "project":
       collectComptimeExpressions(expression.product, expressions);
       return;
+    case "namedProject":
+      collectComptimeExpressions(expression.product, expressions);
+      return;
     case "recordUpdate":
       collectComptimeExpressions(expression.product, expressions);
       for (const field of expression.fields) {
@@ -224,13 +227,22 @@ function scalarExpression(
     case "float64":
       return undefined;
     case "binary": {
+      const operator = expression.operator;
+      if (
+        operator === ":>" || operator === ":<" || operator === ":+" ||
+        operator === ":|" || operator === ":&" || operator === ":-"
+      ) {
+        return undefined;
+      }
       const left = scalarExpression(expression.left);
       const right = scalarExpression(expression.right);
       if (left === undefined || right === undefined) return undefined;
       return {
-        ...expression,
+        kind: "binary",
+        operator,
         left,
         right,
+        span: expression.span,
       };
     }
     case "if": {
@@ -309,6 +321,15 @@ function replaceComptimeExpressions(
         ),
       };
     case "project":
+      return {
+        ...expression,
+        product: replaceComptimeExpressions(
+          expression.product,
+          values,
+          nextValueIndex,
+        ),
+      };
+    case "namedProject":
       return {
         ...expression,
         product: replaceComptimeExpressions(
@@ -439,8 +460,8 @@ function replaceComptimeExpressions(
           nextValueIndex,
         ),
       };
-    case "binary":
-      return {
+    case "binary": {
+      const binary = {
         ...expression,
         left: replaceComptimeExpressions(
           expression.left,
@@ -453,6 +474,38 @@ function replaceComptimeExpressions(
           nextValueIndex,
         ),
       };
+      if (binary.operator === ":>" || binary.operator === ":<") {
+        return binary.left;
+      }
+      if (
+        binary.operator === ":+" && binary.left.kind === "integer" &&
+        binary.left.value === 0
+      ) {
+        return binary.right;
+      }
+      if (
+        binary.operator === ":+" && binary.left.kind === "product" &&
+        binary.right.kind === "product"
+      ) {
+        return {
+          kind: "product",
+          productKind: "tuple",
+          values: [...binary.left.values, ...binary.right.values],
+          ...(binary.left.fieldNames === undefined ||
+              binary.right.fieldNames === undefined
+            ? {}
+            : {
+              fieldNames: [
+                ...binary.left.fieldNames,
+                ...binary.right.fieldNames,
+              ],
+            }),
+          type: binary.type,
+          span: binary.span,
+        };
+      }
+      return binary;
+    }
     case "return":
       return {
         ...expression,

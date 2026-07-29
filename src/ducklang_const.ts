@@ -1,6 +1,9 @@
 import { PrimitiveId } from "./ducklang_primitives.ts";
 import type { DucklangSymbol } from "./ducklang_resolution.ts";
-import type { TypedDucklangExpression } from "./ducklang_types.ts";
+import type {
+  TypedDucklangExpression,
+  TypedDucklangModule,
+} from "./ducklang_types.ts";
 import type { Type } from "./types.ts";
 
 declare const typeIdBrand: unique symbol;
@@ -214,6 +217,72 @@ export function evaluateDucklangConst(
   );
 }
 
+export function evaluateDucklangConstModule(
+  module: TypedDucklangModule,
+  options: { readonly fuel: number },
+): Extract<DucklangConstValue, { readonly kind: "module" }> {
+  if (!Number.isSafeInteger(options.fuel) || options.fuel <= 0) {
+    throw new RangeError(
+      `Ducklang compile-time fuel must be a positive safe integer; received ${options.fuel}`,
+    );
+  }
+  const evaluator = new DucklangConstEvaluator(options.fuel);
+  const entries: {
+    readonly symbol: string;
+    readonly value: DucklangConstValue;
+  }[] = [];
+  const environment: DucklangConstEnvironment = {
+    parent: undefined,
+    bindings: entries,
+  };
+
+  for (const binding of module.bindings) {
+    if (binding.value.kind !== "function") continue;
+    entries.push({
+      symbol: qualifiedSymbol(binding.symbol),
+      value: {
+        kind: "closure",
+        code: {
+          kind: "source",
+          parameters: binding.value.parameters,
+          body: binding.value.body,
+        },
+        environment,
+      },
+    });
+  }
+  for (const binding of module.bindings) {
+    if (binding.value.kind === "function") continue;
+    entries.push({
+      symbol: qualifiedSymbol(binding.symbol),
+      value: evaluator.evaluate(binding.value, environment),
+    });
+  }
+
+  const result = evaluator.evaluate(module.result, environment);
+  const values = result.kind === "product"
+    ? result.fields.map((field) => field.value)
+    : module.exportNames.length === 0 &&
+        result.kind === "scalar" && result.scalar.kind === "unit"
+    ? []
+    : [result];
+  if (values.length !== module.exportNames.length) {
+    throw new TypeError(
+      `${module.file}: compile-time module declares ${module.exportNames.length} exports but produced ${values.length} values`,
+    );
+  }
+  return {
+    kind: "module",
+    exports: {
+      kind: "product",
+      fields: module.exportNames.map((name, index) => ({
+        name,
+        value: values[index],
+      })),
+    },
+  };
+}
+
 class DucklangConstEvaluator {
   #remainingFuel: number;
   #callDepth = 0;
@@ -273,14 +342,29 @@ class DucklangConstEvaluator {
         };
       case "call":
         return this.#call(expression, environment);
-      case "product":
+      case "product": {
+        const fields: DucklangConstProduct["fields"][number][] = [];
+        for (const [index, value] of expression.values.entries()) {
+          const evaluated = this.evaluate(value, environment);
+          if (expression.spreadValues?.[index] === true) {
+            if (evaluated.kind !== "product") {
+              throw new TypeError(
+                `${source(value)}: compile-time spread requires a product`,
+              );
+            }
+            fields.push(...evaluated.fields);
+            continue;
+          }
+          fields.push({
+            name: expression.fieldNames?.[index],
+            value: evaluated,
+          });
+        }
         return {
           kind: "product",
-          fields: expression.values.map((value) => ({
-            name: undefined,
-            value: this.evaluate(value, environment),
-          })),
+          fields,
         };
+      }
       case "unionCase":
         return {
           kind: "sum",
@@ -292,6 +376,11 @@ class DucklangConstEvaluator {
         return projectDucklangConst(
           this.evaluate(expression.product, environment),
           expression.index,
+        );
+      case "namedProject":
+        return projectDucklangConst(
+          this.evaluate(expression.product, environment),
+          expression.fieldName,
         );
       case "recordUpdate": {
         const product = this.evaluate(expression.product, environment);
@@ -424,6 +513,28 @@ class DucklangConstEvaluator {
       );
     }
     const callee = this.evaluate(expression.callee, environment);
+    const arguments_ = expression.arguments.map((argument) =>
+      this.evaluate(argument, environment)
+    );
+    if (callee.kind === "type") {
+      if (arguments_.some((argument) => argument.kind !== "type")) {
+        throw new TypeError(
+          `${
+            source(expression)
+          }: compile-time type application requires type arguments`,
+        );
+      }
+      return {
+        kind: "type",
+        typeId: canonicalTypeApplication(
+          callee.typeId,
+          arguments_.map((argument) =>
+            (argument as Extract<DucklangConstValue, { readonly kind: "type" }>)
+              .typeId
+          ),
+        ),
+      };
+    }
     if (callee.kind !== "closure") {
       throw new TypeError(
         `${
@@ -431,9 +542,6 @@ class DucklangConstEvaluator {
         }: compile-time call requires a closure; received ${callee.kind}`,
       );
     }
-    const arguments_ = expression.arguments.map((argument) =>
-      this.evaluate(argument, environment)
-    );
     if (callee.code.kind === "primitive") {
       return this.#primitive(
         callee.code.primitiveId,
@@ -473,8 +581,10 @@ class DucklangConstEvaluator {
     switch (primitiveId) {
       case PrimitiveId.bufferLength: {
         const value = arguments_[0];
-        const length = value?.kind === "scalar" &&
-            value.scalar.kind === "text"
+        const length = value?.kind === "product"
+          ? value.fields.length
+          : value?.kind === "scalar" &&
+              value.scalar.kind === "text"
           ? new TextEncoder().encode(value.scalar.value).length
           : value?.kind === "scalar" && value.scalar.kind === "bytes"
           ? value.scalar.value.length
@@ -547,6 +657,26 @@ class DucklangConstEvaluator {
           );
         }
       }
+      case PrimitiveId.f32Format: {
+        const value = expectNumber(arguments_[0]);
+        const fractionalDigits = expectI32(arguments_[1]);
+        if (typeof value !== "number") {
+          throw new TypeError(
+            `${source(expression)}: compile-time F32 formatting requires F32`,
+          );
+        }
+        if (fractionalDigits < 0 || fractionalDigits > 100) {
+          throw new RangeError(
+            `${
+              source(expression)
+            }: F32 fractional digit count ${fractionalDigits} is outside 0..100`,
+          );
+        }
+        return scalar({
+          kind: "text",
+          value: Math.fround(value).toFixed(fractionalDigits),
+        });
+      }
       case PrimitiveId.panic:
         throw new Error(
           `${source(expression)}: Ducklang compile-time panic: ${
@@ -568,6 +698,26 @@ class DucklangConstEvaluator {
     const collection = this.evaluate(expression.collection, environment);
     const index = expectI32(this.evaluate(expression.index, environment));
     if (collection.kind === "product") {
+      if (expression.entryProjection === true) {
+        const field = collection.fields[index];
+        if (field === undefined) {
+          throw new RangeError(
+            `${
+              source(expression)
+            }: compile-time entry index ${index} is outside arity ${collection.fields.length}`,
+          );
+        }
+        return {
+          kind: "product",
+          fields: [
+            {
+              name: "name",
+              value: scalar({ kind: "text", value: field.name ?? `${index}` }),
+            },
+            { name: "value", value: field.value },
+          ],
+        };
+      }
       return projectDucklangConst(collection, index);
     }
     if (collection.kind === "scalar" && collection.scalar.kind === "text") {
@@ -595,6 +745,18 @@ class DucklangConstEvaluator {
   ): DucklangConstValue {
     const left = this.evaluate(expression.left, environment);
     const right = this.evaluate(expression.right, environment);
+    if (expression.operator === ":>" || expression.operator === ":<") {
+      return left;
+    }
+    if (expression.operator === ":+") {
+      return extendConstValue(left, right, expression);
+    }
+    if (
+      expression.operator === ":|" || expression.operator === ":&" ||
+      expression.operator === ":-"
+    ) {
+      return combineConstTypes(expression.operator, left, right, expression);
+    }
     if (expression.operator === "&&" || expression.operator === "||") {
       const value = expression.operator === "&&"
         ? truthy(left) && truthy(right)
@@ -662,6 +824,81 @@ class DucklangConstEvaluator {
       }: Ducklang compile-time evaluation does not support ${operation}`,
     );
   }
+}
+
+function extendConstValue(
+  base: DucklangConstValue,
+  extension: DucklangConstValue,
+  expression: TypedDucklangExpression,
+): DucklangConstValue {
+  if (
+    base.kind === "scalar" && base.scalar.kind === "i32" &&
+    base.scalar.value === 0 && extension.kind === "product"
+  ) {
+    return extension;
+  }
+  if (base.kind !== "product" || extension.kind !== "product") {
+    throw new TypeError(
+      `${source(expression)}: compile-time extension requires two products`,
+    );
+  }
+  if (
+    extension.fields.length === 2 &&
+    extension.fields[0].value.kind === "scalar" &&
+    extension.fields[0].value.scalar.kind === "text"
+  ) {
+    return extendDucklangConstProduct(base, {
+      kind: "product",
+      fields: [{
+        name: extension.fields[0].value.scalar.value,
+        value: extension.fields[1].value,
+      }],
+    });
+  }
+  return extendDucklangConstProduct(base, extension);
+}
+
+function combineConstTypes(
+  operator: ":|" | ":&" | ":-",
+  left: DucklangConstValue,
+  right: DucklangConstValue,
+  expression: TypedDucklangExpression,
+): DucklangConstValue {
+  if (left.kind !== "type" || right.kind !== "type") {
+    throw new TypeError(
+      `${
+        source(expression)
+      }: compile-time ${operator} requires two type values`,
+    );
+  }
+  const operation = operator === ":|"
+    ? "union"
+    : operator === ":&"
+    ? "intersection"
+    : "difference";
+  return {
+    kind: "type",
+    typeId: canonicalTypeCombination(operation, left.typeId, right.typeId),
+  };
+}
+
+function canonicalTypeApplication(
+  constructor: TypeId,
+  arguments_: readonly TypeId[],
+): TypeId {
+  return JSON.stringify(["apply", constructor, arguments_]) as TypeId;
+}
+
+function canonicalTypeCombination(
+  operation: "union" | "intersection" | "difference",
+  left: TypeId,
+  right: TypeId,
+): TypeId {
+  if (operation === "difference") {
+    return JSON.stringify([operation, left, right]) as TypeId;
+  }
+  const members = [left, right].sort();
+  return JSON.stringify([operation, ...members]) as TypeId;
 }
 
 function lookupConstEnvironment(

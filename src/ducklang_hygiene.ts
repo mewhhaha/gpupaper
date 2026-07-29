@@ -184,9 +184,25 @@ function rewriteStatement(
     case "unionType":
     case "structType":
     case "typeAlias":
-    case "import":
     case "continue":
       return statement;
+    case "import":
+      return {
+        ...statement,
+        namespace: statement.namespace === undefined
+          ? undefined
+          : name(statement.namespace),
+        selections: statement.selections.map((selection) => {
+          const localName = selection.localName ?? {
+            text: selection.exportName,
+            span: selection.span,
+          };
+          const renamed = name(localName);
+          return renamed.text === selection.exportName
+            ? selection
+            : { ...selection, localName: renamed };
+        }),
+      };
     case "typePattern":
       return { ...statement, target: expression(statement.target) };
   }
@@ -339,7 +355,12 @@ function statementBoundNames(
     case "import":
       return [
         statement.namespace,
-        ...statement.selections.map((selection) => selection.localName),
+        ...statement.selections.map((selection) =>
+          selection.localName ?? {
+            text: selection.exportName,
+            span: selection.span,
+          }
+        ),
       ];
     default:
       return [];

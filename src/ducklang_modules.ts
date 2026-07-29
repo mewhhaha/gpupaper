@@ -200,10 +200,6 @@ async function resolveModuleImports(
   graph?: DucklangModuleGraph,
 ): Promise<DucklangModule> {
   const statements: DucklangStatement[] = [];
-  const specializedFunctionExports = new Map<
-    string,
-    ReadonlyMap<string, DucklangStatement & { readonly kind: "binding" }>
-  >();
   for (const statement of module.statements) {
     if (
       statement.kind === "binding" &&
@@ -219,7 +215,9 @@ async function resolveModuleImports(
           statement.value,
           parameter.text,
         );
-        if (fieldNames.length === 0) return parameter;
+        if (fieldNames.length === 0) {
+          return { ...parameter, compileTimeRecord: true };
+        }
         const typeName = `$module_${statement.name.text}_parameter_${index}`;
         statements.push(moduleRecordStructType(
           typeName,
@@ -228,6 +226,7 @@ async function resolveModuleImports(
         ));
         return {
           ...parameter,
+          compileTimeRecord: true,
           declaredType: ducklangNamedType(typeName, parameter.span),
         };
       });
@@ -300,7 +299,16 @@ async function resolveModuleImports(
           undefined
       )
     ) {
-      statements.push(statement);
+      statements.push({
+        ...statement,
+        selections: statement.selections.map((selection) => ({
+          ...selection,
+          localName: selection.localName ?? {
+            text: selection.exportName,
+            span: selection.span,
+          },
+        })),
+      });
       continue;
     }
     const graphImport = statement.kind === "import"
@@ -313,60 +321,6 @@ async function resolveModuleImports(
       statement.kind !== "import" ||
       (!statement.path.startsWith(".") && graphImport === undefined)
     ) {
-      if (statement.kind === "binding") {
-        const selected = selectSpecializedFunctionExport(
-          statement.value,
-          specializedFunctionExports,
-        );
-        if (selected !== undefined) {
-          statements.push({
-            ...statement,
-            value: {
-              kind: "reference",
-              name: selected.name,
-              span: statement.value.span,
-            },
-          });
-          continue;
-        }
-      }
-      if (statement.kind === "recordBinding") {
-        const specializedBindings: DucklangStatement[] = [];
-        for (const field of statement.fields) {
-          const selected = selectSpecializedFunctionExport(
-            {
-              kind: "field",
-              product: statement.value,
-              fieldName: field.fieldName,
-              span: field.localName.span,
-            },
-            specializedFunctionExports,
-          );
-          if (selected === undefined) {
-            specializedBindings.length = 0;
-            break;
-          }
-          specializedBindings.push({
-            kind: "binding" as const,
-            declarationKind: statement.declarationKind,
-            recursive: false,
-            name: field.localName,
-            value: {
-              kind: "reference" as const,
-              name: selected.name,
-              span: field.localName.span,
-            },
-            span: field.localName.span,
-          });
-        }
-        if (
-          statement.fields.length > 0 &&
-          specializedBindings.length === statement.fields.length
-        ) {
-          statements.push(...specializedBindings);
-          continue;
-        }
-      }
       statements.push(statement);
       continue;
     }
@@ -427,123 +381,55 @@ async function resolveModuleImports(
       );
     }
     const namespace = statement.namespace;
-    const rawDependencyResult = dependency.statements.at(-1);
+    const instanceRenames = new Map(
+      dependency.statements.flatMap((dependencyStatement) =>
+        statementValueNames(dependencyStatement).map((name) =>
+          [
+            name,
+            hygienicDucklangName(
+              `${namespace.text}_${name}`,
+              dependency.file,
+            ),
+          ] as const
+        )
+      ),
+    );
+    const dependencyStatements = renameDucklangValues(
+      dependency.statements,
+      instanceRenames,
+    );
+    const trailingDependencyStatement = dependencyStatements.at(-1);
+    const dependencyExportExpression =
+      trailingDependencyStatement?.kind === "expression" &&
+        trailingDependencyStatement.expression.kind === "record"
+        ? trailingDependencyStatement.expression
+        : trailingDependencyStatement?.kind === "expression" &&
+            trailingDependencyStatement.expression.kind === "call" &&
+            trailingDependencyStatement.expression.callee.kind ===
+              "reference" &&
+            trailingDependencyStatement.expression.callee.name.text ===
+              "return" &&
+            trailingDependencyStatement.expression.arguments.length === 1 &&
+            trailingDependencyStatement.expression.arguments[0].kind ===
+              "record"
+        ? trailingDependencyStatement.expression.arguments[0]
+        : undefined;
     if (
-      dependency.parameters.every((parameter) =>
-        !referencesName(dependency.statements, parameter.text)
-      ) && rawDependencyResult?.kind === "expression" &&
-      rawDependencyResult.expression.kind === "record"
+      trailingDependencyStatement === undefined ||
+      dependencyExportExpression === undefined
     ) {
-      const dependencyBindings = new Map(
-        dependency.statements.flatMap((dependencyStatement) =>
-          dependencyStatement.kind === "binding"
-            ? [[dependencyStatement.name.text, dependencyStatement] as const]
-            : []
-        ),
+      throw new TypeError(
+        `${module.file}:${statement.span.start}: Ducklang module ${
+          JSON.stringify(statement.path)
+        } does not return an export record`,
       );
-      const exportedFunctions = new Map<
-        string,
-        DucklangStatement & { readonly kind: "binding" }
-      >();
-      const renamedBindings: (DucklangStatement & {
-        readonly kind: "binding";
-      })[] = [];
-      for (const field of rawDependencyResult.expression.fields) {
-        if (field.value.kind !== "reference") continue;
-        const binding = dependencyBindings.get(field.value.name.text);
-        if (binding?.value.kind !== "function") continue;
-        const renamed = {
-          ...binding,
-          name: {
-            ...binding.name,
-            text: `$module_${namespace.text}_${binding.name.text}`,
-          },
-        };
-        renamedBindings.push(renamed);
-        exportedFunctions.set(field.name, renamed);
-      }
-      if (
-        exportedFunctions.size > 0 &&
-        exportedFunctions.size === rawDependencyResult.expression.fields.length
-      ) {
-        const exportedBindingNames = new Set(
-          rawDependencyResult.expression.fields.flatMap((field) =>
-            field.value.kind === "reference" ? [field.value.name.text] : []
-          ),
-        );
-        const declaredValueNames = new Set(
-          statements.flatMap(statementValueNames),
-        );
-        const declaredTypeKeys = new Set(
-          statements.flatMap(statementTypeKeys),
-        );
-        for (
-          const dependencyStatement of dependency.statements.slice(0, -1)
-        ) {
-          if (
-            dependencyStatement.kind === "binding" &&
-            exportedBindingNames.has(dependencyStatement.name.text)
-          ) {
-            continue;
-          }
-          if (
-            statementTypeKeys(dependencyStatement).some((key) =>
-              declaredTypeKeys.has(key)
-            )
-          ) {
-            continue;
-          }
-          if (dependencyStatement.kind === "import") {
-            const selections = dependencyStatement.selections.filter(
-              (selection) =>
-                selection.localName === undefined ||
-                !declaredValueNames.has(selection.localName.text),
-            );
-            if (
-              selections.length === 0 &&
-              dependencyStatement.namespace === undefined
-            ) {
-              continue;
-            }
-            const imported = { ...dependencyStatement, selections };
-            statements.push(imported);
-            for (const name of statementValueNames(imported)) {
-              declaredValueNames.add(name);
-            }
-            continue;
-          }
-          // A dependency's private bindings are hygienically renamed, so a name
-          // shared with the importer is no longer a reason to drop one. Dropping
-          // it silently rebound the dependency's references to the importer's
-          // binding of the same name.
-          const valueNames = statementValueNames(dependencyStatement);
-          statements.push(dependencyStatement);
-          for (const name of valueNames) declaredValueNames.add(name);
-          for (const key of statementTypeKeys(dependencyStatement)) {
-            declaredTypeKeys.add(key);
-          }
-        }
-        statements.push(...renamedBindings);
-        for (const protocol of dependency.protocols) {
-          if (
-            !module.protocols.some((current) => current.name === protocol.name)
-          ) {
-            module = { ...module, protocols: [...module.protocols, protocol] };
-          }
-        }
-        module = {
-          ...module,
-          extensions: [...module.extensions, ...dependency.extensions],
-          fixities: [...module.fixities, ...dependency.fixities],
-        };
-        specializedFunctionExports.set(namespace.text, exportedFunctions);
-        continue;
-      }
     }
-    let dependencyStatements = dependency.statements;
+
     const parameters = dependency.parameters.map((parameter, index) => {
       const fieldNames = collectParameterFields(dependency, parameter.text);
-      if (fieldNames.length === 0) return parameter;
+      if (fieldNames.length === 0) {
+        return { ...parameter, compileTimeRecord: true };
+      }
       const typeName = `$module_${namespace.text}_parameter_${index}`;
       statements.push(moduleRecordStructType(
         typeName,
@@ -552,48 +438,99 @@ async function resolveModuleImports(
       ));
       return {
         ...parameter,
+        compileTimeRecord: true,
         declaredType: ducklangNamedType(typeName, parameter.span),
       };
     });
-    const dependencyResult = dependencyStatements.at(-1);
-    if (
-      dependencyResult?.kind === "expression" &&
-      dependencyResult.expression.kind === "record"
-    ) {
-      const typeName = `$module_${namespace.text}_exports`;
-      statements.push(moduleRecordStructType(
-        typeName,
-        dependencyResult.expression.fields.map((field) => ({
-          name: field.name,
-          span: field.span,
-        })),
-        dependencyResult.span,
-      ));
-      dependencyStatements = [
-        ...dependencyStatements.slice(0, -1),
-        {
-          ...dependencyResult,
-          expression: { ...dependencyResult.expression, nominalType: typeName },
-        },
-      ];
-    }
-    const body: DucklangExpression = {
-      kind: "block",
-      statements: dependencyStatements,
-      span: dependency.span,
+    const exportTypeName = `$module_${namespace.text}_exports`;
+    statements.push(moduleRecordStructType(
+      exportTypeName,
+      dependencyExportExpression.fields.map((field) => ({
+        name: field.name,
+        span: field.span,
+      })),
+      dependencyExportExpression.span,
+    ));
+    const exportExpression = {
+      ...dependencyExportExpression,
+      nominalType: exportTypeName,
     };
+
+    const declarations = new Set<DucklangStatement["kind"]>([
+      "effectDeclaration",
+      "initDeclaration",
+      "unionType",
+      "structType",
+      "typeAlias",
+      "typePattern",
+      "import",
+    ]);
+    const dependencyBodyStatements: DucklangStatement[] = [];
+    const declaredTypeKeys = new Set(statements.flatMap(statementTypeKeys));
+    for (const dependencyStatement of dependencyStatements.slice(0, -1)) {
+      const typeKeys = statementTypeKeys(dependencyStatement);
+      if (typeKeys.some((key) => declaredTypeKeys.has(key))) continue;
+      if (
+        parameters.length > 0 && !declarations.has(dependencyStatement.kind)
+      ) {
+        dependencyBodyStatements.push(dependencyStatement);
+        continue;
+      }
+      statements.push(dependencyStatement);
+      for (const key of typeKeys) declaredTypeKeys.add(key);
+    }
+
+    const renamedExtensions = dependency.extensions.map((extension) => ({
+      ...extension,
+      methods: extension.methods.map((method) => ({
+        ...method,
+        value: renameDucklangValuesInExpression(
+          method.value,
+          instanceRenames,
+        ),
+      })),
+    }));
+    const protocolNames = new Set(
+      module.protocols.map((protocol) => protocol.name),
+    );
+    module = {
+      ...module,
+      protocols: [
+        ...module.protocols,
+        ...dependency.protocols.filter((protocol) =>
+          !protocolNames.has(protocol.name)
+        ),
+      ],
+      extensions: [...module.extensions, ...renamedExtensions],
+      fixities: [...module.fixities, ...dependency.fixities],
+    };
+
+    const value: DucklangExpression = parameters.length === 0
+      ? exportExpression
+      : {
+        kind: "function",
+        recursive: false,
+        parameters,
+        body: {
+          kind: "block",
+          statements: [
+            ...dependencyBodyStatements,
+            {
+              kind: "expression",
+              expression: exportExpression,
+              span: trailingDependencyStatement.span,
+            },
+          ],
+          span: dependency.span,
+        },
+        span: dependency.span,
+      };
     statements.push({
       kind: "binding",
       declarationKind: "const",
       recursive: false,
       name: namespace,
-      value: parameters.length === 0 ? body : {
-        kind: "function",
-        recursive: false,
-        parameters,
-        body,
-        span: dependency.span,
-      },
+      value,
       span: statement.span,
     });
   }
@@ -646,9 +583,9 @@ function statementValueNames(statement: DucklangStatement): readonly string[] {
         ...(statement.namespace === undefined
           ? []
           : [statement.namespace.text]),
-        ...statement.selections.flatMap((selection) =>
-          selection.localName === undefined ? [] : [selection.localName.text]
-        ),
+        ...statement.selections.flatMap((
+          selection,
+        ) => [selection.localName?.text ?? selection.exportName]),
       ];
     case "effectDeclaration":
     case "initDeclaration":
@@ -707,7 +644,24 @@ function mergeImportedDeclarations(
   module: DucklangModule,
   graph: DucklangModuleGraph,
 ): DucklangModule {
-  const typeKeys = new Set(module.statements.flatMap(statementTypeKeys));
+  const declarationKinds = new Set<DucklangStatement["kind"]>([
+    "effectDeclaration",
+    "initDeclaration",
+    "unionType",
+    "structType",
+    "typeAlias",
+    "typePattern",
+  ]);
+  const seenDeclarations = new Set<string>();
+  const linkedStatements = module.statements.filter((statement) => {
+    if (!declarationKinds.has(statement.kind)) return true;
+    const identity =
+      `${statement.kind}\u0000${statement.span.file}\u0000${statement.span.start}`;
+    if (seenDeclarations.has(identity)) return false;
+    seenDeclarations.add(identity);
+    return true;
+  });
+  const typeKeys = new Set(linkedStatements.flatMap(statementTypeKeys));
   const declarations: DucklangStatement[] = [];
   const protocols = [...module.protocols];
   const protocolNames = new Set(protocols.map((protocol) => protocol.name));
@@ -755,47 +709,11 @@ function mergeImportedDeclarations(
 
   return {
     ...module,
-    statements: [...declarations, ...module.statements],
+    statements: [...declarations, ...linkedStatements],
     protocols,
     extensions,
     fixities,
   };
-}
-
-function selectSpecializedFunctionExport(
-  expression: DucklangExpression,
-  modules: ReadonlyMap<
-    string,
-    ReadonlyMap<string, DucklangStatement & { readonly kind: "binding" }>
-  >,
-): (DucklangStatement & { readonly kind: "binding" }) | undefined {
-  if (expression.kind !== "field") return undefined;
-  const namespace = expression.product.kind === "call" &&
-      expression.product.callee.kind === "reference"
-    ? expression.product.callee.name.text
-    : expression.product.kind === "reference"
-    ? expression.product.name.text
-    : undefined;
-  return namespace === undefined
-    ? undefined
-    : modules.get(namespace)?.get(expression.fieldName);
-}
-
-function referencesName(values: unknown, name: string): boolean {
-  const pending: unknown[] = [values];
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (value === null || typeof value !== "object") continue;
-    const node = value as Record<string, unknown>;
-    const referenceName = node.name as Record<string, unknown> | undefined;
-    if (
-      node.kind === "reference" && referenceName?.text === name
-    ) {
-      return true;
-    }
-    pending.push(...Object.values(node));
-  }
-  return false;
 }
 
 function collectParameterFields(
@@ -863,11 +781,11 @@ function openModuleBindings(
       );
     }
   }
-  const bindings = new Map(
+  const providers = new Map(
     dependency.statements.flatMap((dependencyStatement) =>
-      dependencyStatement.kind === "binding"
-        ? [[dependencyStatement.name.text, dependencyStatement] as const]
-        : []
+      statementValueNames(dependencyStatement).map((name) =>
+        [name, dependencyStatement] as const
+      )
     ),
   );
   const requiredBindings = new Set<string>();
@@ -882,15 +800,25 @@ function openModuleBindings(
     const bindingName = pendingBindings.pop()!;
     if (requiredBindings.has(bindingName)) continue;
     requiredBindings.add(bindingName);
-    const binding = bindings.get(bindingName);
-    if (binding === undefined) continue;
-    for (const referencedName of collectReferencedNames(binding.value)) {
+    const provider = providers.get(bindingName);
+    if (provider === undefined) continue;
+    for (const referencedName of collectReferencedNames(provider)) {
       requiredNames.add(referencedName);
-      if (bindings.has(referencedName)) pendingBindings.push(referencedName);
+      if (providers.has(referencedName)) pendingBindings.push(referencedName);
     }
   }
   const spliced = dependency.statements.flatMap<DucklangStatement>(
     (dependencyStatement) => {
+      if (
+        dependencyStatement.kind === "effectDeclaration" ||
+        dependencyStatement.kind === "initDeclaration" ||
+        dependencyStatement.kind === "unionType" ||
+        dependencyStatement.kind === "structType" ||
+        dependencyStatement.kind === "typeAlias" ||
+        dependencyStatement.kind === "typePattern"
+      ) {
+        return [dependencyStatement];
+      }
       if (dependencyStatement.kind === "import") {
         const selections = dependencyStatement.selections.filter((selection) =>
           selection.localName !== undefined &&
@@ -901,10 +829,30 @@ function openModuleBindings(
           : [{ ...dependencyStatement, selections }];
       }
       if (
-        dependencyStatement.kind !== "binding" ||
-        !requiredBindings.has(dependencyStatement.name.text)
+        !statementValueNames(dependencyStatement).some((name) =>
+          requiredBindings.has(name)
+        )
       ) {
         return [];
+      }
+      if (dependencyStatement.kind === "recordBinding") {
+        return [{
+          ...dependencyStatement,
+          fields: dependencyStatement.fields.map((field) => {
+            const exportedName = [...exportedBindings].find(
+              ([, bindingName]) => bindingName === field.localName.text,
+            )?.[0];
+            const selection = exportedName === undefined
+              ? undefined
+              : selections.get(exportedName);
+            return selection?.localName === undefined
+              ? field
+              : { ...field, localName: selection.localName };
+          }),
+        }];
+      }
+      if (dependencyStatement.kind !== "binding") {
+        return [dependencyStatement];
       }
       const exportedName = [...exportedBindings].find(([, bindingName]) =>
         bindingName === dependencyStatement.name.text
@@ -944,14 +892,11 @@ function hygieniseDucklangDependency(
   );
   const renames = new Map(
     dependency.statements.flatMap((statement) =>
-      statement.kind === "binding" && !exported.has(statement.name.text)
-        ? [
-          [
-            statement.name.text,
-            hygienicDucklangName(statement.name.text, dependency.file),
-          ] as const,
-        ]
-        : []
+      statementValueNames(statement).flatMap((name) =>
+        exported.has(name)
+          ? []
+          : [[name, hygienicDucklangName(name, dependency.file)] as const]
+      )
     ),
   );
   if (renames.size === 0) return dependency;
