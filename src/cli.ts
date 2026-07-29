@@ -97,14 +97,13 @@ async function main(arguments_: readonly string[]): Promise<void> {
     gpuWasmVerification,
     hostInterfaceFile,
   } = parseCommandLine(arguments_);
-  const source = await Deno.readTextFile(file);
-  const hostInterface = hostInterfaceFile === undefined
-    ? undefined
-    : await Deno.readTextFile(hostInterfaceFile);
-  const artifact = await compileModuleSource(file, source, {
+  const artifact = await compileCliInput({
+    command,
+    file,
+    output: outputArgument,
     gpuMode,
     gpuWasmVerification,
-    hostInterface,
+    hostInterfaceFile,
   });
 
   if (command === "compile") {
@@ -170,6 +169,18 @@ async function main(arguments_: readonly string[]): Promise<void> {
 
   const result = await runMain(artifact.wasm);
   console.log(JSON.stringify(experimentReport(artifact, result), null, 2));
+}
+
+export async function compileCliInput(
+  invocation: CliInvocation,
+): Promise<CompilationArtifact> {
+  const { file, gpuMode, gpuWasmVerification, hostInterfaceFile } = invocation;
+  const source = await Deno.readTextFile(file);
+  return await compileModuleSource(file, source, {
+    gpuMode,
+    gpuWasmVerification,
+    hostInterface: hostInterfaceFile,
+  });
 }
 
 export function formatCompilationBackends(

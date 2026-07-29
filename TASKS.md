@@ -1108,12 +1108,19 @@ CPU/GPU disagreement, or return partially written output.
       artifacts and CLI output name the type, comptime, Core, Wasm, and
       verification backends. Output still goes through a same-directory
       temporary file followed by rename.
-- [ ] Add generated differential tests for type solving, compile-time bytecode,
-      Core rewrite batches, and Wasm plans. Seeds and minimized failures must be
-      reproducible without a GPU; GPU-enabled CI runs the same cases against the
-      CPU oracles.
-- [ ] Stress concurrent compilations through the shared device and prove
+- [x] Add generated differential tests for type solving, compile-time bytecode,
+      Core rewrite batches, and Wasm plans. Six fixed hexadecimal seeds generate
+      union partitions, arithmetic programs, mixed integer/float Core
+      identities, and variable-sized modules. Independent CPU expectations run
+      without WebGPU; a GPU-enabled run compares every generated batch, and each
+      failure reports its seed.
+- [x] Stress concurrent compilations through the shared device and prove
       deterministic isolation, bounded cleanup, and recovery after a failed job.
+      Eight mixed Haskell and Ducklang compilations share the device and pipeline
+      caches while an invalid Core package is rejected. Every result matches its
+      baseline byte-for-byte, Deno's resource sanitizer observes the test
+      boundary, and a subsequent required-GPU compilation completes through
+      both Core and Wasm.
 - [ ] Define release gates for the frozen corpus, malformed inputs, GPU-required
       execution, repeated output identity, and benchmark regressions. Record the
       adapter limits and enough samples to state a break-even interval rather

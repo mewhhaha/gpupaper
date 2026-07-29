@@ -3,7 +3,11 @@ import {
   evaluateBytecodeOnCpu,
   evaluateBytecodeOnGpu,
 } from "../src/comptime.ts";
-import { formatCompilationBackends, parseCommandLine } from "../src/cli.ts";
+import {
+  compileCliInput,
+  formatCompilationBackends,
+  parseCommandLine,
+} from "../src/cli.ts";
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
   solveTypeEqualitiesOnGpu,
@@ -68,6 +72,23 @@ Deno.test("CLI rejects a host interface without a file path", () => {
     () => parseCommandLine(["compile", "editor.duck", "--host-interface"]),
     /--host-interface requires a file path/,
   );
+});
+
+Deno.test("CLI passes the host interface path to managed compilation", async () => {
+  const file = "examples/binned/effects/multi_file/main.duck";
+  const host = "examples/binned/effects/multi_file/host.duck";
+  const artifact = await compileCliInput(
+    parseCommandLine([
+      "compile",
+      file,
+      "--host-interface",
+      host,
+      "--cpu",
+    ]),
+  );
+
+  assertEquals(artifact.language, "ducklang");
+  assertEquals(artifact.backends.wasmEmission, "cpu");
 });
 
 Deno.test("host interfaces are rejected for non-Ducklang compilation", async () => {
