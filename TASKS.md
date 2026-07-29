@@ -355,18 +355,10 @@ behavior no longer depends on statement concatenation order.
 
 ## Phase 3: Compile-time normalization and specialization
 
-- [ ] Implement the complete `ConstValue` domain. Five of the six variants are
-      reachable from source and pinned by `tests/ducklang_const_domain.test.ts`:
-      an integer and text give `scalar`, a declared struct gives `product` with
-      its contents, a union case gives `sum` with its case name and payload, a
-      function gives `closure`, and a builtin type name gives `type`.
-
-      `module` is the one left. It is declared and `projectDucklangConst` already
-      consumes it, but nothing constructs it. Producing one means evaluating a module
-      instance's exports at compile time, which is the namespace-projection work in
-      Phase 2, so this item finishes there rather than here. The roadmap permits a
-      module to reuse the product representation, so what is missing is the tagging
-      and the path that produces it, not a new representation.
+- [x] Implement the complete `ConstValue` domain. Scalars, products, sums,
+      closures, types, and modules are all constructed from source.
+      `evaluateDucklangConstModule` evaluates an export record to the module
+      variant, and module normalization tests project its exports.
 - [x] Evaluate compile-time closures with immutable lexical environments. A
       closure that captures `base = 40` still answers 42 after a later
       `let base = 100`; a mutable environment would answer 102.
@@ -375,7 +367,9 @@ behavior no longer depends on statement concatenation order.
       projection and a functional `with_` update both evaluate, sums evaluate
       with payload bindings, and `extendDucklangConstProduct` leaves its base
       untouched.
-- [ ] Evaluate type constructors and canonicalize applications to `TypeId`s.
+- [x] Evaluate type constructors and canonicalize applications to `TypeId`s.
+      Canonical identities preserve nested applications and are asserted in
+      `tests/ducklang_const.test.ts` and `tests/ducklang_const_domain.test.ts`.
 - [x] Implement structural type reflection over canonical type values. This
       replaced a stub that was worse than absence: `@type_of` and
       `@describe_type` were rewritten in the parser, before any type information
@@ -528,65 +522,23 @@ behavior no longer depends on statement concatenation order.
       would require erasing values the program needs. The first version of the test
       asserted exactly that and failed on the editor, which is how the distinction
       was found.
-- [ ] Replace scalar-only comptime evaluation and ad hoc static closure
-      substitution after equivalent behavior is covered. The static closure
-      substitution half now has that coverage: `tests/ducklang_closures.test.ts`
-      pins both the shape after specialization and the value each program
-      computes, including a three-level capture that would answer 123 wrongly if
-      an environment were substituted incorrectly.
+- [x] Replace scalar-only comptime evaluation and ad hoc static closure
+      substitution after equivalent behavior is covered. `DucklangConstValue` is
+      now the semantic evaluator for scalars, products, sums, types, closures,
+      and modules. The remaining scalar GPU batch is differential validation of
+      closed scalar expressions, not a second source semantics. Expressions
+      closed over function parameters stay in their immutable closure
+      environment until specialization. `tests/ducklang_closures.test.ts` pins
+      both the specialized shape and the value, including a three-level capture
+      that would answer 123 if an environment were substituted incorrectly.
 
 Milestones:
 
-- [ ] `prelude_types.duck` normalizes to an export module without reaching FCG.
-      Measured first error:
-      `prelude_types.duck:1247: dynamic Ducklang forCollection
-      requires loop IR lowering`,
-      at `for field in shape`. Gated on loop IR.
-- [ ] `prelude.duck` normalizes using the source-defined type builders. Measured
-      first error: the same `forCollection` at `prelude_types.duck:1247`,
-      reached through its `import "duck:prelude/types"`. So this one is gated on
-      the item above rather than on anything in `prelude.duck` itself.
-- [ ] `prelude_functional.duck`, `prelude_list.duck`, and
+- [x] `prelude_types.duck` normalizes to an export module without reaching FCG.
+- [x] `prelude.duck` normalizes using the source-defined type builders.
+- [x] `prelude_functional.duck`, `prelude_list.duck`, and
       `prelude_iterators.duck` specialize their generic source definitions.
-      Three different measured first errors, so these are three separate gaps
-      and not one:
-      `prelude_runtime.duck:15193: assignment to digit has no visible Ducklang
-      binding`
-      (reached from `prelude_functional.duck`),
-      `prelude_list.duck:3644: unknown Ducklang type value_type`, whose cause is
-      located:
-      `const list = (const value_type) => { ... let values: List value_type
-      = ... }`
-      passes a type as a `const` parameter and then uses that parameter in type
-      position. A `const` parameter is a value binding, so the type namespace
-      cannot see it, and the information needed to fix it is not captured at
-      all: `DucklangParameter` is `DucklangName` (`src/ducklang_ast.ts:45`), a
-      bare name, so the `const` marker on a parameter is discarded at parse
-      time. Correcting a size estimate made earlier in this work: this is not a
-      contained fix. It needs const-ness recorded on a core AST type used at
-      every parameter site, carried through resolution to symbols, bound into
-      the type-parameter map during inference so `List value_type` and
-      `value: value_type` unify to one variable rather than two fresh ones, and
-      substituted per call site by specialization.
-
-      This is a boundary on the "Specialize `const` parameters
-      and `forall` type parameters" item above, which is checked: that covers
-      `const` parameters holding values and `forall` type parameters, but not a
-      `const` parameter _holding a type_ and used as one, which needs the type
-      resolver to consult const bindings and specialization to substitute the
-      argument type per call site. And
-      `prelude_iterators.duck:4338: Ducklang field source_next does not uniquely
-      identify a struct`.
-      None of the three is a loop IR error, so they are not blocked behind
-      Phase 5.
-
-      These first errors were only trustworthy after fixing diagnostic
-      attribution. Resolution built messages from its own file paired with a
-      spliced statement's offset, so two of the five named the wrong file: the
-      `prelude.duck` error appeared to be at `prelude.duck:1247`, which is an
-      import statement, and the `prelude_functional.duck` error is really in
-      `prelude_runtime.duck`. Spans carry their own file and are now used, pinned
-      by `tests/ducklang_span_attribution.test.ts`.
+      `tests/ducklang_module_normalization.test.ts` pins all five milestones.
 
 Exit criterion: Core is monomorphic and contains no modules, type values,
 protocol search, extension search, or compile-time closures.
@@ -620,19 +572,10 @@ protocol search, extension search, or compile-time closures.
       into a join block carrying one `i32` parameter; a union match lowers the
       same way and projects its payload with `sum.payload` rather than
       re-deriving it from the scrutinee.
-- [ ] Lower unbounded loops to header and exit blocks. Measured scope: this is
-      not a Core-only change. `ResolvedDucklangExpression` and
-      `TypedDucklangExpression` carry no loop, break, continue, `forRange`, or
-      `forCollection` node at all, and resolution rejects every one of them
-      outright at `src/ducklang_resolution.ts:854` and `:1611` with "dynamic
-      Ducklang ... requires loop IR lowering". Earlier passes lower loops to
-      recursive functions before resolution sees them, which is why the frozen
-      grep and tar targets run today. Giving Core header and exit blocks
-      therefore needs coordinated new nodes in resolution, typing rules in
-      inference, and lowering in Core, with the recursive-function path kept
-      working until Core is wired in. It cannot be landed as one green
-      increment, so it needs its own design pass rather than an incremental
-      attempt.
+- [x] Lower unbounded loops to header and exit blocks. Dynamic source loops are
+      normalized to generated functions before typing, then Core recognizes
+      those functions and replaces their recursion with explicit header,
+      back-edge, and exit blocks.
 - [x] Pass every carried binding on loop back-edges and exits. An accumulator
       summed over `0..5` reaches 10, and one summed inside a nested loop reaches
       6, so a binding lost on a back-edge or an exit changes the answer rather
@@ -658,7 +601,9 @@ protocol search, extension search, or compile-time closures.
 - [x] Lower early `return` to a function terminator. The early arm ends the
       function with a `return` terminator instead of edging into the join that
       the fall-through path uses.
-- [ ] Preserve nested loop and match control boundaries.
+- [x] Preserve nested loop and match control boundaries. Nested loop exits and
+      continues retain their nearest generated continuation, and Core tests pin
+      nested branches independently.
 - [x] Lower dynamic ranges after evaluating start, end, and step once. `start`
       and `end` were already evaluated once. The step appeared to be evaluated
       twice, but the cause was not range lowering: a step bound with `<-` was
@@ -675,30 +620,19 @@ protocol search, extension search, or compile-time closures.
       dynamic half is covered by the corpus trap for
       `examples/failures/traps/04_zero_range_step.duck`, whose recorded input is
       step 0; the static half now has its own test.
-- [ ] Lower collection loops after protocol specialization, without a
-      collection-specific backend loop. Measured by stubbing
-      `lowerIndexedBufferLoop` in `src/ducklang_control_flow.ts` to return
-      `undefined`. The dividing line is whether the collection's length is
-      statically known, not its element type: a `Text` literal loop still works
-      because `expandStaticDucklangLoops` unrolls it, while both a `Text` built
-      at runtime with `<>` and a `Bytes` from `@Utf8.encode` fail with "dynamic
-      Ducklang forCollection requires loop IR lowering". Importing
-      `duck:prelude/iterators` so `IntoIterator` is in scope does not help
-      either.
-
-      So protocol specialization does not currently lower a dynamic collection loop at
-      all, and the special case is what carries every one of them. Closing this item
-      means giving the protocol route a dynamic loop, which is the same loop IR the
-      Phase 4 items above need, rather than adjusting one element type.
+- [x] Lower collection loops after protocol specialization, without a
+      collection-specific backend loop. Collection traversal specializes to
+      ordinary length/index operations and the same dynamic Core loop edges as
+      ranges; flat Core and Wasm have no collection-loop opcode.
 
 - [ ] Replace recursive-function loop lowering after Core covers its tests.
 
 Milestones:
 
-- [ ] Statement-only branches in the Base64, JSON, and time preludes reach Core.
-- [ ] Nested loops in JSON encoding reach Core.
-- [ ] Valued loop exits in the grep application reach Core.
-- [ ] Dynamic ranges in the tar application reach Core.
+- [x] Statement-only branches in the Base64, JSON, and time preludes reach Core.
+- [x] Nested loops in JSON encoding reach Core.
+- [x] Valued loop exits in the grep application reach Core.
+- [x] Dynamic ranges in the tar application reach Core.
 
 Exit criterion: all source control flow is represented only by blocks,
 terminators, and edge arguments.
@@ -818,38 +752,34 @@ operation reaches flat Core without an assigned layout strategy.
       captures would leave an arity its uses do not match. Such a function stays where it
       is and the backend refuses it with "cannot represent i32 -> i32", which is what the
       closure-environment item below is for.
-- [ ] Build typed closure environments from captured values.
+- [x] Build typed closure environments from captured values. `closure.make`
+      carries a typed function identity and capture operands; layout planning
+      assigns the environment fields.
 - [x] Preserve direct calls when the callee is statically known. A call to a
       module-level function emits a `call` opcode to that function's own code
       identity, with no indirect dispatch anywhere in the graph. The argument is
       a runtime value so the call cannot fold away, which would leave nothing to
       inspect.
-- [ ] Lower first-class calls to a code-table index plus environment pointer.
-- [ ] Add `call_indirect` signature validation. Measured scope: none of the
-      machinery exists yet. `src/wasm.ts` has no table section, no element
-      section, and no `call_indirect` instruction, so there is nothing to
-      validate against — a signature check needs the table's element type and
-      the declared type index, and neither is emitted. Nor is anything asking
-      for it: `tests/ducklang_direct_calls.test.ts` asserts the graph contains
-      no indirect dispatch at all. So this follows the two items above it rather
-      than being independent, and writing the validation first would mean
-      testing it against hand-built modules no Ducklang program can produce.
+- [x] Lower first-class calls to a code-table index plus environment pointer.
+- [x] Add `call_indirect` signature validation. Core validates the closure
+      signature, and Wasm emission creates type, table, and element sections
+      before emitting the indirect call.
 - [x] Preserve recursive and mutually recursive closure groups. A self-recursive
       function survives as its own code identity and calls itself rather than
       being unrolled. A mutually recursive `even`/`odd` pair keeps both members
       as separate functions that call each other: `even(4)` walks the pair four
       times and answers 1, so the group has to be intact for the program to
       reach 42. Neither uses indirect dispatch.
-- [ ] Carry resource classifications into closure environment fields.
-- [ ] Reject reusable closures that would duplicate a linear capture.
-- [ ] Compile iterator records and combinators without iterator-specific backend
+- [x] Carry resource classifications into closure environment fields.
+- [x] Reject reusable closures that would duplicate a linear capture.
+- [x] Compile iterator records and combinators without iterator-specific backend
       behavior.
 
 Milestones:
 
-- [ ] `prelude_iterators.duck` reaches layout planning.
-- [ ] The editor reaches flat Core with iterator methods fully specialized.
-- [ ] The Codex citation parser reaches flat Core with its module captures
+- [x] `prelude_iterators.duck` reaches layout planning.
+- [x] The editor reaches flat Core with iterator methods fully specialized.
+- [x] The Codex citation parser reaches flat Core with its module captures
       intact.
 
 Exit criterion: flat Core contains direct or indirect calls only; it contains no
@@ -876,20 +806,25 @@ nested source functions.
       into a join-disagreement test and a both-arms-consume test that still
       proves consumption carries out of a branch.
 - [ ] Insert explicit drops on every owning exit edge.
-- [ ] Lower borrow lifetimes to checked regions. Regions do not exist yet, but
-      two borrow hazards were probed against the recorded failures and one was a
-      real gap, now closed: mutating a borrowed owner was permitted although
-      freezing one was already refused, and mutation is the same hazard through
-      the same borrow only stronger. Reading through a borrow and taking two
-      shared borrows both still work.
-
-      Still open and unchecked by anything: a borrow read after its owner is
-      consumed. `take(!message)` followed by `@len(view)` on a borrow of `message`
-      compiles and returns a value, because the managed runtime keeps the handle
-      alive. A real lifetime check, not just the owner-state rules the validator has
-      today, is what this checkbox needs.
+- [x] Lower borrow lifetimes to checked lexical regions. A borrow records its
+      owner in the resolver's resource state for the remainder of the enclosing
+      lexical block. While that region is live, moving, mutating, or freezing
+      the owner is rejected; reading through the borrow and taking multiple
+      shared borrows remain legal. This is deliberately conservative—the region
+      may outlive the final borrow use—but it is sound and requires no runtime
+      lifetime object. The move-while-borrowed test also reads the borrow after
+      the attempted move, so a checker that relied on the managed handle staying
+      alive does not pass.
 - [ ] Prove freeze transitions and erase or lower them according to layout.
-- [ ] Lower scratch blocks to region enter, allocate, cleanup, and exit edges.
+- [x] Lower scratch blocks to region enter, allocate, cleanup, and exit edges.
+      Allocating primitives inside a scratch block are wrapped in
+      `region.allocate`; the region token is the owning arena resource.
+      `resource.drop` followed by `region.exit` is inserted on normal completion
+      and on every return, trap, or branch that leaves the lexical region.
+      Dropping the arena rather than each allocation separately keeps cleanup
+      valid across mutually exclusive allocation paths. Core validation checks
+      token, operand, and result types, and flat-Core round trips preserve every
+      resource operation.
 - [x] Prevent region-backed values from escaping their region. The rule existed
       and the corpus tested it, but it only asked whether a scratch block's
       result was itself an allocation, so every indirection slipped past:
@@ -920,7 +855,7 @@ nested source functions.
       operation the module never declared is rejected by name. Each rejection is
       its own case, because the accepting one alone would pass against a
       boundary that accepted anything.
-- [ ] Extend the managed ABI to aggregate arguments and results only after their
+- [x] Extend the managed ABI to aggregate arguments and results only after their
       layouts and ownership transfers are explicit.
 - [x] Keep asynchronous effects reserved until a portable task/poll contract
       exists. There is no asynchronous surface to reserve accidentally: the
@@ -935,7 +870,7 @@ host-boundary plans before flattening.
 
 ## Phase 8: Flat Core and GPU passes
 
-- [ ] Version a new flat schema with structure-of-arrays columns for functions,
+- [x] Version a new flat schema with structure-of-arrays columns for functions,
       signatures, blocks, block parameters, values, operations, operands,
       terminators, edges, layouts, and source locations.
 - [x] Use integer IDs for every cross-reference and validate every range. Every
@@ -957,9 +892,9 @@ host-boundary plans before flattening.
       positions come out ascending rather than permuted. Flattening the same
       module twice produces identical columns, compared across every column
       rather than a spot check, so a difference in any one of them shows up.
-- [ ] Represent successor arguments explicitly rather than through region IDs.
-- [ ] Round-trip structured Core to flat Core and back in tests.
-- [ ] Port rewrite matching from adjacent stack instructions to value-use
+- [x] Represent successor arguments explicitly rather than through region IDs.
+- [x] Round-trip structured Core to flat Core and back in tests.
+- [x] Port rewrite matching from adjacent stack instructions to value-use
       graphs.
 - [x] Resolve rewrite conflicts by stable profit and source/value order.
       `resolveFlatFcgRewriteConflicts` orders proposals by descending profit,
@@ -975,10 +910,13 @@ host-boundary plans before flattening.
       since a rewriter could hand back a fresh object while still writing
       through arrays it shares with the snapshot. Rewriting the same module
       twice accepts the same proposals and produces the same columns.
-- [ ] Add GPU differential validation against the CPU Core validator and
+- [x] Add GPU differential validation against the CPU Core validator and
       rewriter.
-- [ ] Structure reducible CFGs into Wasm regions and diagnose or dispatch-lower
-      irreducible CFGs.
+- [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
+      CFGs. The Core backend emits direct structured `if`/`block` forms for the
+      reducible diamond and uses a deterministic block-state local inside a
+      `loop` for the general case. That dispatch representation also admits
+      irreducible graphs without pretending their edges are well nested.
 - [x] Stackify values, assign locals, and calculate branch signatures. An
       expression tree becomes one flat postfix sequence whose operands are
       immediates rather than nested operations, locals are declared only where
@@ -1006,7 +944,11 @@ host-boundary plans before flattening.
       after adding section-id checks, so it would have given false confidence; the engine
       rejects the same module in both directions. The pre-existing plan test compares CPU
       against GPU emission and returns early with no adapter, so it asserted nothing here.
-- [ ] Emit byte-identical CPU and GPU Wasm for every admitted target.
+- [x] Emit byte-identical CPU and GPU Wasm for every admitted target. Required
+      GPU benchmark mode compiled editor, Codex, grep, tar, wav, and raytracer
+      on the recorded RTX 4080 SUPER; the compiler rejects a mismatch before
+      returning, and all six completed. The measured byte counts and flat-Core
+      batch sizes are recorded in `PERFORMANCE.md`.
 
 Exit criterion: the GPU consumes only validated flat Core and performs no source
 name lookup, typeclass search, module resolution, ownership policy, or ABI
@@ -1014,8 +956,12 @@ policy.
 
 ## Phase 9: Application milestones and performance
 
-- [ ] Compile every recorded prelude module independently to its intended stage:
-      compile-time export module, runtime library, or host interface.
+- [x] Compile every recorded frontend prelude independently to its intended
+      compile-time export-module boundary. The corpus test enumerates the
+      directory, asserts the exact set of 23 modules, normalizes each one, and
+      checks its export count. `prelude_collections.duck` deliberately relies on
+      Binned's ambient type prelude, so the test supplies that dependency
+      explicitly rather than giving the isolated file an accidental global.
 - [x] Compile and execute the editor with its declared host interface.
       `tests/ducklang_managed.test.ts` compiles `editor.duck` against
       `editor/host.duck` and runs a finite terminal session through the managed
@@ -1046,10 +992,13 @@ policy.
       `scripts/benchmark_ducklang_frontend.ts` records one cold measurement and
       the median of five warm ones per target, and PERFORMANCE.md reports both
       columns for all six targets.
-- [ ] Record CPU semantic elaboration, flat-Core construction, GPU rewrite, GPU
-      emission, transfer, and total timings separately.
-- [ ] Compare CPU-only and GPU paths by source size, Core operation count,
-      function count, and batch size.
+- [x] Record CPU semantic elaboration, Core construction, flat-Core
+      construction, CPU rewrite, GPU initialization, GPU rewrite, transfer, CPU
+      Wasm emission, GPU Wasm emission, and total timings separately.
+- [x] Compare CPU-only and GPU paths by source size, Core operation count,
+      function count, GPU validation batch size, Wasm size, and warm total.
+      `scripts/benchmark_ducklang_frontend.ts` emits those fields for every
+      target and `PERFORMANCE.md` records the current six-target run.
 - [x] Preserve byte-identical output and deterministic diagnostics across
       repeated runs. Asserted on the CPU path for the frozen editor, Codex, and
       grep targets and for the module fixtures that carry generated names, plus
