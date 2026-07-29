@@ -1048,6 +1048,74 @@ Exit criterion: compatibility and performance claims name the exact recorded
 Binned revision, target set, hardware, execution mode, and measured pipeline
 boundaries.
 
+## Phase 10: Production GPU compiler boundary
+
+Production here means the admitted Ducklang corpus can be compiled
+deterministically by a long-lived process or the CLI on a conforming WebGPU
+implementation, with explicit resource bounds, recoverable automatic fallback,
+strict required-GPU behavior, and an independently validated Wasm artifact. It
+does not mean accepting source outside the language contract or hiding CPU
+frontend work behind a GPU label.
+
+The theoretical basis is fail-stop stage composition: every stage either
+produces a validated value for the next stage or returns a typed inability to
+run. Automatic mode may replace only an unavailable GPU implementation with the
+equivalent CPU implementation. It may not reinterpret invalid IR, ignore a
+CPU/GPU disagreement, or return partially written output.
+
+- [x] Make GPU Core rewrite proposals authoritative, resolve them in stable
+      order, compact the flat package directly, and validate the rebuilt
+      snapshot before lowering.
+- [x] Hash-cons repeated type constructors before upload, use the scalable
+      representative algorithm beyond the measured quadratic crossover, and pack
+      four emitted Wasm bytes into each output word.
+- [x] Admit algebraic rewrites only where the value type proves the required
+      law. `x + 0` and `x * 1` are currently integer rules: bypassing an
+      IEEE-754 operation can change signed-zero or NaN payload bits observable
+      through reinterpretation.
+- [x] Preflight every GPU buffer, binding, dispatch, and generated-work bound
+      against the selected device before allocation. One shared boundary now
+      checks safe-integer byte counts, `maxBufferSize`, storage and uniform
+      binding spans, and one-dimensional workgroup counts. Type solving,
+      compile-time evaluation, Core validation and rewrite matching, and Wasm
+      emission have no direct `createBuffer` or `dispatchWorkgroups` calls
+      outside that boundary. Capacity tests pin exact-limit acceptance and
+      evidence-bearing rejection; automatic compilation receives
+      `unavailable`, while required mode promotes the same reason to failure.
+- [ ] Treat device loss and out-of-memory as recoverable GPU unavailability in
+      automatic mode, invalidate every cached pipeline tied to that device, and
+      retry a later compilation on a newly requested device. Validation errors,
+      semantic disagreement, and malformed GPU output remain hard failures.
+- [ ] Separate production execution from differential verification. A production
+      GPU emission must not first encode the complete CPU byte buffer;
+      verification mode must still compare every byte and remain the default for
+      tests and benchmarks.
+- [ ] Validate the selected final Wasm bytes with the engine and validate their
+      imports, exports, and managed ABI metadata before returning a compilation
+      artifact.
+- [ ] Let the CLI compile managed applications by accepting an explicit host
+      interface, report which backend completed each GPU-capable stage, and
+      preserve atomic output replacement on every failure path.
+- [ ] Add generated differential tests for type solving, compile-time bytecode,
+      Core rewrite batches, and Wasm plans. Seeds and minimized failures must be
+      reproducible without a GPU; GPU-enabled CI runs the same cases against the
+      CPU oracles.
+- [ ] Stress concurrent compilations through the shared device and prove
+      deterministic isolation, bounded cleanup, and recovery after a failed job.
+- [ ] Define release gates for the frozen corpus, malformed inputs, GPU-required
+      execution, repeated output identity, and benchmark regressions. Record the
+      adapter limits and enough samples to state a break-even interval rather
+      than a single-run speedup.
+- [ ] Reconcile the README, compatibility matrix, live-error inventory, and
+      performance report with the implemented pipeline. Remove stale
+      proof-of-concept limits and claims contradicted by executable tests.
+
+Exit criterion: both automatic and required GPU policies have observable, tested
+semantics; no GPU allocation or dispatch is attempted outside a checked device
+bound; the returned Wasm and ABI are independently valid; editor, Codex, grep,
+tar, wav, and raytracer compile in required-GPU verification mode; and the
+documented release command passes from a clean checkout.
+
 ## Current live first-error inventory
 
 This inventory records the first observed failure for each target, not every

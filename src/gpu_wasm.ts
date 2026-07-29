@@ -1,5 +1,8 @@
 import {
   acquireCompilerGpuErrorScope,
+  compilerGpuCapacityViolation,
+  createCompilerGpuBuffer,
+  dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
 } from "./gpu_device.ts";
 import {
@@ -251,79 +254,131 @@ export async function emitWasmPlanOnGpu(
       `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
     );
   }
-  const maximumBufferWords = Math.floor(device.limits.maxBufferSize / 4);
-  const maximumStorageWords = Math.floor(
-    device.limits.maxStorageBufferBindingSize / 4,
-  );
   const maximumOutputWordCount = Math.ceil(maximumByteCount / 4);
-  if (
-    Math.max(plan.atoms.length, maximumOutputWordCount) >
-      Math.min(maximumBufferWords, maximumStorageWords) ||
-    maximumOutputWordCount + 1 > maximumBufferWords
-  ) {
-    return {
-      status: "unavailable",
-      reason:
-        `GPU Wasm limits are ${maximumBufferWords} buffer words and ${maximumStorageWords} storage words; requested ${plan.atoms.length} atoms and up to ${maximumOutputWordCount} packed output words`,
-    };
+  const atomBytes = Math.max(4, columns.kinds.byteLength);
+  const outputBytes = maximumOutputWordCount * 4;
+  const capacityRequests = [
+    ["atom kinds", atomBytes, "storage"],
+    ["atom low words", atomBytes, "storage"],
+    ["atom high words", atomBytes, "storage"],
+    ["range starts", atomBytes, "storage"],
+    ["range counts", atomBytes, "storage"],
+    ["dependency levels", atomBytes, "storage"],
+    ["atom sizes", atomBytes, "storage"],
+    ["prefixes", atomBytes, "storage"],
+    ["alternate prefixes", atomBytes, "storage"],
+    ["packed output", outputBytes, "storage"],
+    ["count parameters", 4, "uniform"],
+    ["pass parameters", 8, "uniform"],
+    ["readback", 4 + outputBytes, "copy"],
+  ] as const;
+  for (const [label, byteLength, binding] of capacityRequests) {
+    const reason = compilerGpuCapacityViolation(device.limits, {
+      kind: "buffer",
+      label: `Wasm ${label}`,
+      byteLength,
+      binding,
+    });
+    if (reason !== undefined) return { status: "unavailable", reason };
+  }
+  const workgroupCount = Math.ceil(plan.atoms.length / 64);
+  const dispatchReason = compilerGpuCapacityViolation(device.limits, {
+    kind: "dispatch",
+    label: "Wasm emission",
+    workgroupCount,
+  });
+  if (dispatchReason !== undefined) {
+    return { status: "unavailable", reason: dispatchReason };
   }
 
   const kindBuffer = createBuffer(
     device,
+    "Wasm atom kinds",
     columns.kinds,
     GPUBufferUsage.STORAGE,
   );
   const lowWordBuffer = createBuffer(
     device,
+    "Wasm atom low words",
     columns.lowWords,
     GPUBufferUsage.STORAGE,
   );
   const highWordBuffer = createBuffer(
     device,
+    "Wasm atom high words",
     columns.highWords,
     GPUBufferUsage.STORAGE,
   );
   const rangeStartBuffer = createBuffer(
     device,
+    "Wasm range starts",
     columns.rangeStarts,
     GPUBufferUsage.STORAGE,
   );
   const rangeCountBuffer = createBuffer(
     device,
+    "Wasm range counts",
     columns.rangeCounts,
     GPUBufferUsage.STORAGE,
   );
   const dependencyLevelBuffer = createBuffer(
     device,
+    "Wasm dependency levels",
     columns.dependencyLevels,
     GPUBufferUsage.STORAGE,
   );
-  const sizeBuffer = device.createBuffer({
-    size: columns.kinds.byteLength,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const prefixBuffer = device.createBuffer({
-    size: columns.kinds.byteLength,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST |
-      GPUBufferUsage.COPY_SRC,
-  });
-  const alternatePrefixBuffer = device.createBuffer({
-    size: columns.kinds.byteLength,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const outputBuffer = device.createBuffer({
-    size: maximumOutputWordCount * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const sizeBuffer = createCompilerGpuBuffer(
+    device,
+    "Wasm atom sizes",
+    {
+      size: atomBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const prefixBuffer = createCompilerGpuBuffer(
+    device,
+    "Wasm prefixes",
+    {
+      size: atomBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST |
+        GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const alternatePrefixBuffer = createCompilerGpuBuffer(
+    device,
+    "Wasm alternate prefixes",
+    {
+      size: atomBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const outputBuffer = createCompilerGpuBuffer(
+    device,
+    "Wasm packed output",
+    {
+      size: outputBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
   const countParameterBuffer = createBuffer(
     device,
+    "Wasm count parameters",
     new Uint32Array([plan.atoms.length]),
     GPUBufferUsage.UNIFORM,
   );
-  const readback = device.createBuffer({
-    size: 4 + maximumOutputWordCount * 4,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback = createCompilerGpuBuffer(
+    device,
+    "Wasm readback",
+    {
+      size: 4 + outputBytes,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   const transientParameterBuffers: GPUBuffer[] = [];
   const buffers = [
     kindBuffer,
@@ -359,7 +414,12 @@ export async function emitWasmPlanOnGpu(
     const sizePass = encoder.beginComputePass();
     sizePass.setPipeline(sizePipeline);
     sizePass.setBindGroup(0, sizeBindGroup);
-    sizePass.dispatchWorkgroups(Math.ceil(plan.atoms.length / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      sizePass,
+      "Wasm size calculation",
+      workgroupCount,
+    );
     sizePass.end();
 
     for (
@@ -369,6 +429,7 @@ export async function emitWasmPlanOnGpu(
     ) {
       const parameterBuffer = createBuffer(
         device,
+        `Wasm length parameters ${level}`,
         new Uint32Array([plan.atoms.length, level]),
         GPUBufferUsage.UNIFORM,
       );
@@ -388,7 +449,12 @@ export async function emitWasmPlanOnGpu(
       const pass = encoder.beginComputePass();
       pass.setPipeline(lengthPipeline);
       pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(Math.ceil(plan.atoms.length / 64));
+      dispatchCompilerGpuWorkgroups(
+        device,
+        pass,
+        `Wasm length level ${level}`,
+        workgroupCount,
+      );
       pass.end();
     }
 
@@ -405,6 +471,7 @@ export async function emitWasmPlanOnGpu(
     for (let distance = 1; distance < plan.atoms.length; distance *= 2) {
       const parameterBuffer = createBuffer(
         device,
+        `Wasm scan parameters ${distance}`,
         new Uint32Array([plan.atoms.length, distance]),
         GPUBufferUsage.UNIFORM,
       );
@@ -420,7 +487,12 @@ export async function emitWasmPlanOnGpu(
       const pass = encoder.beginComputePass();
       pass.setPipeline(scanPipeline);
       pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(Math.ceil(plan.atoms.length / 64));
+      dispatchCompilerGpuWorkgroups(
+        device,
+        pass,
+        `Wasm scan distance ${distance}`,
+        workgroupCount,
+      );
       pass.end();
       [inputPrefixBuffer, outputPrefixBuffer] = [
         outputPrefixBuffer,
@@ -444,7 +516,12 @@ export async function emitWasmPlanOnGpu(
     const emissionPass = encoder.beginComputePass();
     emissionPass.setPipeline(emissionPipeline);
     emissionPass.setBindGroup(0, emissionBindGroup);
-    emissionPass.dispatchWorkgroups(Math.ceil(plan.atoms.length / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      emissionPass,
+      "Wasm byte emission",
+      workgroupCount,
+    );
     emissionPass.end();
     encoder.copyBufferToBuffer(
       inputPrefixBuffer,
@@ -626,14 +703,23 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
 
 function createBuffer(
   device: GPUDevice,
+  label: string,
   words: Uint32Array,
   usage: GPUBufferUsageFlags,
 ): GPUBuffer {
-  const buffer = device.createBuffer({
-    size: Math.max(4, words.byteLength),
-    usage,
-    mappedAtCreation: true,
-  });
+  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
+    ? "uniform"
+    : "storage";
+  const buffer = createCompilerGpuBuffer(
+    device,
+    label,
+    {
+      size: Math.max(4, words.byteLength),
+      usage,
+      mappedAtCreation: true,
+    },
+    binding,
+  );
   new Uint32Array(buffer.getMappedRange()).set(words);
   buffer.unmap();
   return buffer;

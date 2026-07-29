@@ -10,6 +10,9 @@ import {
 } from "./flat_ducklang_core.ts";
 import {
   acquireCompilerGpuErrorScope,
+  compilerGpuCapacityViolation,
+  createCompilerGpuBuffer,
+  dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
 } from "./gpu_device.ts";
 
@@ -227,59 +230,142 @@ export async function runDucklangCoreGpuPass(
     snapshot.valueDefinitionKinds,
     snapshot.valueDefinitionIds,
   );
+  const outputSize = 8 + snapshot.operationKinds.byteLength * 2;
+  const capacityRequests = [
+    ["validation records", Math.max(4, records.byteLength), "storage"],
+    ["validation errors", 8, "storage"],
+    ["validation parameters", 4, "uniform"],
+    ["operations", Math.max(4, operationColumns.byteLength), "storage"],
+    ["operation ranges", Math.max(4, operationRanges.byteLength), "storage"],
+    ["operands", Math.max(4, snapshot.operandValueIds.byteLength), "storage"],
+    ["attributes", Math.max(4, attributes.byteLength), "storage"],
+    ["values", Math.max(4, values.byteLength), "storage"],
+    ["type kinds", Math.max(4, snapshot.typeKinds.byteLength), "storage"],
+    [
+      "type auxiliaries",
+      Math.max(4, snapshot.typeAuxiliaries.byteLength),
+      "storage",
+    ],
+    [
+      "rewrite rules",
+      Math.max(4, snapshot.operationKinds.byteLength),
+      "storage",
+    ],
+    [
+      "rewrite replacements",
+      Math.max(4, snapshot.operationKinds.byteLength),
+      "storage",
+    ],
+    ["rewrite parameters", 20, "uniform"],
+    ["readback", Math.max(8, outputSize), "copy"],
+  ] as const;
+  for (const [label, byteLength, binding] of capacityRequests) {
+    const reason = compilerGpuCapacityViolation(device.limits, {
+      kind: "buffer",
+      label: `Ducklang Core ${label}`,
+      byteLength,
+      binding,
+    });
+    if (reason !== undefined) return { status: "unavailable", reason };
+  }
+  for (
+    const [label, workgroupCount] of [
+      ["validation", Math.max(1, Math.ceil(records.length / 256))],
+      [
+        "rewrite",
+        Math.max(1, Math.ceil(snapshot.operationKinds.length / 64)),
+      ],
+    ] as const
+  ) {
+    const reason = compilerGpuCapacityViolation(device.limits, {
+      kind: "dispatch",
+      label: `Ducklang Core ${label}`,
+      workgroupCount,
+    });
+    if (reason !== undefined) return { status: "unavailable", reason };
+  }
   const transferStart = performance.now();
-  const recordBuffer = createBuffer(device, records, GPUBufferUsage.STORAGE);
+  const recordBuffer = createBuffer(
+    device,
+    "Ducklang Core validation records",
+    records,
+    GPUBufferUsage.STORAGE,
+  );
   const errorBuffer = createBuffer(
     device,
+    "Ducklang Core validation errors",
     new Uint32Array([0, 0xffff_ffff]),
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   );
   const validationParameters = createBuffer(
     device,
+    "Ducklang Core validation parameters",
     new Uint32Array([records.length / 4]),
     GPUBufferUsage.UNIFORM,
   );
   const operationBuffer = createBuffer(
     device,
+    "Ducklang Core operations",
     operationColumns,
     GPUBufferUsage.STORAGE,
   );
   const operationRangeBuffer = createBuffer(
     device,
+    "Ducklang Core operation ranges",
     operationRanges,
     GPUBufferUsage.STORAGE,
   );
   const operandBuffer = createBuffer(
     device,
+    "Ducklang Core operands",
     snapshot.operandValueIds,
     GPUBufferUsage.STORAGE,
   );
   const attributeBuffer = createBuffer(
     device,
+    "Ducklang Core attributes",
     attributes,
     GPUBufferUsage.STORAGE,
   );
-  const valueBuffer = createBuffer(device, values, GPUBufferUsage.STORAGE);
+  const valueBuffer = createBuffer(
+    device,
+    "Ducklang Core values",
+    values,
+    GPUBufferUsage.STORAGE,
+  );
   const typeKindBuffer = createBuffer(
     device,
+    "Ducklang Core type kinds",
     snapshot.typeKinds,
     GPUBufferUsage.STORAGE,
   );
   const typeAuxiliaryBuffer = createBuffer(
     device,
+    "Ducklang Core type auxiliaries",
     snapshot.typeAuxiliaries,
     GPUBufferUsage.STORAGE,
   );
-  const ruleBuffer = device.createBuffer({
-    size: Math.max(4, snapshot.operationKinds.byteLength),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const replacementBuffer = device.createBuffer({
-    size: Math.max(4, snapshot.operationKinds.byteLength),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const ruleBuffer = createCompilerGpuBuffer(
+    device,
+    "Ducklang Core rewrite rules",
+    {
+      size: Math.max(4, snapshot.operationKinds.byteLength),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const replacementBuffer = createCompilerGpuBuffer(
+    device,
+    "Ducklang Core rewrite replacements",
+    {
+      size: Math.max(4, snapshot.operationKinds.byteLength),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
   const rewriteParameters = createBuffer(
     device,
+    "Ducklang Core rewrite parameters",
     new Uint32Array([
       snapshot.operationKinds.length,
       snapshot.operandValueIds.length,
@@ -289,11 +375,15 @@ export async function runDucklangCoreGpuPass(
     ]),
     GPUBufferUsage.UNIFORM,
   );
-  const outputSize = 8 + snapshot.operationKinds.byteLength * 2;
-  const readback = device.createBuffer({
-    size: Math.max(8, outputSize),
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback = createCompilerGpuBuffer(
+    device,
+    "Ducklang Core readback",
+    {
+      size: Math.max(8, outputSize),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   const transferMilliseconds = performance.now() - transferStart;
   const buffers = [
     recordBuffer,
@@ -329,7 +419,10 @@ export async function runDucklangCoreGpuPass(
     const validationPass = encoder.beginComputePass();
     validationPass.setPipeline(validationPipeline);
     validationPass.setBindGroup(0, validationBindGroup);
-    validationPass.dispatchWorkgroups(
+    dispatchCompilerGpuWorkgroups(
+      device,
+      validationPass,
+      "Ducklang Core validation",
       Math.max(1, Math.ceil(records.length / 256)),
     );
     validationPass.end();
@@ -352,7 +445,10 @@ export async function runDucklangCoreGpuPass(
     const rewritePass = encoder.beginComputePass();
     rewritePass.setPipeline(rewritePipeline);
     rewritePass.setBindGroup(0, rewriteBindGroup);
-    rewritePass.dispatchWorkgroups(
+    dispatchCompilerGpuWorkgroups(
+      device,
+      rewritePass,
+      "Ducklang Core rewrite",
       Math.max(1, Math.ceil(snapshot.operationKinds.length / 64)),
     );
     rewritePass.end();
@@ -895,14 +991,23 @@ async function requestGpuCoreContext(): Promise<GpuCoreContext> {
 
 function createBuffer(
   device: GPUDevice,
+  label: string,
   words: Uint32Array,
   usage: GPUBufferUsageFlags,
 ): GPUBuffer {
-  const buffer = device.createBuffer({
-    size: Math.max(4, words.byteLength),
-    usage,
-    mappedAtCreation: true,
-  });
+  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
+    ? "uniform"
+    : "storage";
+  const buffer = createCompilerGpuBuffer(
+    device,
+    label,
+    {
+      size: Math.max(4, words.byteLength),
+      usage,
+      mappedAtCreation: true,
+    },
+    binding,
+  );
   new Uint32Array(buffer.getMappedRange()).set(words);
   buffer.unmap();
   return buffer;

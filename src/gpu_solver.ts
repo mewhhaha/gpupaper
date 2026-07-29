@@ -1,7 +1,12 @@
 import type { EqualityConstraint, Type } from "./types.ts";
 import {
   acquireCompilerGpuErrorScope,
+  CompilerGpuCapacityError,
+  type CompilerGpuCapacityRequest,
+  createCompilerGpuBuffer,
+  dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
+  requireCompilerGpuCapacity,
 } from "./gpu_device.ts";
 
 export type GpuSolveResult =
@@ -225,6 +230,20 @@ export async function solveTypeEqualitiesOnGpu(
   const deviceRequest = await requestCompilerGpuDevice();
   if (deviceRequest.status === "unavailable") return deviceRequest;
   const device = deviceRequest.device;
+  try {
+    return await solveTypeEqualitiesWithDevice(device, equalities);
+  } catch (error) {
+    if (error instanceof CompilerGpuCapacityError) {
+      return { status: "unavailable", reason: error.message };
+    }
+    throw error;
+  }
+}
+
+async function solveTypeEqualitiesWithDevice(
+  device: GPUDevice,
+  equalities: readonly EqualityConstraint[],
+): Promise<GpuSolveResult> {
   selectPipelineDevice(device);
   const flat = flattenEqualities(equalities);
   if (flat.terms.length === 0) {
@@ -344,8 +363,13 @@ export async function unionPairsOnGpu(
     { length: termCount },
     (_, index) => index,
   );
-  return (await unionOnGpu(device, initialRepresentatives, equalities))
-    .representatives;
+  try {
+    return (await unionOnGpu(device, initialRepresentatives, equalities))
+      .representatives;
+  } catch (error) {
+    if (error instanceof CompilerGpuCapacityError) return undefined;
+    throw error;
+  }
 }
 
 function flattenEqualities(
@@ -585,6 +609,28 @@ async function decomposeConstructorsOnGpu(
       pairSlotCount * maximumChildCount,
     ),
   );
+  requireTypeSolverGpuCapacities(device, [
+    storageCapacity("constructor representatives", representatives.length * 4),
+    storageCapacity("constructor term kinds", termKinds.byteLength),
+    storageCapacity("constructor labels", termLabelIds.byteLength),
+    storageCapacity("constructor child starts", childStarts.length * 4),
+    storageCapacity("constructor child counts", childCounts.length * 4),
+    storageCapacity("constructor children", Math.max(4, children.length * 4)),
+    storageCapacity("constructor pair counts", pairSlotCount * 4),
+    storageCapacity("constructor first prefixes", pairSlotCount * 4),
+    storageCapacity("constructor second prefixes", pairSlotCount * 4),
+    storageCapacity("constructor clash", 4),
+    storageCapacity("constructor overflow", 4),
+    storageCapacity("constructor output equalities", equalityCapacity * 8),
+    storageCapacity("constructor output parents", equalityCapacity * 4),
+    uniformCapacity("constructor parameters", 8),
+    uniformCapacity("constructor scan parameters", 8),
+    copyCapacity("constructor metadata readback", 12),
+    dispatchCapacity(
+      "constructor decomposition",
+      Math.ceil(pairSlotCount / 64),
+    ),
+  ]);
 
   const representativeBuffer = createBuffer(
     device,
@@ -616,44 +662,79 @@ async function decomposeConstructorsOnGpu(
     new Uint32Array(children),
     GPUBufferUsage.STORAGE,
   );
-  const pairCountBuffer = device.createBuffer({
-    size: Math.max(4, pairSlotCount * 4),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const firstPrefixBuffer = device.createBuffer({
-    size: Math.max(4, pairSlotCount * 4),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const secondPrefixBuffer = device.createBuffer({
-    size: Math.max(4, pairSlotCount * 4),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const pairCountBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor pair counts",
+    {
+      size: Math.max(4, pairSlotCount * 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const firstPrefixBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor first prefixes",
+    {
+      size: Math.max(4, pairSlotCount * 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const secondPrefixBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor second prefixes",
+    {
+      size: Math.max(4, pairSlotCount * 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
   const clashBuffer = createBuffer(
     device,
     new Uint32Array([0xffff_ffff]),
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   );
-  const overflowBuffer = device.createBuffer({
-    size: 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const outputEqualityBuffer = device.createBuffer({
-    size: equalityCapacity * 8,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const outputParentBuffer = device.createBuffer({
-    size: equalityCapacity * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
+  const overflowBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor overflow",
+    {
+      size: 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const outputEqualityBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor output equalities",
+    {
+      size: equalityCapacity * 8,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const outputParentBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver constructor output parents",
+    {
+      size: equalityCapacity * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
   const decompositionParameterBuffer = createBuffer(
     device,
     new Uint32Array([termCount, equalityCapacity]),
     GPUBufferUsage.UNIFORM,
   );
-  const metadataReadback = device.createBuffer({
-    size: 12,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const metadataReadback = createCompilerGpuBuffer(
+    device,
+    "type solver constructor metadata readback",
+    {
+      size: 12,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   const scanParameterBuffers: GPUBuffer[] = [];
   const buffers = [
     representativeBuffer,
@@ -698,7 +779,12 @@ async function decomposeConstructorsOnGpu(
     const countPass = encoder.beginComputePass();
     countPass.setPipeline(pipelines.count);
     countPass.setBindGroup(0, countBindGroup);
-    countPass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      countPass,
+      "type solver constructor count",
+      Math.ceil(pairSlotCount / 64),
+    );
     countPass.end();
 
     let inputPrefixBuffer = pairCountBuffer;
@@ -721,7 +807,12 @@ async function decomposeConstructorsOnGpu(
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipelines.scan);
       pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+      dispatchCompilerGpuWorkgroups(
+        device,
+        pass,
+        "type solver constructor scan",
+        Math.ceil(pairSlotCount / 64),
+      );
       pass.end();
       [inputPrefixBuffer, outputPrefixBuffer] = [
         outputPrefixBuffer,
@@ -747,7 +838,12 @@ async function decomposeConstructorsOnGpu(
     const emitPass = encoder.beginComputePass();
     emitPass.setPipeline(pipelines.emit);
     emitPass.setBindGroup(0, emitBindGroup);
-    emitPass.dispatchWorkgroups(Math.ceil(pairSlotCount / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      emitPass,
+      "type solver constructor emission",
+      Math.ceil(pairSlotCount / 64),
+    );
     emitPass.end();
     encoder.copyBufferToBuffer(clashBuffer, 0, metadataReadback, 0, 4);
     encoder.copyBufferToBuffer(
@@ -797,10 +893,18 @@ async function decomposeConstructorsOnGpu(
       return { status: "completed", clash: undefined, equalities: [] };
     }
 
-    outputReadback = device.createBuffer({
-      size: equalityCount * 12,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
+    requireTypeSolverGpuCapacities(device, [
+      copyCapacity("constructor output readback", equalityCount * 12),
+    ]);
+    outputReadback = createCompilerGpuBuffer(
+      device,
+      "type solver constructor output readback",
+      {
+        size: equalityCount * 12,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      },
+      "copy",
+    );
     const outputEncoder = device.createCommandEncoder();
     outputEncoder.copyBufferToBuffer(
       outputEqualityBuffer,
@@ -862,6 +966,20 @@ async function unionOnGpu(
 ): Promise<{ readonly representatives: number[]; readonly rounds: number }> {
   const parentBytes = new Uint32Array(initialRepresentatives);
   const equalityWords = new Uint32Array(equalities.flat());
+  const equalityBufferBytes = Math.max(8, equalityWords.byteLength);
+  requireTypeSolverGpuCapacities(device, [
+    storageCapacity("union parents", parentBytes.byteLength),
+    storageCapacity("union equalities", equalityBufferBytes),
+    copyCapacity("union readback", parentBytes.byteLength),
+    dispatchCapacity(
+      "union equalities",
+      Math.max(1, Math.ceil(equalities.length / 64)),
+    ),
+    dispatchCapacity(
+      "union path compression",
+      Math.ceil(parentBytes.length / 64),
+    ),
+  ]);
   const parentBuffer = createBuffer(
     device,
     parentBytes,
@@ -872,10 +990,15 @@ async function unionOnGpu(
     equalityWords.length === 0 ? new Uint32Array([0, 0]) : equalityWords,
     GPUBufferUsage.STORAGE,
   );
-  const readback = device.createBuffer({
-    size: parentBytes.byteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback = createCompilerGpuBuffer(
+    device,
+    "type solver union readback",
+    {
+      size: parentBytes.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   let readbackMapped = false;
   try {
     const pipelines = await requestUnionPipelines(device);
@@ -896,14 +1019,22 @@ async function unionOnGpu(
     const unionPass = encoder.beginComputePass();
     unionPass.setPipeline(pipelines.union);
     unionPass.setBindGroup(0, bindGroup);
-    unionPass.dispatchWorkgroups(
+    dispatchCompilerGpuWorkgroups(
+      device,
+      unionPass,
+      "type solver union equalities",
       Math.max(1, Math.ceil(equalities.length / 64)),
     );
     unionPass.end();
     const compressionPass = encoder.beginComputePass();
     compressionPass.setPipeline(pipelines.compression);
     compressionPass.setBindGroup(0, bindGroup);
-    compressionPass.dispatchWorkgroups(Math.ceil(parentBytes.length / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      compressionPass,
+      "type solver union path compression",
+      Math.ceil(parentBytes.length / 64),
+    );
     compressionPass.end();
     encoder.copyBufferToBuffer(
       parentBuffer,
@@ -1058,15 +1189,36 @@ async function findInfiniteTypeOnGpu(
     parameterWords[start] = count;
     parameterWords[start + 1] = pivot;
   }
+  requireTypeSolverGpuCapacities(device, [
+    storageCapacity("reachability matrix", matrix.byteLength),
+    {
+      kind: "buffer",
+      label: "type solver reachability parameters",
+      byteLength: parameterWords.byteLength,
+      binding: "uniform",
+      bindingByteLength: 8,
+    },
+    copyCapacity("reachability readback", matrix.byteLength),
+    dispatchCapacity(
+      "reachability closure",
+      Math.ceil(matrix.length / 64),
+    ),
+  ]);
   const parameterBuffer = createBuffer(
     device,
     parameterWords,
     GPUBufferUsage.UNIFORM,
+    8,
   );
-  const readback = device.createBuffer({
-    size: matrix.byteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback = createCompilerGpuBuffer(
+    device,
+    "type solver reachability readback",
+    {
+      size: matrix.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   let readbackMapped = false;
   try {
     const { bindGroupLayout, pipeline } = await requestReachabilityPipeline(
@@ -1084,7 +1236,12 @@ async function findInfiniteTypeOnGpu(
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, bindGroup, [pivot * parameterStride]);
-      pass.dispatchWorkgroups(Math.ceil(matrix.length / 64));
+      dispatchCompilerGpuWorkgroups(
+        device,
+        pass,
+        "type solver reachability closure",
+        Math.ceil(matrix.length / 64),
+      );
       pass.end();
     }
     encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
@@ -1279,12 +1436,76 @@ function createBuffer(
   device: GPUDevice,
   words: Uint32Array,
   usage: GPUBufferUsageFlags,
+  bindingByteLength?: number,
 ): GPUBuffer {
   const size = Math.max(4, Math.ceil(words.byteLength / 4) * 4);
-  const buffer = device.createBuffer({ size, usage, mappedAtCreation: true });
+  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
+    ? "uniform"
+    : "storage";
+  const buffer = createCompilerGpuBuffer(
+    device,
+    "type solver input",
+    { size, usage, mappedAtCreation: true },
+    binding,
+    bindingByteLength,
+  );
   new Uint32Array(buffer.getMappedRange()).set(words);
   buffer.unmap();
   return buffer;
+}
+
+function requireTypeSolverGpuCapacities(
+  device: GPUDevice,
+  requests: readonly CompilerGpuCapacityRequest[],
+): void {
+  for (const request of requests) requireCompilerGpuCapacity(device, request);
+}
+
+function storageCapacity(
+  label: string,
+  byteLength: number,
+): CompilerGpuCapacityRequest {
+  return {
+    kind: "buffer",
+    label: `type solver ${label}`,
+    byteLength: Math.max(4, byteLength),
+    binding: "storage",
+  };
+}
+
+function uniformCapacity(
+  label: string,
+  byteLength: number,
+): CompilerGpuCapacityRequest {
+  return {
+    kind: "buffer",
+    label: `type solver ${label}`,
+    byteLength: Math.max(4, byteLength),
+    binding: "uniform",
+  };
+}
+
+function copyCapacity(
+  label: string,
+  byteLength: number,
+): CompilerGpuCapacityRequest {
+  return {
+    kind: "buffer",
+    label: `type solver ${label}`,
+    byteLength,
+    binding: "copy",
+  };
+}
+
+function dispatchCapacity(
+  label: string,
+  workgroupCount: number,
+): CompilerGpuCapacityRequest {
+  return {
+    kind: "dispatch",
+    label: `type solver ${label}`,
+    workgroupCount,
+  };
 }
 
 function equalityKey([left, right]: readonly [number, number]): string {

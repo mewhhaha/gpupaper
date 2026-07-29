@@ -6,6 +6,9 @@ import type {
 } from "./syntax.ts";
 import {
   acquireCompilerGpuErrorScope,
+  compilerGpuCapacityViolation,
+  createCompilerGpuBuffer,
+  dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
 } from "./gpu_device.ts";
 
@@ -402,35 +405,84 @@ export async function evaluateBytecodeOnGpu(
     combinedOperands.push(...program.operands);
   }
   const stackCapacity = comptimeStackCapacity;
+  const capacityRequests = [
+    ["opcodes", Math.max(4, combinedOpcodes.length * 4), "storage"],
+    ["operands", Math.max(4, combinedOperands.length * 4), "storage"],
+    ["program starts", Math.max(4, starts.length * 4), "storage"],
+    ["results", programs.length * 4, "storage"],
+    ["statuses", programs.length * 4, "storage"],
+    ["stacks", programs.length * stackCapacity * 4, "storage"],
+    ["parameters", 16, "uniform"],
+    ["readback", programs.length * 8, "copy"],
+  ] as const;
+  for (const [label, byteLength, binding] of capacityRequests) {
+    const reason = compilerGpuCapacityViolation(device.limits, {
+      kind: "buffer",
+      label: `comptime ${label}`,
+      byteLength,
+      binding,
+    });
+    if (reason !== undefined) {
+      return { status: "unavailable", reason, backend: "gpu" };
+    }
+  }
+  const workgroupCount = Math.ceil(programs.length / 64);
+  const dispatchReason = compilerGpuCapacityViolation(device.limits, {
+    kind: "dispatch",
+    label: "comptime evaluation",
+    workgroupCount,
+  });
+  if (dispatchReason !== undefined) {
+    return { status: "unavailable", reason: dispatchReason, backend: "gpu" };
+  }
   const opcodeBuffer = createGpuBuffer(
     device,
+    "comptime opcodes",
     new Uint32Array(combinedOpcodes),
     GPUBufferUsage.STORAGE,
   );
   const operandBuffer = createGpuBuffer(
     device,
+    "comptime operands",
     new Int32Array(combinedOperands),
     GPUBufferUsage.STORAGE,
   );
   const startBuffer = createGpuBuffer(
     device,
+    "comptime program starts",
     new Uint32Array(starts),
     GPUBufferUsage.STORAGE,
   );
-  const resultBuffer = device.createBuffer({
-    size: programs.length * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const statusBuffer = device.createBuffer({
-    size: programs.length * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  const stackBuffer = device.createBuffer({
-    size: programs.length * stackCapacity * 4,
-    usage: GPUBufferUsage.STORAGE,
-  });
+  const resultBuffer = createCompilerGpuBuffer(
+    device,
+    "comptime results",
+    {
+      size: programs.length * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const statusBuffer = createCompilerGpuBuffer(
+    device,
+    "comptime statuses",
+    {
+      size: programs.length * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
+  );
+  const stackBuffer = createCompilerGpuBuffer(
+    device,
+    "comptime stacks",
+    {
+      size: programs.length * stackCapacity * 4,
+      usage: GPUBufferUsage.STORAGE,
+    },
+    "storage",
+  );
   const parameterBuffer = createGpuBuffer(
     device,
+    "comptime parameters",
     new Uint32Array([
       programs.length,
       Math.max(...programs.map((program) => program.opcodes.length)),
@@ -439,10 +491,15 @@ export async function evaluateBytecodeOnGpu(
     ]),
     GPUBufferUsage.UNIFORM,
   );
-  const readback = device.createBuffer({
-    size: programs.length * 8,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback = createCompilerGpuBuffer(
+    device,
+    "comptime readback",
+    {
+      size: programs.length * 8,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
   const buffers = [
     opcodeBuffer,
     operandBuffer,
@@ -469,7 +526,12 @@ export async function evaluateBytecodeOnGpu(
     const pass = encoder.beginComputePass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(programs.length / 64));
+    dispatchCompilerGpuWorkgroups(
+      device,
+      pass,
+      "comptime evaluation",
+      workgroupCount,
+    );
     pass.end();
     encoder.copyBufferToBuffer(
       resultBuffer,
@@ -745,14 +807,23 @@ function requestComptimeGpuContext(): Promise<ComptimeGpuContextRequest> {
 
 function createGpuBuffer(
   device: GPUDevice,
+  label: string,
   values: Uint32Array | Int32Array,
   usage: GPUBufferUsageFlags,
 ): GPUBuffer {
-  const buffer = device.createBuffer({
-    size: Math.max(4, values.byteLength),
-    usage,
-    mappedAtCreation: true,
-  });
+  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
+    ? "uniform"
+    : "storage";
+  const buffer = createCompilerGpuBuffer(
+    device,
+    label,
+    {
+      size: Math.max(4, values.byteLength),
+      usage,
+      mappedAtCreation: true,
+    },
+    binding,
+  );
   new Uint8Array(buffer.getMappedRange()).set(
     new Uint8Array(values.buffer, values.byteOffset, values.byteLength),
   );
