@@ -1,7 +1,9 @@
 import {
   type CompilationArtifact,
+  type CompilationBackends,
   compileModuleSource,
   type GpuMode,
+  type GpuWasmVerification,
   runMain,
 } from "./compiler.ts";
 
@@ -12,6 +14,8 @@ export type CliInvocation = {
   readonly file: string;
   readonly output: string | undefined;
   readonly gpuMode: GpuMode;
+  readonly gpuWasmVerification: GpuWasmVerification;
+  readonly hostInterfaceFile: string | undefined;
 };
 
 export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
@@ -21,20 +25,42 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     !["compile", "run", "experiments"].includes(command)
   ) {
     throw new Error(
-      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--require-gpu]",
+      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
     );
   }
-  const unknownOption = rest.find((argument) =>
-    argument.startsWith("--") &&
-    argument !== "--cpu" && argument !== "--require-gpu"
-  );
-  if (unknownOption !== undefined) {
-    throw new Error(`unknown option ${unknownOption}`);
+  const positional: string[] = [];
+  let hostInterfaceFile: string | undefined;
+  let index = 0;
+  while (index < rest.length) {
+    const argument = rest[index];
+    if (
+      argument === "--cpu" || argument === "--require-gpu" ||
+      argument === "--no-gpu-verification"
+    ) {
+      index += 1;
+      continue;
+    }
+    if (argument === "--host-interface") {
+      if (hostInterfaceFile !== undefined) {
+        throw new Error("--host-interface may be provided only once");
+      }
+      const path = rest[index + 1];
+      if (path === undefined || path.startsWith("--")) {
+        throw new Error("--host-interface requires a file path");
+      }
+      hostInterfaceFile = path;
+      index += 2;
+      continue;
+    }
+    if (argument.startsWith("--")) {
+      throw new Error(`unknown option ${argument}`);
+    }
+    positional.push(argument);
+    index += 1;
   }
   if (rest.includes("--cpu") && rest.includes("--require-gpu")) {
     throw new Error("--cpu and --require-gpu cannot be used together");
   }
-  const positional = rest.filter((argument) => !argument.startsWith("--"));
   const maximumPositionals = command === "compile" ? 1 : 0;
   if (positional.length > maximumPositionals) {
     throw new Error(
@@ -55,15 +81,31 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
       : rest.includes("--require-gpu")
       ? "required"
       : "auto",
+    gpuWasmVerification: rest.includes("--no-gpu-verification")
+      ? "none"
+      : "differential",
+    hostInterfaceFile,
   };
 }
 
 async function main(arguments_: readonly string[]): Promise<void> {
-  const { command, file, output: outputArgument, gpuMode } = parseCommandLine(
-    arguments_,
-  );
+  const {
+    command,
+    file,
+    output: outputArgument,
+    gpuMode,
+    gpuWasmVerification,
+    hostInterfaceFile,
+  } = parseCommandLine(arguments_);
   const source = await Deno.readTextFile(file);
-  const artifact = await compileModuleSource(file, source, { gpuMode });
+  const hostInterface = hostInterfaceFile === undefined
+    ? undefined
+    : await Deno.readTextFile(hostInterfaceFile);
+  const artifact = await compileModuleSource(file, source, {
+    gpuMode,
+    gpuWasmVerification,
+    hostInterface,
+  });
 
   if (command === "compile") {
     const output = outputArgument ?? file.replace(/\.(?:hs|duck)$/, "") +
@@ -114,11 +156,13 @@ async function main(arguments_: readonly string[]): Promise<void> {
       throw writeError;
     }
     console.log(`wrote ${artifact.wasm.length} bytes to ${output}`);
+    console.log(formatCompilationBackends(artifact.backends));
     printTypes(artifact);
     return;
   }
   if (command === "run") {
     const result = await runMain(artifact.wasm);
+    console.log(formatCompilationBackends(artifact.backends));
     printTypes(artifact);
     console.log(`main = ${result}`);
     return;
@@ -126,6 +170,12 @@ async function main(arguments_: readonly string[]): Promise<void> {
 
   const result = await runMain(artifact.wasm);
   console.log(JSON.stringify(experimentReport(artifact, result), null, 2));
+}
+
+export function formatCompilationBackends(
+  backends: CompilationBackends,
+): string {
+  return `backends: type=${backends.typeCheck} comptime=${backends.comptime} core=${backends.coreRewrite} wasm=${backends.wasmEmission} verification=${backends.wasmVerification}`;
 }
 
 function printTypes(artifact: CompilationArtifact): void {

@@ -42,8 +42,12 @@ export type DucklangCoreWasmArtifact = {
   readonly fcg: FcgModule;
   readonly flatFcg: FlatFcgPackage;
   readonly wasmPlan: WasmBinaryPlan;
-  readonly wasm: Uint8Array;
+  readonly wasm: Uint8Array | undefined;
   readonly textLiterals: readonly string[];
+};
+
+export type DucklangCoreWasmOptions = {
+  readonly emission: "cpu" | "planOnly";
 };
 
 export const ducklangTextLiteralsSectionName = "ducklang.text_literals";
@@ -75,6 +79,7 @@ type ClosureTarget = {
 
 export function lowerDucklangCoreToFcgAndWasm(
   core: DucklangCoreModule,
+  options: DucklangCoreWasmOptions = { emission: "cpu" },
 ): DucklangCoreWasmArtifact {
   validateDucklangCore(core);
   const textLiterals = collectTextLiterals(core);
@@ -200,18 +205,22 @@ export function lowerDucklangCoreToFcgAndWasm(
     );
   }
   const wasmPlan = builder.finishPlan();
-  const wasm = emitWasmPlanOnCpu(wasmPlan);
-  try {
-    new WebAssembly.Module(
-      new Uint8Array(wasm).buffer as ArrayBuffer,
-    );
-  } catch (cause) {
-    throw new Error(
-      `internal error: Core backend emitted invalid WebAssembly: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-      { cause },
-    );
+  const wasm = options.emission === "cpu"
+    ? emitWasmPlanOnCpu(wasmPlan)
+    : undefined;
+  if (wasm !== undefined) {
+    try {
+      new WebAssembly.Module(
+        new Uint8Array(wasm).buffer as ArrayBuffer,
+      );
+    } catch (cause) {
+      throw new Error(
+        `internal error: Core backend emitted invalid WebAssembly: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+        { cause },
+      );
+    }
   }
   const fcg = {
     functions: fcgFunctions,

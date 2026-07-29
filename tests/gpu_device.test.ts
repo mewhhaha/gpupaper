@@ -1,6 +1,8 @@
 import {
+  awaitCompilerGpuCommand,
   compilerGpuCapacityViolation,
   type CompilerGpuLimits,
+  compilerGpuUnavailabilityReason,
 } from "../src/gpu_device.ts";
 
 const limits: CompilerGpuLimits = {
@@ -8,6 +10,8 @@ const limits: CompilerGpuLimits = {
   maxStorageBufferBindingSize: 512,
   maxUniformBufferBindingSize: 256,
   maxComputeWorkgroupsPerDimension: 64,
+  maxStorageBuffersPerShaderStage: 8,
+  maxUniformBuffersPerShaderStage: 4,
 };
 
 Deno.test("GPU capacity accepts requests at every device limit", () => {
@@ -17,6 +21,15 @@ Deno.test("GPU capacity accepts requests at every device limit", () => {
       label: "Core operations",
       byteLength: 512,
       binding: "storage",
+    }),
+    undefined,
+  );
+  assertEquals(
+    compilerGpuCapacityViolation(limits, {
+      kind: "pipelineBindings",
+      label: "Core rewrite",
+      storageBufferCount: 8,
+      uniformBufferCount: 1,
     }),
     undefined,
   );
@@ -66,6 +79,15 @@ Deno.test("GPU capacity reports the exact exceeded boundary", () => {
     }),
     "GPU Core rewrite dispatch requires 65 workgroups; device limit is 64",
   );
+  assertEquals(
+    compilerGpuCapacityViolation(limits, {
+      kind: "pipelineBindings",
+      label: "Core rewrite",
+      storageBufferCount: 9,
+      uniformBufferCount: 1,
+    }),
+    "GPU Core rewrite pipeline requires 9 storage buffers; device shader-stage limit is 8",
+  );
 });
 
 Deno.test("GPU capacity rejects unsafe sizes before WebGPU coercion", () => {
@@ -90,8 +112,51 @@ Deno.test("GPU capacity rejects unsafe sizes before WebGPU coercion", () => {
   );
 });
 
+Deno.test("GPU command wait reports device loss with driver evidence", async () => {
+  const device = {
+    lost: Promise.resolve({
+      reason: "unknown",
+      message: "adapter reset",
+    }),
+  } as GPUDevice;
+
+  await assertRejects(
+    () =>
+      awaitCompilerGpuCommand(
+        device,
+        "Core rewrite",
+        new Promise<never>(() => {}),
+      ),
+    /Core rewrite: WebGPU device was lost \(unknown\): adapter reset/,
+  );
+});
+
+Deno.test("GPU out-of-memory errors are classified as unavailability", () => {
+  const error = new Error("allocation failed");
+  error.name = "GPUOutOfMemoryError";
+
+  assertEquals(
+    compilerGpuUnavailabilityReason("Wasm emission", error),
+    "Wasm emission: WebGPU ran out of memory: allocation failed",
+  );
+});
+
 function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) {
     throw new Error(`expected ${String(expected)}; received ${String(actual)}`);
   }
+}
+
+async function assertRejects(
+  action: () => Promise<unknown>,
+  pattern: RegExp,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (pattern.test(message)) return;
+    throw new Error(`expected ${pattern}; received ${message}`);
+  }
+  throw new Error(`expected ${pattern}; action completed`);
 }

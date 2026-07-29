@@ -3,7 +3,7 @@ import {
   evaluateBytecodeOnCpu,
   evaluateBytecodeOnGpu,
 } from "../src/comptime.ts";
-import { parseCommandLine } from "../src/cli.ts";
+import { formatCompilationBackends, parseCommandLine } from "../src/cli.ts";
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import {
   solveTypeEqualitiesOnGpu,
@@ -11,6 +11,7 @@ import {
 } from "../src/gpu_solver.ts";
 import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
 import { evaluateWithInteractionCalculus } from "../src/interaction.ts";
+import { lowerToFcgAndWasm } from "../src/fcg.ts";
 import { expandMacros } from "../src/macros.ts";
 import { parseModule } from "../src/parser.ts";
 import type { EqualityConstraint, Type } from "../src/types.ts";
@@ -38,6 +39,34 @@ Deno.test("CLI cannot overwrite its Haskell input with Wasm", () => {
   assertThrows(
     () => parseCommandLine(["compile", "test.hs", "test.hs"]),
     /compile output must differ from input test\.hs/,
+  );
+});
+
+Deno.test("CLI accepts a managed host interface and authoritative GPU output", () => {
+  const invocation = parseCommandLine([
+    "compile",
+    "editor.duck",
+    "editor.wasm",
+    "--host-interface",
+    "host.duck",
+    "--require-gpu",
+    "--no-gpu-verification",
+  ]);
+
+  assertEquals(invocation, {
+    command: "compile",
+    file: "editor.duck",
+    output: "editor.wasm",
+    gpuMode: "required",
+    gpuWasmVerification: "none",
+    hostInterfaceFile: "host.duck",
+  });
+});
+
+Deno.test("CLI rejects a host interface without a file path", () => {
+  assertThrows(
+    () => parseCommandLine(["compile", "editor.duck", "--host-interface"]),
+    /--host-interface requires a file path/,
   );
 });
 
@@ -637,6 +666,56 @@ Deno.test("repeated CPU compilation emits byte-identical Wasm", async () => {
     gpuMode: "off",
   });
   assertEquals([...first.wasm], [...second.wasm]);
+});
+
+Deno.test("plan-only lowering does not materialize CPU Wasm", async () => {
+  const artifact = await compileModuleSource(
+    "test.hs",
+    "main = 42\n",
+    { gpuMode: "off" },
+  );
+
+  const planned = lowerToFcgAndWasm(artifact.inferred, {
+    emission: "planOnly",
+  });
+
+  assertEquals(planned.wasm, undefined);
+  assertEquals(planned.wasmPlan.atoms.length > 0, true);
+});
+
+Deno.test("GPU-authoritative emission matches differential emission", async () => {
+  const source = "main = 42\n";
+  const differential = await compileModuleSource("test.hs", source);
+  if (differential.gpuWasmResult?.status !== "completed") return;
+
+  const authoritative = await compileModuleSource("test.hs", source, {
+    gpuMode: "required",
+    gpuWasmVerification: "none",
+  });
+
+  assertEquals(authoritative.gpuWasmResult?.status, "completed");
+  assertEquals([...authoritative.wasm], [...differential.wasm]);
+  assertEquals(
+    formatCompilationBackends(authoritative.backends),
+    "backends: type=cpu+gpu comptime=cpu+gpu core=notApplicable wasm=gpu verification=none",
+  );
+});
+
+Deno.test("Ducklang GPU-authoritative emission matches differential emission", async () => {
+  const source = "42\n";
+  const differential = await compileModuleSource("test.duck", source);
+  if (differential.gpuWasmResult?.status !== "completed") return;
+
+  const authoritative = await compileModuleSource("test.duck", source, {
+    gpuMode: "required",
+    gpuWasmVerification: "none",
+  });
+
+  assertEquals(authoritative.gpuWasmResult?.status, "completed");
+  assertEquals([...authoritative.wasm], [...differential.wasm]);
+  assertEquals(authoritative.backends.coreRewrite, "gpu");
+  assertEquals(authoritative.backends.wasmEmission, "gpu");
+  assertEquals(authoritative.backends.wasmVerification, "none");
 });
 
 Deno.test("FCG rewrites optimize arithmetic identities inside structured branches", async () => {

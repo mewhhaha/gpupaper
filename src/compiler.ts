@@ -3,6 +3,11 @@ import {
   type ComptimeValue,
   evaluateModuleComptime,
 } from "./comptime.ts";
+import {
+  parseDucklangTextLiterals,
+  validateDucklangManagedArtifact,
+  validateSelectedWasm,
+} from "./artifact_validation.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
 import {
   type DucklangConstValue,
@@ -72,12 +77,23 @@ import {
 import { expandMacros, type MacroExpansionReport } from "./macros.ts";
 import { parseModule } from "./parser.ts";
 import { formatScheme, inferModule, type InferredModule } from "./types.ts";
+import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "./wasm.ts";
 
 export type GpuMode = "auto" | "off" | "required";
+export type GpuWasmVerification = "differential" | "none";
 
 export type CompilationOptions = {
   readonly gpuMode?: GpuMode;
+  readonly gpuWasmVerification?: GpuWasmVerification;
   readonly hostInterface?: string;
+};
+
+export type CompilationBackends = {
+  readonly typeCheck: "cpu" | "cpu+gpu";
+  readonly comptime: "cpu" | "cpu+gpu";
+  readonly coreRewrite: "cpu" | "gpu" | "notApplicable";
+  readonly wasmEmission: "cpu" | "gpu";
+  readonly wasmVerification: "none" | "cpuDifferential";
 };
 
 export type CompilationTimings = {
@@ -116,6 +132,7 @@ type SharedCompilationArtifact = {
   readonly comptimeGpuResult: ComptimeBatchResult | undefined;
   readonly interactionResults: readonly InteractionResult[];
   readonly macros: Omit<MacroExpansionReport, "module">;
+  readonly backends: CompilationBackends;
   readonly timings: CompilationTimings;
 };
 
@@ -183,6 +200,7 @@ async function compileHaskellModuleSource(
   options: CompilationOptions,
 ): Promise<HaskellCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
+  const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
   const parseStart = performance.now();
   const parsed = parseModule(file, source);
   const parseMilliseconds = performance.now() - parseStart;
@@ -230,19 +248,29 @@ async function compileHaskellModuleSource(
   const finalTypeMilliseconds = performance.now() - finalTypeStart;
 
   const wasmStart = performance.now();
-  const lowered = lowerToFcgAndWasm(finalInference);
+  const lowered = lowerToFcgAndWasm(finalInference, {
+    emission: gpuMode === "off" || gpuWasmVerification === "differential"
+      ? "cpu"
+      : "planOnly",
+  });
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
     : await emitWasmPlanOnGpu(lowered.wasmPlan);
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
-  requireMatchingGpuWasm(file, lowered.wasm, gpuWasmResult, gpuMode);
+  const wasm = selectWasmOutput(
+    file,
+    lowered.wasm,
+    lowered.wasmPlan,
+    gpuWasmResult,
+    gpuMode,
+    gpuWasmVerification,
+  );
+  validateSelectedWasm(file, wasm);
   return {
     language: "haskell",
-    wasm: gpuWasmResult?.status === "completed"
-      ? gpuWasmResult.bytes
-      : lowered.wasm,
+    wasm,
     fcg: lowered.fcg,
     flatFcg: lowered.flatFcg,
     inferred: finalInference,
@@ -261,6 +289,16 @@ async function compileHaskellModuleSource(
       invocationCount: macroExpansion.invocationCount,
       generatedCount: macroExpansion.generatedCount,
       wasmByteCount: macroExpansion.wasmByteCount,
+    },
+    backends: {
+      typeCheck: gpuTypeResult?.status === "solved" ? "cpu+gpu" : "cpu",
+      comptime: comptime.gpu?.status === "completed" ? "cpu+gpu" : "cpu",
+      coreRewrite: "notApplicable",
+      wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
+      wasmVerification: gpuWasmResult?.status === "completed" &&
+          gpuWasmVerification === "differential"
+        ? "cpuDifferential"
+        : "none",
     },
     timings: {
       parseMilliseconds,
@@ -444,6 +482,7 @@ async function compileDucklangModuleSource(
   options: CompilationOptions,
 ): Promise<DucklangCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "auto";
+  const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
   const frontend = await elaborateDucklangModuleSource(file, source, options);
   const specialized = frontend.module;
   const coreStart = performance.now();
@@ -474,19 +513,31 @@ async function compileDucklangModuleSource(
   }
   const optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
   const wasmStart = performance.now();
-  const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore);
+  const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore, {
+    emission: gpuMode === "off" || gpuWasmVerification === "differential"
+      ? "cpu"
+      : "planOnly",
+  });
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
     : await emitWasmPlanOnGpu(lowered.wasmPlan);
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
-  requireMatchingGpuWasm(file, lowered.wasm, gpuWasmResult, gpuMode);
+  const wasm = selectWasmOutput(
+    file,
+    lowered.wasm,
+    lowered.wasmPlan,
+    gpuWasmResult,
+    gpuMode,
+    gpuWasmVerification,
+  );
+  const abi = createDucklangManagedAbi(specialized, lowered.textLiterals);
+  const wasmModule = validateSelectedWasm(file, wasm);
+  validateDucklangManagedArtifact(file, wasmModule, abi);
   return {
     language: "ducklang",
-    wasm: gpuWasmResult?.status === "completed"
-      ? gpuWasmResult.bytes
-      : lowered.wasm,
+    wasm,
     fcg: lowered.fcg,
     flatFcg: lowered.flatFcg,
     inferred: specialized,
@@ -495,7 +546,7 @@ async function compileDucklangModuleSource(
     optimizedFlatCore,
     optimizedCore,
     gpuCoreResult,
-    abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
+    abi,
     initialTypes: frontend.initialTypes,
     finalTypes: frontend.initialTypes,
     gpuTypeResult: frontend.gpuTypeResult,
@@ -507,6 +558,20 @@ async function compileDucklangModuleSource(
       invocationCount: 0,
       generatedCount: 0,
       wasmByteCount: 0,
+    },
+    backends: {
+      typeCheck: frontend.gpuTypeResult?.status === "solved"
+        ? "cpu+gpu"
+        : "cpu",
+      comptime: frontend.comptime.gpu?.status === "completed"
+        ? "cpu+gpu"
+        : "cpu",
+      coreRewrite: gpuCoreResult?.status === "completed" ? "gpu" : "cpu",
+      wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
+      wasmVerification: gpuWasmResult?.status === "completed" &&
+          gpuWasmVerification === "differential"
+        ? "cpuDifferential"
+        : "none",
     },
     timings: {
       ...frontend.timings,
@@ -533,17 +598,29 @@ async function compileDucklangModuleSource(
   };
 }
 
-function requireMatchingGpuWasm(
+function selectWasmOutput(
   file: string,
-  cpuWasm: Uint8Array,
+  cpuWasm: Uint8Array | undefined,
+  wasmPlan: WasmBinaryPlan,
   gpuResult: GpuWasmEmissionResult | undefined,
   gpuMode: GpuMode,
-): void {
+  verification: GpuWasmVerification,
+): Uint8Array {
   if (gpuResult?.status === "unavailable") {
     if (gpuMode === "required") throw new Error(gpuResult.reason);
-    return;
+    return cpuWasm ?? emitWasmPlanOnCpu(wasmPlan);
   }
-  if (gpuResult === undefined) return;
+  if (gpuResult === undefined) {
+    return cpuWasm ?? emitWasmPlanOnCpu(wasmPlan);
+  }
+  if (verification === "none") {
+    return gpuResult.bytes;
+  }
+  if (cpuWasm === undefined) {
+    throw new Error(
+      `${file}: differential GPU Wasm verification has no CPU emission`,
+    );
+  }
   if (gpuResult.bytes.length !== cpuWasm.length) {
     throw new Error(
       `${file}: CPU/GPU Wasm length mismatch: CPU emitted ${cpuWasm.length} bytes; GPU emitted ${gpuResult.bytes.length}`,
@@ -557,6 +634,7 @@ function requireMatchingGpuWasm(
       }; GPU emitted ${gpuResult.bytes[index]}`,
     );
   }
+  return gpuResult.bytes;
 }
 
 export async function runMain(
@@ -577,7 +655,7 @@ export async function runMain(
   }
   const textLiterals = textSections.length === 0
     ? []
-    : parseDucklangTextLiterals(textSections[0]);
+    : parseDucklangTextLiterals("main runner", textSections[0]);
   const imports: WebAssembly.Imports = {};
   imports[ducklangRuntimeImportModule] = createDucklangRuntimeImports(
     createDucklangRuntimeHeap(textLiterals),
@@ -604,29 +682,6 @@ export async function runMain(
     throw new Error(`main returned ${typeof result}; expected i32 or i64`);
   }
   return result;
-}
-
-function parseDucklangTextLiterals(section: ArrayBuffer): readonly string[] {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(new TextDecoder().decode(section));
-  } catch (cause) {
-    throw new TypeError(
-      "main runner received malformed Ducklang text literals",
-      {
-        cause,
-      },
-    );
-  }
-  if (
-    !Array.isArray(decoded) ||
-    !decoded.every((value) => typeof value === "string")
-  ) {
-    throw new TypeError(
-      "main runner expected the Ducklang text literal section to contain a string array",
-    );
-  }
-  return decoded;
 }
 
 function readHostInput(

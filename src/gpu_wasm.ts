@@ -1,9 +1,12 @@
 import {
   acquireCompilerGpuErrorScope,
+  awaitCompilerGpuCommand,
   compilerGpuCapacityViolation,
+  compilerGpuUnavailabilityReason,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
+  requireCompilerGpuCapacity,
 } from "./gpu_device.ts";
 import {
   validateWasmBinaryPlan,
@@ -233,6 +236,18 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
 `;
 
 export async function emitWasmPlanOnGpu(
+  plan: WasmBinaryPlan,
+): Promise<GpuWasmEmissionResult> {
+  try {
+    return await emitWasmPlanWithGpu(plan);
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason("Wasm emission", error);
+    if (reason !== undefined) return { status: "unavailable", reason };
+    throw error;
+  }
+}
+
+async function emitWasmPlanWithGpu(
   plan: WasmBinaryPlan,
 ): Promise<GpuWasmEmissionResult> {
   validateWasmBinaryPlan(plan);
@@ -538,7 +553,11 @@ export async function emitWasmPlanOnGpu(
       maximumOutputWordCount * 4,
     );
     device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "Wasm emission",
+      readback.mapAsync(GPUMapMode.READ),
+    );
     readbackMapped = true;
     const validationError = await device.popErrorScope();
     validationScopePending = false;
@@ -564,6 +583,10 @@ export async function emitWasmPlanOnGpu(
       lengthRounds: plan.maximumDependencyLevel,
       scanRounds,
     };
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason("Wasm emission", error);
+    if (reason !== undefined) return { status: "unavailable", reason };
+    throw error;
   } finally {
     if (validationScopePending) await device.popErrorScope();
     if (readbackMapped) readback.unmap();
@@ -632,6 +655,12 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
       const request = await requestCompilerGpuDevice();
       if (request.status === "unavailable") return request;
       const device = request.device;
+      requireCompilerGpuCapacity(device, {
+        kind: "pipelineBindings",
+        label: "Wasm emission",
+        storageBufferCount: 6,
+        uniformBufferCount: 1,
+      });
       const modules = [
         device.createShaderModule({ code: sizeShader }),
         device.createShaderModule({ code: lengthShader }),

@@ -10,10 +10,13 @@ import {
 } from "./flat_ducklang_core.ts";
 import {
   acquireCompilerGpuErrorScope,
+  awaitCompilerGpuCommand,
   compilerGpuCapacityViolation,
+  compilerGpuUnavailabilityReason,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
+  requireCompilerGpuCapacity,
 } from "./gpu_device.ts";
 
 export type GpuDucklangCoreResult =
@@ -86,21 +89,20 @@ struct Parameters {
 @group(0) @binding(2) var<storage, read> operands: array<u32>;
 @group(0) @binding(3) var<storage, read> attributes: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read> values: array<vec4<u32>>;
-@group(0) @binding(5) var<storage, read> type_kinds: array<u32>;
-@group(0) @binding(6) var<storage, read> type_auxiliaries: array<u32>;
-@group(0) @binding(7) var<storage, read_write> rules: array<u32>;
-@group(0) @binding(8) var<storage, read_write> replacements: array<u32>;
-@group(0) @binding(9) var<uniform> parameters: Parameters;
+@group(0) @binding(5) var<storage, read> types: array<vec2<u32>>;
+@group(0) @binding(6) var<storage, read_write> rules: array<u32>;
+@group(0) @binding(7) var<storage, read_write> replacements: array<u32>;
+@group(0) @binding(8) var<uniform> parameters: Parameters;
 
 fn has_integer_scalar_result(operation: vec4<u32>) -> bool {
   let type_id = operation.w;
   if (
     type_id >= parameters.type_count ||
-    type_kinds[type_id] != ${FlatDucklangCoreKind.type.scalar}u
+    types[type_id].x != ${FlatDucklangCoreKind.type.scalar}u
   ) {
     return false;
   }
-  let scalar = type_auxiliaries[type_id];
+  let scalar = types[type_id].y;
   return
     scalar == ${FlatDucklangCoreKind.scalar.i32}u ||
     scalar == ${FlatDucklangCoreKind.scalar.i64}u;
@@ -182,6 +184,21 @@ let contextPromise: Promise<GpuCoreContext> | undefined;
 export async function runDucklangCoreGpuPass(
   snapshot: FlatDucklangCore,
 ): Promise<GpuDucklangCoreResult> {
+  try {
+    return await runDucklangCoreWithGpu(snapshot);
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason(
+      "Ducklang Core pass",
+      error,
+    );
+    if (reason !== undefined) return { status: "unavailable", reason };
+    throw error;
+  }
+}
+
+async function runDucklangCoreWithGpu(
+  snapshot: FlatDucklangCore,
+): Promise<GpuDucklangCoreResult> {
   const records = gpuValidationRecords(snapshot);
   let cpuValidation:
     | {
@@ -230,6 +247,10 @@ export async function runDucklangCoreGpuPass(
     snapshot.valueDefinitionKinds,
     snapshot.valueDefinitionIds,
   );
+  const types = interleavePairs(
+    snapshot.typeKinds,
+    snapshot.typeAuxiliaries,
+  );
   const outputSize = 8 + snapshot.operationKinds.byteLength * 2;
   const capacityRequests = [
     ["validation records", Math.max(4, records.byteLength), "storage"],
@@ -240,12 +261,7 @@ export async function runDucklangCoreGpuPass(
     ["operands", Math.max(4, snapshot.operandValueIds.byteLength), "storage"],
     ["attributes", Math.max(4, attributes.byteLength), "storage"],
     ["values", Math.max(4, values.byteLength), "storage"],
-    ["type kinds", Math.max(4, snapshot.typeKinds.byteLength), "storage"],
-    [
-      "type auxiliaries",
-      Math.max(4, snapshot.typeAuxiliaries.byteLength),
-      "storage",
-    ],
+    ["types", Math.max(8, types.byteLength), "storage"],
     [
       "rewrite rules",
       Math.max(4, snapshot.operationKinds.byteLength),
@@ -333,16 +349,10 @@ export async function runDucklangCoreGpuPass(
     values,
     GPUBufferUsage.STORAGE,
   );
-  const typeKindBuffer = createBuffer(
+  const typeBuffer = createBuffer(
     device,
-    "Ducklang Core type kinds",
-    snapshot.typeKinds,
-    GPUBufferUsage.STORAGE,
-  );
-  const typeAuxiliaryBuffer = createBuffer(
-    device,
-    "Ducklang Core type auxiliaries",
-    snapshot.typeAuxiliaries,
+    "Ducklang Core types",
+    types,
     GPUBufferUsage.STORAGE,
   );
   const ruleBuffer = createCompilerGpuBuffer(
@@ -394,8 +404,7 @@ export async function runDucklangCoreGpuPass(
     operandBuffer,
     attributeBuffer,
     valueBuffer,
-    typeKindBuffer,
-    typeAuxiliaryBuffer,
+    typeBuffer,
     ruleBuffer,
     replacementBuffer,
     rewriteParameters,
@@ -435,11 +444,10 @@ export async function runDucklangCoreGpuPass(
         { binding: 2, resource: { buffer: operandBuffer } },
         { binding: 3, resource: { buffer: attributeBuffer } },
         { binding: 4, resource: { buffer: valueBuffer } },
-        { binding: 5, resource: { buffer: typeKindBuffer } },
-        { binding: 6, resource: { buffer: typeAuxiliaryBuffer } },
-        { binding: 7, resource: { buffer: ruleBuffer } },
-        { binding: 8, resource: { buffer: replacementBuffer } },
-        { binding: 9, resource: { buffer: rewriteParameters } },
+        { binding: 5, resource: { buffer: typeBuffer } },
+        { binding: 6, resource: { buffer: ruleBuffer } },
+        { binding: 7, resource: { buffer: replacementBuffer } },
+        { binding: 8, resource: { buffer: rewriteParameters } },
       ],
     });
     const rewritePass = encoder.beginComputePass();
@@ -471,7 +479,11 @@ export async function runDucklangCoreGpuPass(
     }
     const gpuStart = performance.now();
     device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "Ducklang Core pass",
+      readback.mapAsync(GPUMapMode.READ),
+    );
     mapped = true;
     const gpuMilliseconds = performance.now() - gpuStart;
     const validationError = await device.popErrorScope();
@@ -535,6 +547,13 @@ export async function runDucklangCoreGpuPass(
       transferMilliseconds,
       commitMilliseconds,
     };
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason(
+      "Ducklang Core pass",
+      error,
+    );
+    if (reason !== undefined) return { status: "unavailable", reason };
+    throw error;
   } finally {
     if (scopePending) await device.popErrorScope();
     if (mapped) readback.unmap();
@@ -925,6 +944,19 @@ function interleaveColumns(
   return words;
 }
 
+function interleavePairs(
+  first: Uint32Array,
+  second: Uint32Array,
+): Uint32Array {
+  const length = Math.max(first.length, second.length);
+  const words = new Uint32Array(length * 2);
+  for (let index = 0; index < length; index += 1) {
+    words[index * 2] = first[index] ?? 0;
+    words[index * 2 + 1] = second[index] ?? 0;
+  }
+  return words;
+}
+
 async function requestGpuCoreContext(): Promise<GpuCoreContext> {
   if (contextPromise !== undefined) return await contextPromise;
   const pending = (async (): Promise<GpuCoreContext> => {
@@ -932,6 +964,18 @@ async function requestGpuCoreContext(): Promise<GpuCoreContext> {
     if (deviceRequest.status === "unavailable") return deviceRequest;
     const device = deviceRequest.device;
     try {
+      requireCompilerGpuCapacity(device, {
+        kind: "pipelineBindings",
+        label: "Ducklang Core validation",
+        storageBufferCount: 2,
+        uniformBufferCount: 1,
+      });
+      requireCompilerGpuCapacity(device, {
+        kind: "pipelineBindings",
+        label: "Ducklang Core rewrite",
+        storageBufferCount: 8,
+        uniformBufferCount: 1,
+      });
       const validationModule = device.createShaderModule({
         code: validationShader,
       });

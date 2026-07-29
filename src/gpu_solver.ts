@@ -1,8 +1,10 @@
 import type { EqualityConstraint, Type } from "./types.ts";
 import {
   acquireCompilerGpuErrorScope,
+  awaitCompilerGpuCommand,
   CompilerGpuCapacityError,
   type CompilerGpuCapacityRequest,
+  CompilerGpuUnavailableError,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
@@ -233,7 +235,10 @@ export async function solveTypeEqualitiesOnGpu(
   try {
     return await solveTypeEqualitiesWithDevice(device, equalities);
   } catch (error) {
-    if (error instanceof CompilerGpuCapacityError) {
+    if (
+      error instanceof CompilerGpuCapacityError ||
+      error instanceof CompilerGpuUnavailableError
+    ) {
       return { status: "unavailable", reason: error.message };
     }
     throw error;
@@ -367,7 +372,10 @@ export async function unionPairsOnGpu(
     return (await unionOnGpu(device, initialRepresentatives, equalities))
       .representatives;
   } catch (error) {
-    if (error instanceof CompilerGpuCapacityError) return undefined;
+    if (
+      error instanceof CompilerGpuCapacityError ||
+      error instanceof CompilerGpuUnavailableError
+    ) return undefined;
     throw error;
   }
 }
@@ -855,7 +863,11 @@ async function decomposeConstructorsOnGpu(
     );
     encoder.copyBufferToBuffer(overflowBuffer, 0, metadataReadback, 8, 4);
     device.queue.submit([encoder.finish()]);
-    await metadataReadback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "type solver constructor metadata",
+      metadataReadback.mapAsync(GPUMapMode.READ),
+    );
     metadataMapped = true;
     const metadata = new Uint32Array(
       metadataReadback.getMappedRange().slice(0),
@@ -921,7 +933,11 @@ async function decomposeConstructorsOnGpu(
       equalityCount * 4,
     );
     device.queue.submit([outputEncoder.finish()]);
-    await outputReadback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "type solver constructor output",
+      outputReadback.mapAsync(GPUMapMode.READ),
+    );
     outputMapped = true;
     const mapped = outputReadback.getMappedRange();
     const equalityWords = new Uint32Array(mapped, 0, equalityCount * 2);
@@ -1044,7 +1060,11 @@ async function unionOnGpu(
       parentBytes.byteLength,
     );
     device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "type solver union",
+      readback.mapAsync(GPUMapMode.READ),
+    );
     readbackMapped = true;
     const representatives = [
       ...new Uint32Array(readback.getMappedRange().slice(0)),
@@ -1246,7 +1266,11 @@ async function findInfiniteTypeOnGpu(
     }
     encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
     device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "type solver reachability",
+      readback.mapAsync(GPUMapMode.READ),
+    );
     readbackMapped = true;
     const closure = new Uint32Array(readback.getMappedRange());
     for (let index = 0; index < count; index += 1) {
@@ -1279,6 +1303,12 @@ function selectPipelineDevice(device: GPUDevice): void {
 function requestUnionPipelines(device: GPUDevice): Promise<UnionPipelines> {
   if (unionPipelinesPromise !== undefined) return unionPipelinesPromise;
   const pendingPipelines = (async () => {
+    requireCompilerGpuCapacity(device, {
+      kind: "pipelineBindings",
+      label: "type solver union",
+      storageBufferCount: 2,
+      uniformBufferCount: 0,
+    });
     const shader = device.createShaderModule({ code: unionShader });
     await requireShaderCompilation("union", [shader]);
     const bindGroupLayout = device.createBindGroupLayout({
@@ -1326,6 +1356,12 @@ function requestDecompositionPipelines(
     return decompositionPipelinesPromise;
   }
   const pendingPipelines = (async () => {
+    requireCompilerGpuCapacity(device, {
+      kind: "pipelineBindings",
+      label: "type solver constructor decomposition",
+      storageBufferCount: 7,
+      uniformBufferCount: 1,
+    });
     const countModule = device.createShaderModule({
       code: constructorCountShader,
     });
@@ -1377,6 +1413,12 @@ function requestReachabilityPipeline(
     return reachabilityPipelinePromise;
   }
   const pendingPipeline = (async () => {
+    requireCompilerGpuCapacity(device, {
+      kind: "pipelineBindings",
+      label: "type solver reachability",
+      storageBufferCount: 1,
+      uniformBufferCount: 1,
+    });
     const shader = device.createShaderModule({ code: reachabilityShader });
     await requireShaderCompilation("reachability", [shader]);
     const bindGroupLayout = device.createBindGroupLayout({

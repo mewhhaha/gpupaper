@@ -9,6 +9,8 @@ export type CompilerGpuLimits = {
   readonly maxStorageBufferBindingSize: number;
   readonly maxUniformBufferBindingSize: number;
   readonly maxComputeWorkgroupsPerDimension: number;
+  readonly maxStorageBuffersPerShaderStage: number;
+  readonly maxUniformBuffersPerShaderStage: number;
 };
 
 export type CompilerGpuCapacityRequest =
@@ -23,6 +25,12 @@ export type CompilerGpuCapacityRequest =
     readonly kind: "dispatch";
     readonly label: string;
     readonly workgroupCount: number;
+  }
+  | {
+    readonly kind: "pipelineBindings";
+    readonly label: string;
+    readonly storageBufferCount: number;
+    readonly uniformBufferCount: number;
   };
 
 let devicePromise: Promise<CompilerGpuDeviceRequest> | undefined;
@@ -78,10 +86,71 @@ export async function acquireCompilerGpuErrorScope(): Promise<() => void> {
   return release;
 }
 
+export async function awaitCompilerGpuCommand<T>(
+  device: GPUDevice,
+  subject: string,
+  completion: Promise<T>,
+): Promise<T> {
+  const lost = device.lost.then((loss) => {
+    throw new CompilerGpuUnavailableError(
+      `${subject}: WebGPU device was lost (${loss.reason}): ${
+        loss.message || "no driver message"
+      }`,
+    );
+  });
+  try {
+    return await Promise.race([completion, lost]);
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason(subject, error);
+    if (reason !== undefined) {
+      throw new CompilerGpuUnavailableError(reason);
+    }
+    throw error;
+  }
+}
+
+export function compilerGpuUnavailabilityReason(
+  subject: string,
+  error: unknown,
+): string | undefined {
+  if (error instanceof CompilerGpuUnavailableError) return error.message;
+  if (
+    typeof error === "object" && error !== null &&
+    "name" in error && error.name === "GPUOutOfMemoryError"
+  ) {
+    const message = "message" in error && typeof error.message === "string"
+      ? error.message
+      : "no driver message";
+    return `${subject}: WebGPU ran out of memory: ${message}`;
+  }
+  return undefined;
+}
+
 export function compilerGpuCapacityViolation(
   limits: CompilerGpuLimits,
   request: CompilerGpuCapacityRequest,
 ): string | undefined {
+  if (request.kind === "pipelineBindings") {
+    if (
+      !Number.isSafeInteger(request.storageBufferCount) ||
+      request.storageBufferCount < 0 ||
+      !Number.isSafeInteger(request.uniformBufferCount) ||
+      request.uniformBufferCount < 0
+    ) {
+      return `GPU ${request.label} pipeline requires non-negative safe-integer binding counts; received ${request.storageBufferCount} storage and ${request.uniformBufferCount} uniform`;
+    }
+    if (
+      request.storageBufferCount > limits.maxStorageBuffersPerShaderStage
+    ) {
+      return `GPU ${request.label} pipeline requires ${request.storageBufferCount} storage buffers; device shader-stage limit is ${limits.maxStorageBuffersPerShaderStage}`;
+    }
+    if (
+      request.uniformBufferCount > limits.maxUniformBuffersPerShaderStage
+    ) {
+      return `GPU ${request.label} pipeline requires ${request.uniformBufferCount} uniform buffers; device shader-stage limit is ${limits.maxUniformBuffersPerShaderStage}`;
+    }
+    return undefined;
+  }
   if (request.kind === "dispatch") {
     if (
       !Number.isSafeInteger(request.workgroupCount) ||
@@ -168,4 +237,8 @@ export function dispatchCompilerGpuWorkgroups(
 
 export class CompilerGpuCapacityError extends Error {
   override readonly name = "CompilerGpuCapacityError";
+}
+
+export class CompilerGpuUnavailableError extends Error {
+  override readonly name = "CompilerGpuUnavailableError";
 }

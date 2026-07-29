@@ -6,10 +6,13 @@ import type {
 } from "./syntax.ts";
 import {
   acquireCompilerGpuErrorScope,
+  awaitCompilerGpuCommand,
   compilerGpuCapacityViolation,
+  compilerGpuUnavailabilityReason,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
+  requireCompilerGpuCapacity,
 } from "./gpu_device.ts";
 
 export type ComptimeValue =
@@ -379,6 +382,24 @@ export async function evaluateBytecodeOnGpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
 ): Promise<ComptimeBatchResult> {
+  try {
+    return await evaluateBytecodeWithGpu(programs, fuel);
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason(
+      "comptime evaluation",
+      error,
+    );
+    if (reason !== undefined) {
+      return { status: "unavailable", reason, backend: "gpu" };
+    }
+    throw error;
+  }
+}
+
+async function evaluateBytecodeWithGpu(
+  programs: readonly BytecodeProgram[],
+  fuel = 1024,
+): Promise<ComptimeBatchResult> {
   if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > maximumComptimeFuel) {
     throw new RangeError(
       `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
@@ -548,7 +569,11 @@ export async function evaluateBytecodeOnGpu(
       programs.length * 4,
     );
     device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
+    await awaitCompilerGpuCommand(
+      device,
+      "comptime evaluation",
+      readback.mapAsync(GPUMapMode.READ),
+    );
     readbackMapped = true;
     const validationError = await device.popErrorScope();
     validationScopePending = false;
@@ -585,6 +610,15 @@ export async function evaluateBytecodeOnGpu(
       );
     }
     return { status: "completed", values: completed, backend: "gpu" };
+  } catch (error) {
+    const reason = compilerGpuUnavailabilityReason(
+      "comptime evaluation",
+      error,
+    );
+    if (reason !== undefined) {
+      return { status: "unavailable", reason, backend: "gpu" };
+    }
+    throw error;
   } finally {
     if (validationScopePending) await device.popErrorScope();
     if (readbackMapped) readback.unmap();
@@ -763,6 +797,12 @@ function requestComptimeGpuContext(): Promise<ComptimeGpuContextRequest> {
       const request = await requestCompilerGpuDevice();
       if (request.status === "unavailable") return request;
       const device = request.device;
+      requireCompilerGpuCapacity(device, {
+        kind: "pipelineBindings",
+        label: "comptime evaluation",
+        storageBufferCount: 6,
+        uniformBufferCount: 1,
+      });
       const shader = device.createShaderModule({ code: evaluatorShader });
       const errors = (await shader.getCompilationInfo()).messages.filter(
         (message) => message.type === "error",

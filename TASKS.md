@@ -1080,22 +1080,34 @@ CPU/GPU disagreement, or return partially written output.
       compile-time evaluation, Core validation and rewrite matching, and Wasm
       emission have no direct `createBuffer` or `dispatchWorkgroups` calls
       outside that boundary. Capacity tests pin exact-limit acceptance and
-      evidence-bearing rejection; automatic compilation receives
-      `unavailable`, while required mode promotes the same reason to failure.
-- [ ] Treat device loss and out-of-memory as recoverable GPU unavailability in
+      evidence-bearing rejection; automatic compilation receives `unavailable`,
+      while required mode promotes the same reason to failure.
+- [x] Treat device loss and out-of-memory as recoverable GPU unavailability in
       automatic mode, invalidate every cached pipeline tied to that device, and
-      retry a later compilation on a newly requested device. Validation errors,
-      semantic disagreement, and malformed GPU output remain hard failures.
-- [ ] Separate production execution from differential verification. A production
-      GPU emission must not first encode the complete CPU byte buffer;
-      verification mode must still compare every byte and remain the default for
-      tests and benchmarks.
-- [ ] Validate the selected final Wasm bytes with the engine and validate their
+      retry a later compilation on a newly requested device. Every submitted
+      readback races the device-loss promise and carries its reason and driver
+      message. The shared device, Core, comptime, Wasm, union, decomposition,
+      and reachability caches all discard state tied to a lost device. Required
+      mode promotes unavailability to failure; validation errors, semantic
+      disagreement, and malformed GPU output remain hard failures.
+- [x] Separate production execution from differential verification.
+      `gpuWasmVerification: "none"` lowers only a Wasm plan, lets GPU emission
+      produce the first byte buffer, and encodes on CPU only if automatic mode
+      needs a fallback. Differential byte comparison remains the default.
+      Focused Haskell and Ducklang tests compare authoritative and verified GPU
+      output.
+- [x] Validate the selected final Wasm bytes with the engine and validate their
       imports, exports, and managed ABI metadata before returning a compilation
-      artifact.
-- [ ] Let the CLI compile managed applications by accepting an explicit host
+      artifact. The validator requires exactly the `main` function export,
+      function-only imports, declared and unique ABI references, exact managed
+      host imports, and text-literal custom-section agreement.
+- [x] Let the CLI compile managed applications by accepting an explicit host
       interface, report which backend completed each GPU-capable stage, and
-      preserve atomic output replacement on every failure path.
+      preserve atomic output replacement on every failure path. The CLI accepts
+      `--host-interface host.duck` and `--no-gpu-verification`; compilation
+      artifacts and CLI output name the type, comptime, Core, Wasm, and
+      verification backends. Output still goes through a same-directory
+      temporary file followed by rename.
 - [ ] Add generated differential tests for type solving, compile-time bytecode,
       Core rewrite batches, and Wasm plans. Seeds and minimized failures must be
       reproducible without a GPU; GPU-enabled CI runs the same cases against the

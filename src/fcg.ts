@@ -44,7 +44,11 @@ export type WasmArtifact = {
   readonly fcg: FcgModule;
   readonly flatFcg: FlatFcgPackage;
   readonly wasmPlan: WasmBinaryPlan;
-  readonly wasm: Uint8Array;
+  readonly wasm: Uint8Array | undefined;
+};
+
+export type WasmLoweringOptions = {
+  readonly emission: "cpu" | "planOnly";
 };
 
 type FunctionShape = {
@@ -56,7 +60,10 @@ type FunctionShape = {
 type ConstructorShape = { readonly tag: number; readonly fieldCount: number };
 type PrimitiveShape = { readonly operation: "integerEquality" };
 
-export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
+export function lowerToFcgAndWasm(
+  inferred: InferredModule,
+  options: WasmLoweringOptions = { emission: "cpu" },
+): WasmArtifact {
   const builder = new WasmModuleBuilder();
   const valueDeclarations = inferred.declarations.map((typed) =>
     typed.declaration
@@ -146,8 +153,13 @@ export function lowerToFcgAndWasm(inferred: InferredModule): WasmArtifact {
   }
   builder.exportFunction("main", mainShape.functionIndex);
   const wasmPlan = builder.finishPlan();
-  const wasm = emitWasmPlanOnCpu(wasmPlan);
-  if (!WebAssembly.validate(new Uint8Array(wasm).buffer as ArrayBuffer)) {
+  const wasm = options.emission === "cpu"
+    ? emitWasmPlanOnCpu(wasmPlan)
+    : undefined;
+  if (
+    wasm !== undefined &&
+    !WebAssembly.validate(new Uint8Array(wasm).buffer as ArrayBuffer)
+  ) {
     throw new Error("internal error: emitted WebAssembly did not validate");
   }
   const fcg = { functions: loweredFunctions, constructorTags };
