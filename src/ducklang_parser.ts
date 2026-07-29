@@ -294,7 +294,19 @@ function normalizeStatementBoundaries(
   source: string,
   typeParameters: readonly string[] = [],
 ): readonly DucklangStatement[] {
-  return statements.flatMap((statement) => {
+  const repairedStatements: DucklangStatement[] = [];
+  for (let index = 0; index < statements.length; index += 1) {
+    const statement = statements[index];
+    const followingStatement = statements[index + 1];
+    const repaired = repairConditionalAssignment(
+      statement,
+      followingStatement,
+    );
+    repairedStatements.push(repaired ?? statement);
+    if (repaired !== undefined) index += 1;
+  }
+
+  return repairedStatements.flatMap((statement) => {
     const normalized = normalizeStatementExpressions(
       statement,
       source,
@@ -396,6 +408,128 @@ function normalizeStatementBoundaries(
       },
     ];
   });
+}
+
+function repairConditionalAssignment(
+  statement: DucklangStatement,
+  followingStatement: DucklangStatement | undefined,
+): DucklangStatement | undefined {
+  if (
+    statement.kind !== "assignment" ||
+    followingStatement?.kind !== "expression"
+  ) {
+    return undefined;
+  }
+  // Baba's generalized assignment production can prefer the identifier reading
+  // of `if`, splitting `x = if ... { ... } else { ... }` at `else`. Rejoin that
+  // one ambiguous surface form before names or statement boundaries become semantic.
+  const alternative = trailingElseBlock(followingStatement.expression);
+  if (alternative === undefined) return undefined;
+  const detached = detachTrailingBlock(statement.value);
+  if (detached === undefined) return undefined;
+  const condition = removeLeadingIfKeyword(detached.expression);
+  if (condition === undefined) return undefined;
+
+  return {
+    ...statement,
+    value: {
+      kind: "if",
+      condition,
+      consequence: detached.block,
+      alternative,
+      span: {
+        file: statement.span.file,
+        start: statement.value.span.start,
+        end: alternative.span.end,
+      },
+    },
+    span: { ...statement.span, end: followingStatement.span.end },
+  };
+}
+
+function trailingElseBlock(
+  expression: DucklangExpression,
+): Extract<DucklangExpression, { readonly kind: "block" }> | undefined {
+  if (
+    expression.kind !== "call" ||
+    expression.callee.kind !== "reference" ||
+    expression.callee.name.text !== "else" ||
+    expression.arguments.length !== 1
+  ) {
+    return undefined;
+  }
+  const argument = expression.arguments[0];
+  if (argument.kind === "block") return argument;
+  if (
+    argument.kind !== "record" ||
+    argument.fields.length !== 1 ||
+    argument.fields[0].value.kind !== "reference" ||
+    argument.fields[0].name !== argument.fields[0].value.name.text ||
+    argument.fields[0].span.start !== argument.fields[0].value.span.start ||
+    argument.fields[0].span.end !== argument.fields[0].value.span.end
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "block",
+    statements: [{
+      kind: "expression",
+      expression: argument.fields[0].value,
+      span: argument.fields[0].span,
+    }],
+    span: argument.span,
+  };
+}
+
+function detachTrailingBlock(
+  expression: DucklangExpression,
+): {
+  readonly expression: DucklangExpression;
+  readonly block: Extract<DucklangExpression, { readonly kind: "block" }>;
+} | undefined {
+  if (expression.kind === "binary") {
+    const detached = detachTrailingBlock(expression.right);
+    if (detached === undefined) return undefined;
+    return {
+      expression: { ...expression, right: detached.expression },
+      block: detached.block,
+    };
+  }
+  if (
+    expression.kind !== "call" ||
+    expression.arguments.at(-1)?.kind !== "block"
+  ) {
+    return undefined;
+  }
+  const block = expression.arguments.at(-1) as Extract<
+    DucklangExpression,
+    { readonly kind: "block" }
+  >;
+  const argumentsWithoutBlock = expression.arguments.slice(0, -1);
+  return {
+    expression: argumentsWithoutBlock.length === 0
+      ? expression.callee
+      : { ...expression, arguments: argumentsWithoutBlock },
+    block,
+  };
+}
+
+function removeLeadingIfKeyword(
+  expression: DucklangExpression,
+): DucklangExpression | undefined {
+  if (expression.kind === "binary") {
+    const left = removeLeadingIfKeyword(expression.left);
+    return left === undefined ? undefined : { ...expression, left };
+  }
+  if (
+    expression.kind !== "call" ||
+    expression.callee.kind !== "reference" ||
+    expression.callee.name.text !== "if" ||
+    expression.arguments.length !== 1
+  ) {
+    return undefined;
+  }
+  return expression.arguments[0];
 }
 
 function normalizeStatementExpressions(

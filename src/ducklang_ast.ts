@@ -220,6 +220,7 @@ export type DucklangExpression =
   | {
     readonly kind: "function";
     readonly recursive: boolean;
+    readonly loweringRole?: "loop";
     readonly parameters: readonly DucklangParameter[];
     readonly typeParameters?: readonly string[];
     readonly parameterTypeSources?: readonly DucklangExpression[];

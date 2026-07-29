@@ -61,6 +61,36 @@ Deno.test("Ducklang frontend parses every frozen live Binned target", async () =
   }
 });
 
+Deno.test("assignment-valued conditionals remain one expression", async () => {
+  const module = await parseDucklangModule(
+    "conditional_assignment.duck",
+    `let result = 0
+result = if true {
+  41
+} else {
+  result
+}
+result
+`,
+  );
+  const assignment = module.statements[1];
+  if (assignment?.kind !== "assignment") {
+    throw new Error(
+      `expected conditional assignment, received ${assignment?.kind}`,
+    );
+  }
+  if (assignment.value.kind !== "if") {
+    throw new Error(
+      `expected assignment-valued if, received ${assignment.value.kind}`,
+    );
+  }
+  if (module.statements.length !== 3) {
+    throw new Error(
+      `expected three statements, received ${module.statements.length}`,
+    );
+  }
+});
+
 async function collectDuckSources(directory: URL): Promise<URL[]> {
   const sources: URL[] = [];
   for await (const entry of Deno.readDir(directory)) {

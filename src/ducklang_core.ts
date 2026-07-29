@@ -224,6 +224,7 @@ type CoreFunctionSource = {
     TypedDucklangExpression,
     { readonly kind: "function" }
   >;
+  readonly loweringRole: "loop" | undefined;
   readonly captures: readonly CoreFunctionCapture[];
 };
 
@@ -301,6 +302,7 @@ export function lowerDucklangToCore(
       source.captures,
       source.expression.body,
       source.expression.span,
+      source.loweringRole,
     )
   );
   functions.push(
@@ -318,6 +320,7 @@ export function lowerDucklangToCore(
       [],
       mainBody,
       module.result.span,
+      undefined,
     ),
   );
   const core = canonicalizeDucklangCoreTypes({
@@ -439,6 +442,7 @@ function planCoreFunctions(module: TypedDucklangModule): CoreFunctionPlan {
       `$closure_${state.expression.span.start}_${index}`,
     sourceSymbolId: state.sourceSymbol?.id,
     expression: state.expression,
+    loweringRole: state.expression.loweringRole,
     captures: [...state.captures.values()],
   }));
   return {
@@ -733,6 +737,9 @@ class CoreFunctionLowerer {
   readonly #functionSignatures: ReadonlyMap<number, CoreSignatureId>;
   readonly #blocks: MutableCoreBlock[] = [];
   #nextValue = 0;
+  #currentFunctionId: CoreFunctionId | undefined;
+  #loopHeader: MutableCoreBlock | undefined;
+  #loopExit: MutableCoreBlock | undefined;
 
   constructor(
     module: TypedDucklangModule,
@@ -755,6 +762,7 @@ class CoreFunctionLowerer {
     captures: readonly CoreFunctionCapture[],
     body: TypedDucklangExpression,
     span: SourceSpan,
+    loweringRole: "loop" | undefined,
   ): DucklangCoreFunction {
     const entry = this.#block(
       [
@@ -771,6 +779,14 @@ class CoreFunctionLowerer {
         })),
       ],
     );
+    this.#currentFunctionId = id;
+    this.#loopHeader = loweringRole === "loop" ? entry : undefined;
+    this.#loopExit = loweringRole === "loop"
+      ? this.#block([{
+        type: this.#types.require(body.type, body.span),
+        span: body.span,
+      }])
+      : undefined;
     const environment = new Map(
       [
         ...parameters.map((parameter, index) =>
@@ -786,9 +802,26 @@ class CoreFunctionLowerer {
     );
     const lowered = this.#expression(body, entry, environment);
     if (!lowered.terminated) {
-      this.#terminate(lowered.block, {
+      this.#terminate(
+        lowered.block,
+        this.#loopExit === undefined
+          ? {
+            kind: "return",
+            values: [lowered.value],
+            span: body.span,
+          }
+          : {
+            kind: "branch",
+            target: this.#loopExit.id,
+            arguments: [lowered.value],
+            span: body.span,
+          },
+      );
+    }
+    if (this.#loopExit !== undefined) {
+      this.#terminate(this.#loopExit, {
         kind: "return",
-        values: [lowered.value],
+        values: [this.#loopExit.parameters[0].value],
         span: body.span,
       });
     }
@@ -931,6 +964,18 @@ class CoreFunctionLowerer {
                 environment,
                 expression.span,
               );
+              if (
+                directSource.id === this.#currentFunctionId &&
+                this.#loopHeader !== undefined
+              ) {
+                this.#terminate(current, {
+                  kind: "branch",
+                  target: this.#loopHeader.id,
+                  arguments: [...operands, ...captures],
+                  span: expression.span,
+                });
+                return { terminated: true, block: current };
+              }
               return this.#operation(current, {
                 kind: "call.direct",
                 functionId: directSource.id,
@@ -1147,11 +1192,21 @@ class CoreFunctionLowerer {
           environment,
         );
         if (returned.terminated) return returned;
-        this.#terminate(returned.block, {
-          kind: "return",
-          values: [returned.value],
-          span: expression.span,
-        });
+        this.#terminate(
+          returned.block,
+          this.#loopExit === undefined
+            ? {
+              kind: "return",
+              values: [returned.value],
+              span: expression.span,
+            }
+            : {
+              kind: "branch",
+              target: this.#loopExit.id,
+              arguments: [returned.value],
+              span: expression.span,
+            },
+        );
         return { terminated: true, block: returned.block };
       }
       case "function": {

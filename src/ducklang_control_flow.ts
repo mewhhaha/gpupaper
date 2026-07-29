@@ -94,7 +94,7 @@ function lowerStatements(
       continue;
     }
     if (lowered.kind === "forCollection") {
-      const collection = lowerIndexedBufferLoop(
+      const collection = lowerIndexedCollectionLoop(
         lowered,
         visibleBindingNames(result),
       );
@@ -312,6 +312,7 @@ function lowerDynamicLoop(
     value: {
       kind: "function",
       recursive: true,
+      loweringRole: "loop",
       parameters: carriedBindings,
       parameterTypeSources: carriedBindings.map(bindingReference),
       body: lowerLoopStatementSequence(
@@ -447,7 +448,7 @@ function lowerLoopStatementSequence(
     );
   }
   if (statement.kind === "forCollection") {
-    const lowered = lowerIndexedBufferLoop(statement, new Map());
+    const lowered = lowerIndexedCollectionLoop(statement, new Map());
     if (lowered !== undefined) {
       return lowerLoopStatementSequence(
         [...lowered, ...remaining],
@@ -993,6 +994,7 @@ function lowerDynamicRange(
     value: {
       kind: "function",
       recursive: true,
+      loweringRole: "loop",
       parameters: [
         iterator,
         endParameter,
@@ -1085,25 +1087,21 @@ function lowerDynamicRange(
   return [loopFunction, resultStatement];
 }
 
-function lowerIndexedBufferLoop(
+function lowerIndexedCollectionLoop(
   statement: Extract<DucklangStatement, { readonly kind: "forCollection" }>,
   visibleBindings: ReadonlyMap<string, DucklangName>,
 ): readonly DucklangStatement[] | undefined {
   if (
-    statement.body.kind !== "block" || statement.caseName !== undefined ||
-    statement.collection.kind !== "reference"
-  ) {
-    return undefined;
-  }
-  const collectionType = statement.collection.name.declaredType;
-  if (
-    collectionType?.name !== "Bytes" && collectionType?.name !== "Text"
+    statement.body.kind !== "block" || statement.caseName !== undefined
   ) {
     return undefined;
   }
   const collectionName: DucklangName = {
     text: `$collection_${statement.span.start}`,
-    declaredType: collectionType,
+    ...(statement.collection.kind === "reference" &&
+        statement.collection.name.declaredType !== undefined
+      ? { declaredType: statement.collection.name.declaredType }
+      : {}),
     span: statement.collection.span,
   };
   const indexName: DucklangName = statement.index ?? {
@@ -1133,13 +1131,9 @@ function lowerIndexedBufferLoop(
           declaredType: ducklangNamedType("I32", statement.value.span),
         },
         value: {
-          kind: "call",
-          callee: {
-            kind: "reference",
-            name: { text: "@get", span: statement.span },
-            span: statement.span,
-          },
-          arguments: [collectionReference, indexReference],
+          kind: "index",
+          collection: collectionReference,
+          index: indexReference,
           span: statement.span,
         },
         span: statement.span,

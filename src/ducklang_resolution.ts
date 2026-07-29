@@ -146,6 +146,7 @@ export type ResolvedDucklangExpression =
   | {
     readonly kind: "function";
     readonly recursive: boolean;
+    readonly loweringRole?: "loop";
     readonly parameters: readonly DucklangSymbol[];
     readonly typeParameters?: readonly string[];
     readonly parameterTypeSources?: readonly ResolvedDucklangExpression[];
@@ -1328,6 +1329,9 @@ class DucklangResolver {
         return {
           kind: "function",
           recursive: expression.recursive,
+          ...(expression.loweringRole === undefined
+            ? {}
+            : { loweringRole: expression.loweringRole }),
           parameters,
           ...(expression.typeParameters === undefined
             ? {}

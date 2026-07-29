@@ -207,6 +207,8 @@ export function createDucklangRuntimeImports(
     [primitiveRuntimeImportName(PrimitiveId.bufferLength)]: (
       handle: number,
     ) => {
+      const product = products.get(handle);
+      if (product !== undefined) return product.length;
       const buffer = requireHandle(handle);
       return buffer.kind === "text"
         ? encoder.encode(buffer.value).length

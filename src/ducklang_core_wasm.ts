@@ -929,8 +929,6 @@ function emitOperation(
         operation.operands.slice(0, -1),
         index,
         wasmValueType(core, operation.type),
-        function_,
-        layout,
         getValue,
       ),
     );
@@ -1291,8 +1289,6 @@ function emitProductSelection(
   values: readonly CoreValueId[],
   index: CoreValueId,
   resultType: number,
-  function_: DucklangCoreFunction,
-  layout: FunctionValueLayout,
   getValue: (
     value: CoreValueId,
   ) => readonly WasmInstruction[],

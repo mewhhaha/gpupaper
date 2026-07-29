@@ -6,6 +6,7 @@ import {
   lowerDucklangToCore,
   validateDucklangCore,
 } from "../src/ducklang_core.ts";
+import { lowerDucklangControlFlow } from "../src/ducklang_control_flow.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
@@ -366,6 +367,44 @@ Deno.test("Core gives a captured function typed code and environment boundaries"
     ),
     true,
   );
+});
+
+Deno.test("Core replaces a dynamic range recursion with header and exit edges", async () => {
+  const parsed = await parseDucklangModule(
+    "range.duck",
+    "let sum = bound => {\n  let total = 0\n  for value in 0..bound {\n    total = total + value\n  }\n  total\n}\nsum(5)\n",
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(
+      resolveDucklangModule(lowerDucklangControlFlow(parsed)),
+    ),
+  );
+  const loop = module.functions.find((function_) =>
+    function_.name.startsWith("$range_loop_")
+  );
+  if (loop === undefined) throw new Error("expected a range loop function");
+
+  assertEquals(
+    loop.blocks.some((block) =>
+      block.terminator.kind === "branch" &&
+      block.terminator.target === loop.entryBlock
+    ),
+    true,
+  );
+  assertEquals(
+    loop.blocks.some((block) =>
+      block.operations.some((operation) =>
+        operation.kind === "call.direct" &&
+        operation.functionId === loop.id
+      )
+    ),
+    false,
+  );
+  const exits = loop.blocks.filter((block) =>
+    block.terminator.kind === "return"
+  );
+  assertEquals(exits.length, 1);
+  assertEquals(exits[0].parameters.length, 1);
 });
 
 async function lower(
