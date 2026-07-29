@@ -140,8 +140,9 @@ export type TypedDucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
+    readonly typeParameters?: readonly string[];
     readonly parameterTypeSources?: readonly TypedDucklangExpression[];
-    readonly declaredResultType?: string;
+    readonly declaredResultType?: DucklangTypeReference;
     readonly body: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
@@ -387,6 +388,7 @@ class DucklangInference {
   >;
   readonly #initFields: readonly DucklangInitField[];
   readonly #exportNames: readonly string[];
+  #activeTypeParameters: ReadonlyMap<string, Type> = new Map();
   #nextVariable = 0;
 
   constructor(
@@ -455,17 +457,28 @@ class DucklangInference {
     const typed: TypedDucklangBinding[] = [];
     for (const binding of bindings) {
       if (!binding.recursive) continue;
+      const typeParameters = binding.value.kind === "function"
+        ? this.#functionTypeParameters(
+          binding.value.parameters,
+          binding.value.typeParameters,
+        )
+        : new Map<string, Type>();
       const type = binding.value.kind === "function" &&
           binding.value.declaredResultType !== undefined
         ? functionType(
           binding.value.parameters.map((parameter) =>
             parameter.declaredType !== undefined
-              ? this.#declaredType(parameter.declaredType, parameter.span)
-              : this.#freshVariable()
+              ? this.#declaredType(
+                parameter.declaredType,
+                parameter.span,
+                typeParameters,
+              )
+              : typeParameters.get(parameter.text) ?? this.#freshVariable()
           ),
           this.#declaredType(
             binding.value.declaredResultType,
             binding.value.span,
+            typeParameters,
           ),
         )
         : this.#freshVariable();
@@ -485,6 +498,10 @@ class DucklangInference {
         recursiveType !== undefined && binding.value.kind === "function" &&
         binding.value.parameterTypeSources !== undefined
       ) {
+        const typeParameters = this.#functionTypeParameters(
+          binding.value.parameters,
+          binding.value.typeParameters,
+        );
         const parameterSourceTypes = binding.value.parameterTypeSources.map((
           source,
         ) => this.inferExpression(source, environment).type);
@@ -493,14 +510,20 @@ class DucklangInference {
           functionType(
             binding.value.parameters.map((parameter, index) =>
               parameter.declaredType !== undefined
-                ? this.#declaredType(parameter.declaredType, parameter.span)
-                : parameterSourceTypes[index]
+                ? this.#declaredType(
+                  parameter.declaredType,
+                  parameter.span,
+                  typeParameters,
+                )
+                : typeParameters.get(parameter.text) ??
+                  parameterSourceTypes[index]
             ),
             binding.value.declaredResultType === undefined
               ? this.#freshVariable()
               : this.#declaredType(
                 binding.value.declaredResultType,
                 binding.value.span,
+                typeParameters,
               ),
           ),
           binding.span,
@@ -1342,48 +1365,67 @@ class DucklangInference {
       }
       case "function": {
         const functionEnvironment = new Map(environment);
-        const parameterTypeSources = expression.parameterTypeSources?.map((
-          source,
-        ) => this.inferExpression(source, environment));
-        const parameterTypes = expression.parameters.map((parameter, index) => {
-          const type = parameter.declaredType !== undefined
-            ? this.#declaredType(parameter.declaredType, parameter.span)
-            : parameterTypeSources?.[index]?.type ?? this.#freshVariable();
-          functionEnvironment.set(parameter.id, type);
-          this.#symbolTypes.set(parameter.id, type);
-          return type;
-        });
-        const declaredResultType = expression.declaredResultType === undefined
-          ? undefined
-          : this.#declaredType(
-            expression.declaredResultType,
-            expression.span,
+        const typeParameters = this.#functionTypeParameters(
+          expression.parameters,
+          expression.typeParameters,
+        );
+        const previousTypeParameters = this.#activeTypeParameters;
+        this.#activeTypeParameters = typeParameters;
+        try {
+          const parameterTypeSources = expression.parameterTypeSources?.map((
+            source,
+          ) => this.inferExpression(source, environment));
+          const parameterTypes = expression.parameters.map(
+            (parameter, index) => {
+              const type = parameter.declaredType !== undefined
+                ? this.#declaredType(
+                  parameter.declaredType,
+                  parameter.span,
+                  typeParameters,
+                )
+                : typeParameters.get(parameter.text) ??
+                  parameterTypeSources?.[index]?.type ??
+                  this.#freshVariable();
+              functionEnvironment.set(parameter.id, type);
+              this.#symbolTypes.set(parameter.id, type);
+              return type;
+            },
           );
-        const body = this.inferExpression(
-          expression.body,
-          functionEnvironment,
-          declaredResultType,
-        );
-        const resultType = declaredResultType ?? body.type;
-        if (declaredResultType !== undefined) {
-          this.#unify(body.type, declaredResultType, expression.body.span);
-        }
-        this.#unifyReturnTypes(body.expression, resultType);
-        const type = parameterTypes.toReversed().reduce<Type>(
-          (result, parameter) => ({ kind: "function", parameter, result }),
-          resultType,
-        );
-        return {
-          expression: {
-            ...expression,
-            parameterTypeSources: parameterTypeSources?.map((source) =>
-              source.expression
-            ),
-            body: body.expression,
+          const declaredResultType = expression.declaredResultType === undefined
+            ? undefined
+            : this.#declaredType(
+              expression.declaredResultType,
+              expression.span,
+              typeParameters,
+            );
+          const body = this.inferExpression(
+            expression.body,
+            functionEnvironment,
+            declaredResultType,
+          );
+          const resultType = declaredResultType ?? body.type;
+          if (declaredResultType !== undefined) {
+            this.#unify(body.type, declaredResultType, expression.body.span);
+          }
+          this.#unifyReturnTypes(body.expression, resultType);
+          const type = parameterTypes.toReversed().reduce<Type>(
+            (result, parameter) => ({ kind: "function", parameter, result }),
+            resultType,
+          );
+          return {
+            expression: {
+              ...expression,
+              parameterTypeSources: parameterTypeSources?.map((source) =>
+                source.expression
+              ),
+              body: body.expression,
+              type,
+            },
             type,
-          },
-          type,
-        };
+          };
+        } finally {
+          this.#activeTypeParameters = previousTypeParameters;
+        }
       }
       case "call": {
         const callee = this.inferExpression(expression.callee, environment);
@@ -2214,8 +2256,39 @@ class DucklangInference {
     );
   }
 
-  #declaredType(name: string, span: SourceSpan): Type {
-    return this.#typeReference({ name, arguments: [], span }, new Map(), []);
+  #declaredType(
+    reference: string | DucklangTypeReference,
+    span: SourceSpan,
+    parameters: ReadonlyMap<string, Type> = this.#activeTypeParameters,
+  ): Type {
+    return this.#typeReference(
+      typeof reference === "string"
+        ? { name: reference, arguments: [], span }
+        : reference,
+      parameters,
+      [],
+    );
+  }
+
+  #functionTypeParameters(
+    parameters: readonly DucklangSymbol[],
+    declaredParameters: readonly string[] | undefined,
+  ): ReadonlyMap<string, Type> {
+    const types = new Map(this.#activeTypeParameters);
+    for (const name of declaredParameters ?? []) {
+      if (!types.has(name)) types.set(name, this.#freshVariable());
+    }
+    for (const parameter of parameters) {
+      if (
+        parameter.compileTimeRecord !== true ||
+        parameter.declaredType !== undefined ||
+        types.has(parameter.text)
+      ) {
+        continue;
+      }
+      types.set(parameter.text, this.#freshVariable());
+    }
+    return types;
   }
 
   #builtinType(id: BuiltinTypeIdentity): Type {
@@ -2362,7 +2435,7 @@ class DucklangInference {
       );
     if (declaration === undefined) {
       throw new TypeError(
-        `${this.#file}:${reference.span.start}: unknown Ducklang type ${reference.name}`,
+        `${reference.span.file}:${reference.span.start}: unknown Ducklang type ${reference.name}`,
       );
     }
     if (arguments_.length === 0 && declaration.parameters.length > 0) {

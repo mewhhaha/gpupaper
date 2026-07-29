@@ -24,9 +24,10 @@ export type DucklangSymbol = {
   readonly moduleId: ModuleId;
   readonly text: string;
   readonly scope: "module" | "parameter" | "local";
-  readonly declaredType?: string;
+  readonly declaredType?: DucklangTypeReference;
   readonly declaredEffectRow?: DucklangEffectRow | null;
   readonly identityPolymorphic?: boolean;
+  readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
   readonly span: SourceSpan;
 };
@@ -146,8 +147,9 @@ export type ResolvedDucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangSymbol[];
+    readonly typeParameters?: readonly string[];
     readonly parameterTypeSources?: readonly ResolvedDucklangExpression[];
-    readonly declaredResultType?: string;
+    readonly declaredResultType?: DucklangTypeReference;
     readonly body: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
@@ -1327,6 +1329,9 @@ class DucklangResolver {
           kind: "function",
           recursive: expression.recursive,
           parameters,
+          ...(expression.typeParameters === undefined
+            ? {}
+            : { typeParameters: expression.typeParameters }),
           ...(expression.parameterTypeSources === undefined ? {} : {
             parameterTypeSources: expression.parameterTypeSources.map((
               source,
@@ -1714,6 +1719,9 @@ class DucklangResolver {
       ...(name.identityPolymorphic === undefined
         ? {}
         : { identityPolymorphic: name.identityPolymorphic }),
+      ...(name.compileTimeRecord === undefined
+        ? {}
+        : { compileTimeRecord: name.compileTimeRecord }),
       ...(name.linear === undefined ? {} : { linear: name.linear }),
       span: name.span,
     } satisfies DucklangSymbol;

@@ -1,8 +1,8 @@
 import { PrimitiveId } from "./ducklang_primitives.ts";
+import { visitDucklangExpressionChildren } from "./ducklang_closures.ts";
 import type { DucklangSymbol } from "./ducklang_resolution.ts";
 import type {
   DucklangBinaryOperator,
-  TypedDucklangBinding,
   TypedDucklangExpression,
   TypedDucklangModule,
 } from "./ducklang_types.ts";
@@ -107,6 +107,14 @@ export type DucklangCoreOperation =
     readonly functionId: CoreFunctionId;
   })
   | (CoreOperationBase & {
+    readonly kind: "closure.make";
+    readonly functionId: CoreFunctionId;
+  })
+  | (CoreOperationBase & {
+    readonly kind: "call.indirect";
+    readonly signature: CoreSignatureId;
+  })
+  | (CoreOperationBase & {
     readonly kind: "host.call";
     readonly effectName: string;
     readonly operationName: string;
@@ -203,27 +211,27 @@ type LoweredExpression =
     readonly block: MutableCoreBlock;
   };
 
+type CoreFunctionCapture = {
+  readonly symbol: DucklangSymbol;
+  readonly type: Type;
+};
+
+type CoreFunctionSource = {
+  readonly id: CoreFunctionId;
+  readonly name: string;
+  readonly sourceSymbolId: number | undefined;
+  readonly expression: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "function" }
+  >;
+  readonly captures: readonly CoreFunctionCapture[];
+};
+
 export function lowerDucklangToCore(
   module: TypedDucklangModule,
 ): DucklangCoreModule {
-  const types = new CoreTypeRegistry(module);
-  const functionBindings = module.bindings.filter(
-    (
-      binding,
-    ): binding is TypedDucklangBinding & {
-      readonly value: Extract<
-        TypedDucklangExpression,
-        { readonly kind: "function" }
-      >;
-    } => binding.value.kind === "function",
-  );
-  const functionIds = new Map(
-    functionBindings.map((binding, index) => [
-      binding.symbol.id,
-      index as CoreFunctionId,
-    ]),
-  );
-  const mainFunctionId = functionBindings.length as CoreFunctionId;
+  const functionPlan = planCoreFunctions(module);
+  const mainFunctionId = functionPlan.sources.length as CoreFunctionId;
   const signatures: DucklangCoreSignature[] = [];
   const signatureIds = new Map<string, CoreSignatureId>();
   const signature = (
@@ -243,17 +251,19 @@ export function lowerDucklangToCore(
     signatureIds.set(key, id);
     return id;
   };
+  const types = new CoreTypeRegistry(module, signature);
   const functionSignatures = new Map<number, CoreSignatureId>();
-  for (const binding of functionBindings) {
-    const parameterTypes = binding.value.parameters.map((parameter) =>
+  for (const source of functionPlan.sources) {
+    const parameterTypes = source.expression.parameters.map((parameter) =>
       requireSymbolType(module, parameter)
     );
+    parameterTypes.push(...source.captures.map((capture) => capture.type));
     functionSignatures.set(
-      binding.symbol.id,
+      source.id,
       signature(
         parameterTypes,
-        binding.value.body.type,
-        binding.value.span,
+        source.expression.body.type,
+        source.expression.span,
       ),
     );
   }
@@ -276,33 +286,35 @@ export function lowerDucklangToCore(
       type: module.result.type,
       span: module.result.span,
     };
-  const functions = functionBindings.map((binding) =>
+  const functions = functionPlan.sources.map((source) =>
     new CoreFunctionLowerer(
       module,
       types,
-      functionIds,
+      functionPlan,
       functionSignatures,
     ).lower(
-      functionIds.get(binding.symbol.id)!,
-      binding.symbol.text,
-      binding.symbol.id,
-      functionSignatures.get(binding.symbol.id)!,
-      binding.value.parameters,
-      binding.value.body,
-      binding.span,
+      source.id,
+      source.name,
+      source.sourceSymbolId,
+      functionSignatures.get(source.id)!,
+      source.expression.parameters,
+      source.captures,
+      source.expression.body,
+      source.expression.span,
     )
   );
   functions.push(
     new CoreFunctionLowerer(
       module,
       types,
-      functionIds,
+      functionPlan,
       functionSignatures,
     ).lower(
       mainFunctionId,
       "main",
       undefined,
       mainSignature,
+      [],
       [],
       mainBody,
       module.result.span,
@@ -318,6 +330,178 @@ export function lowerDucklangToCore(
   });
   validateDucklangCore(core);
   return core;
+}
+
+type CoreFunctionPlan = {
+  readonly sources: readonly CoreFunctionSource[];
+  readonly byExpression: ReadonlyMap<
+    Extract<TypedDucklangExpression, { readonly kind: "function" }>,
+    CoreFunctionSource
+  >;
+  readonly bySymbol: ReadonlyMap<number, CoreFunctionSource>;
+};
+
+function planCoreFunctions(module: TypedDucklangModule): CoreFunctionPlan {
+  const symbolsByExpression = new Map<
+    Extract<TypedDucklangExpression, { readonly kind: "function" }>,
+    DucklangSymbol
+  >();
+  for (const binding of module.bindings) {
+    if (binding.value.kind === "function") {
+      symbolsByExpression.set(binding.value, binding.symbol);
+    }
+    collectFunctionBindingSymbols(binding.value, symbolsByExpression);
+  }
+  collectFunctionBindingSymbols(module.result, symbolsByExpression);
+
+  const expressions: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "function" }
+  >[] = [];
+  const collectedExpressions = new Set<TypedDucklangExpression>();
+  const collect = (expression: TypedDucklangExpression): void => {
+    if (collectedExpressions.has(expression)) return;
+    collectedExpressions.add(expression);
+    if (expression.kind === "function") expressions.push(expression);
+    visitDucklangExpressionChildren(expression, collect);
+  };
+  for (const binding of module.bindings) collect(binding.value);
+  collect(module.result);
+
+  const functionIdsByExpression = new Map(
+    expressions.map((expression, index) => [
+      expression,
+      index as CoreFunctionId,
+    ]),
+  );
+  const functionIdsBySymbol = new Map<number, CoreFunctionId>();
+  for (const [expression, symbol] of symbolsByExpression) {
+    const id = functionIdsByExpression.get(expression);
+    if (id !== undefined) functionIdsBySymbol.set(symbol.id, id);
+  }
+
+  const states = expressions.map((expression, index) => {
+    const sourceSymbol = symbolsByExpression.get(expression);
+    const defined = collectCoreFunctionDefinitions(expression, sourceSymbol);
+    const captures = new Map<number, CoreFunctionCapture>();
+    const dependencies = new Set<CoreFunctionId>();
+    const visit = (candidate: TypedDucklangExpression): void => {
+      if (candidate !== expression && candidate.kind === "function") {
+        dependencies.add(functionIdsByExpression.get(candidate)!);
+        return;
+      }
+      if (
+        candidate.kind === "call" &&
+        candidate.callee.kind === "reference"
+      ) {
+        const callee = functionIdsBySymbol.get(candidate.callee.symbol.id);
+        if (callee !== undefined && callee !== index) dependencies.add(callee);
+      }
+      if (
+        candidate.kind === "reference" &&
+        !defined.has(candidate.symbol.id) &&
+        !functionIdsBySymbol.has(candidate.symbol.id)
+      ) {
+        captures.set(candidate.symbol.id, {
+          symbol: candidate.symbol,
+          type: candidate.type,
+        });
+        return;
+      }
+      visitDucklangExpressionChildren(candidate, visit);
+    };
+    visit(expression.body);
+    return { expression, sourceSymbol, defined, captures, dependencies };
+  });
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const state of states) {
+      for (const dependencyId of state.dependencies) {
+        for (const capture of states[dependencyId].captures.values()) {
+          if (
+            state.defined.has(capture.symbol.id) ||
+            state.captures.has(capture.symbol.id)
+          ) {
+            continue;
+          }
+          state.captures.set(capture.symbol.id, capture);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  const sources = states.map((state, index): CoreFunctionSource => ({
+    id: index as CoreFunctionId,
+    name: state.sourceSymbol?.text ??
+      `$closure_${state.expression.span.start}_${index}`,
+    sourceSymbolId: state.sourceSymbol?.id,
+    expression: state.expression,
+    captures: [...state.captures.values()],
+  }));
+  return {
+    sources,
+    byExpression: new Map(
+      sources.map((source) => [source.expression, source]),
+    ),
+    bySymbol: new Map(
+      sources.flatMap((source) =>
+        source.sourceSymbolId === undefined
+          ? []
+          : [[source.sourceSymbolId, source] as const]
+      ),
+    ),
+  };
+}
+
+function collectFunctionBindingSymbols(
+  expression: TypedDucklangExpression,
+  symbols: Map<
+    Extract<TypedDucklangExpression, { readonly kind: "function" }>,
+    DucklangSymbol
+  >,
+): void {
+  if (expression.kind === "block") {
+    for (const step of expression.steps) {
+      if (
+        step.kind === "binding" && step.binding.value.kind === "function"
+      ) {
+        symbols.set(step.binding.value, step.binding.symbol);
+      }
+    }
+  }
+  visitDucklangExpressionChildren(
+    expression,
+    (child) => collectFunctionBindingSymbols(child, symbols),
+  );
+}
+
+function collectCoreFunctionDefinitions(
+  expression: Extract<
+    TypedDucklangExpression,
+    { readonly kind: "function" }
+  >,
+  sourceSymbol: DucklangSymbol | undefined,
+): ReadonlySet<number> {
+  const definitions = new Set(
+    expression.parameters.map((parameter) => parameter.id),
+  );
+  if (sourceSymbol !== undefined) definitions.add(sourceSymbol.id);
+  const visit = (candidate: TypedDucklangExpression): void => {
+    if (candidate.kind === "ifUnion" && candidate.payloadSymbol !== undefined) {
+      definitions.add(candidate.payloadSymbol.id);
+    }
+    if (candidate.kind === "block") {
+      for (const step of candidate.steps) {
+        if (step.kind === "binding") definitions.add(step.binding.symbol.id);
+      }
+    }
+    visitDucklangExpressionChildren(candidate, visit);
+  };
+  visit(expression.body);
+  return definitions;
 }
 
 /**
@@ -404,11 +588,24 @@ function remapCoreType(
 
 class CoreTypeRegistry {
   readonly #module: TypedDucklangModule;
+  readonly #signature: (
+    parameters: readonly Type[],
+    result: Type,
+    span: SourceSpan,
+  ) => CoreSignatureId;
   readonly #types: DucklangCoreType[] = [];
   readonly #typeIds = new Map<string, CoreTypeId>();
 
-  constructor(module: TypedDucklangModule) {
+  constructor(
+    module: TypedDucklangModule,
+    signature: (
+      parameters: readonly Type[],
+      result: Type,
+      span: SourceSpan,
+    ) => CoreSignatureId,
+  ) {
     this.#module = module;
+    this.#signature = signature;
   }
 
   require(type: Type, span: SourceSpan): CoreTypeId {
@@ -433,24 +630,29 @@ class CoreTypeRegistry {
     return this.#types;
   }
 
+  functionSignature(type: Type, span: SourceSpan): CoreSignatureId {
+    const coreType = this.#types[this.require(type, span)];
+    if (coreType.kind === "function") return coreType.signature;
+    throw new TypeError(
+      `${span.file}:${span.start}: indirect Core call has non-function type ${
+        formatDucklangType(type)
+      }`,
+    );
+  }
+
   #resolve(
     type: Exclude<Type, { readonly kind: "variable" }>,
     span: SourceSpan,
   ) {
     if (type.kind === "function") {
-      const parameters: CoreTypeId[] = [];
-      let current: Type = type;
-      while (current.kind === "function") {
-        parameters.push(this.require(current.parameter, span));
-        current = current.result;
-      }
-      const signature = {
-        parameters,
-        result: this.require(current, span),
-      };
+      const result = functionResultType(type);
       return {
         kind: "function" as const,
-        signature: this.#internTypeSignature(signature),
+        signature: this.#signature(
+          functionParameterTypes(type),
+          result,
+          span,
+        ),
       };
     }
     const scalar = {
@@ -522,22 +724,12 @@ class CoreTypeRegistry {
       fields: type.arguments.map((argument) => this.require(argument, span)),
     };
   }
-
-  #internTypeSignature(signature: DucklangCoreSignature): CoreSignatureId {
-    const key = `function:${JSON.stringify(signature)}`;
-    const existing = this.#typeIds.get(key);
-    if (existing !== undefined) return existing as number as CoreSignatureId;
-    const id = this.#types.length as CoreTypeId;
-    this.#typeIds.set(key, id);
-    this.#types.push({ kind: "product", fields: [] });
-    return id as number as CoreSignatureId;
-  }
 }
 
 class CoreFunctionLowerer {
   readonly #module: TypedDucklangModule;
   readonly #types: CoreTypeRegistry;
-  readonly #functionIds: ReadonlyMap<number, CoreFunctionId>;
+  readonly #functionPlan: CoreFunctionPlan;
   readonly #functionSignatures: ReadonlyMap<number, CoreSignatureId>;
   readonly #blocks: MutableCoreBlock[] = [];
   #nextValue = 0;
@@ -545,12 +737,12 @@ class CoreFunctionLowerer {
   constructor(
     module: TypedDucklangModule,
     types: CoreTypeRegistry,
-    functionIds: ReadonlyMap<number, CoreFunctionId>,
+    functionPlan: CoreFunctionPlan,
     functionSignatures: ReadonlyMap<number, CoreSignatureId>,
   ) {
     this.#module = module;
     this.#types = types;
-    this.#functionIds = functionIds;
+    this.#functionPlan = functionPlan;
     this.#functionSignatures = functionSignatures;
   }
 
@@ -560,23 +752,37 @@ class CoreFunctionLowerer {
     sourceSymbolId: number | undefined,
     signature: CoreSignatureId,
     parameters: readonly DucklangSymbol[],
+    captures: readonly CoreFunctionCapture[],
     body: TypedDucklangExpression,
     span: SourceSpan,
   ): DucklangCoreFunction {
     const entry = this.#block(
-      parameters.map((parameter) => ({
-        type: this.#types.require(
-          requireSymbolType(this.#module, parameter),
-          parameter.span,
-        ),
-        span: parameter.span,
-      })),
+      [
+        ...parameters.map((parameter) => ({
+          type: this.#types.require(
+            requireSymbolType(this.#module, parameter),
+            parameter.span,
+          ),
+          span: parameter.span,
+        })),
+        ...captures.map((capture) => ({
+          type: this.#types.require(capture.type, capture.symbol.span),
+          span: capture.symbol.span,
+        })),
+      ],
     );
     const environment = new Map(
-      parameters.map((parameter, index) => [
-        parameter.id,
-        entry.parameters[index].value,
-      ]),
+      [
+        ...parameters.map((parameter, index) =>
+          [parameter.id, entry.parameters[index].value] as const
+        ),
+        ...captures.map((capture, index) =>
+          [
+            capture.symbol.id,
+            entry.parameters[parameters.length + index].value,
+          ] as const
+        ),
+      ],
     );
     const lowered = this.#expression(body, entry, environment);
     if (!lowered.terminated) {
@@ -633,12 +839,20 @@ class CoreFunctionLowerer {
         });
       case "reference": {
         const value = environment.get(expression.symbol.id);
-        if (value === undefined) {
-          throw new ReferenceError(
-            `${expression.span.file}:${expression.span.start}: Core lowering has no runtime value for ${expression.symbol.text}#${expression.symbol.id}`,
+        if (value !== undefined) return { terminated: false, block, value };
+        const source = this.#functionPlan.bySymbol.get(expression.symbol.id);
+        if (source !== undefined) {
+          return this.#closure(
+            source,
+            expression.type,
+            block,
+            environment,
+            expression.span,
           );
         }
-        return { terminated: false, block, value };
+        throw new ReferenceError(
+          `${expression.span.file}:${expression.span.start}: Core lowering has no runtime value for ${expression.symbol.text}#${expression.symbol.id}`,
+        );
       }
       case "binary":
         return this.#operands(
@@ -671,6 +885,20 @@ class CoreFunctionLowerer {
         );
       case "call": {
         if (expression.callee.kind === "primitive") {
+          if (expression.callee.primitiveId === PrimitiveId.panic) {
+            return this.#operands(
+              expression.arguments,
+              block,
+              environment,
+              (current) => {
+                this.#terminate(current, {
+                  kind: "trap",
+                  span: expression.span,
+                });
+                return { terminated: true, block: current };
+              },
+            );
+          }
           return this.#operands(
             expression.arguments,
             block,
@@ -687,25 +915,43 @@ class CoreFunctionLowerer {
               }),
           );
         }
-        if (expression.callee.kind !== "reference") {
-          throw new TypeError(
-            `${expression.span.file}:${expression.span.start}: ${expression.callee.kind} callee reached direct-call Core`,
-          );
-        }
-        const functionId = this.#functionIds.get(expression.callee.symbol.id);
-        if (functionId === undefined) {
-          throw new ReferenceError(
-            `${expression.span.file}:${expression.span.start}: Core lowering has no function for ${expression.callee.symbol.text}#${expression.callee.symbol.id}`,
+        const directSource = expression.callee.kind === "reference"
+          ? this.#functionPlan.bySymbol.get(expression.callee.symbol.id)
+          : expression.callee.kind === "function"
+          ? this.#functionPlan.byExpression.get(expression.callee)
+          : undefined;
+        if (directSource !== undefined) {
+          return this.#operands(
+            expression.arguments,
+            block,
+            environment,
+            (current, operands) => {
+              const captures = this.#captureValues(
+                directSource,
+                environment,
+                expression.span,
+              );
+              return this.#operation(current, {
+                kind: "call.direct",
+                functionId: directSource.id,
+                type: this.#types.require(expression.type, expression.span),
+                operands: [...operands, ...captures],
+                span: expression.span,
+              });
+            },
           );
         }
         return this.#operands(
-          expression.arguments,
+          [expression.callee, ...expression.arguments],
           block,
           environment,
           (current, operands) =>
             this.#operation(current, {
-              kind: "call.direct",
-              functionId,
+              kind: "call.indirect",
+              signature: this.#types.functionSignature(
+                expression.callee.type,
+                expression.callee.span,
+              ),
               type: this.#types.require(expression.type, expression.span),
               operands,
               span: expression.span,
@@ -908,9 +1154,23 @@ class CoreFunctionLowerer {
         });
         return { terminated: true, block: returned.block };
       }
+      case "function": {
+        const source = this.#functionPlan.byExpression.get(expression);
+        if (source === undefined) {
+          throw new Error(
+            `${expression.span.file}:${expression.span.start}: Core closure has no planned function`,
+          );
+        }
+        return this.#closure(
+          source,
+          expression.type,
+          block,
+          environment,
+          expression.span,
+        );
+      }
       case "primitive":
       case "intrinsic":
-      case "function":
       case "optionDo":
       case "comptime":
         throw new TypeError(
@@ -937,7 +1197,6 @@ class CoreFunctionLowerer {
         current = lowered.block;
         continue;
       }
-      if (step.binding.value.kind === "function") continue;
       const lowered = this.#expression(
         step.binding.value,
         current,
@@ -1125,6 +1384,36 @@ class CoreFunctionLowerer {
     return { terminated: false, block: join, value: join.parameters[0].value };
   }
 
+  #closure(
+    source: CoreFunctionSource,
+    type: Type,
+    block: MutableCoreBlock,
+    environment: ReadonlyMap<number, CoreValueId>,
+    span: SourceSpan,
+  ): LoweredExpression {
+    return this.#operation(block, {
+      kind: "closure.make",
+      functionId: source.id,
+      type: this.#types.require(type, span),
+      operands: this.#captureValues(source, environment, span),
+      span,
+    });
+  }
+
+  #captureValues(
+    source: CoreFunctionSource,
+    environment: ReadonlyMap<number, CoreValueId>,
+    span: SourceSpan,
+  ): readonly CoreValueId[] {
+    return source.captures.map((capture) => {
+      const value = environment.get(capture.symbol.id);
+      if (value !== undefined) return value;
+      throw new ReferenceError(
+        `${span.file}:${span.start}: Core closure ${source.name} cannot capture ${capture.symbol.text}#${capture.symbol.id} because it has no runtime value`,
+      );
+    });
+  }
+
   #operands(
     expressions: readonly TypedDucklangExpression[],
     block: MutableCoreBlock,
@@ -1218,6 +1507,13 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
     }
     requireIndex(function_.signature, module.signatures.length, "signature");
     requireIndex(function_.entryBlock, function_.blocks.length, "entry block");
+    const signature = module.signatures[function_.signature];
+    const entryParameters = function_.blocks[function_.entryBlock].parameters;
+    requireCoreTypes(
+      `function ${function_.name} entry`,
+      entryParameters.map((parameter) => parameter.type),
+      signature.parameters,
+    );
     const definitions = new Map<
       CoreValueId,
       { readonly block: CoreBlockId; readonly operation: number }
@@ -1245,11 +1541,23 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
           operationIndex,
           function_,
         );
-        if (operation.kind === "call.direct") {
+        if (
+          operation.kind === "call.direct" ||
+          operation.kind === "closure.make"
+        ) {
           requireIndex(
             operation.functionId,
             module.functions.length,
-            "direct callee",
+            operation.kind === "call.direct"
+              ? "direct callee"
+              : "closure function",
+          );
+        }
+        if (operation.kind === "call.indirect") {
+          requireIndex(
+            operation.signature,
+            module.signatures.length,
+            "indirect signature",
           );
         }
       }
@@ -1271,6 +1579,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
             operationIndex,
           );
         }
+        validateCoreCallOperation(module, function_, operation);
       }
       for (const operand of terminatorValues(block.terminator)) {
         requireDominatingValue(
@@ -1282,7 +1591,140 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
           block.operations.length,
         );
       }
+      validateCoreTerminator(module, function_, block);
     }
+  }
+}
+
+function validateCoreCallOperation(
+  module: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  operation: DucklangCoreOperation,
+): void {
+  if (operation.kind === "call.direct") {
+    const callee = module.functions[operation.functionId];
+    const signature = module.signatures[callee.signature];
+    requireCoreTypes(
+      `direct call ${function_.name} -> ${callee.name}`,
+      operation.operands.map((operand) => coreValueType(function_, operand)),
+      signature.parameters,
+    );
+    if (operation.type !== signature.result) {
+      throw new TypeError(
+        `Core direct call ${function_.name} -> ${callee.name} has result type ${operation.type}; signature returns ${signature.result}`,
+      );
+    }
+    return;
+  }
+  if (operation.kind === "closure.make") {
+    const target = module.functions[operation.functionId];
+    const codeSignature = module.signatures[target.signature];
+    const closureType = module.types[operation.type];
+    if (closureType.kind !== "function") {
+      throw new TypeError(
+        `Core closure ${function_.name}:${operation.result} has non-function type ${operation.type}`,
+      );
+    }
+    const closureSignature = module.signatures[closureType.signature];
+    if (
+      codeSignature.parameters.length <
+        closureSignature.parameters.length
+    ) {
+      throw new TypeError(
+        `Core closure ${target.name} exposes ${closureSignature.parameters.length} parameters but its code accepts ${codeSignature.parameters.length}`,
+      );
+    }
+    requireCoreTypes(
+      `closure ${target.name} parameters`,
+      codeSignature.parameters.slice(0, closureSignature.parameters.length),
+      closureSignature.parameters,
+    );
+    requireCoreTypes(
+      `closure ${target.name} captures`,
+      operation.operands.map((operand) => coreValueType(function_, operand)),
+      codeSignature.parameters.slice(closureSignature.parameters.length),
+    );
+    if (codeSignature.result !== closureSignature.result) {
+      throw new TypeError(
+        `Core closure ${target.name} returns ${codeSignature.result}; closure signature returns ${closureSignature.result}`,
+      );
+    }
+    return;
+  }
+  if (operation.kind !== "call.indirect") return;
+  if (operation.operands.length === 0) {
+    throw new TypeError(
+      `Core indirect call ${function_.name}:${operation.result} has no closure operand`,
+    );
+  }
+  const closureType = module.types[
+    coreValueType(function_, operation.operands[0])
+  ];
+  if (
+    closureType.kind !== "function" ||
+    closureType.signature !== operation.signature
+  ) {
+    throw new TypeError(
+      `Core indirect call ${function_.name}:${operation.result} signature ${operation.signature} disagrees with its closure type`,
+    );
+  }
+  const signature = module.signatures[operation.signature];
+  requireCoreTypes(
+    `indirect call ${function_.name}:${operation.result}`,
+    operation.operands.slice(1).map((operand) =>
+      coreValueType(function_, operand)
+    ),
+    signature.parameters,
+  );
+  if (operation.type !== signature.result) {
+    throw new TypeError(
+      `Core indirect call ${function_.name}:${operation.result} has result type ${operation.type}; signature returns ${signature.result}`,
+    );
+  }
+}
+
+function validateCoreTerminator(
+  module: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  block: DucklangCoreBlock,
+): void {
+  if (block.terminator.kind === "conditional_branch") {
+    const conditionType = module.types[
+      coreValueType(function_, block.terminator.condition)
+    ];
+    if (conditionType.kind !== "scalar" || conditionType.scalar !== "i32") {
+      throw new TypeError(
+        `Core conditional ${function_.name}:${block.id} has non-i32 condition`,
+      );
+    }
+    return;
+  }
+  if (block.terminator.kind !== "return") return;
+  const signature = module.signatures[function_.signature];
+  requireCoreTypes(
+    `return ${function_.name}:${block.id}`,
+    block.terminator.values.map((value) => coreValueType(function_, value)),
+    [signature.result],
+  );
+}
+
+function requireCoreTypes(
+  subject: string,
+  actual: readonly CoreTypeId[],
+  expected: readonly CoreTypeId[],
+): void {
+  if (actual.length !== expected.length) {
+    throw new TypeError(
+      `Core ${subject} supplies ${actual.length} values for ${expected.length} types`,
+    );
+  }
+  for (const [index, type] of actual.entries()) {
+    if (type === expected[index]) continue;
+    throw new TypeError(
+      `Core ${subject} value ${index} has type ${type}; expected ${
+        expected[index]
+      }`,
+    );
   }
 }
 
@@ -1472,6 +1914,22 @@ function requireSymbolType(
   throw new Error(
     `${symbol.span.file}:${symbol.span.start}: missing type for ${symbol.text}#${symbol.id}`,
   );
+}
+
+function functionParameterTypes(type: Type): readonly Type[] {
+  const parameters: Type[] = [];
+  let current = type;
+  while (current.kind === "function") {
+    parameters.push(current.parameter);
+    current = current.result;
+  }
+  return parameters;
+}
+
+function functionResultType(type: Type): Type {
+  let current = type;
+  while (current.kind === "function") current = current.result;
+  return current;
 }
 
 function sourceType(

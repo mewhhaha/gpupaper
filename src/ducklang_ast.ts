@@ -2,7 +2,7 @@ import type { SourceSpan } from "./syntax.ts";
 
 export type DucklangName = {
   readonly text: string;
-  readonly declaredType?: string;
+  readonly declaredType?: DucklangTypeReference;
   readonly declaredEffectRow?: DucklangEffectRow | null;
   readonly sourceTest?: boolean;
   readonly identityPolymorphic?: boolean;
@@ -55,6 +55,13 @@ export type DucklangTypeReference = {
   readonly arguments: readonly DucklangTypeReference[];
   readonly span: SourceSpan;
 };
+
+export function ducklangNamedType(
+  name: string,
+  span: SourceSpan,
+): DucklangTypeReference {
+  return { name, arguments: [], span };
+}
 
 export type DucklangUnionCase = {
   readonly name: string;
@@ -214,8 +221,9 @@ export type DucklangExpression =
     readonly kind: "function";
     readonly recursive: boolean;
     readonly parameters: readonly DucklangParameter[];
+    readonly typeParameters?: readonly string[];
     readonly parameterTypeSources?: readonly DucklangExpression[];
-    readonly declaredResultType?: string;
+    readonly declaredResultType?: DucklangTypeReference;
     readonly body: DucklangExpression;
     readonly span: SourceSpan;
   }

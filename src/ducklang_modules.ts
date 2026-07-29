@@ -1,7 +1,8 @@
-import type {
-  DucklangExpression,
-  DucklangModule,
-  DucklangStatement,
+import {
+  type DucklangExpression,
+  type DucklangModule,
+  ducklangNamedType,
+  type DucklangStatement,
 } from "./ducklang_ast.ts";
 import {
   buildDucklangModuleGraph,
@@ -225,7 +226,10 @@ async function resolveModuleImports(
           fieldNames.map((name) => ({ name, span: parameter.span })),
           parameter.span,
         ));
-        return { ...parameter, declaredType: typeName };
+        return {
+          ...parameter,
+          declaredType: ducklangNamedType(typeName, parameter.span),
+        };
       });
       const directResult = statement.value.body.kind === "record"
         ? statement.value.body
@@ -546,7 +550,10 @@ async function resolveModuleImports(
         fieldNames.map((name) => ({ name, span: parameter.span })),
         parameter.span,
       ));
-      return { ...parameter, declaredType: typeName };
+      return {
+        ...parameter,
+        declaredType: ducklangNamedType(typeName, parameter.span),
+      };
     });
     const dependencyResult = dependencyStatements.at(-1);
     if (

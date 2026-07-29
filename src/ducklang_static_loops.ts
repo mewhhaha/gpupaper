@@ -1,8 +1,10 @@
-import type {
-  DucklangExpression,
-  DucklangModule,
-  DucklangName,
-  DucklangStatement,
+import {
+  type DucklangExpression,
+  type DucklangModule,
+  type DucklangName,
+  ducklangNamedType,
+  type DucklangStatement,
+  type DucklangTypeReference,
 } from "./ducklang_ast.ts";
 
 type Expansion = {
@@ -862,9 +864,28 @@ function substituteDeclaredType(
   values: ReadonlyMap<string, DucklangExpression>,
 ): DucklangName {
   if (name.declaredType === undefined) return name;
-  const typeValue = values.get(name.declaredType);
-  const declaredType = staticTypeName(typeValue);
-  return declaredType === undefined ? name : { ...name, declaredType };
+  return {
+    ...name,
+    declaredType: substituteDeclaredTypeReference(name.declaredType, values),
+  };
+}
+
+function substituteDeclaredTypeReference(
+  reference: DucklangTypeReference,
+  values: ReadonlyMap<string, DucklangExpression>,
+): DucklangTypeReference {
+  const staticName = reference.arguments.length === 0
+    ? staticTypeName(values.get(reference.name))
+    : undefined;
+  if (staticName !== undefined) {
+    return ducklangNamedType(staticName, reference.span);
+  }
+  return {
+    ...reference,
+    arguments: reference.arguments.map((argument) =>
+      substituteDeclaredTypeReference(argument, values)
+    ),
+  };
 }
 
 function staticTypeName(

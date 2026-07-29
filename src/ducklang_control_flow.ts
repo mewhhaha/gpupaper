@@ -1,8 +1,9 @@
-import type {
-  DucklangExpression,
-  DucklangModule,
-  DucklangName,
-  DucklangStatement,
+import {
+  type DucklangExpression,
+  type DucklangModule,
+  type DucklangName,
+  ducklangNamedType,
+  type DucklangStatement,
 } from "./ducklang_ast.ts";
 
 export function lowerDucklangControlFlow(
@@ -1095,7 +1096,9 @@ function lowerIndexedBufferLoop(
     return undefined;
   }
   const collectionType = statement.collection.name.declaredType;
-  if (collectionType !== "Bytes" && collectionType !== "Text") {
+  if (
+    collectionType?.name !== "Bytes" && collectionType?.name !== "Text"
+  ) {
     return undefined;
   }
   const collectionName: DucklangName = {
@@ -1105,7 +1108,7 @@ function lowerIndexedBufferLoop(
   };
   const indexName: DucklangName = statement.index ?? {
     text: `$collection_index_${statement.span.start}`,
-    declaredType: "I32",
+    declaredType: ducklangNamedType("I32", statement.span),
     span: statement.span,
   };
   const collectionReference: DucklangExpression = {
@@ -1127,7 +1130,7 @@ function lowerIndexedBufferLoop(
         recursive: false,
         name: {
           ...statement.value,
-          declaredType: "I32",
+          declaredType: ducklangNamedType("I32", statement.value.span),
         },
         value: {
           kind: "call",

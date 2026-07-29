@@ -1,10 +1,11 @@
-import type {
-  DucklangExpression,
-  DucklangExtensionMethod,
-  DucklangFixityDeclaration,
-  DucklangModule,
-  DucklangName,
-  DucklangStatement,
+import {
+  type DucklangExpression,
+  type DucklangExtensionMethod,
+  type DucklangFixityDeclaration,
+  type DucklangModule,
+  type DucklangName,
+  ducklangNamedType,
+  type DucklangStatement,
 } from "./ducklang_ast.ts";
 
 type ExtensionImplementation = {
@@ -189,7 +190,7 @@ function inferParameterTypesFromCalls(
       const bodyTypes = new Map(types);
       expression.parameters.forEach((parameter) => {
         if (parameter.declaredType !== undefined) {
-          bodyTypes.set(parameter.text, parameter.declaredType);
+          bodyTypes.set(parameter.text, parameter.declaredType.name);
         }
       });
       scanExpression(expression.body, bodyTypes);
@@ -268,16 +269,19 @@ function applyInferredParameterTypes(
     return {
       ...expression,
       parameters: expression.parameters.map((parameter, index) => {
-        const declaredType = parameter.declaredType ??
+        const declaredTypeName = parameter.declaredType?.name ??
           parameterTypes.get(index);
         if (
-          declaredType === undefined ||
-          declaredType === parameter.declaredType
+          declaredTypeName === undefined ||
+          declaredTypeName === parameter.declaredType?.name
         ) {
           return parameter;
         }
         changed = true;
-        return { ...parameter, declaredType };
+        return {
+          ...parameter,
+          declaredType: ducklangNamedType(declaredTypeName, parameter.span),
+        };
       }),
     };
   };
@@ -720,12 +724,12 @@ function elaborateStatement(
 
       const stateName: DucklangName = {
         text: `$iterator_state_${statement.span.start}`,
-        declaredType: collectionType,
+        declaredType: ducklangNamedType(collectionType, statement.span),
         span: statement.span,
       };
       const nextStateName: DucklangName = {
         text: `$iterator_next_state_${statement.span.start}`,
-        declaredType: collectionType,
+        declaredType: ducklangNamedType(collectionType, statement.span),
         span: statement.span,
       };
       const stateReference: DucklangExpression = {
@@ -805,7 +809,7 @@ function elaborateStatement(
       if (statement.index !== undefined) {
         const positionName: DucklangName = {
           text: `$iterator_position_${statement.span.start}`,
-          declaredType: "I32",
+          declaredType: ducklangNamedType("I32", statement.span),
           span: statement.span,
         };
         loopStatements.push(
@@ -876,7 +880,7 @@ function elaborateStatement(
           recursive: false,
           name: {
             text: `$iterator_position_${statement.span.start}`,
-            declaredType: "I32",
+            declaredType: ducklangNamedType("I32", statement.span),
             span: statement.span,
           },
           value: { kind: "integer", value: 0, span: statement.span },
@@ -971,7 +975,10 @@ function elaborateExpression(
       const declaredType = types.get(expression.name.text);
       return declaredType === undefined ? expression : {
         ...expression,
-        name: { ...expression.name, declaredType },
+        name: {
+          ...expression.name,
+          declaredType: ducklangNamedType(declaredType, expression.name.span),
+        },
       };
     }
     case "hostCall":
@@ -1005,7 +1012,7 @@ function elaborateExpression(
       const bodyTypes = new Map(types);
       for (const parameter of expression.parameters) {
         if (parameter.declaredType !== undefined) {
-          bodyTypes.set(parameter.text, parameter.declaredType);
+          bodyTypes.set(parameter.text, parameter.declaredType.name);
         }
       }
       return {
@@ -1033,12 +1040,12 @@ function elaborateExpression(
       ) {
         const countName = {
           text: `$indexed_collection_count_${expression.span.start}`,
-          declaredType: "I32",
+          declaredType: ducklangNamedType("I32", expression.span),
           span: expression.span,
         };
         const valueName = {
           text: `$indexed_collection_value_${expression.span.start}`,
-          declaredType: "I32",
+          declaredType: ducklangNamedType("I32", expression.span),
           span: expression.span,
         };
         const countReference: DucklangExpression = {
@@ -1129,7 +1136,7 @@ function elaborateExpression(
       ) {
         const countName = {
           text: `$iterator_count_${expression.span.start}`,
-          declaredType: "I32",
+          declaredType: ducklangNamedType("I32", expression.span),
           span: expression.span,
         };
         const sourceName = {
@@ -1514,7 +1521,7 @@ function recordDeclaredTypes(
 ): void {
   if (statement.kind === "binding" || statement.kind === "assignment") {
     if (statement.name.declaredType !== undefined) {
-      types.set(statement.name.text, statement.name.declaredType);
+      types.set(statement.name.text, statement.name.declaredType.name);
       return;
     }
     const inferredType = expressionTypeName(
@@ -1530,7 +1537,7 @@ function recordDeclaredTypes(
   if (statement.kind !== "recursiveGroup") return;
   for (const binding of statement.bindings) {
     if (binding.name.declaredType !== undefined) {
-      types.set(binding.name.text, binding.name.declaredType);
+      types.set(binding.name.text, binding.name.declaredType.name);
     }
   }
 }
@@ -1616,7 +1623,7 @@ function expressionTypeName(
                 typeDeclarations,
                 resolvingFunctions,
               );
-            const parameterType = parameter.declaredType ?? argumentType;
+            const parameterType = parameter.declaredType?.name ?? argumentType;
             if (parameterType !== undefined) {
               bodyTypes.set(parameter.text, parameterType);
             }
@@ -1685,7 +1692,7 @@ function expressionTypeName(
       const blockTypes = new Map(types);
       for (const statement of expression.statements) {
         if (statement.kind !== "binding") continue;
-        const type = statement.name.declaredType ??
+        const type = statement.name.declaredType?.name ??
           expressionTypeName(
             statement.value,
             blockTypes,

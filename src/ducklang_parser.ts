@@ -5,19 +5,20 @@ import type {
   TokenCursor,
 } from "@mewhhaha/baba/runtime/generated-wasm";
 import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
-import type {
-  DucklangEffectRow,
-  DucklangExpression,
-  DucklangExtensionDeclaration,
-  DucklangFixityDeclaration,
-  DucklangImportSelection,
-  DucklangModule,
-  DucklangName,
-  DucklangParameter,
-  DucklangProtocolDeclaration,
-  DucklangRecordField,
-  DucklangStatement,
-  DucklangTypeReference,
+import {
+  type DucklangEffectRow,
+  type DucklangExpression,
+  type DucklangExtensionDeclaration,
+  type DucklangFixityDeclaration,
+  type DucklangImportSelection,
+  type DucklangModule,
+  type DucklangName,
+  ducklangNamedType,
+  type DucklangParameter,
+  type DucklangProtocolDeclaration,
+  type DucklangRecordField,
+  type DucklangStatement,
+  type DucklangTypeReference,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
 
@@ -251,14 +252,14 @@ export async function parseDucklangModuleWithTimings(
               "module parameter",
             );
             const declaredType = parameter.field("type");
-            const declaredTypeName = isCursor(declaredType)
-              ? simpleTypeName(declaredType)
+            const declaredTypeReference = isCursor(declaredType)
+              ? lowerTypeReference(file, declaredType)
               : undefined;
             return [{
               ...name,
-              ...(declaredTypeName === undefined
+              ...(declaredTypeReference === undefined
                 ? {}
-                : { declaredType: declaredTypeName }),
+                : { declaredType: declaredTypeReference }),
             }];
           })()
           : []
@@ -291,9 +292,14 @@ export async function parseDucklangModuleWithTimings(
 function normalizeStatementBoundaries(
   statements: readonly DucklangStatement[],
   source: string,
+  typeParameters: readonly string[] = [],
 ): readonly DucklangStatement[] {
   return statements.flatMap((statement) => {
-    const normalized = normalizeStatementExpressions(statement, source);
+    const normalized = normalizeStatementExpressions(
+      statement,
+      source,
+      typeParameters,
+    );
     if (
       normalized.kind === "expression" &&
       normalized.expression.kind === "call" &&
@@ -395,79 +401,74 @@ function normalizeStatementBoundaries(
 function normalizeStatementExpressions(
   statement: DucklangStatement,
   source: string,
+  typeParameters: readonly string[],
 ): DucklangStatement {
+  const normalize = (expression: DucklangExpression) =>
+    normalizeExpressionStatementBoundaries(
+      expression,
+      source,
+      typeParameters,
+    );
   switch (statement.kind) {
     case "recursiveGroup":
       return {
         ...statement,
         bindings: statement.bindings.map((binding) => ({
           ...binding,
-          value: normalizeExpressionStatementBoundaries(binding.value, source),
+          value: normalize(binding.value),
         })),
       };
     case "typePattern":
       return {
         ...statement,
-        target: normalizeExpressionStatementBoundaries(
-          statement.target,
-          source,
-        ),
+        target: normalize(statement.target),
       };
     case "binding":
     case "assignment":
       return {
         ...statement,
-        value: normalizeExpressionStatementBoundaries(statement.value, source),
+        value: normalize(statement.value),
       };
     case "unionBinding":
       return {
         ...statement,
-        value: normalizeExpressionStatementBoundaries(statement.value, source),
-        alternative: normalizeExpressionStatementBoundaries(
-          statement.alternative,
-          source,
-        ),
+        value: normalize(statement.value),
+        alternative: normalize(statement.alternative),
       };
     case "productBinding":
     case "recordBinding":
       return {
         ...statement,
-        value: normalizeExpressionStatementBoundaries(statement.value, source),
+        value: normalize(statement.value),
       };
     case "forRange":
       return {
         ...statement,
-        start: normalizeExpressionStatementBoundaries(statement.start, source),
-        end: normalizeExpressionStatementBoundaries(statement.end, source),
+        start: normalize(statement.start),
+        end: normalize(statement.end),
         step: statement.step === undefined
           ? undefined
-          : normalizeExpressionStatementBoundaries(statement.step, source),
-        body: normalizeExpressionStatementBoundaries(statement.body, source),
+          : normalize(statement.step),
+        body: normalize(statement.body),
       };
     case "forCollection":
       return {
         ...statement,
-        collection: normalizeExpressionStatementBoundaries(
-          statement.collection,
-          source,
-        ),
-        body: normalizeExpressionStatementBoundaries(statement.body, source),
+        collection: normalize(statement.collection),
+        body: normalize(statement.body),
       };
     case "break":
       return {
         ...statement,
         value: statement.value === undefined
           ? undefined
-          : normalizeExpressionStatementBoundaries(statement.value, source),
+          : normalize(statement.value),
       };
     case "return":
     case "expression":
       return {
         ...statement,
-        expression: normalizeExpressionStatementBoundaries(
-          statement.expression,
-          source,
-        ),
+        expression: normalize(statement.expression),
       };
     case "effectDeclaration":
     case "initDeclaration":
@@ -483,9 +484,10 @@ function normalizeStatementExpressions(
 function normalizeExpressionStatementBoundaries(
   expression: DucklangExpression,
   source: string,
+  typeParameters: readonly string[] = [],
 ): DucklangExpression {
   const normalize = (child: DucklangExpression) =>
-    normalizeExpressionStatementBoundaries(child, source);
+    normalizeExpressionStatementBoundaries(child, source, typeParameters);
   const normalizeFields = (fields: readonly DucklangRecordField[]) =>
     fields.map((field) => ({ ...field, value: normalize(field.value) }));
   switch (expression.kind) {
@@ -512,9 +514,28 @@ function normalizeExpressionStatementBoundaries(
     case "record":
       return { ...expression, fields: normalizeFields(expression.fields) };
     case "function": {
-      const body = normalize(expression.body);
+      const functionTypeParameters = [
+        ...new Set([
+          ...typeParameters,
+          ...(expression.typeParameters ?? []),
+          ...expression.parameters.flatMap((parameter) =>
+            parameter.compileTimeRecord === true &&
+              parameter.declaredType === undefined
+              ? [parameter.text]
+              : []
+          ),
+        ]),
+      ];
+      const body = normalizeExpressionStatementBoundaries(
+        expression.body,
+        source,
+        functionTypeParameters,
+      );
       return {
         ...expression,
+        ...(functionTypeParameters.length === 0
+          ? {}
+          : { typeParameters: functionTypeParameters }),
         body: expression.declaredResultType === undefined
           ? body
           : applyNominalProductType(body, expression.declaredResultType),
@@ -568,7 +589,11 @@ function normalizeExpressionStatementBoundaries(
     case "block":
       return {
         ...expression,
-        statements: normalizeStatementBoundaries(expression.statements, source),
+        statements: normalizeStatementBoundaries(
+          expression.statements,
+          source,
+          typeParameters,
+        ),
       };
     case "comptime":
       return { ...expression, expression: normalize(expression.expression) };
@@ -1196,10 +1221,19 @@ function lowerModuleStatement(
   if (statement.name === "binding_statement") {
     let value = lowerExpression(file, requiredField(statement, "value"));
     const declaredType = statement.field("type");
+    const forallType = isCursor(declaredType)
+      ? findRule(declaredType, "forall_type")
+      : undefined;
+    if (value.kind === "function" && forallType !== undefined) {
+      value = {
+        ...value,
+        typeParameters: forallTypeParameterNames(forallType),
+      };
+    }
     if (
       value.kind === "function" && isCursor(declaredType) &&
       value.parameters.length > 0 &&
-      findRule(declaredType, "forall_type") !== undefined
+      forallType !== undefined
     ) {
       const functionType = findRule(declaredType, "function_type");
       const functionResult = functionType?.field("result");
@@ -1220,7 +1254,7 @@ function lowerModuleStatement(
               return parameter.declaredType !== undefined ||
                   type.name.startsWith("$")
                 ? parameter
-                : { ...parameter, declaredType: type.name };
+                : { ...parameter, declaredType: type };
             }),
           };
         }
@@ -1239,12 +1273,12 @@ function lowerModuleStatement(
         ],
       };
     }
-    const declaredTypeName = isCursor(declaredType)
-      ? simpleTypeName(declaredType)
+    const declaredTypeReference = isCursor(declaredType)
+      ? lowerTypeReference(file, declaredType)
       : undefined;
-    const declaredResultTypeName = isCursor(declaredType)
-      ? finalResultTypeName(declaredType)
-      : undefined;
+    const declaredResultTypeReference = declaredTypeReference === undefined
+      ? undefined
+      : finalResultTypeReference(declaredTypeReference);
     const declaredTypeTokens: TokenCursor[] = [];
     if (isCursor(declaredType)) {
       collectAllTokens(declaredType, declaredTypeTokens);
@@ -1252,12 +1286,15 @@ function lowerModuleStatement(
     const declaredFunctionType = declaredTypeTokens.some((token) =>
       token.text === "->"
     );
-    const bindingDeclaredTypeName = declaredTypeName ??
-      (declaredFunctionType ? undefined : declaredResultTypeName);
+    const bindingDeclaredType = declaredFunctionType
+      ? undefined
+      : declaredTypeReference;
     const declaredEffectRow = isCursor(declaredType)
       ? lowerDeclaredEffectRow(file, declaredType)
       : undefined;
-    const nominalType = declaredTypeName ?? declaredResultTypeName;
+    const nominalType = declaredFunctionType
+      ? declaredResultTypeReference
+      : declaredTypeReference;
     if (nominalType !== undefined) {
       value = applyNominalProductType(value, nominalType);
     }
@@ -1392,9 +1429,9 @@ function lowerModuleStatement(
     };
     const name = {
       ...parsedName,
-      ...(bindingDeclaredTypeName === undefined
+      ...(bindingDeclaredType === undefined
         ? {}
-        : { declaredType: bindingDeclaredTypeName }),
+        : { declaredType: bindingDeclaredType }),
       ...(declaredEffectRow === undefined ? {} : { declaredEffectRow }),
       ...(tokenField(statement, "linear") !== undefined
         ? { linear: true }
@@ -1896,8 +1933,21 @@ function lowerTypeReference(
       span: sourceSpan(file, functionType),
     };
   }
+  const parenthesized = findRule(input, "type_parenthesized");
+  if (
+    parenthesized !== undefined &&
+    parenthesized.span.start === input.span.start &&
+    parenthesized.span.end === input.span.end
+  ) {
+    const nested = parenthesized.children().find((child): child is RuleCursor =>
+      child.type === "rule" && child.name === "_type_expression"
+    );
+    if (nested !== undefined) return lowerTypeReference(file, nested);
+  }
   const product = findRule(input, "type_product");
   if (product !== undefined) {
+    const productTokens: TokenCursor[] = [];
+    collectAllTokens(product, productTokens);
     const elements: RuleCursor[] = [];
     const collectElements = (cursor: RuleCursor): void => {
       for (const child of cursor.children()) {
@@ -1910,13 +1960,20 @@ function lowerTypeReference(
       }
     };
     collectElements(product);
-    if (elements.length > 0) {
+    if (productTokens.some((token) => token.text === ";")) {
       return {
-        name: "$tuple",
-        arguments: elements.map((element) => lowerTypeReference(file, element)),
+        name: "$array",
+        arguments: elements.slice(0, 1).map((element) =>
+          lowerTypeReference(file, element)
+        ),
         span: sourceSpan(file, product),
       };
     }
+    return {
+      name: "$tuple",
+      arguments: elements.map((element) => lowerTypeReference(file, element)),
+      span: sourceSpan(file, product),
+    };
   }
   const newtype = findRule(input, "newtype_type");
   if (newtype !== undefined) {
@@ -1951,6 +2008,12 @@ function lowerTypeReference(
   const tokens: TokenCursor[] = [];
   collectAllTokens(input, tokens);
   const identifiers = tokens.filter((token) => token.kind === "identifier");
+  if (
+    identifiers.length === 0 &&
+    tokens.every((token) => token.text === "(" || token.text === ")")
+  ) {
+    return { name: "Unit", arguments: [], span: sourceSpan(file, input) };
+  }
   if (tokens.some((token) => token.text === ":&") && identifiers.length > 0) {
     const name = identifiers.at(-1)!;
     return { name: name.text, arguments: [], span: sourceSpan(file, input) };
@@ -1971,6 +2034,16 @@ function lowerTypeReference(
   );
   if (base === undefined) {
     throw unsupported(file, application, "type application base");
+  }
+  if (arguments_.length === 0) {
+    const parenthesizedBase = findRule(base, "type_parenthesized");
+    if (parenthesizedBase !== undefined) {
+      const nested = parenthesizedBase.children().find(
+        (child): child is RuleCursor =>
+          child.type === "rule" && child.name === "_type_expression",
+      );
+      if (nested !== undefined) return lowerTypeReference(file, nested);
+    }
   }
   const name = identifierName(file, base, "type reference");
   return {
@@ -2083,7 +2156,7 @@ function lowerExpression(
     if (!isCursor(annotation)) return lowerExpression(file, value);
     return applyNominalProductType(
       lowerExpression(file, value),
-      lowerTypeReference(file, annotation).name,
+      lowerTypeReference(file, annotation),
     );
   }
 
@@ -3430,15 +3503,17 @@ function shorthandRecordFields(
 
 function applyNominalProductType(
   expression: DucklangExpression,
-  nominalType: string,
+  declaredType: DucklangTypeReference,
 ): DucklangExpression {
   if (expression.kind === "function") {
     return {
       ...expression,
-      declaredResultType: nominalType,
-      body: applyNominalProductType(expression.body, nominalType),
+      declaredResultType: declaredType,
+      body: applyNominalProductType(expression.body, declaredType),
     };
   }
+  if (declaredType.name.startsWith("$")) return expression;
+  const nominalType = declaredType.name;
   if (expression.kind === "product" && expression.productKind === "array") {
     return { ...expression, productKind: "tuple", nominalType };
   }
@@ -3451,19 +3526,25 @@ function applyNominalProductType(
   if (expression.kind === "if") {
     return {
       ...expression,
-      consequence: applyNominalProductType(expression.consequence, nominalType),
+      consequence: applyNominalProductType(
+        expression.consequence,
+        declaredType,
+      ),
       alternative: expression.alternative === undefined
         ? undefined
-        : applyNominalProductType(expression.alternative, nominalType),
+        : applyNominalProductType(expression.alternative, declaredType),
     };
   }
   if (expression.kind === "ifUnion") {
     return {
       ...expression,
-      consequence: applyNominalProductType(expression.consequence, nominalType),
+      consequence: applyNominalProductType(
+        expression.consequence,
+        declaredType,
+      ),
       alternative: expression.alternative === undefined
         ? undefined
-        : applyNominalProductType(expression.alternative, nominalType),
+        : applyNominalProductType(expression.alternative, declaredType),
     };
   }
   if (expression.kind !== "block" || expression.statements.length === 0) {
@@ -3474,45 +3555,29 @@ function applyNominalProductType(
   if (last === undefined || last.kind !== "expression") return expression;
   statements[statements.length - 1] = {
     ...last,
-    expression: applyNominalProductType(last.expression, nominalType),
+    expression: applyNominalProductType(last.expression, declaredType),
   };
   return { ...expression, statements };
 }
 
-function simpleTypeName(input: SyntaxCursor): string | undefined {
-  const tokens: TokenCursor[] = [];
-  collectAllTokens(input, tokens);
-  const [token] = tokens;
-  return token?.kind === "identifier" &&
-      tokens.every((candidate) =>
-        /^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.text)
-      )
-    ? token.text
-    : undefined;
+function finalResultTypeReference(
+  reference: DucklangTypeReference,
+): DucklangTypeReference | undefined {
+  if (reference.name === "$array") return undefined;
+  return reference.name === "$function" && reference.arguments[1] !== undefined
+    ? finalResultTypeReference(reference.arguments[1])
+    : reference;
 }
 
-function finalResultTypeName(input: SyntaxCursor): string | undefined {
-  const functionType = findRule(input, "function_type");
-  const result = functionType?.field("result");
-  if (isCursor(result)) return finalResultTypeName(result);
-  const simpleName = simpleTypeName(input);
-  if (simpleName !== undefined) return simpleName;
+function forallTypeParameterNames(
+  forallType: RuleCursor,
+): readonly string[] {
   const tokens: TokenCursor[] = [];
-  collectAllTokens(input, tokens);
-  const identifiers = tokens.filter((token) => token.kind === "identifier");
-  if (
-    identifiers.length === 1 &&
-    tokens.every((token) =>
-      token.kind === "identifier" || token.text === "(" || token.text === ")"
-    )
-  ) {
-    return identifiers[0].text;
-  }
-  const [constructor] = tokens;
-  return constructor?.kind === "identifier" &&
-      /^[A-Z][A-Za-z0-9_]*$/.test(constructor.text)
-    ? constructor.text
-    : undefined;
+  collectAllTokens(forallType, tokens);
+  const delimiter = tokens.findIndex((token) => token.text === ".");
+  return tokens.slice(0, delimiter < 0 ? tokens.length : delimiter)
+    .filter((token) => token.kind === "identifier")
+    .map((token) => token.text);
 }
 
 function lowerTokenExpression(
@@ -3741,9 +3806,9 @@ function constParameterNames(
         const parameterTokens: TokenCursor[] = [];
         collectAllTokens(parameter, parameterTokens);
         const declaredType = parameter.field("type");
-        const simpleDeclaredType = isCursor(declaredType) &&
+        const declaredTypeReference = isCursor(declaredType) &&
             !parameterTokens.some((token) => token.text === "->")
-          ? lowerTypeReference(file, declaredType).name
+          ? lowerTypeReference(file, declaredType)
           : undefined;
         const compileTime = parameterTokens.some((token) =>
           token.text === "const"
@@ -3754,10 +3819,10 @@ function constParameterNames(
             ? { variadic: true }
             : {}),
           ...(compileTime ? { compileTimeRecord: true } : {}),
-          ...(simpleDeclaredType === undefined ||
-              (compileTime && /^[a-z]/.test(simpleDeclaredType))
+          ...(declaredTypeReference === undefined ||
+              (compileTime && /^[a-z]/.test(declaredTypeReference.name))
             ? {}
-            : { declaredType: simpleDeclaredType }),
+            : { declaredType: declaredTypeReference }),
         };
       });
     }
@@ -3806,20 +3871,23 @@ function constParameterNames(
       );
     }
     searchStart = nameOffset + match[2].length;
-    const declaredType = match[3] === "I32" || match[3] === "I64" ||
+    const declaredTypeName = match[3] === "I32" || match[3] === "I64" ||
         match[3] === "Bool" || match[3] === "Text"
       ? match[3]
       : undefined;
+    const span = {
+      file,
+      start: list.span.start + nameOffset,
+      end: list.span.start + nameOffset + match[2].length,
+    };
     return {
       text: match[2],
       ...(parameter.includes("...") ? { variadic: true } : {}),
       ...(match[1] === undefined ? {} : { compileTimeRecord: true }),
-      ...(declaredType === undefined ? {} : { declaredType }),
-      span: {
-        file,
-        start: list.span.start + nameOffset,
-        end: list.span.start + nameOffset + match[2].length,
-      },
+      ...(declaredTypeName === undefined
+        ? {}
+        : { declaredType: ducklangNamedType(declaredTypeName, span) }),
+      span,
     };
   });
 }
@@ -3884,7 +3952,7 @@ function arrowParameters(
         };
       }
       const annotation = match[3]?.trim();
-      const declaredType = annotation === undefined ||
+      const declaredTypeName = annotation === undefined ||
           annotation.includes("->")
         ? undefined
         : /^(?:&\s*)?([A-Za-z][A-Za-z0-9_]*)/.exec(annotation)?.[1];
@@ -3892,7 +3960,9 @@ function arrowParameters(
         text: match[2],
         ...(match[1] === "!" ? { linear: true } : {}),
         ...(match[1] === "const" ? { compileTimeRecord: true } : {}),
-        ...(declaredType === undefined ? {} : { declaredType }),
+        ...(declaredTypeName === undefined
+          ? {}
+          : { declaredType: ducklangNamedType(declaredTypeName, span) }),
         span,
       };
     });
@@ -3946,7 +4016,10 @@ function arrowParameters(
       ...(linear ? { linear: true } : {}),
       ...(compileTime ? { compileTimeRecord: true } : {}),
       ...(annotation === undefined ? {} : {
-        declaredType: annotation.text,
+        declaredType: ducklangNamedType(
+          annotation.text,
+          sourceSpan(file, annotation),
+        ),
       }),
       span: sourceSpan(file, parameterName),
     };

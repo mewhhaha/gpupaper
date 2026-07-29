@@ -1,11 +1,12 @@
-import type {
-  DucklangExpression,
-  DucklangModule,
-  DucklangName,
-  DucklangStatement,
-  DucklangStructField,
-  DucklangTypeReference,
-  DucklangUnionCase,
+import {
+  type DucklangExpression,
+  type DucklangModule,
+  type DucklangName,
+  ducklangNamedType,
+  type DucklangStatement,
+  type DucklangStructField,
+  type DucklangTypeReference,
+  type DucklangUnionCase,
 } from "./ducklang_ast.ts";
 import type { SourceSpan } from "./syntax.ts";
 
@@ -214,7 +215,10 @@ function deriveSumFunction(
   return {
     kind: "function",
     recursive: false,
-    parameters: [{ ...valueName, declaredType: targetType }],
+    parameters: [{
+      ...valueName,
+      declaredType: ducklangNamedType(targetType, valueName.span),
+    }],
     body,
     span,
   };
@@ -232,8 +236,14 @@ function deriveEqualityFunction(
     kind: "function",
     recursive: false,
     parameters: [
-      { ...leftName, declaredType: targetType },
-      { ...rightName, declaredType: targetType },
+      {
+        ...leftName,
+        declaredType: ducklangNamedType(targetType, leftName.span),
+      },
+      {
+        ...rightName,
+        declaredType: ducklangNamedType(targetType, rightName.span),
+      },
     ],
     body: equalityExpression(
       type,

@@ -10,11 +10,9 @@ import { expandDucklangIncludes } from "../src/ducklang_module_graph.ts";
  * carried along. The programs are also run, so erasure cannot pass by deleting
  * something the answer needed.
  *
- * Note what is deliberately not asserted: that no binding carries the compile-time
- * stage. That stage records the declaration kind, so a `const` read at runtime keeps
- * it and must survive as a runtime definition. The editor has 17 such bindings and
- * `escape_character` alone is read four times, so requiring the stage to be absent
- * would demand erasing values the program needs.
+ * Immutable scalar constants are substituted at their uses as well. This is
+ * ordinary let-reduction: without pointer identity or mutation, retaining a
+ * zero-argument runtime definition has no semantic purpose.
  */
 
 const programs: readonly (readonly [string, string, number])[] = [
@@ -42,11 +40,10 @@ for (const [description, source, expected] of programs) {
     });
 
     assertEquals(await runMain(artifact.wasm), expected);
-    // Only `total` is read afterwards, so every other binding in these programs is
-    // compile-time only and must be gone.
+    // The result is scalar, so both its inputs and the final name disappear.
     assertEquals(
       artifact.inferred.bindings.map((binding) => binding.symbol.text),
-      ["total"],
+      [],
     );
     assertEquals(comptimeNodes(artifact.inferred), 0);
   });

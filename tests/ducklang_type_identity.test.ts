@@ -42,7 +42,7 @@ Deno.test("Ducklang type qualification separates same-named declarations per fil
   const annotations = new Map(
     qualified.module.statements.flatMap((statement) =>
       statement.kind === "binding" && statement.name.declaredType !== undefined
-        ? [[statement.span.file, statement.name.declaredType] as const]
+        ? [[statement.span.file, statement.name.declaredType.name] as const]
         : []
     ),
   );
@@ -112,7 +112,15 @@ function twoFileModule(): DucklangModule {
     kind: "binding",
     declarationKind: "let",
     recursive: false,
-    name: { text: "p", declaredType: "Point", span: span(file, 10) },
+    name: {
+      text: "p",
+      declaredType: {
+        name: "Point",
+        arguments: [],
+        span: span(file, 10),
+      },
+      span: span(file, 10),
+    },
     value: {
       kind: "product",
       productKind: "tuple",

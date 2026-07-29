@@ -39,7 +39,7 @@ export function specializeStaticDucklangClosures(
         }
       }
     }
-    visitChildren(expression, collectDirectFunctions);
+    visitDucklangExpressionChildren(expression, collectDirectFunctions);
   };
   for (const binding of rewrittenBindings) {
     if (binding.value.kind === "function") {
@@ -86,7 +86,7 @@ export function specializeStaticDucklangClosures(
       visit(binding.value);
       return;
     }
-    visitChildren(expression, visit);
+    visitDucklangExpressionChildren(expression, visit);
   };
   visit(result);
 
@@ -285,9 +285,9 @@ function isOnlyDirectlyCalled(
       onlyCalled = false;
       return;
     }
-    visitChildren(expression, visit);
+    visitDucklangExpressionChildren(expression, visit);
   };
-  visitChildren(scope, visit);
+  visitDucklangExpressionChildren(scope, visit);
   return onlyCalled;
 }
 
@@ -347,7 +347,10 @@ export function ducklangFunctionFreeVariables(
         ).map((capture) => capture.symbol),
       });
     }
-    visitChildren(expression, (child) => visit(child, owner));
+    visitDucklangExpressionChildren(
+      expression,
+      (child) => visit(child, owner),
+    );
   };
   for (const binding of module.bindings) {
     visit(binding.value, binding.symbol.id);
@@ -381,7 +384,7 @@ function collectFunctionCaptures(
       });
       return;
     }
-    visitChildren(expression, visit);
+    visitDucklangExpressionChildren(expression, visit);
   };
   visit(function_.body);
   return [...captures.values()];
@@ -402,7 +405,10 @@ function collectDefinedSymbols(
       if (step.kind === "binding") symbols.add(step.binding.symbol.id);
     }
   }
-  visitChildren(expression, (child) => collectDefinedSymbols(child, symbols));
+  visitDucklangExpressionChildren(
+    expression,
+    (child) => collectDefinedSymbols(child, symbols),
+  );
 }
 
 function appendCallArguments(
@@ -432,6 +438,13 @@ function rewriteExpression(
 ): TypedDucklangExpression {
   if (expression.kind === "reference") {
     const value = values.get(expression.symbol.id);
+    if (value !== undefined && isInlineableScalar(value)) {
+      return {
+        ...value,
+        type: expression.type,
+        span: expression.span,
+      };
+    }
     if (
       value?.kind === "reference" && value.symbol.id !== expression.symbol.id
     ) {
@@ -688,6 +701,17 @@ function rewriteExpression(
       span: rewritten.span,
     }, values);
   }
+  if (
+    rewritten.arguments.length === 0 &&
+    selectedCallee.kind !== "function" &&
+    selectedCallee.type.kind !== "function"
+  ) {
+    return {
+      ...selectedCallee,
+      type: rewritten.type,
+      span: rewritten.span,
+    };
+  }
   const factory = selectedCallee;
   if (
     factory.kind !== "function" || factory.recursive ||
@@ -760,7 +784,7 @@ function containsReturn(expression: TypedDucklangExpression): boolean {
   while (pending.length > 0) {
     const current = pending.pop()!;
     if (current.kind === "return") return true;
-    visitChildren(current, (child) => pending.push(child));
+    visitDucklangExpressionChildren(current, (child) => pending.push(child));
   }
   return false;
 }
@@ -777,7 +801,7 @@ function referencesSymbol(
     ) {
       return true;
     }
-    visitChildren(current, (child) => pending.push(child));
+    visitDucklangExpressionChildren(current, (child) => pending.push(child));
   }
   return false;
 }
@@ -822,6 +846,30 @@ function rewriteBlock(
   });
 }
 
+function isInlineableScalar(
+  expression: TypedDucklangExpression,
+): expression is Extract<
+  TypedDucklangExpression,
+  {
+    readonly kind:
+      | "integer"
+      | "integer64"
+      | "float32"
+      | "float64"
+      | "boolean"
+      | "unit"
+      | "string";
+  }
+> {
+  return expression.kind === "integer" ||
+    expression.kind === "integer64" ||
+    expression.kind === "float32" ||
+    expression.kind === "float64" ||
+    expression.kind === "boolean" ||
+    expression.kind === "unit" ||
+    expression.kind === "string";
+}
+
 function collectReferences(
   expression: TypedDucklangExpression,
   references: Set<number>,
@@ -833,7 +881,7 @@ function collectReferences(
       references.add(current.symbol.id);
       continue;
     }
-    visitChildren(current, (child) => pending.push(child));
+    visitDucklangExpressionChildren(current, (child) => pending.push(child));
   }
 }
 
@@ -850,7 +898,7 @@ function isCalledParameter(
     ) {
       return true;
     }
-    visitChildren(current, (child) => pending.push(child));
+    visitDucklangExpressionChildren(current, (child) => pending.push(child));
   }
   return false;
 }
@@ -1500,7 +1548,7 @@ function substitute(
     }
     if (!current.childrenVisited) {
       pending.push({ ...current, childrenVisited: true });
-      visitChildren(current.expression, (child) => {
+      visitDucklangExpressionChildren(current.expression, (child) => {
         if (!rewritten.has(child)) {
           pending.push({ expression: child, childrenVisited: false });
         }
@@ -1644,7 +1692,7 @@ export function rewriteChildren(
   }
 }
 
-function visitChildren(
+export function visitDucklangExpressionChildren(
   expression: TypedDucklangExpression,
   visit: (child: TypedDucklangExpression) => void,
 ): void {

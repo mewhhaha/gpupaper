@@ -139,9 +139,8 @@ Deno.test("Core preserves a nested branch boundary", async () => {
  * lowering that fell back to memory loads or kept a source field name would fail
  * rather than pass on "it produced some operations".
  *
- * Every value lives inside a function: lowerDucklangToCore only lowers function
- * bindings, and a module-level value binding reports "Core lowering has no
- * runtime value for <name>".
+ * Module values are lowered into `main`; functions receive any values they
+ * capture as explicit parameters.
  */
 const aggregateCases:
   readonly (readonly [string, string, readonly string[]])[] = [
@@ -315,6 +314,57 @@ Deno.test("Core lowering leaves a function-only module unchanged", async () => {
       0,
     ),
     1,
+  );
+});
+
+Deno.test("Core gives a captured function typed code and environment boundaries", async () => {
+  const parsed = await parseDucklangModule(
+    "closure.duck",
+    "let apply = (f: I32 -> I32, value: I32) => f(value)\nlet make_adder = (base: I32) => (offset: I32) => base + offset\nlet add = make_adder(40)\napply(add, 2)\n",
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  validateDucklangCore(module);
+
+  const closure = module.functions.find((function_) =>
+    function_.name.startsWith("$closure_")
+  );
+  if (closure === undefined) throw new Error("expected a lifted closure");
+  const codeSignature = module.signatures[closure.signature];
+  assertEquals(codeSignature.parameters.length, 2);
+
+  const closureMake =
+    module.functions.flatMap((function_) =>
+      function_.blocks.flatMap((block) =>
+        block.operations.filter((operation) =>
+          operation.kind === "closure.make" &&
+          operation.functionId === closure.id
+        )
+      )
+    )[0];
+  if (closureMake?.kind !== "closure.make") {
+    throw new Error("expected closure.make for captured function");
+  }
+  assertEquals(closureMake.operands.length, 1);
+  const closureType = module.types[closureMake.type];
+  if (closureType.kind !== "function") {
+    throw new Error("closure.make did not produce a function type");
+  }
+  assertEquals(
+    module.signatures[closureType.signature].parameters.length,
+    1,
+  );
+
+  const apply = module.functions.find((function_) =>
+    function_.name === "apply"
+  );
+  if (apply === undefined) throw new Error("expected apply");
+  assertEquals(
+    apply.blocks.some((block) =>
+      block.operations.some((operation) => operation.kind === "call.indirect")
+    ),
+    true,
   );
 });
 

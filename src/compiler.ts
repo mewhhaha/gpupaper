@@ -18,6 +18,10 @@ import { elaborateDucklangHandlers } from "./ducklang_handlers.ts";
 import { validateDucklangOwnership } from "./ducklang_ownership.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import {
+  type DucklangCoreModule,
+  lowerDucklangToCore,
+} from "./ducklang_core.ts";
+import {
   ducklangTextLiteralsSectionName,
   lowerDucklangToFcgAndWasm,
 } from "./ducklang_fcg.ts";
@@ -75,6 +79,7 @@ export type CompilationTimings = {
   readonly gpuTypeMilliseconds: number;
   readonly comptimeMilliseconds: number;
   readonly finalTypeMilliseconds: number;
+  readonly coreMilliseconds: number;
   readonly wasmMilliseconds: number;
   readonly gpuWasmMilliseconds: number;
 };
@@ -102,6 +107,7 @@ export type HaskellCompilationArtifact = SharedCompilationArtifact & {
 export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly language: "ducklang";
   readonly inferred: TypedDucklangModule;
+  readonly core: DucklangCoreModule;
   readonly abi: DucklangManagedAbi;
 };
 
@@ -238,6 +244,7 @@ async function compileHaskellModuleSource(
       gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds,
+      coreMilliseconds: 0,
       wasmMilliseconds,
       gpuWasmMilliseconds,
     },
@@ -335,8 +342,11 @@ async function compileDucklangModuleSource(
   }
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
-  const wasmStart = performance.now();
   const specialized = specializeStaticDucklangClosures(comptime.module);
+  const coreStart = performance.now();
+  const core = lowerDucklangToCore(specialized);
+  const coreMilliseconds = performance.now() - coreStart;
+  const wasmStart = performance.now();
   const lowered = lowerDucklangToFcgAndWasm(specialized);
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
@@ -353,6 +363,7 @@ async function compileDucklangModuleSource(
     fcg: lowered.fcg,
     flatFcg: lowered.flatFcg,
     inferred: specialized,
+    core,
     abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
     initialTypes,
     finalTypes: initialTypes,
@@ -380,6 +391,7 @@ async function compileDucklangModuleSource(
       gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds: 0,
+      coreMilliseconds,
       wasmMilliseconds,
       gpuWasmMilliseconds,
     },

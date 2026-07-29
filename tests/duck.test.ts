@@ -120,7 +120,9 @@ combine(20, 22)
   const binding = module.statements[0];
   assertEquals(
     binding.kind === "binding" && binding.value.kind === "function"
-      ? binding.value.parameters.map((parameter) => parameter.declaredType)
+      ? binding.value.parameters.map((parameter) =>
+        parameter.declaredType?.name
+      )
       : undefined,
     ["I32", "I32"],
   );
@@ -1137,13 +1139,17 @@ Deno.test("unsupported Ducklang operators fail during typed IR elaboration", asy
   );
 });
 
-Deno.test("Ducklang const bindings retain their compile-time stage", async () => {
+Deno.test("Ducklang substitutes immutable scalar const bindings before Core", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "const answer = 42\nanswer\n",
     { gpuMode: "off" },
   );
-  assertEquals(artifact.inferred.bindings[0].stage, "compileTime");
+  assertEquals(artifact.inferred.bindings.length, 0);
+  assertEquals(
+    artifact.core.functions.at(-1)?.blocks[0].operations[0].kind,
+    "constant",
+  );
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
@@ -1186,7 +1192,7 @@ Deno.test("Ducklang colon-equals assignment permits a new binding type", async (
   assertEquals(await runMain(artifact.wasm), 42);
 });
 
-Deno.test("Ducklang compilation exposes typed IR and FCG stages", async () => {
+Deno.test("Ducklang compilation exposes typed Core and FCG stages", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let add = (left, right) => left + right\nadd(20, 22)\n",
@@ -1195,6 +1201,10 @@ Deno.test("Ducklang compilation exposes typed IR and FCG stages", async () => {
   assertEquals(artifact.language, "ducklang");
   assertEquals(artifact.finalTypes, ["add#0 :: i32 -> i32 -> i32"]);
   assertEquals(artifact.inferred.equalities.length > 0, true);
+  assertEquals(
+    artifact.core.functions.map((function_) => function_.name),
+    ["add", "main"],
+  );
   assertEquals(
     artifact.fcg.functions.map((function_) => function_.name),
     ["add__duck0", "main"],
