@@ -139,9 +139,12 @@ const operationKinds = [
   "closure.make",
   "call.indirect",
   "host.call",
+  "resource.move",
   "resource.borrow",
   "resource.freeze",
+  "resource.drop",
   "region.enter",
+  "region.allocate",
   "region.exit",
 ] as const;
 const binaryOperators: readonly DucklangBinaryOperator[] = [
@@ -1376,9 +1379,12 @@ function inflateOperation(
     case "product.index_update":
     case "product.select":
     case "sum.tag":
+    case "resource.move":
     case "resource.borrow":
     case "resource.freeze":
+    case "resource.drop":
     case "region.enter":
+    case "region.allocate":
     case "region.exit":
       requireAttributeCount(kind, attributes, 0);
       return { ...base, kind };
@@ -1516,9 +1522,12 @@ function appendOperationAttributes(
     case "product.index_update":
     case "product.select":
     case "sum.tag":
+    case "resource.move":
     case "resource.borrow":
     case "resource.freeze":
+    case "resource.drop":
     case "region.enter":
+    case "region.allocate":
     case "region.exit":
       return;
   }

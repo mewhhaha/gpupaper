@@ -143,6 +143,7 @@ export type ResolvedDucklangExpression =
   | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
+    readonly consumed?: true;
     readonly span: SourceSpan;
   }
   | {
@@ -1364,6 +1365,9 @@ class DucklangResolver {
           symbol: expression.name.identityPolymorphic
             ? { ...symbol, identityPolymorphic: true }
             : symbol,
+          ...((symbol.linear || expression.name.linear === true)
+            ? { consumed: true as const }
+            : {}),
           span: expression.span,
         };
       }

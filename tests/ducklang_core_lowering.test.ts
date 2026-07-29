@@ -412,6 +412,83 @@ Deno.test("Core keeps freeze and scratch region boundaries explicit", async () =
   assertEquals(operationKinds.includes("region.exit"), true);
 });
 
+Deno.test("Core marks scratch allocations for cleanup before region exit", async () => {
+  const parsed = await parseDucklangModule(
+    "scratch_cleanup.duck",
+    'let preserve = () => scratch {\n  freeze ("a" <> "b")\n}\n@len(preserve())\n',
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  const preserve = module.functions.find((function_) =>
+    function_.name === "preserve"
+  );
+  if (preserve === undefined) throw new Error("expected preserve");
+  const operationKinds = preserve.blocks.flatMap((block) =>
+    block.operations.map((operation) => operation.kind)
+  );
+  assertEquals(
+    operationKinds,
+    [
+      "region.enter",
+      "constant",
+      "constant",
+      "primitive",
+      "region.allocate",
+      "resource.freeze",
+      "resource.drop",
+      "region.exit",
+    ],
+  );
+  validateDucklangCore(module);
+});
+
+Deno.test("Core cleans a scratch region on an early return edge", async () => {
+  const parsed = await parseDucklangModule(
+    "scratch_return.duck",
+    'let preserve = flag => scratch {\n  if flag {\n    return freeze ("a" <> "b")\n  }\n  freeze ("c" <> "d")\n}\n@len(preserve(true))\n',
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  const preserve = module.functions.find((function_) =>
+    function_.name === "preserve"
+  );
+  if (preserve === undefined) throw new Error("expected preserve");
+  const returningBlocks = preserve.blocks.filter((block) =>
+    block.terminator.kind === "return"
+  );
+  assertEquals(returningBlocks.length, 2);
+  for (const block of returningBlocks) {
+    assertEquals(
+      block.operations.slice(-2).map((operation) => operation.kind),
+      ["resource.drop", "region.exit"],
+    );
+  }
+  validateDucklangCore(module);
+});
+
+Deno.test("Core preserves an explicit linear move", async () => {
+  const parsed = await parseDucklangModule(
+    "move.duck",
+    'let length = (!message: Text) => @len(message)\nlet !message: Text = "kept"\nlength(!message)\n',
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  const length = module.functions.find((function_) =>
+    function_.name === "length"
+  );
+  if (length === undefined) throw new Error("expected length");
+  assertEquals(
+    length.blocks.flatMap((block) =>
+      block.operations.map((operation) => operation.kind)
+    ),
+    ["resource.move", "primitive"],
+  );
+  validateDucklangCore(module);
+});
+
 Deno.test("Core replaces a dynamic range recursion with header and exit edges", async () => {
   const parsed = await parseDucklangModule(
     "range.duck",

@@ -1020,10 +1020,15 @@ function emitOperation(
     ]);
   }
   if (
+    operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
-    operation.kind === "resource.freeze"
+    operation.kind === "resource.freeze" ||
+    operation.kind === "region.allocate"
   ) {
-    return finish(getOperands());
+    return finish(getValue(operation.operands.at(-1)!));
+  }
+  if (operation.kind === "resource.drop") {
+    return finish(wasmInstruction.i32Constant(0));
   }
   if (
     operation.kind === "region.enter" ||
@@ -1607,8 +1612,10 @@ function isStackifiableOperation(
     operation.kind === "constant" ||
     operation.kind === "scalar.binary" ||
     operation.kind === "product.select" ||
+    operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
-    operation.kind === "resource.freeze"
+    operation.kind === "resource.freeze" ||
+    operation.kind === "region.allocate"
   ) {
     return true;
   }

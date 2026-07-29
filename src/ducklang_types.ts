@@ -142,6 +142,7 @@ export type TypedDucklangExpression =
   | {
     readonly kind: "reference";
     readonly symbol: DucklangSymbol;
+    readonly consumed?: true;
     readonly type: Type;
     readonly span: SourceSpan;
   }

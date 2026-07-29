@@ -1,4 +1,4 @@
-import { PrimitiveId } from "./ducklang_primitives.ts";
+import { primitiveDescriptor, PrimitiveId } from "./ducklang_primitives.ts";
 import { visitDucklangExpressionChildren } from "./ducklang_closures.ts";
 import type { DucklangSymbol } from "./ducklang_resolution.ts";
 import type {
@@ -121,9 +121,12 @@ export type DucklangCoreOperation =
   })
   | (CoreOperationBase & {
     readonly kind:
+      | "resource.move"
       | "resource.borrow"
       | "resource.freeze"
+      | "resource.drop"
       | "region.enter"
+      | "region.allocate"
       | "region.exit";
   });
 
@@ -191,6 +194,7 @@ export type DucklangCoreModule = {
 
 type MutableCoreBlock = {
   readonly id: CoreBlockId;
+  regionDepth: number;
   readonly parameters: {
     readonly value: CoreValueId;
     readonly type: CoreTypeId;
@@ -742,6 +746,9 @@ class CoreFunctionLowerer {
   #currentFunctionId: CoreFunctionId | undefined;
   #loopHeader: MutableCoreBlock | undefined;
   #loopExit: MutableCoreBlock | undefined;
+  readonly #regions: {
+    readonly token: CoreValueId;
+  }[] = [];
 
   constructor(
     module: TypedDucklangModule,
@@ -839,7 +846,12 @@ class CoreFunctionLowerer {
             `${span.file}:${span.start}: Core block ${block.id} in ${name} has no terminator`,
           );
         }
-        return { ...block, terminator: block.terminator };
+        return {
+          id: block.id,
+          parameters: block.parameters,
+          operations: block.operations,
+          terminator: block.terminator,
+        };
       }),
       span,
     };
@@ -874,7 +886,17 @@ class CoreFunctionLowerer {
         });
       case "reference": {
         const value = environment.get(expression.symbol.id);
-        if (value !== undefined) return { terminated: false, block, value };
+        if (value !== undefined) {
+          if (expression.consumed !== true) {
+            return { terminated: false, block, value };
+          }
+          return this.#operation(block, {
+            kind: "resource.move",
+            type: this.#types.require(expression.type, expression.span),
+            operands: [value],
+            span: expression.span,
+          });
+        }
         const source = this.#functionPlan.bySymbol.get(expression.symbol.id);
         if (source !== undefined) {
           return this.#closure(
@@ -1179,21 +1201,21 @@ class CoreFunctionLowerer {
           operands: [],
           span: expression.span,
         });
+        this.#regions.push({ token: entered.value });
         const body = this.#expression(
           expression.body,
           entered.block,
           environment,
         );
+        const region = this.#regions.pop();
+        if (region === undefined || region.token !== entered.value) {
+          throw new Error(
+            `${expression.span.file}:${expression.span.start}: Core scratch region stack is inconsistent`,
+          );
+        }
         if (body.terminated) return body;
-        this.#operation(body.block, {
-          kind: "region.exit",
-          type: this.#types.require(
-            { kind: "constructor", name: "unit", arguments: [] },
-            expression.span,
-          ),
-          operands: [entered.value],
-          span: expression.span,
-        });
+        this.#appendRegionCleanup(body.block, region, expression.span);
+        body.block.regionDepth = this.#regions.length;
         return body;
       }
       case "return": {
@@ -1536,6 +1558,21 @@ class CoreFunctionLowerer {
     }
     const result = this.#nextValue++ as CoreValueId;
     block.operations.push({ ...operation, result } as DucklangCoreOperation);
+    const region = this.#regions.at(-1);
+    if (
+      region !== undefined && operation.kind === "primitive" &&
+      primitiveDescriptor(operation.primitiveId).effects.includes("allocate")
+    ) {
+      const allocated = this.#nextValue++ as CoreValueId;
+      block.operations.push({
+        kind: "region.allocate",
+        result: allocated,
+        type: operation.type,
+        operands: [region.token, result],
+        span: operation.span,
+      });
+      return { terminated: false, block, value: allocated };
+    }
     return { terminated: false, block, value: result };
   }
 
@@ -1547,6 +1584,7 @@ class CoreFunctionLowerer {
   ): MutableCoreBlock {
     const block: MutableCoreBlock = {
       id: this.#blocks.length as CoreBlockId,
+      regionDepth: this.#regions.length,
       parameters: parameters.map((parameter) => ({
         ...parameter,
         value: this.#nextValue++ as CoreValueId,
@@ -1567,7 +1605,65 @@ class CoreFunctionLowerer {
         `${terminator.span.file}:${terminator.span.start}: Core block ${block.id} already has a terminator`,
       );
     }
+    const targetDepth = this.#terminatorTargetRegionDepth(terminator);
+    if (targetDepth < block.regionDepth) {
+      for (
+        let regionIndex = block.regionDepth - 1;
+        regionIndex >= targetDepth;
+        regionIndex -= 1
+      ) {
+        const region = this.#regions[regionIndex];
+        if (region === undefined) {
+          throw new Error(
+            `${terminator.span.file}:${terminator.span.start}: Core edge leaves unavailable region ${regionIndex}`,
+          );
+        }
+        this.#appendRegionCleanup(block, region, terminator.span);
+      }
+    }
     block.terminator = terminator;
+  }
+
+  #terminatorTargetRegionDepth(terminator: DucklangCoreTerminator): number {
+    if (terminator.kind === "return" || terminator.kind === "trap") return 0;
+    if (terminator.kind === "branch") {
+      return this.#blocks[terminator.target]?.regionDepth ?? 0;
+    }
+    const trueDepth = this.#blocks[terminator.trueTarget]?.regionDepth ?? 0;
+    const falseDepth = this.#blocks[terminator.falseTarget]?.regionDepth ?? 0;
+    if (trueDepth !== falseDepth) {
+      throw new TypeError(
+        `${terminator.span.file}:${terminator.span.start}: Core conditional edge leaves different region depths ${trueDepth} and ${falseDepth}`,
+      );
+    }
+    return trueDepth;
+  }
+
+  #appendRegionCleanup(
+    block: MutableCoreBlock,
+    region: {
+      readonly token: CoreValueId;
+    },
+    span: SourceSpan,
+  ): void {
+    const unitType = this.#types.require(
+      { kind: "constructor", name: "unit", arguments: [] },
+      span,
+    );
+    block.operations.push({
+      kind: "resource.drop",
+      result: this.#nextValue++ as CoreValueId,
+      type: unitType,
+      operands: [region.token],
+      span,
+    });
+    block.operations.push({
+      kind: "region.exit",
+      result: this.#nextValue++ as CoreValueId,
+      type: unitType,
+      operands: [region.token],
+      span,
+    });
   }
 }
 
@@ -1675,6 +1771,53 @@ function validateCoreCallOperation(
   function_: DucklangCoreFunction,
   operation: DucklangCoreOperation,
 ): void {
+  if (
+    operation.kind === "resource.move" ||
+    operation.kind === "resource.borrow" ||
+    operation.kind === "resource.freeze"
+  ) {
+    requireCoreOperationOperands(function_, operation, 1);
+    const operandType = coreValueType(function_, operation.operands[0]);
+    if (operandType !== operation.type) {
+      throw new TypeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} changes type ${operandType} to ${operation.type}`,
+      );
+    }
+    return;
+  }
+  if (
+    operation.kind === "resource.drop" ||
+    operation.kind === "region.exit"
+  ) {
+    requireCoreOperationOperands(function_, operation, 1);
+    requireCoreUnitType(module, operation.type, operation.kind);
+    requireCoreUnitType(
+      module,
+      coreValueType(function_, operation.operands[0]),
+      `${operation.kind} operand`,
+    );
+    return;
+  }
+  if (operation.kind === "region.enter") {
+    requireCoreOperationOperands(function_, operation, 0);
+    requireCoreUnitType(module, operation.type, operation.kind);
+    return;
+  }
+  if (operation.kind === "region.allocate") {
+    requireCoreOperationOperands(function_, operation, 2);
+    requireCoreUnitType(
+      module,
+      coreValueType(function_, operation.operands[0]),
+      "region.allocate token",
+    );
+    const allocatedType = coreValueType(function_, operation.operands[1]);
+    if (allocatedType !== operation.type) {
+      throw new TypeError(
+        `Core region.allocate ${function_.name}:${operation.result} changes allocation type ${allocatedType} to ${operation.type}`,
+      );
+    }
+    return;
+  }
   if (operation.kind === "call.direct") {
     const callee = module.functions[operation.functionId];
     const signature = module.signatures[callee.signature];
@@ -1755,6 +1898,27 @@ function validateCoreCallOperation(
       `Core indirect call ${function_.name}:${operation.result} has result type ${operation.type}; signature returns ${signature.result}`,
     );
   }
+}
+
+function requireCoreOperationOperands(
+  function_: DucklangCoreFunction,
+  operation: DucklangCoreOperation,
+  expected: number,
+): void {
+  if (operation.operands.length === expected) return;
+  throw new TypeError(
+    `Core ${operation.kind} ${function_.name}:${operation.result} has ${operation.operands.length} operands; expected ${expected}`,
+  );
+}
+
+function requireCoreUnitType(
+  module: DucklangCoreModule,
+  type: CoreTypeId,
+  role: string,
+): void {
+  const coreType = module.types[type];
+  if (coreType?.kind === "scalar" && coreType.scalar === "unit") return;
+  throw new TypeError(`Core ${role} has non-unit type ${type}`);
 }
 
 function validateCoreTerminator(
