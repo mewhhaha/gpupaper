@@ -200,6 +200,7 @@ async function resolveModuleImports(
   graph?: DucklangModuleGraph,
 ): Promise<DucklangModule> {
   const statements: DucklangStatement[] = [];
+  const linkedDefinitionKeys = new Set<string>();
   for (const statement of module.statements) {
     if (
       statement.kind === "binding" &&
@@ -337,17 +338,18 @@ async function resolveModuleImports(
         }`,
       );
     }
+    const instanceKey = ducklangModuleInstanceKey({
+      moduleId: dependencyNode.id,
+      sourceHash: dependencyNode.sourceHash,
+      parameterNames: dependencyNode.module.parameters.map(
+        (parameter) => parameter.text,
+      ),
+      // Arguments are added by compile-time closure application. Linking caches
+      // the immutable definition shared by every specialization.
+      argumentKeys: [],
+    });
     const rawDependency = await instances.instantiate(
-      ducklangModuleInstanceKey({
-        moduleId: dependencyNode.id,
-        sourceHash: dependencyNode.sourceHash,
-        parameterNames: dependencyNode.module.parameters.map(
-          (parameter) => parameter.text,
-        ),
-        // Module parameters stay unbound until compile-time evaluation applies
-        // the export function, so every instance shares the empty environment.
-        argumentKeys: [],
-      }),
+      instanceKey,
       () =>
         resolveModuleImports(
           dependencyNode.module,
@@ -363,9 +365,18 @@ async function resolveModuleImports(
       statement.open ||
       (statement.namespace === undefined && statement.selections.length > 0)
     ) {
-      statements.push(
-        ...openModuleBindings(module.file, statement, dependency),
-      );
+      for (
+        const linkedStatement of openModuleBindings(
+          module.file,
+          statement,
+          dependency,
+        )
+      ) {
+        const key = linkedDefinitionKey(linkedStatement, module.file);
+        if (key !== undefined && linkedDefinitionKeys.has(key)) continue;
+        if (key !== undefined) linkedDefinitionKeys.add(key);
+        statements.push(linkedStatement);
+      }
       continue;
     }
     if (
@@ -383,15 +394,17 @@ async function resolveModuleImports(
     const namespace = statement.namespace;
     const instanceRenames = new Map(
       dependency.statements.flatMap((dependencyStatement) =>
-        statementValueNames(dependencyStatement).map((name) =>
-          [
-            name,
-            hygienicDucklangName(
-              `${namespace.text}_${name}`,
-              dependency.file,
-            ),
-          ] as const
-        )
+        dependencyStatement.span.file === dependency.file
+          ? statementValueNames(dependencyStatement).map((name) =>
+            [
+              name,
+              hygienicDucklangName(
+                `${namespace.text}_${name}`,
+                dependency.file,
+              ),
+            ] as const
+          )
+          : []
       ),
     );
     const dependencyStatements = renameDucklangValues(
@@ -399,21 +412,9 @@ async function resolveModuleImports(
       instanceRenames,
     );
     const trailingDependencyStatement = dependencyStatements.at(-1);
-    const dependencyExportExpression =
-      trailingDependencyStatement?.kind === "expression" &&
-        trailingDependencyStatement.expression.kind === "record"
-        ? trailingDependencyStatement.expression
-        : trailingDependencyStatement?.kind === "expression" &&
-            trailingDependencyStatement.expression.kind === "call" &&
-            trailingDependencyStatement.expression.callee.kind ===
-              "reference" &&
-            trailingDependencyStatement.expression.callee.name.text ===
-              "return" &&
-            trailingDependencyStatement.expression.arguments.length === 1 &&
-            trailingDependencyStatement.expression.arguments[0].kind ===
-              "record"
-        ? trailingDependencyStatement.expression.arguments[0]
-        : undefined;
+    const dependencyExportExpression = moduleExportExpression(
+      trailingDependencyStatement,
+    );
     if (
       trailingDependencyStatement === undefined ||
       dependencyExportExpression === undefined
@@ -454,6 +455,8 @@ async function resolveModuleImports(
     const exportExpression = {
       ...dependencyExportExpression,
       nominalType: exportTypeName,
+      compileTimeModule: true as const,
+      compileTimeModuleKey: instanceKey,
     };
 
     const declarations = new Set<DucklangStatement["kind"]>([
@@ -468,6 +471,16 @@ async function resolveModuleImports(
     const dependencyBodyStatements: DucklangStatement[] = [];
     const declaredTypeKeys = new Set(statements.flatMap(statementTypeKeys));
     for (const dependencyStatement of dependencyStatements.slice(0, -1)) {
+      const definitionKey = linkedDefinitionKey(
+        dependencyStatement,
+        module.file,
+      );
+      if (
+        definitionKey !== undefined &&
+        linkedDefinitionKeys.has(definitionKey)
+      ) {
+        continue;
+      }
       const typeKeys = statementTypeKeys(dependencyStatement);
       if (typeKeys.some((key) => declaredTypeKeys.has(key))) continue;
       if (
@@ -477,6 +490,9 @@ async function resolveModuleImports(
         continue;
       }
       statements.push(dependencyStatement);
+      if (definitionKey !== undefined) {
+        linkedDefinitionKeys.add(definitionKey);
+      }
       for (const key of typeKeys) declaredTypeKeys.add(key);
     }
 
@@ -752,7 +768,8 @@ function openModuleBindings(
     );
   }
   const result = dependency.statements.at(-1);
-  if (result?.kind !== "expression" || result.expression.kind !== "record") {
+  const exports = moduleExportExpression(result);
+  if (result === undefined || exports === undefined) {
     throw new TypeError(
       `${file}:${statement.span.start}: open Ducklang import ${
         JSON.stringify(statement.path)
@@ -760,10 +777,10 @@ function openModuleBindings(
     );
   }
   const exportedNames = new Set(
-    result.expression.fields.map((field) => field.name),
+    exports.fields.map((field) => field.name),
   );
   const exportedBindings = new Map(
-    result.expression.fields.flatMap((field) =>
+    exports.fields.flatMap((field) =>
       field.value.kind === "reference"
         ? [[field.name, field.value.name.text] as const]
         : []
@@ -807,7 +824,7 @@ function openModuleBindings(
       if (providers.has(referencedName)) pendingBindings.push(referencedName);
     }
   }
-  const spliced = dependency.statements.flatMap<DucklangStatement>(
+  const linkedDefinitions = dependency.statements.flatMap<DucklangStatement>(
     (dependencyStatement) => {
       if (
         dependencyStatement.kind === "effectDeclaration" ||
@@ -836,67 +853,70 @@ function openModuleBindings(
         return [];
       }
       if (dependencyStatement.kind === "recordBinding") {
-        return [{
-          ...dependencyStatement,
-          fields: dependencyStatement.fields.map((field) => {
-            const exportedName = [...exportedBindings].find(
-              ([, bindingName]) => bindingName === field.localName.text,
-            )?.[0];
-            const selection = exportedName === undefined
-              ? undefined
-              : selections.get(exportedName);
-            return selection?.localName === undefined
-              ? field
-              : { ...field, localName: selection.localName };
-          }),
-        }];
+        return [dependencyStatement];
       }
       if (dependencyStatement.kind !== "binding") {
         return [dependencyStatement];
       }
-      const exportedName = [...exportedBindings].find(([, bindingName]) =>
-        bindingName === dependencyStatement.name.text
-      )?.[0];
-      const selection = exportedName === undefined
-        ? undefined
-        : selections.get(exportedName);
-      if (selection !== undefined && selection.localName === undefined) {
-        return [];
-      }
-      const name = selection?.localName ?? dependencyStatement.name;
-      return [{ ...dependencyStatement, name }];
+      return [dependencyStatement];
     },
   );
-  return spliced;
+  const selectedFields = statement.open || statement.selections.length === 0
+    ? exports.fields
+    : exports.fields.filter((field) =>
+      selections.get(field.name)?.localName !== undefined
+    );
+  const aliases = selectedFields.map((field): DucklangStatement => {
+    const localName = selections.get(field.name)?.localName ?? {
+      text: field.name,
+      span: statement.span,
+    };
+    return {
+      kind: "binding",
+      declarationKind: "const",
+      recursive: false,
+      name: localName,
+      value: field.value,
+      span: statement.span,
+    };
+  });
+  return [...linkedDefinitions, ...aliases];
+}
+
+function moduleExportExpression(
+  statement: DucklangStatement | undefined,
+): Extract<DucklangExpression, { readonly kind: "record" }> | undefined {
+  if (statement?.kind !== "expression") return undefined;
+  if (statement.expression.kind === "record") return statement.expression;
+  if (
+    statement.expression.kind !== "call" ||
+    statement.expression.callee.kind !== "reference" ||
+    statement.expression.callee.name.text !== "return" ||
+    statement.expression.arguments.length !== 1
+  ) {
+    return undefined;
+  }
+  const result = statement.expression.arguments[0];
+  return result.kind === "record" ? result : undefined;
 }
 
 /**
- * Alpha-renames a dependency's private module-level bindings.
+ * Gives every dependency binding a stable module-qualified source identity.
  *
- * Only the bindings that back an export belong in the importer's scope. The
- * private bindings they depend on are spliced too, so renaming them keeps the
- * importer from capturing one by declaring the same name, and keeps them from
- * resolving for an importer that never selected them.
+ * Definitions keep this identity no matter which importer selects them.
+ * Imports introduce local aliases to exported identities; they never rename a
+ * definition into the importer's lexical scope.
  */
 function hygieniseDucklangDependency(
   dependency: DucklangModule,
 ): DucklangModule {
-  const result = dependency.statements.at(-1);
-  if (result?.kind !== "expression" || result.expression.kind !== "record") {
-    return dependency;
-  }
-  const exported = new Set(
-    result.expression.fields.flatMap((field) =>
-      field.value.kind === "reference" ? [field.value.name.text] : []
-    ),
-  );
   const renames = new Map(
     dependency.statements.flatMap((statement) =>
-      statementValueNames(statement).flatMap((name) =>
-        exported.has(name)
-          ? []
-          : [[name, hygienicDucklangName(name, dependency.file)] as const]
-      )
+      statement.span.file === dependency.file
+        ? statementValueNames(statement).map((name) =>
+          [name, hygienicDucklangName(name, dependency.file)] as const
+        )
+        : []
     ),
   );
   if (renames.size === 0) return dependency;
@@ -915,6 +935,18 @@ function hygieniseDucklangDependency(
       })),
     })),
   };
+}
+
+function linkedDefinitionKey(
+  statement: DucklangStatement,
+  importerFile: string,
+): string | undefined {
+  if (statement.span.file === importerFile) return undefined;
+  const names = statementValueNames(statement);
+  if (names.length === 0) return undefined;
+  return `${statement.span.file}\u0000${statement.span.start}\u0000${
+    names.join("\u0000")
+  }`;
 }
 
 function collectReferencedNames(value: unknown): readonly string[] {

@@ -260,7 +260,9 @@ export function evaluateDucklangConstModule(
   }
 
   const result = evaluator.evaluate(module.result, environment);
-  const values = result.kind === "product"
+  const values = result.kind === "module"
+    ? result.exports.fields.map((field) => field.value)
+    : result.kind === "product"
     ? result.fields.map((field) => field.value)
     : module.exportNames.length === 0 &&
         result.kind === "scalar" && result.scalar.kind === "unit"
@@ -286,6 +288,7 @@ export function evaluateDucklangConstModule(
 class DucklangConstEvaluator {
   #remainingFuel: number;
   #callDepth = 0;
+  readonly #moduleInstances = new Map<string, DucklangConstValue>();
 
   constructor(fuel: number) {
     this.#remainingFuel = fuel;
@@ -360,10 +363,13 @@ class DucklangConstEvaluator {
             value: evaluated,
           });
         }
-        return {
+        const product = {
           kind: "product",
           fields,
-        };
+        } satisfies DucklangConstProduct;
+        return expression.compileTimeModule === true
+          ? { kind: "module", exports: product }
+          : product;
       }
       case "unionCase":
         return {
@@ -556,9 +562,19 @@ class DucklangConstEvaluator {
         }: compile-time closure expects ${callee.code.parameters.length} arguments; received ${arguments_.length}`,
       );
     }
+    const moduleKey = compileTimeModuleKey(callee.code.body);
+    const argumentKeys = arguments_.map(canonicalConstValueKey);
+    const applicationKey = moduleKey === undefined ||
+        argumentKeys.some((key) => key === undefined)
+      ? undefined
+      : encodeConstKey([moduleKey, ...(argumentKeys as string[])]);
+    const cached = applicationKey === undefined
+      ? undefined
+      : this.#moduleInstances.get(applicationKey);
+    if (cached !== undefined) return cached;
     this.#callDepth += 1;
     try {
-      return this.evaluate(
+      const result = this.evaluate(
         callee.code.body,
         extendDucklangConstEnvironment(
           callee.environment,
@@ -568,6 +584,10 @@ class DucklangConstEvaluator {
           })),
         ),
       );
+      if (applicationKey !== undefined) {
+        this.#moduleInstances.set(applicationKey, result);
+      }
+      return result;
     } finally {
       this.#callDepth -= 1;
     }
@@ -824,6 +844,70 @@ class DucklangConstEvaluator {
       }: Ducklang compile-time evaluation does not support ${operation}`,
     );
   }
+}
+
+function compileTimeModuleKey(
+  expression: TypedDucklangExpression,
+): string | undefined {
+  if (expression.kind === "product") return expression.compileTimeModuleKey;
+  if (expression.kind === "return") {
+    return compileTimeModuleKey(expression.expression);
+  }
+  if (expression.kind === "block") {
+    return compileTimeModuleKey(expression.result);
+  }
+  return undefined;
+}
+
+function canonicalConstValueKey(
+  value: DucklangConstValue,
+): string | undefined {
+  switch (value.kind) {
+    case "scalar":
+      if (value.scalar.kind === "bytes") {
+        return encodeConstKey([
+          "bytes",
+          ...Array.from(
+            value.scalar.value,
+            (byte) => byte.toString(16).padStart(2, "0"),
+          ),
+        ]);
+      }
+      return encodeConstKey([
+        value.scalar.kind,
+        value.scalar.kind === "unit" ? "" : String(value.scalar.value),
+      ]);
+    case "type":
+      return encodeConstKey(["type", value.typeId]);
+    case "product": {
+      const fields = value.fields.map((field) => {
+        const fieldKey = canonicalConstValueKey(field.value);
+        return fieldKey === undefined
+          ? undefined
+          : encodeConstKey([field.name ?? "", fieldKey]);
+      });
+      return fields.some((field) => field === undefined)
+        ? undefined
+        : encodeConstKey(["product", ...(fields as string[])]);
+    }
+    case "sum": {
+      const payload = canonicalConstValueKey(value.value);
+      return payload === undefined ? undefined : encodeConstKey([
+        "sum",
+        value.unionName,
+        value.caseName,
+        payload,
+      ]);
+    }
+    case "module":
+      return canonicalConstValueKey(value.exports);
+    case "closure":
+      return undefined;
+  }
+}
+
+function encodeConstKey(parts: readonly string[]): string {
+  return parts.map((part) => `${part.length}:${part}`).join("\u0000");
 }
 
 function extendConstValue(

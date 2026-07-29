@@ -131,6 +131,8 @@ export type ResolvedDucklangExpression =
       readonly span: SourceSpan;
     }[];
     readonly nominalType?: string;
+    readonly compileTimeModule?: true;
+    readonly compileTimeModuleKey?: string;
     readonly span: SourceSpan;
   }
   | {

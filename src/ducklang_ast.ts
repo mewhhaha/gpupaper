@@ -212,6 +212,8 @@ export type DucklangExpression =
     readonly kind: "record";
     readonly fields: readonly DucklangRecordField[];
     readonly nominalType?: string;
+    readonly compileTimeModule?: true;
+    readonly compileTimeModuleKey?: string;
     readonly span: SourceSpan;
   }
   | {

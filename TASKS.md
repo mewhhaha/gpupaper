@@ -307,7 +307,14 @@ than interpreting source names repeatedly.
 - [x] Add a source provider for relative files and bundled `duck:` modules.
 - [x] Parse and analyze each module once per canonical source and parameter
       environment.
-- [ ] Resolve imports to exported symbol IDs instead of splicing raw statements.
+- [x] Resolve imports to exported symbol IDs instead of splicing definitions
+      into the importer's lexical scope. Every linked definition receives a
+      stable module-qualified name derived from its declaring source and keeps
+      that identity through transitive imports. An import emits a local alias
+      whose resolved reference points at the exported definition's
+      `DucklangSymbol.id`; the definition itself is linked once. The diamond
+      graph test asserts that the shared definition occurs once, and the alias
+      test compares the resolved IDs rather than their spellings.
 - [x] Preserve the complete transitive environment of exported functions,
       constants, types, protocols, extensions, and fixities. Every type,
       protocol, extension, and fixity declared by any transitively imported
@@ -319,33 +326,29 @@ than interpreting source names repeatedly.
       exported functions and constants is the reachability closure over what the
       exports reference, so pruning removes only bindings outside that
       environment, and captures inside it are alpha-renamed rather than dropped.
-- [ ] Represent namespace selection as compile-time module projection.
-- [ ] Represent parameterized modules as compile-time functions from parameter
-      records to export records.
+- [x] Represent namespace selection as compile-time module projection. Namespace
+      export records carry the `compileTimeModule` proof into typed products;
+      the `ConstValue.module` evaluator projects them with the same persistent
+      product operation as any other compile-time record.
+- [x] Represent parameterized modules as compile-time functions from parameter
+      records to export modules. The parameter record is typed structurally,
+      the function body returns a `compileTimeModule`, and specialization erases
+      the application before Core. A `Text` capability record is checked
+      structurally and executes through this path.
 - [x] Detect import cycles with the complete module path in the diagnostic.
-- [ ] Cache module instances by source identity, source hash, compiler version,
-      and canonical compile-time arguments. The instance key and cache exist and
-      cover all four components; the argument component stays empty until
-      parameterized modules become compile-time functions.
-- [ ] Delete the exported-function hoisting path after all callers use the
-      module graph. Measured blocker: the module graph is not what keeps this
-      path alive. Deleting it routes the frozen Codex, grep, and
-      effects/multi_file targets onto the general namespace path, which is
-      strictly weaker in three ways, each reproduced by deleting the block and
-      running the suite: -
-      `main.duck:84: Ducklang Wasm backend cannot represent text -> unit` -- the
-      general path binds a module as a value whose export record holds
-      functions, which needs Phase 6 closure conversion; -
-      `codex.duck:255: Ducklang struct declarations must be module-level` -- the
-      general path wraps a module in a `block`, and resolution admits type
-      declarations only at module scope; -
-      `grep.duck:860: unknown Ducklang name cast` -- block scoping loses a
-      module-level name the hoisting path kept. Generalizing the path to
-      non-function exports instead of deleting it is also not sufficient on its
-      own: the folder handles only `namespace.member` and
-      `namespace(...).member`, so widening the path drops the namespace binding
-      for a module instance bound to a local. That shape is now covered by the
-      const_export_app fixture.
+- [x] Cache module instances by source identity, source hash, compiler version,
+      and canonical compile-time arguments. Linking caches the immutable module
+      definition under the first three components and its parameter list. That
+      key travels on the typed compile-time export module; applying a
+      parameterized module extends it with a length-prefixed canonical encoding
+      of scalar, type, product, sum, and module arguments. Closures are not
+      canonical values and deliberately disable reuse rather than receiving an
+      unstable identity.
+- [x] Delete the exported-function hoisting path. Selected exports are now
+      ordinary aliases to linked definitions, while namespace imports are
+      compile-time export modules. Functions therefore use the same closure and
+      direct-call machinery whether selected, projected, or captured; import
+      linking no longer renames an exported function into the caller's scope.
 - [x] Test that `citation_parser.duck` retains the captured `texts` binding.
 - [x] Test that importing `duck:prelude/iterators` makes `IntoIterator` and its
       extensions visible to the editor.

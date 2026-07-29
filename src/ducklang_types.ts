@@ -109,6 +109,8 @@ export type TypedDucklangExpression =
     readonly spreadValues?: readonly boolean[];
     readonly fieldNames?: readonly string[];
     readonly nominalType?: string;
+    readonly compileTimeModule?: true;
+    readonly compileTimeModuleKey?: string;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -1323,6 +1325,12 @@ class DucklangInference {
                 productKind: "tuple",
                 values: values.map((value) => value.expression),
                 fieldNames,
+                ...(expression.compileTimeModule === true
+                  ? { compileTimeModule: true as const }
+                  : {}),
+                ...(expression.compileTimeModuleKey === undefined
+                  ? {}
+                  : { compileTimeModuleKey: expression.compileTimeModuleKey }),
                 type,
                 span: expression.span,
               },
@@ -1380,6 +1388,12 @@ class DucklangInference {
             values,
             fieldNames: declaration.fields.map((field) => field.name),
             nominalType: declaration.name,
+            ...(expression.compileTimeModule === true
+              ? { compileTimeModule: true as const }
+              : {}),
+            ...(expression.compileTimeModuleKey === undefined
+              ? {}
+              : { compileTimeModuleKey: expression.compileTimeModuleKey }),
             type,
             span: expression.span,
           },

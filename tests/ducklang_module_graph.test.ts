@@ -11,6 +11,8 @@ import {
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import { resolveDucklangLocalImports } from "../src/ducklang_modules.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
+import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
+import { inferDucklangModule } from "../src/ducklang_types.ts";
 
 /**
  * A module's private binding must keep its own meaning no matter what the
@@ -59,6 +61,27 @@ Deno.test("Ducklang imports do not change a struct field offset", async () => {
  */
 Deno.test("Ducklang module parameter records accept non-integer fields", async () => {
   assertEquals(await runFixture("text_parameter_app.duck"), 5);
+
+  const file = await Deno.realPath("tests/fixtures/text_parameter_app.duck");
+  const source = await Deno.readTextFile(file);
+  const linked = await resolveDucklangLocalImports(
+    await parseDucklangModule(file, source),
+    source,
+  );
+  const typed = inferDucklangModule(resolveDucklangModule(linked));
+  const parameterizedModule = typed.bindings.find((binding) =>
+    binding.symbol.text === "text_parameter_module"
+  );
+  if (parameterizedModule?.value.kind !== "function") {
+    throw new Error("expected a compile-time module function");
+  }
+  const result = parameterizedModule.value.body.kind === "block"
+    ? parameterizedModule.value.body.result
+    : parameterizedModule.value.body;
+  assertEquals(
+    result.kind === "product" && result.compileTimeModule === true,
+    true,
+  );
 });
 
 /**
@@ -125,13 +148,16 @@ left.value + right.value
       "memory:/right.duck",
       'const shared = import "./shared.duck"\nreturn { .value = shared.base }\n',
     ],
-    ["memory:/shared.duck", "return { .base = 3 }\n"],
+    [
+      "memory:/shared.duck",
+      "let base = 3\nreturn { .base = base }\n",
+    ],
   ]);
   const root = moduleSource("memory:/root.duck", sources);
   const provider = countingSourceProvider(memorySourceProvider(sources));
   const instances = createDucklangModuleInstanceCache<DucklangModule>();
 
-  await resolveDucklangLocalImports(
+  const linked = await resolveDucklangLocalImports(
     await parseRoot(root),
     root.source,
     { sourceProvider: provider.provider, instances },
@@ -146,6 +172,77 @@ left.value + right.value
     provider.resolutions.filter((path) => path === "./shared.duck").length,
     2,
   );
+  assertEquals(
+    linked.statements.filter((statement) =>
+      statement.kind === "binding" &&
+      statement.span.file === "memory:/shared.duck"
+    ).length,
+    1,
+  );
+});
+
+Deno.test("Ducklang import aliases resolve to the exported symbol identity", async () => {
+  const sources = new Map([
+    [
+      "memory:/root.duck",
+      'const { .answer = local } = import "./dependency.duck"\nlocal\n',
+    ],
+    [
+      "memory:/dependency.duck",
+      "let hidden = 40\nlet answer = hidden + 2\nreturn { .answer = answer }\n",
+    ],
+  ]);
+  const root = moduleSource("memory:/root.duck", sources);
+  const linked = await resolveDucklangLocalImports(
+    await parseRoot(root),
+    root.source,
+    { sourceProvider: memorySourceProvider(sources) },
+  );
+  const resolved = resolveDucklangModule(linked);
+  const alias = resolved.bindings.find((binding) =>
+    binding.symbol.text === "local"
+  );
+  if (alias?.value.kind !== "reference") {
+    throw new Error("expected the import alias to reference its export");
+  }
+  const exportedSymbolId = alias.value.symbol.id;
+  const exported = resolved.bindings.find((binding) =>
+    binding.symbol.id === exportedSymbolId
+  );
+  if (exported === undefined) {
+    throw new Error("expected the exported definition");
+  }
+  assertEquals(exported.symbol.span.file, "memory:/dependency.duck");
+  assertEquals(exported.symbol.text === "answer", false);
+});
+
+Deno.test("Ducklang namespaces are compile-time module projections", async () => {
+  const sources = new Map([
+    [
+      "memory:/root.duck",
+      'const dependency = import "./dependency.duck"\ndependency.answer\n',
+    ],
+    [
+      "memory:/dependency.duck",
+      "let answer = 42\nreturn { .answer = answer }\n",
+    ],
+  ]);
+  const root = moduleSource("memory:/root.duck", sources);
+  const linked = await resolveDucklangLocalImports(
+    await parseRoot(root),
+    root.source,
+    { sourceProvider: memorySourceProvider(sources) },
+  );
+  const typed = inferDucklangModule(resolveDucklangModule(linked));
+  const namespace = typed.bindings.find((binding) =>
+    binding.symbol.text === "dependency"
+  );
+  assertEquals(
+    namespace?.value.kind === "product" &&
+      namespace.value.compileTimeModule === true,
+    true,
+  );
+  assertEquals(typed.result.kind, "project");
 });
 
 Deno.test("Ducklang module instance keys separate contents parameters and arguments", () => {
