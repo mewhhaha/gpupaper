@@ -163,7 +163,12 @@ type CompletedCompilationMeasurement = {
   readonly wasmBytes: number;
   readonly coreFunctionCount: number;
   readonly coreOperationCount: number;
+  readonly gpuTypeTermCount: number;
+  readonly gpuTypeEqualityCount: number;
   readonly gpuValidationRecordCount: number;
+  readonly gpuRewriteProposalCount: number;
+  readonly gpuWasmAtomCount: number;
+  readonly gpuWasmOutputBufferBytes: number;
 };
 
 type CompilationMeasurement =
@@ -228,9 +233,25 @@ async function measureCompilation(
           0,
         )
         : 0,
+      gpuTypeTermCount: artifact.gpuTypeResult?.status === "solved"
+        ? artifact.gpuTypeResult.termCount
+        : 0,
+      gpuTypeEqualityCount: artifact.gpuTypeResult?.status === "solved"
+        ? artifact.gpuTypeResult.equalityCount
+        : 0,
       gpuValidationRecordCount: artifact.language === "ducklang" &&
           artifact.gpuCoreResult?.status === "completed"
         ? artifact.gpuCoreResult.validationRecordCount
+        : 0,
+      gpuRewriteProposalCount: artifact.language === "ducklang" &&
+          artifact.gpuCoreResult?.status === "completed"
+        ? artifact.gpuCoreResult.proposals.length
+        : 0,
+      gpuWasmAtomCount: artifact.gpuWasmResult?.status === "completed"
+        ? artifact.gpuWasmResult.atomCount
+        : 0,
+      gpuWasmOutputBufferBytes: artifact.gpuWasmResult?.status === "completed"
+        ? artifact.gpuWasmResult.outputBufferBytes
         : 0,
     };
   } catch (error) {

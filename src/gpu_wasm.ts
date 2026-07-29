@@ -14,6 +14,7 @@ export type GpuWasmEmissionResult =
     readonly bytes: Uint8Array;
     readonly atomCount: number;
     readonly byteCount: number;
+    readonly outputBufferBytes: number;
     readonly lengthRounds: number;
     readonly scanRounds: number;
   }
@@ -174,8 +175,14 @@ struct Parameters { count: u32 }
 @group(0) @binding(2) var<storage, read> high_words: array<u32>;
 @group(0) @binding(3) var<storage, read> atom_sizes: array<u32>;
 @group(0) @binding(4) var<storage, read> inclusive_offsets: array<u32>;
-@group(0) @binding(5) var<storage, read_write> output_bytes: array<u32>;
+@group(0) @binding(5) var<storage, read_write> output_words: array<atomic<u32>>;
 @group(0) @binding(6) var<uniform> parameters: Parameters;
+
+fn emit_byte(offset: u32, value: u32) {
+  let word_index = offset >> 2u;
+  let shift = (offset & 3u) << 3u;
+  atomicOr(&output_words[word_index], (value & 255u) << shift);
+}
 
 @compute @workgroup_size(64)
 fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
@@ -185,7 +192,7 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let size = atom_sizes[index];
   let output_start = inclusive_offsets[index] - size;
   if (kind == ${atomByte}u) {
-    output_bytes[output_start] = low_words[index];
+    emit_byte(output_start, low_words[index]);
     return;
   }
   if (kind == ${atomUnsigned}u || kind == ${atomLength}u) {
@@ -194,7 +201,7 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
       var encoded_byte = remaining & 127u;
       remaining >>= 7u;
       if (byte_index + 1u < size) { encoded_byte |= 128u; }
-      output_bytes[output_start + byte_index] = encoded_byte;
+      emit_byte(output_start + byte_index, encoded_byte);
     }
     return;
   }
@@ -204,7 +211,7 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
       var encoded_byte = u32(remaining) & 127u;
       remaining >>= 7;
       if (byte_index + 1u < size) { encoded_byte |= 128u; }
-      output_bytes[output_start + byte_index] = encoded_byte;
+      emit_byte(output_start + byte_index, encoded_byte);
     }
     return;
   }
@@ -215,7 +222,7 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let next_low = (low >> 7u) | (high << 25u);
     let next_high = bitcast<u32>(bitcast<i32>(high) >> 7);
     if (byte_index + 1u < size) { encoded_byte |= 128u; }
-    output_bytes[output_start + byte_index] = encoded_byte;
+    emit_byte(output_start + byte_index, encoded_byte);
     low = next_low;
     high = next_high;
   }
@@ -248,15 +255,16 @@ export async function emitWasmPlanOnGpu(
   const maximumStorageWords = Math.floor(
     device.limits.maxStorageBufferBindingSize / 4,
   );
+  const maximumOutputWordCount = Math.ceil(maximumByteCount / 4);
   if (
-    Math.max(plan.atoms.length, maximumByteCount) >
+    Math.max(plan.atoms.length, maximumOutputWordCount) >
       Math.min(maximumBufferWords, maximumStorageWords) ||
-    maximumByteCount + 1 > maximumBufferWords
+    maximumOutputWordCount + 1 > maximumBufferWords
   ) {
     return {
       status: "unavailable",
       reason:
-        `GPU Wasm limits are ${maximumBufferWords} buffer words and ${maximumStorageWords} storage words; requested ${plan.atoms.length} atoms and up to ${maximumByteCount} bytes`,
+        `GPU Wasm limits are ${maximumBufferWords} buffer words and ${maximumStorageWords} storage words; requested ${plan.atoms.length} atoms and up to ${maximumOutputWordCount} packed output words`,
     };
   }
 
@@ -304,7 +312,7 @@ export async function emitWasmPlanOnGpu(
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const outputBuffer = device.createBuffer({
-    size: maximumByteCount * 4,
+    size: maximumOutputWordCount * 4,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const countParameterBuffer = createBuffer(
@@ -313,7 +321,7 @@ export async function emitWasmPlanOnGpu(
     GPUBufferUsage.UNIFORM,
   );
   const readback = device.createBuffer({
-    size: 4 + maximumByteCount * 4,
+    size: 4 + maximumOutputWordCount * 4,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const transientParameterBuffers: GPUBuffer[] = [];
@@ -450,7 +458,7 @@ export async function emitWasmPlanOnGpu(
       0,
       readback,
       4,
-      maximumByteCount * 4,
+      maximumOutputWordCount * 4,
     );
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
@@ -469,20 +477,13 @@ export async function emitWasmPlanOnGpu(
         `WebGPU Wasm emitter returned ${byteCount} bytes; plan maximum is ${maximumByteCount}`,
       );
     }
-    const logicalBytes = new Uint32Array(mapped, 4, byteCount);
-    const bytes = Uint8Array.from(logicalBytes, (encodedByte, byteIndex) => {
-      if (encodedByte > 0xff) {
-        throw new RangeError(
-          `WebGPU Wasm emitter returned logical byte ${encodedByte} at offset ${byteIndex}`,
-        );
-      }
-      return encodedByte;
-    });
+    const bytes = new Uint8Array(mapped, 4, byteCount).slice();
     return {
       status: "completed",
       bytes,
       atomCount: plan.atoms.length,
       byteCount,
+      outputBufferBytes: maximumOutputWordCount * 4,
       lengthRounds: plan.maximumDependencyLevel,
       scanRounds,
     };

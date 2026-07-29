@@ -1,11 +1,11 @@
 import {
+  commitValidatedDucklangCoreRewrites,
   type DucklangCoreRewriteProposal,
-  proposeDucklangCoreRewrites,
-  rewriteFlatDucklangCore,
 } from "./ducklang_core_rewrite.ts";
 import {
   type FlatDucklangCore,
   FlatDucklangCoreKind,
+  type ValidatedFlatDucklangCore,
   validateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 import {
@@ -23,6 +23,7 @@ export type GpuDucklangCoreResult =
     readonly initializationMilliseconds: number;
     readonly gpuMilliseconds: number;
     readonly transferMilliseconds: number;
+    readonly commitMilliseconds: number;
   }
   | {
     readonly status: "invalid";
@@ -162,11 +163,22 @@ export async function runDucklangCoreGpuPass(
   snapshot: FlatDucklangCore,
 ): Promise<GpuDucklangCoreResult> {
   const records = gpuValidationRecords(snapshot);
-  let cpuError: string | undefined;
+  let cpuValidation:
+    | {
+      readonly status: "valid";
+      readonly snapshot: ValidatedFlatDucklangCore;
+    }
+    | { readonly status: "invalid"; readonly reason: string };
   try {
-    validateFlatDucklangCore(snapshot);
+    cpuValidation = {
+      status: "valid",
+      snapshot: validateFlatDucklangCore(snapshot),
+    };
   } catch (error) {
-    cpuError = error instanceof Error ? error.message : String(error);
+    cpuValidation = {
+      status: "invalid",
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 
   const initializationStart = performance.now();
@@ -345,18 +357,21 @@ export async function runDucklangCoreGpuPass(
     const range = readback.getMappedRange();
     const errorWords = new Uint32Array(range, 0, 2);
     const gpuValid = errorWords[0] === 0;
-    const cpuValid = cpuError === undefined;
+    const cpuValid = cpuValidation.status === "valid";
     if (gpuValid !== cpuValid) {
+      const cpuDescription = cpuValidation.status === "valid"
+        ? "accepted"
+        : `rejected ${cpuValidation.reason}`;
       throw new Error(
-        `CPU and GPU flat Core validation disagree: CPU ${
-          cpuValid ? "accepted" : `rejected ${cpuError}`
-        }; GPU found ${errorWords[0]} invalid records, first ${errorWords[1]}`,
+        `CPU and GPU flat Core validation disagree: CPU ${cpuDescription}; GPU found ${
+          errorWords[0]
+        } invalid records, first ${errorWords[1]}`,
       );
     }
-    if (!cpuValid) {
+    if (cpuValidation.status === "invalid") {
       return {
         status: "invalid",
-        reason: cpuError ?? "CPU flat Core validation failed",
+        reason: cpuValidation.reason,
         validationRecordCount: records.length / 4,
       };
     }
@@ -376,18 +391,22 @@ export async function runDucklangCoreGpuPass(
       ruleWords,
       replacementWords,
     );
-    const cpuProposals = proposeDucklangCoreRewrites(snapshot);
-    requireMatchingProposals(cpuProposals, gpuProposals);
-    const rewritten = rewriteFlatDucklangCore(snapshot);
+    const commitStart = performance.now();
+    const committed = commitValidatedDucklangCoreRewrites(
+      cpuValidation.snapshot,
+      gpuProposals,
+    );
+    const commitMilliseconds = performance.now() - commitStart;
     return {
       status: "completed",
-      package: rewritten.package,
+      package: committed.package,
       proposals: gpuProposals,
-      accepted: rewritten.accepted,
+      accepted: committed.accepted,
       validationRecordCount: records.length / 4,
       initializationMilliseconds,
       gpuMilliseconds,
       transferMilliseconds,
+      commitMilliseconds,
     };
   } finally {
     if (scopePending) await device.popErrorScope();
@@ -424,18 +443,6 @@ function gpuRewriteProposals(
       profit: 1,
     }];
   });
-}
-
-function requireMatchingProposals(
-  cpu: readonly DucklangCoreRewriteProposal[],
-  gpu: readonly DucklangCoreRewriteProposal[],
-): void {
-  if (JSON.stringify(cpu) === JSON.stringify(gpu)) return;
-  throw new Error(
-    `CPU and GPU Ducklang Core rewrites disagree: CPU ${
-      JSON.stringify(cpu)
-    }; GPU ${JSON.stringify(gpu)}`,
-  );
 }
 
 function gpuValidationRecords(package_: FlatDucklangCore): Uint32Array {

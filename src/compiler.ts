@@ -95,10 +95,11 @@ export type CompilationTimings = {
   readonly finalTypeMilliseconds: number;
   readonly coreMilliseconds: number;
   readonly flatCoreMilliseconds: number;
-  readonly coreRewriteMilliseconds: number;
+  readonly cpuCoreRewriteMilliseconds: number;
   readonly gpuCoreInitializationMilliseconds: number;
   readonly gpuCoreMilliseconds: number;
   readonly gpuCoreTransferMilliseconds: number;
+  readonly gpuCoreCommitMilliseconds: number;
   readonly wasmMilliseconds: number;
   readonly gpuWasmMilliseconds: number;
 };
@@ -276,10 +277,11 @@ async function compileHaskellModuleSource(
       finalTypeMilliseconds,
       coreMilliseconds: 0,
       flatCoreMilliseconds: 0,
-      coreRewriteMilliseconds: 0,
+      cpuCoreRewriteMilliseconds: 0,
       gpuCoreInitializationMilliseconds: 0,
       gpuCoreMilliseconds: 0,
       gpuCoreTransferMilliseconds: 0,
+      gpuCoreCommitMilliseconds: 0,
       wasmMilliseconds,
       gpuWasmMilliseconds,
     },
@@ -450,9 +452,6 @@ async function compileDucklangModuleSource(
   const flatCoreStart = performance.now();
   const flatCore = flattenDucklangCore(core);
   const flatCoreMilliseconds = performance.now() - flatCoreStart;
-  const coreRewriteStart = performance.now();
-  const cpuCoreRewrite = rewriteFlatDucklangCore(flatCore);
-  const coreRewriteMilliseconds = performance.now() - coreRewriteStart;
   const gpuCoreResult = gpuMode === "off"
     ? undefined
     : await runDucklangCoreGpuPass(flatCore);
@@ -464,9 +463,15 @@ async function compileDucklangModuleSource(
       `${file}: GPU rejected CPU-validated flat Core: ${gpuCoreResult.reason}`,
     );
   }
-  const optimizedFlatCore = gpuCoreResult?.status === "completed"
-    ? gpuCoreResult.package
-    : cpuCoreRewrite.package;
+  let optimizedFlatCore: FlatDucklangCore;
+  let cpuCoreRewriteMilliseconds = 0;
+  if (gpuCoreResult?.status === "completed") {
+    optimizedFlatCore = gpuCoreResult.package;
+  } else {
+    const coreRewriteStart = performance.now();
+    optimizedFlatCore = rewriteFlatDucklangCore(flatCore).package;
+    cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
+  }
   const optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
   const wasmStart = performance.now();
   const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore);
@@ -509,7 +514,7 @@ async function compileDucklangModuleSource(
       finalTypeMilliseconds: 0,
       coreMilliseconds,
       flatCoreMilliseconds,
-      coreRewriteMilliseconds,
+      cpuCoreRewriteMilliseconds,
       gpuCoreInitializationMilliseconds: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.initializationMilliseconds
         : 0,
@@ -518,6 +523,9 @@ async function compileDucklangModuleSource(
         : 0,
       gpuCoreTransferMilliseconds: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.transferMilliseconds
+        : 0,
+      gpuCoreCommitMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.commitMilliseconds
         : 0,
       wasmMilliseconds,
       gpuWasmMilliseconds,

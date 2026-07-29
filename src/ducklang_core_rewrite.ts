@@ -1,13 +1,7 @@
-import type {
-  CoreValueId,
-  DucklangCoreOperation,
-  DucklangCoreTerminator,
-} from "./ducklang_core.ts";
 import {
   type FlatDucklangCore,
   FlatDucklangCoreKind,
-  flattenDucklangCore,
-  inflateFlatDucklangCore,
+  type ValidatedFlatDucklangCore,
   validateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 
@@ -28,18 +22,30 @@ export type DucklangCoreRewriteResult = {
   readonly accepted: readonly DucklangCoreRewriteProposal[];
 };
 
+export type DucklangCoreRewriteCommit = {
+  readonly package: FlatDucklangCore;
+  readonly accepted: readonly DucklangCoreRewriteProposal[];
+};
+
 const ruleIds: Readonly<Record<DucklangCoreRewriteRule, number>> = {
   addZero: 0,
   multiplyOne: 1,
 };
+const absentFlatId = 0xffff_ffff;
 
 export function rewriteFlatDucklangCore(
   snapshot: FlatDucklangCore,
 ): DucklangCoreRewriteResult {
-  const proposals = proposeDucklangCoreRewrites(snapshot);
-  const accepted = resolveDucklangCoreRewriteConflicts(snapshot, proposals);
+  validateFlatDucklangCore(snapshot);
+  const proposals = proposeValidatedDucklangCoreRewrites(snapshot);
+  const accepted = resolveValidatedDucklangCoreRewriteConflicts(
+    snapshot,
+    proposals,
+  );
+  const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  validateFlatDucklangCore(rewritten);
   return {
-    package: rebuildFlatDucklangCore(snapshot, accepted),
+    package: rewritten,
     proposals,
     accepted,
   };
@@ -49,6 +55,12 @@ export function proposeDucklangCoreRewrites(
   snapshot: FlatDucklangCore,
 ): readonly DucklangCoreRewriteProposal[] {
   validateFlatDucklangCore(snapshot);
+  return proposeValidatedDucklangCoreRewrites(snapshot);
+}
+
+function proposeValidatedDucklangCoreRewrites(
+  snapshot: FlatDucklangCore,
+): readonly DucklangCoreRewriteProposal[] {
   const proposals: DucklangCoreRewriteProposal[] = [];
   for (
     let operationId = 0;
@@ -105,6 +117,13 @@ export function resolveDucklangCoreRewriteConflicts(
   proposals: readonly DucklangCoreRewriteProposal[],
 ): readonly DucklangCoreRewriteProposal[] {
   validateFlatDucklangCore(snapshot);
+  return resolveValidatedDucklangCoreRewriteConflicts(snapshot, proposals);
+}
+
+function resolveValidatedDucklangCoreRewriteConflicts(
+  snapshot: FlatDucklangCore,
+  proposals: readonly DucklangCoreRewriteProposal[],
+): readonly DucklangCoreRewriteProposal[] {
   const claimedOperations = new Set<number>();
   const accepted: DucklangCoreRewriteProposal[] = [];
   const ordered = [...proposals].sort((left, right) =>
@@ -131,70 +150,307 @@ export function rebuildFlatDucklangCore(
   accepted: readonly DucklangCoreRewriteProposal[],
 ): FlatDucklangCore {
   validateFlatDucklangCore(snapshot);
-  accepted.forEach((proposal) => validateProposal(snapshot, proposal));
-  const acceptedOperations = new Set<number>();
-  const replacements = new Map<string, CoreValueId>();
+  const rebuilt = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  validateFlatDucklangCore(rebuilt);
+  return rebuilt;
+}
+
+export function commitValidatedDucklangCoreRewrites(
+  validated: ValidatedFlatDucklangCore,
+  proposals: readonly DucklangCoreRewriteProposal[],
+): DucklangCoreRewriteCommit {
+  const snapshot = validated.package;
+  const accepted = resolveValidatedDucklangCoreRewriteConflicts(
+    snapshot,
+    proposals,
+  );
+  const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  validateFlatDucklangCore(rewritten);
+  return { package: rewritten, accepted };
+}
+
+function rebuildValidatedFlatDucklangCore(
+  snapshot: FlatDucklangCore,
+  accepted: readonly DucklangCoreRewriteProposal[],
+): FlatDucklangCore {
+  const removedOperations = new Uint8Array(snapshot.operationKinds.length);
+  const replacementValueIds = new Uint32Array(snapshot.valueLocalIds.length);
+  replacementValueIds.fill(absentFlatId);
   for (const proposal of accepted) {
-    if (acceptedOperations.has(proposal.operationId)) {
+    validateProposal(snapshot, proposal);
+    if (removedOperations[proposal.operationId] !== 0) {
       throw new TypeError(
         `accepted Ducklang Core rewrites repeat operation ${proposal.operationId}`,
       );
     }
-    acceptedOperations.add(proposal.operationId);
-    replacements.set(
-      valueKey(
-        proposal.functionId,
-        snapshot.valueLocalIds[proposal.resultValueId],
-      ),
-      snapshot.valueLocalIds[proposal.replacementValueId] as CoreValueId,
-    );
+    removedOperations[proposal.operationId] = 1;
+    replacementValueIds[proposal.resultValueId] = proposal.replacementValueId;
   }
-  const resolveValue = (
-    functionId: number,
-    value: CoreValueId,
-  ): CoreValueId => {
+
+  const resolveReplacement = (valueId: number): number => {
     const visited = new Set<number>();
-    let current = value;
+    let current = valueId;
     while (true) {
       if (visited.has(current)) {
         throw new TypeError(
-          `Ducklang Core rewrite replacements form a cycle at function ${functionId} value ${current}`,
+          `Ducklang Core rewrite replacements form a cycle at function ${
+            snapshot.valueFunctionIds[current]
+          } value ${snapshot.valueLocalIds[current]}`,
         );
       }
       visited.add(current);
-      const replacement = replacements.get(valueKey(functionId, current));
-      if (replacement === undefined) return current;
+      const replacement = replacementValueIds[current];
+      if (replacement === absentFlatId) return current;
       current = replacement;
     }
   };
-  const module = inflateFlatDucklangCore(snapshot);
-  let operationId = 0;
-  const functions = module.functions.map((function_) => ({
-    ...function_,
-    blocks: function_.blocks.map((block) => {
-      const operations: DucklangCoreOperation[] = [];
-      for (const operation of block.operations) {
-        const retained = !acceptedOperations.has(operationId);
-        operationId += 1;
-        if (!retained) continue;
-        operations.push({
-          ...operation,
-          operands: operation.operands.map((value) =>
-            resolveValue(function_.id, value)
-          ),
-        });
+
+  const valueIdRemap = new Uint32Array(snapshot.valueLocalIds.length);
+  valueIdRemap.fill(absentFlatId);
+  let retainedValueCount = 0;
+  for (let valueId = 0; valueId < snapshot.valueLocalIds.length; valueId += 1) {
+    if (replacementValueIds[valueId] !== absentFlatId) continue;
+    valueIdRemap[valueId] = retainedValueCount;
+    retainedValueCount += 1;
+  }
+  const remapValue = (valueId: number): number => {
+    const resolved = resolveReplacement(valueId);
+    const remapped = valueIdRemap[resolved];
+    if (remapped !== absentFlatId) return remapped;
+    throw new TypeError(
+      `Ducklang Core rewrite left function ${
+        snapshot.valueFunctionIds[valueId]
+      } value ${
+        snapshot.valueLocalIds[valueId]
+      } without a retained replacement`,
+    );
+  };
+
+  const operationIdRemap = new Uint32Array(
+    snapshot.operationKinds.length,
+  );
+  operationIdRemap.fill(absentFlatId);
+  const operationBlockIds: number[] = [];
+  const operationKinds: number[] = [];
+  const operationResultValueIds: number[] = [];
+  const operationTypeIds: number[] = [];
+  const operationOperandStarts: number[] = [];
+  const operationOperandCounts: number[] = [];
+  const operationAttributeStarts: number[] = [];
+  const operationAttributeCounts: number[] = [];
+  const operationSourceLocationIds: number[] = [];
+  const operandValueIds: number[] = [];
+  const attributeKinds: number[] = [];
+  const attributeLowWords: number[] = [];
+  const attributeHighWords: number[] = [];
+
+  for (
+    let operationId = 0;
+    operationId < snapshot.operationKinds.length;
+    operationId += 1
+  ) {
+    if (removedOperations[operationId] !== 0) continue;
+    operationIdRemap[operationId] = operationKinds.length;
+    operationBlockIds.push(snapshot.operationBlockIds[operationId]);
+    operationKinds.push(snapshot.operationKinds[operationId]);
+    operationResultValueIds.push(
+      remapValue(snapshot.operationResultValueIds[operationId]),
+    );
+    operationTypeIds.push(snapshot.operationTypeIds[operationId]);
+    operationSourceLocationIds.push(
+      snapshot.operationSourceLocationIds[operationId],
+    );
+
+    operationOperandStarts.push(operandValueIds.length);
+    const operandStart = snapshot.operationOperandStarts[operationId];
+    const operandCount = snapshot.operationOperandCounts[operationId];
+    operationOperandCounts.push(operandCount);
+    for (
+      let operandId = operandStart;
+      operandId < operandStart + operandCount;
+      operandId += 1
+    ) {
+      operandValueIds.push(remapValue(snapshot.operandValueIds[operandId]));
+    }
+
+    operationAttributeStarts.push(attributeKinds.length);
+    const attributeStart = snapshot.operationAttributeStarts[operationId];
+    const attributeCount = snapshot.operationAttributeCounts[operationId];
+    operationAttributeCounts.push(attributeCount);
+    for (
+      let attributeId = attributeStart;
+      attributeId < attributeStart + attributeCount;
+      attributeId += 1
+    ) {
+      attributeKinds.push(snapshot.attributeKinds[attributeId]);
+      attributeLowWords.push(snapshot.attributeLowWords[attributeId]);
+      attributeHighWords.push(snapshot.attributeHighWords[attributeId]);
+    }
+  }
+
+  const blockOperationStarts: number[] = [];
+  const blockOperationCounts: number[] = [];
+  let retainedOperationStart = 0;
+  for (
+    let blockId = 0;
+    blockId < snapshot.blockFunctionIds.length;
+    blockId += 1
+  ) {
+    blockOperationStarts.push(retainedOperationStart);
+    const operationStart = snapshot.blockOperationStarts[blockId];
+    const operationCount = snapshot.blockOperationCounts[blockId];
+    let retainedOperationCount = 0;
+    for (
+      let operationId = operationStart;
+      operationId < operationStart + operationCount;
+      operationId += 1
+    ) {
+      if (removedOperations[operationId] === 0) {
+        retainedOperationCount += 1;
       }
-      return {
-        ...block,
-        operations,
-        terminator: rewriteTerminator(
-          block.terminator,
-          (value) => resolveValue(function_.id, value),
-        ),
-      };
-    }),
-  }));
-  return flattenDucklangCore({ ...module, functions });
+    }
+    blockOperationCounts.push(retainedOperationCount);
+    retainedOperationStart += retainedOperationCount;
+  }
+
+  const valueFunctionIds: number[] = [];
+  const valueLocalIds: number[] = [];
+  const valueTypeIds: number[] = [];
+  const valueDefinitionKinds: number[] = [];
+  const valueDefinitionIds: number[] = [];
+  for (let valueId = 0; valueId < snapshot.valueLocalIds.length; valueId += 1) {
+    if (replacementValueIds[valueId] !== absentFlatId) continue;
+    valueFunctionIds.push(snapshot.valueFunctionIds[valueId]);
+    valueLocalIds.push(snapshot.valueLocalIds[valueId]);
+    valueTypeIds.push(snapshot.valueTypeIds[valueId]);
+    const definitionKind = snapshot.valueDefinitionKinds[valueId];
+    valueDefinitionKinds.push(definitionKind);
+    if (
+      definitionKind ===
+        FlatDucklangCoreKind.valueDefinition.operation
+    ) {
+      const remapped = operationIdRemap[
+        snapshot.valueDefinitionIds[valueId]
+      ];
+      if (remapped === absentFlatId) {
+        throw new TypeError(
+          `Ducklang Core rewrite retained function ${
+            snapshot.valueFunctionIds[valueId]
+          } value ${
+            snapshot.valueLocalIds[valueId]
+          } but removed its definition`,
+        );
+      }
+      valueDefinitionIds.push(remapped);
+    } else {
+      valueDefinitionIds.push(snapshot.valueDefinitionIds[valueId]);
+    }
+  }
+
+  const rebuilt: FlatDucklangCore = {
+    schemaVersion: snapshot.schemaVersion,
+    entryFunctionId: snapshot.entryFunctionId,
+    moduleFileId: snapshot.moduleFileId,
+
+    stringBytes: snapshot.stringBytes.slice(),
+    stringStarts: snapshot.stringStarts.slice(),
+    stringLengths: snapshot.stringLengths.slice(),
+
+    sourceLocationFileIds: snapshot.sourceLocationFileIds.slice(),
+    sourceLocationStarts: snapshot.sourceLocationStarts.slice(),
+    sourceLocationEnds: snapshot.sourceLocationEnds.slice(),
+
+    typeKinds: snapshot.typeKinds.slice(),
+    typePayloadStarts: snapshot.typePayloadStarts.slice(),
+    typePayloadCounts: snapshot.typePayloadCounts.slice(),
+    typeAuxiliaries: snapshot.typeAuxiliaries.slice(),
+    typePayloads: snapshot.typePayloads.slice(),
+
+    signatureParameterStarts: snapshot.signatureParameterStarts.slice(),
+    signatureParameterCounts: snapshot.signatureParameterCounts.slice(),
+    signatureResultTypeIds: snapshot.signatureResultTypeIds.slice(),
+    signatureParameterTypeIds: snapshot.signatureParameterTypeIds.slice(),
+
+    functionNameIds: snapshot.functionNameIds.slice(),
+    functionSourceSymbolIds: snapshot.functionSourceSymbolIds.slice(),
+    functionSignatureIds: snapshot.functionSignatureIds.slice(),
+    functionEntryBlockIds: snapshot.functionEntryBlockIds.slice(),
+    functionBlockStarts: snapshot.functionBlockStarts.slice(),
+    functionBlockCounts: snapshot.functionBlockCounts.slice(),
+    functionSourceLocationIds: snapshot.functionSourceLocationIds.slice(),
+
+    blockFunctionIds: snapshot.blockFunctionIds.slice(),
+    blockLocalIds: snapshot.blockLocalIds.slice(),
+    blockParameterStarts: snapshot.blockParameterStarts.slice(),
+    blockParameterCounts: snapshot.blockParameterCounts.slice(),
+    blockOperationStarts: new Uint32Array(blockOperationStarts),
+    blockOperationCounts: new Uint32Array(blockOperationCounts),
+    blockTerminatorIds: snapshot.blockTerminatorIds.slice(),
+
+    blockParameterValueIds: Uint32Array.from(
+      snapshot.blockParameterValueIds,
+      remapValue,
+    ),
+    blockParameterTypeIds: snapshot.blockParameterTypeIds.slice(),
+    blockParameterSourceLocationIds: snapshot.blockParameterSourceLocationIds
+      .slice(),
+
+    valueFunctionIds: new Uint32Array(valueFunctionIds),
+    valueLocalIds: new Uint32Array(valueLocalIds),
+    valueTypeIds: new Uint32Array(valueTypeIds),
+    valueDefinitionKinds: new Uint32Array(valueDefinitionKinds),
+    valueDefinitionIds: new Uint32Array(valueDefinitionIds),
+
+    operationBlockIds: new Uint32Array(operationBlockIds),
+    operationKinds: new Uint32Array(operationKinds),
+    operationResultValueIds: new Uint32Array(operationResultValueIds),
+    operationTypeIds: new Uint32Array(operationTypeIds),
+    operationOperandStarts: new Uint32Array(operationOperandStarts),
+    operationOperandCounts: new Uint32Array(operationOperandCounts),
+    operationAttributeStarts: new Uint32Array(operationAttributeStarts),
+    operationAttributeCounts: new Uint32Array(operationAttributeCounts),
+    operationSourceLocationIds: new Uint32Array(operationSourceLocationIds),
+    operandValueIds: new Uint32Array(operandValueIds),
+    attributeKinds: new Uint32Array(attributeKinds),
+    attributeLowWords: new Uint32Array(attributeLowWords),
+    attributeHighWords: new Uint32Array(attributeHighWords),
+
+    terminatorBlockIds: snapshot.terminatorBlockIds.slice(),
+    terminatorKinds: snapshot.terminatorKinds.slice(),
+    terminatorConditionValueIds: Uint32Array.from(
+      snapshot.terminatorConditionValueIds,
+      (valueId) =>
+        valueId === absentFlatId ? absentFlatId : remapValue(valueId),
+    ),
+    terminatorEdgeStarts: snapshot.terminatorEdgeStarts.slice(),
+    terminatorEdgeCounts: snapshot.terminatorEdgeCounts.slice(),
+    terminatorReturnStarts: snapshot.terminatorReturnStarts.slice(),
+    terminatorReturnCounts: snapshot.terminatorReturnCounts.slice(),
+    terminatorSourceLocationIds: snapshot.terminatorSourceLocationIds.slice(),
+    returnValueIds: Uint32Array.from(snapshot.returnValueIds, remapValue),
+
+    edgeTargetBlockIds: snapshot.edgeTargetBlockIds.slice(),
+    edgeArgumentStarts: snapshot.edgeArgumentStarts.slice(),
+    edgeArgumentCounts: snapshot.edgeArgumentCounts.slice(),
+    edgeSourceLocationIds: snapshot.edgeSourceLocationIds.slice(),
+    edgeArgumentValueIds: Uint32Array.from(
+      snapshot.edgeArgumentValueIds,
+      remapValue,
+    ),
+
+    layoutKinds: snapshot.layoutKinds.slice(),
+    layoutSizes: snapshot.layoutSizes.slice(),
+    layoutAlignments: snapshot.layoutAlignments.slice(),
+    layoutComponentStarts: snapshot.layoutComponentStarts.slice(),
+    layoutComponentCounts: snapshot.layoutComponentCounts.slice(),
+    layoutTagOffsets: snapshot.layoutTagOffsets.slice(),
+    layoutTagSizes: snapshot.layoutTagSizes.slice(),
+    layoutPayloadOffsets: snapshot.layoutPayloadOffsets.slice(),
+    layoutComponentIds: snapshot.layoutComponentIds.slice(),
+    layoutComponentOffsets: snapshot.layoutComponentOffsets.slice(),
+    typeLayoutIds: snapshot.typeLayoutIds.slice(),
+  };
+  return rebuilt;
 }
 
 function coreConstantEquals(
@@ -226,29 +482,6 @@ function coreConstantEquals(
   }
   return snapshot.attributeHighWords[attributeId] ===
     (expected === 0 ? 0 : 0x3ff0_0000);
-}
-
-function rewriteTerminator(
-  terminator: DucklangCoreTerminator,
-  rewriteValue: (value: CoreValueId) => CoreValueId,
-): DucklangCoreTerminator {
-  if (terminator.kind === "branch") {
-    return {
-      ...terminator,
-      arguments: terminator.arguments.map(rewriteValue),
-    };
-  }
-  if (terminator.kind === "conditional_branch") {
-    return {
-      ...terminator,
-      condition: rewriteValue(terminator.condition),
-      trueArguments: terminator.trueArguments.map(rewriteValue),
-      falseArguments: terminator.falseArguments.map(rewriteValue),
-    };
-  }
-  return terminator.kind === "return"
-    ? { ...terminator, values: terminator.values.map(rewriteValue) }
-    : terminator;
 }
 
 function validateProposal(
@@ -309,8 +542,4 @@ function validateProposal(
       `Ducklang Core rewrite ${proposal.rule} profit must be a non-negative integer; received ${proposal.profit}`,
     );
   }
-}
-
-function valueKey(functionId: number, valueId: number): string {
-  return `${functionId}:${valueId}`;
 }

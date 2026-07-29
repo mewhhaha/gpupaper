@@ -115,6 +115,13 @@ export type FlatDucklangCore = {
   readonly typeLayoutIds: Uint32Array;
 };
 
+const validatedFlatDucklangCore = Symbol("validatedFlatDucklangCore");
+
+export type ValidatedFlatDucklangCore = {
+  readonly package: FlatDucklangCore;
+  readonly [validatedFlatDucklangCore]: true;
+};
+
 const absent = 0xffff_ffff;
 const parameterDefinition = 0;
 const operationDefinition = 1;
@@ -585,8 +592,12 @@ export function inflateFlatDucklangCore(
 
 export function validateFlatDucklangCore(
   package_: FlatDucklangCore,
-): void {
+): ValidatedFlatDucklangCore {
   inflateFlatDucklangCore(package_);
+  return {
+    package: package_,
+    [validatedFlatDucklangCore]: true,
+  };
 }
 
 type ValidatedTables = {

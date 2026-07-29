@@ -1259,6 +1259,9 @@ Deno.test("Ducklang type and comptime jobs reach the GPU differential passes", a
   assertEquals(artifact.comptimeGpuResult === undefined, false);
   assertEquals(artifact.gpuCoreResult === undefined, false);
   assertEquals(artifact.gpuWasmResult === undefined, false);
+  if (artifact.gpuCoreResult?.status === "completed") {
+    assertEquals(artifact.timings.cpuCoreRewriteMilliseconds, 0);
+  }
   assertEquals(await runMain(artifact.wasm), 42);
 });
 

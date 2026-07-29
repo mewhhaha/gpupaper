@@ -16,6 +16,7 @@ import { parseModule } from "../src/parser.ts";
 import type { EqualityConstraint, Type } from "../src/types.ts";
 import { formatScheme, inferModule } from "../src/types.ts";
 import {
+  emitWasmPlanOnCpu,
   encodeSigned,
   encodeSigned64,
   encodeUnsigned,
@@ -336,6 +337,34 @@ Deno.test("WebGPU constructor decomposition generates child equalities", async (
   }
   assertEquals(result.equalityCount, 2);
   assertEquals(result.decompositionCount > 0, true);
+});
+
+Deno.test("WebGPU type graphs share repeated constructor terms", async () => {
+  const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
+  const list: Type = {
+    kind: "constructor",
+    name: "List",
+    arguments: [integer],
+  };
+  const result = await solveTypeEqualitiesOnGpu([
+    {
+      left: { kind: "variable", id: 0 },
+      right: list,
+      span: testSpan,
+    },
+    {
+      left: { kind: "variable", id: 1 },
+      right: list,
+      span: testSpan,
+    },
+  ]);
+  if (result.status === "unavailable") return;
+  if (result.status !== "solved") {
+    throw new Error(
+      `expected a solved shared type graph; received ${result.status}`,
+    );
+  }
+  assertEquals(result.termCount, 4);
 });
 
 Deno.test("WebGPU equality closure reports constructor clashes", async () => {
@@ -685,6 +714,10 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
 
   assertEquals([...gpu.bytes], [...builder.finish()]);
   assertEquals(gpu.atomCount, plan.atoms.length);
+  assertEquals(
+    gpu.outputBufferBytes,
+    Math.ceil(plan.atoms.length * 10 / 4) * 4,
+  );
   assertEquals(gpu.lengthRounds, plan.maximumDependencyLevel);
   assertEquals(
     WebAssembly.validate(
@@ -692,6 +725,28 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     ),
     true,
   );
+});
+
+Deno.test("packed WebGPU Wasm emission is deterministic across shared words", async () => {
+  const builder = new WasmModuleBuilder();
+  const typeIndex = builder.addFunctionType([], [wasmType.i32]);
+  const functionIndex = builder.addFunction(
+    typeIndex,
+    [],
+    wasmInstruction.i32Constant(42),
+  );
+  builder.exportFunction("main", functionIndex);
+  builder.addCustomSection(
+    "packed",
+    Uint8Array.from({ length: 257 }, (_, index) => index & 0xff),
+  );
+  const plan = builder.finishPlan();
+  const expected = emitWasmPlanOnCpu(plan);
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const emitted = await emitWasmPlanOnGpu(plan);
+    if (emitted.status === "unavailable") return;
+    assertEquals(emitted.bytes, expected);
+  }
 });
 
 Deno.test("Wasm imports cannot invalidate allocated function indices", () => {

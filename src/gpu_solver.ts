@@ -56,8 +56,15 @@ type DecompositionPipelines = {
   readonly emit: GPUComputePipeline;
 };
 
+type ReachabilityPipeline = {
+  readonly pipeline: GPUComputePipeline;
+  readonly bindGroupLayout: GPUBindGroupLayout;
+};
+
 const maximumDecomposedEqualityCount = 1_048_576;
-const maximumQuadraticGpuTermCount = 512;
+// Constructor pairing allocates and scans n² slots. Above 64 terms, measured
+// compiler graphs are faster through linear grouping followed by GPU union.
+const maximumQuadraticGpuTermCount = 64;
 
 const unionShader = `
 @group(0) @binding(0) var<storage, read_write> parents: array<atomic<u32>>;
@@ -210,7 +217,7 @@ fn emit_child_equalities(
 let pipelineDevice: GPUDevice | undefined;
 let unionPipelinesPromise: Promise<UnionPipelines> | undefined;
 let decompositionPipelinesPromise: Promise<DecompositionPipelines> | undefined;
-let reachabilityPipelinePromise: Promise<GPUComputePipeline> | undefined;
+let reachabilityPipelinePromise: Promise<ReachabilityPipeline> | undefined;
 
 export async function solveTypeEqualitiesOnGpu(
   equalities: readonly EqualityConstraint[],
@@ -346,6 +353,7 @@ function flattenEqualities(
 ): FlatConstraints {
   const terms: FlatTerm[] = [];
   const variableTerms = new Map<number, number>();
+  const constructorTerms = new Map<string, number>();
   const pairs: [number, number][] = [];
   const sourceStarts: number[] = [];
 
@@ -361,12 +369,17 @@ function flattenEqualities(
     const children = type.kind === "function"
       ? [flattenType(type.parameter), flattenType(type.result)]
       : type.arguments.map(flattenType);
+    const label = type.kind === "function" ? "->" : type.name;
+    const key = `${label.length}:${label}:${children.join(",")}`;
+    const existing = constructorTerms.get(key);
+    if (existing !== undefined) return existing;
     const termIndex = terms.length;
     terms.push({
       kind: "constructor",
-      label: type.kind === "function" ? "->" : type.name,
+      label,
       children,
     });
+    constructorTerms.set(key, termIndex);
     return termIndex;
   };
 
@@ -1038,39 +1051,42 @@ async function findInfiniteTypeOnGpu(
     matrix,
     GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   );
-  const parameterBuffer = device.createBuffer({
-    size: 8,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
+  const parameterStride = device.limits.minUniformBufferOffsetAlignment;
+  const parameterWords = new Uint32Array(parameterStride / 4 * count);
+  for (let pivot = 0; pivot < count; pivot += 1) {
+    const start = pivot * parameterStride / 4;
+    parameterWords[start] = count;
+    parameterWords[start + 1] = pivot;
+  }
+  const parameterBuffer = createBuffer(
+    device,
+    parameterWords,
+    GPUBufferUsage.UNIFORM,
+  );
   const readback = device.createBuffer({
     size: matrix.byteLength,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   let readbackMapped = false;
   try {
-    const pipeline = await requestReachabilityPipeline(device);
+    const { bindGroupLayout, pipeline } = await requestReachabilityPipeline(
+      device,
+    );
     const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
+      layout: bindGroupLayout,
       entries: [{ binding: 0, resource: { buffer: matrixBuffer } }, {
         binding: 1,
-        resource: { buffer: parameterBuffer },
+        resource: { buffer: parameterBuffer, size: 8 },
       }],
     });
+    const encoder = device.createCommandEncoder();
     for (let pivot = 0; pivot < count; pivot += 1) {
-      device.queue.writeBuffer(
-        parameterBuffer,
-        0,
-        new Uint32Array([count, pivot]),
-      );
-      const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
+      pass.setBindGroup(0, bindGroup, [pivot * parameterStride]);
       pass.dispatchWorkgroups(Math.ceil(matrix.length / 64));
       pass.end();
-      device.queue.submit([encoder.finish()]);
     }
-    const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
@@ -1199,17 +1215,39 @@ function requestDecompositionPipelines(
 
 function requestReachabilityPipeline(
   device: GPUDevice,
-): Promise<GPUComputePipeline> {
+): Promise<ReachabilityPipeline> {
   if (reachabilityPipelinePromise !== undefined) {
     return reachabilityPipelinePromise;
   }
   const pendingPipeline = (async () => {
     const shader = device.createShaderModule({ code: reachabilityShader });
     await requireShaderCompilation("reachability", [shader]);
-    return await device.createComputePipelineAsync({
-      layout: "auto",
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "uniform",
+            hasDynamicOffset: true,
+            minBindingSize: 8,
+          },
+        },
+      ],
+    });
+    const pipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    });
+    const pipeline = await device.createComputePipelineAsync({
+      layout: pipelineLayout,
       compute: { module: shader, entryPoint: "close_reachability" },
     });
+    return { pipeline, bindGroupLayout };
   })();
   reachabilityPipelinePromise = pendingPipeline;
   void pendingPipeline.catch(() => {
