@@ -3005,11 +3005,14 @@ function lowerExpression(
   }
 
   if (cursor.name === "linear_reference") {
-    const name = identifierName(
-      file,
-      requiredField(cursor, "name"),
-      "linear reference",
-    );
+    const name = {
+      ...identifierName(
+        file,
+        requiredField(cursor, "name"),
+        "linear reference",
+      ),
+      linear: true,
+    };
     return { kind: "reference", name, span: sourceSpan(file, cursor) };
   }
 

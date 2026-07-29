@@ -329,6 +329,7 @@ class DucklangResolver {
   readonly #initFields: DucklangInitField[] = [];
   readonly #structTypes: ResolvedDucklangStructType[] = [];
   readonly #linearUseCounts = new Map<number, number>();
+  readonly #borrowedOwners = new Map<number, Set<number>>();
 
   /**
    * Resolves mutually exclusive branches so each starts from the same linear
@@ -804,6 +805,7 @@ class DucklangResolver {
           value,
           span: statement.span,
         } satisfies ResolvedDucklangBinding;
+        this.#recordBorrow(binding);
         this.#bindingStages.set(binding.symbol.id, binding.stage);
         bindings.push(binding);
         steps.push({ kind: "binding", binding });
@@ -1015,6 +1017,7 @@ class DucklangResolver {
           value,
           span: statement.span,
         } satisfies ResolvedDucklangBinding;
+        this.#recordBorrow(binding);
         this.#bindingStages.set(binding.symbol.id, binding.stage);
         bindings.push(binding);
         steps.push({ kind: "binding", binding });
@@ -1042,6 +1045,7 @@ class DucklangResolver {
         value,
         span: statement.span,
       } satisfies ResolvedDucklangBinding;
+      this.#recordBorrow(binding);
       this.#bindingStages.set(binding.symbol.id, binding.stage);
       bindings.push(binding);
       steps.push({ kind: "binding", binding });
@@ -1291,8 +1295,22 @@ class DucklangResolver {
             `${expression.span.file}:${expression.span.start}: unknown Ducklang name ${expression.name.text}`,
           );
         }
-        if (symbol.linear) {
-          const uses = (this.#linearUseCounts.get(symbol.id) ?? 0) + 1;
+        const useCount = this.#linearUseCounts.get(symbol.id) ?? 0;
+        if (useCount > 0 && !symbol.linear && expression.name.linear !== true) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: moved Ducklang value ${symbol.text} cannot be used`,
+          );
+        }
+        if (symbol.linear || expression.name.linear === true) {
+          if (
+            expression.name.linear === true &&
+            (this.#borrowedOwners.get(symbol.id)?.size ?? 0) > 0
+          ) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: cannot move borrowed Ducklang value ${symbol.text}`,
+            );
+          }
+          const uses = useCount + 1;
           if (uses > 1) {
             throw new TypeError(
               `${expression.span.file}:${expression.span.start}: linear Ducklang value ${symbol.text} was already consumed`,
@@ -1716,6 +1734,19 @@ class DucklangResolver {
           `${expression.span.file}:${expression.span.start}: dynamic Ducklang loop expression requires loop IR lowering`,
         );
     }
+  }
+
+  #recordBorrow(binding: ResolvedDucklangBinding): void {
+    if (
+      binding.value.kind !== "unary" || binding.value.operator !== "&" ||
+      binding.value.operand.kind !== "reference"
+    ) {
+      return;
+    }
+    const ownerId = binding.value.operand.symbol.id;
+    const borrows = this.#borrowedOwners.get(ownerId) ?? new Set<number>();
+    borrows.add(binding.symbol.id);
+    this.#borrowedOwners.set(ownerId, borrows);
   }
 
   #declare(

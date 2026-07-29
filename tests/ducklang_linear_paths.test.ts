@@ -108,6 +108,20 @@ Deno.test("Ducklang still allows two shared borrows of one owner", async () => {
   );
 });
 
+Deno.test("Ducklang rejects moving an owner while it is borrowed", async () => {
+  await assertRejects(
+    'let consume = (!value) => @len(value)\nlet message: Text = "a" <> "b"\nlet view = &message\nconsume(!message)\n@len(view)\n',
+    /cannot move borrowed Ducklang value message/,
+  );
+});
+
+Deno.test("Ducklang rejects reading a value after it is moved", async () => {
+  await assertRejects(
+    'let consume = (!value) => @len(value)\nlet message: Text = "a" <> "b"\nconsume(!message)\n@len(message)\n',
+    /moved Ducklang value message cannot be used/,
+  );
+});
+
 /**
  * Scratch region escapes.
  *

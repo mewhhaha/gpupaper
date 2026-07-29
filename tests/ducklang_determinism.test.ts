@@ -85,9 +85,7 @@ Deno.test("Ducklang generated names are stable across runs", async () => {
   // Guard against a vacuous pass: each program must actually carry a generated
   // name, one hygienic binding and one file-qualified type.
   assertEquals(
-    firstCollision.some((entry) =>
-      /helper(?:\$[0-9a-f]{8})+#/.test(entry)
-    ),
+    firstCollision.some((entry) => /helper(?:\$[0-9a-f]{8})+#/.test(entry)),
     true,
   );
   assertEquals(
