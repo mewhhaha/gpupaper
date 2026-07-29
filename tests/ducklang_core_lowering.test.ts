@@ -369,6 +369,49 @@ Deno.test("Core gives a captured function typed code and environment boundaries"
   );
 });
 
+Deno.test("Core rejects a reusable closure with a linear capture", async () => {
+  const parsed = await parseDucklangModule(
+    "linear_closure.duck",
+    "let wrap = (!token) => () => token\nlet !token = 42\nwrap(!token)\n",
+  );
+  try {
+    lowerDucklangToCore(
+      inferDucklangModule(resolveDucklangModule(parsed)),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      /reusable Ducklang closure .* cannot capture linear value token/.test(
+        message,
+      )
+    ) {
+      return;
+    }
+    throw new Error(`unexpected diagnostic ${JSON.stringify(message)}`);
+  }
+  throw new Error("expected a linear closure capture rejection");
+});
+
+Deno.test("Core keeps freeze and scratch region boundaries explicit", async () => {
+  const parsed = await parseDucklangModule(
+    "regions.duck",
+    'let preserve = (message: Text) => scratch {\n  freeze message\n}\npreserve("kept")\n',
+  );
+  const module = lowerDucklangToCore(
+    inferDucklangModule(resolveDucklangModule(parsed)),
+  );
+  const preserve = module.functions.find((function_) =>
+    function_.name === "preserve"
+  );
+  if (preserve === undefined) throw new Error("expected preserve");
+  const operationKinds = preserve.blocks.flatMap((block) =>
+    block.operations.map((operation) => operation.kind)
+  );
+  assertEquals(operationKinds.includes("region.enter"), true);
+  assertEquals(operationKinds.includes("resource.freeze"), true);
+  assertEquals(operationKinds.includes("region.exit"), true);
+});
+
 Deno.test("Core replaces a dynamic range recursion with header and exit edges", async () => {
   const parsed = await parseDucklangModule(
     "range.duck",

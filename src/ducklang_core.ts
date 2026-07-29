@@ -1457,6 +1457,14 @@ class CoreFunctionLowerer {
     environment: ReadonlyMap<number, CoreValueId>,
     span: SourceSpan,
   ): LoweredExpression {
+    const linearCapture = source.captures.find((capture) =>
+      capture.symbol.linear === true
+    );
+    if (linearCapture !== undefined) {
+      throw new TypeError(
+        `${span.file}:${span.start}: reusable Ducklang closure ${source.name} cannot capture linear value ${linearCapture.symbol.text}`,
+      );
+    }
     return this.#operation(block, {
       kind: "closure.make",
       functionId: source.id,

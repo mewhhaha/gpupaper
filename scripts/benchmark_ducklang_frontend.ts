@@ -161,6 +161,9 @@ type CompletedCompilationMeasurement = {
   readonly totalMilliseconds: number;
   readonly timingsMilliseconds: CompilationTimings;
   readonly wasmBytes: number;
+  readonly coreFunctionCount: number;
+  readonly coreOperationCount: number;
+  readonly gpuValidationRecordCount: number;
 };
 
 type CompilationMeasurement =
@@ -211,6 +214,24 @@ async function measureCompilation(
       totalMilliseconds: performance.now() - start,
       timingsMilliseconds: artifact.timings,
       wasmBytes: artifact.wasm.length,
+      coreFunctionCount: artifact.language === "ducklang"
+        ? artifact.core.functions.length
+        : 0,
+      coreOperationCount: artifact.language === "ducklang"
+        ? artifact.core.functions.reduce(
+          (functionTotal, function_) =>
+            functionTotal +
+            function_.blocks.reduce(
+              (blockTotal, block) => blockTotal + block.operations.length,
+              0,
+            ),
+          0,
+        )
+        : 0,
+      gpuValidationRecordCount: artifact.language === "ducklang" &&
+          artifact.gpuCoreResult?.status === "completed"
+        ? artifact.gpuCoreResult.validationRecordCount
+        : 0,
     };
   } catch (error) {
     return {

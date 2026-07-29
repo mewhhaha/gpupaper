@@ -480,7 +480,8 @@ function rewriteExpression(
     };
   }
   if (rewritten.kind === "ownership") {
-    return rewritten.expression;
+    const value = staticValue(rewritten.expression, values);
+    return isInlineableScalar(value) ? rewritten.expression : rewritten;
   }
   if (rewritten.kind === "optionDo") {
     const option = staticValue(rewritten.option, values);
@@ -495,7 +496,7 @@ function rewriteExpression(
   }
   if (rewritten.kind === "scratch") {
     const body = collapseEmptyBlock(rewritten.body);
-    return body;
+    return isInlineableScalar(body) ? body : { ...rewritten, body };
   }
   if (rewritten.kind === "textAppend") {
     const left = staticValue(rewritten.left, values);
