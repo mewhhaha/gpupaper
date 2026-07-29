@@ -194,10 +194,8 @@ function computeLayout(
     case "scalar":
       return { kind: "scalar", ...scalarLayout(entry.scalar) };
     case "buffer": {
-      // Core carries no ownership state on a buffer type, so layout planning
-      // assumes the owned representation. A frozen buffer's slice form is
-      // available from ducklangBufferRepresentation and becomes reachable once
-      // ownership reaches Core.
+      // The managed payload ABI preserves runtime identity across ownership
+      // transitions, so both states intentionally share this representation.
       const representation = ducklangBufferRepresentation("owned");
       return {
         kind: "handle",

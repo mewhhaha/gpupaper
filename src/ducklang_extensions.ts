@@ -6,6 +6,7 @@ import {
   type DucklangName,
   ducklangNamedType,
   type DucklangStatement,
+  type DucklangTypeReference,
 } from "./ducklang_ast.ts";
 
 type ExtensionImplementation = {
@@ -16,6 +17,7 @@ type ExtensionImplementation = {
 type ExtensionTypeDeclarations = {
   readonly structFields: ReadonlyMap<string, ReadonlyMap<string, string>>;
   readonly unionCases: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  readonly aliases: ReadonlyMap<string, DucklangTypeReference>;
   readonly hostOperations: ReadonlyMap<string, string>;
   readonly functions: ReadonlyMap<
     string,
@@ -59,6 +61,13 @@ export function elaborateDucklangExtensions(
           ]),
         ),
       ]),
+    ),
+    aliases: new Map(
+      module.statements.flatMap((statement) =>
+        statement.kind === "typeAlias"
+          ? [[statement.name, statement.target] as const]
+          : []
+      ),
     ),
     hostOperations: new Map(
       module.statements.flatMap((statement) =>
@@ -443,10 +452,23 @@ function selectMethod(
   const receiverType = receiver === undefined
     ? undefined
     : expressionTypeName(receiver, types, typeDeclarations);
-  const matching = receiverType === undefined
+  let receiverConstructor = receiverType === undefined
+    ? undefined
+    : typeConstructorName(receiverType);
+  const visitedAliases = new Set<string>();
+  while (
+    receiverConstructor !== undefined &&
+    !visitedAliases.has(receiverConstructor)
+  ) {
+    visitedAliases.add(receiverConstructor);
+    const alias = typeDeclarations.aliases.get(receiverConstructor);
+    if (alias === undefined) break;
+    receiverConstructor = typeConstructorName(alias.name);
+  }
+  const matching = receiverConstructor === undefined
     ? []
     : implementations.filter((implementation) =>
-      implementation.targetType === typeConstructorName(receiverType)
+      typeConstructorName(implementation.targetType) === receiverConstructor
     );
   if (matching.length === 1) return matching[0].method;
   const evidence = implementations.length === 0

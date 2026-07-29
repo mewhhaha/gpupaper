@@ -63,12 +63,9 @@ Deno.test("Ducklang selects a generic extension by receiver type", async () => {
 });
 
 Deno.test("Ducklang rejects an overlapping generic and concrete extension", async () => {
-  // The rejection is correct but the message is not: it reports no implementation
-  // when the problem is two candidates that both apply. Asserted as it stands so
-  // improving the wording is a deliberate change, and recorded in TASKS.md.
   await assertRejects(
     `${boxed}${genericRead}\nextend Box I32 {\n  type Value = I32\n  .read = (box: Box I32) => 7\n}\n${useBox}`,
-    /Ducklang extension method read has no implementation for I32Box/,
+    /Ducklang extension method read has 2 incoherent implementations for I32Box/,
   );
 });
 
