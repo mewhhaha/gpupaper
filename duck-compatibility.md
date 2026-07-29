@@ -3,8 +3,8 @@
 The Ducklang frontend follows the production grammar and semantic examples
 vendored from the sibling `binned` repository. Baba owns syntax recognition; the
 compiler then uses a Duck-specific AST, resolver, typed IR, effect analysis,
-GPU-assisted equality checking, FCG, and Wasm backend. Duck source is never
-translated through the Haskell-like frontend.
+GPU-assisted equality checking, semantic SSA Core, flat Core, and a Wasm
+backend. Duck source is never translated through the Haskell-like frontend.
 
 The copied sources retain their MIT notice in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Their origin and snapshot
@@ -37,8 +37,12 @@ Baba cursor
   -> Duck type and effect inference
   -> GPU differential equality solving
   -> compile-time and closure specialization
-  -> expanded FCG
-  -> Wasm
+  -> immutable typed SSA Core
+  -> validated flat Core
+  -> authoritative GPU Core rewrite proposals
+  -> structured and stackified Wasm plan
+  -> GPU binary emission
+  -> selected-artifact and managed-ABI validation
   -> optional managed JavaScript ABI
 ```
 
@@ -53,11 +57,18 @@ receive stable symbols. Assignment, linear use, ownership escape, effect-row,
 and aggregate-shape failures therefore report the original file offset and the
 values that violated the invariant.
 
+Every GPU buffer, binding span, pipeline shape, and dispatch is preflighted
+against the selected adapter. Automatic mode falls back only for GPU
+unavailability; required mode fails on the same condition. Invalid compiler IR,
+CPU/GPU disagreement, and malformed output are hard failures. The default Wasm
+policy compares CPU and GPU bytes, while production authoritative mode returns
+the GPU-emitted bytes without first encoding them on the CPU.
+
 ## Implemented semantic families
 
 | Family       | Corpus behavior                                                                                                                                             |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scalars      | signed `I32`, `I64`, booleans, packed integer literals, arithmetic, comparison, and logic                                                                   |
+| Scalars      | `I32`, `I64`, `F32`, `F64`, `F32x4`, booleans, exact literals, arithmetic, comparison, bitwise operations, conversion, and reinterpretation                 |
 | Functions    | multiple arguments, recursion, mutual recursion, captures, returned and selected closures, and early return                                                 |
 | Control flow | conditional chains, dynamic branches, ranges, collection loops, `break`, `continue`, and loop expressions                                                   |
 | Aggregates   | tuples, arrays, structs, generic structs, updates, dynamic indexing, unions, matches, and type rows/sets                                                    |
@@ -70,18 +81,18 @@ values that violated the invariant.
 
 ## Managed host ABI
 
-Dynamic `Text` and host effects use a deliberately small browser-compatible ABI.
-Wasm carries artifact-local `i32` text handles; JavaScript owns the string
-table, decodes host arguments, allocates handles for returned strings, and
-decodes the declared scalar export. Static text handles are deterministic and
-recorded in the compilation artifact.
+Dynamic `Text`, `Bytes`, aggregates, and host effects use a deliberately small
+browser-compatible ABI. Wasm carries artifact-local `i32` handles; JavaScript
+owns the managed tables, decodes host arguments, allocates handles for returned
+values, and decodes the declared export. Static text handles are deterministic
+and recorded in the compilation artifact.
 
 The artifact also records:
 
 - effect operation parameter and result types;
 - `Init` field-to-effect capabilities;
 - exact module and per-function operation requirements;
-- source export names and scalar representations.
+- source export names, value types, and aggregate layouts.
 
 Host methods are synchronous. Missing fields, missing methods, invalid return
 types, unknown text handles, and out-of-range `i32` results fail before Wasm can
@@ -89,10 +100,16 @@ silently coerce them.
 
 ## Deliberate boundaries
 
-This proof of concept implements the complete vendored corpus, not every legal
-program in the grammar. The managed ABI currently exposes at most one scalar
-module export, uses opaque handles instead of a linear-memory text layout, and
-does not provide asynchronous host effects. The module elaborator implements the
-record and function-export shapes exercised by the corpus rather than a general
-separately compiled linker. WebGPU remains a differential accelerator; it does
-not replace the CPU oracle or perform effect/module policy decisions.
+The compiler implements the complete vendored contract, not every legal program
+in the grammar. The managed ABI exposes at most one source export through the
+single Wasm `main` function, uses opaque handles instead of a linear-memory text
+layout, and does not provide asynchronous host effects. The module elaborator
+implements the record and function-export shapes exercised by the corpus rather
+than a general separately compiled linker.
+
+The semantic frontend, ownership/effect analysis, type oracle, and ABI policy
+remain CPU responsibilities. GPU type solving and scalar compile-time evaluation
+are differential checks. Flat-Core rewrite matching is GPU-authoritative, and
+Wasm emission can be either GPU-authoritative or CPU-differential. This division
+is intentional: the GPU executes bulk compiler transformations, while
+source-language policy is settled before flat Core.

@@ -17,7 +17,7 @@ primitives:
 - products, sums, and closures;
 - SSA blocks with parameters;
 - linear resource and region obligations;
-- explicit memory, calls, and control flow.
+- explicit buffers, calls, and control flow.
 
 The existing vendored corpus contract, stable source spans, CPU type oracle, GPU
 differential checks, and deterministic output remain required throughout this
@@ -71,8 +71,8 @@ method/module lookup.
 ### 6. Wasm backend
 
 Owns stackification, locals, structured-control formation, binary layout, and
-byte emission. CPU and GPU emission remain differential until the GPU path is
-fully validated.
+byte emission. GPU emission may be checked against the CPU encoder or selected
+authoritatively; the selected artifact is always validated independently.
 
 ## Primitive sets
 
@@ -192,11 +192,6 @@ buffer.slice
 buffer.concat
 buffer.allocate
 
-memory.load
-memory.store
-memory.copy
-memory.allocate
-
 host.call
 ```
 
@@ -205,6 +200,12 @@ The scalar primitive registry must cover the corresponding Wasm families for
 primitive needs one canonical ID, signature, stage, effect classification, and
 lowering rule. Source aliases and imported wrapper names must resolve to that ID
 before Core construction.
+
+Raw `memory.*` operations are not part of the current Core contract. The payload
+ABI represents buffers and aggregates with managed handles, so their
+machine-facing operations are typed runtime calls. Introducing linear-memory
+loads and stores would define a different payload ABI; it is not required by a
+GPU that executes compiler passes rather than the payload program.
 
 ### Resource primitives
 
@@ -466,10 +467,9 @@ behavior no longer depends on statement concatenation order.
       since a selector that refused everything would satisfy the rejections by
       itself.
 
-      Diagnostic defect recorded rather than fixed: the overlap case reports "has no
-      implementation for I32Box" when the problem is two candidates that both apply,
-      which sends a reader looking for a missing extension instead of a duplicated
-      one. Selection is correct; only the wording is wrong.
+      Alias expansion participates in receiver matching, so an overlapping
+      generic and concrete `Box` implementation reports both candidates for
+      `I32Box` rather than falsely reporting that none exists.
 
       Also noted: an extension providing only some of a protocol's methods compiles,
       because `extend I32 { ... }` extends a type rather than claiming to implement a
@@ -582,8 +582,9 @@ protocol search, extension search, or compile-time closures.
 - [x] Pass every carried binding on loop back-edges and exits. An accumulator
       summed over `0..5` reaches 10, and one summed inside a nested loop reaches
       6, so a binding lost on a back-edge or an exit changes the answer rather
-      than rearranging work. Pins the current pipeline; Core-level header and
-      exit blocks remain open, because Core never sees a loop.
+      than rearranging work. Core replaces the frontend's private recursive
+      builder with explicit header, back-edge, and exit blocks before
+      flattening.
 - [x] Lower bare and valued `break` without mixing their result signatures. A
       loop whose value is taken must supply one on every exit, and mixing is now
       rejected with "Ducklang loop mixes a valued break with a bare break". It
@@ -593,14 +594,14 @@ protocol search, extension search, or compile-time closures.
       runtime with "unknown handle 0" rather than being diagnosed. The check
       runs before static loop expansion; placed after it, a constant-conditioned
       loop was already folded to the fabricated zero. A loop whose every exit is
-      valued, and a bare break in a `for` statement, both still compile.
-      Core-level header and exit block lowering is separate and still open.
+      valued, and a bare break in a `for` statement, both still compile and
+      reach typed Core exit edges.
 - [x] Lower `continue` to the nearest loop header. A `continue` inside a nested
       loop skips only the inner iteration: two outer passes over an inner `0..3`
       that skips `1` total 4, which a `continue` targeting the outer header
       would not produce. A bare `break` likewise exits only the loop it is in,
-      leaving the outer loop to finish. Pins the current pipeline; Core-level
-      lowering remains open.
+      leaving the outer loop to finish. The generated continuation becomes the
+      nearest typed Core header edge.
 - [x] Lower early `return` to a function terminator. The early arm ends the
       function with a `return` terminator instead of edging into the join that
       the fall-through path uses.
@@ -682,16 +683,11 @@ terminators, and edge arguments.
       rather than looped on.
 - [x] Choose and document physical representations for owned and frozen `Text`
       and `Bytes`. `ducklangBufferRepresentation` in `src/ducklang_layout.ts` is
-      the single rule, with tests on the decision itself. Owned stays a
-      four-byte managed table index, because ownership transfer and release need
-      a runtime identity that a raw address cannot give the host. Frozen becomes
-      an (offset, length) pair in linear memory, eight bytes aligned to four,
-      because immutable bytes can be shared without a runtime owner and a slice
-      lets the GPU path address them directly. `Text` and `Bytes` share a
-      representation at each ownership state while staying distinct semantic
-      kinds. Nothing emits the slice form yet: Core carries no ownership on a
-      buffer type, so layout planning assumes owned, and actually replacing the
-      handles is the separate item below.
+      the single rule, with tests on the decision itself. Both states remain
+      four-byte managed table indices because ownership transfer, release, host
+      adaptation, and aggregate sharing need stable runtime identity. Freezing
+      changes the legal operations, not the physical identity. `Text` and
+      `Bytes` share a representation while staying distinct semantic kinds.
 - [x] Lower semantic buffer operations to allocation, length, checked access,
       functional update, slicing, concatenation, generation, fill, equality, and
       UTF-8 conversion. Each has one canonical primitive descriptor with effects
@@ -720,9 +716,9 @@ terminators, and edge arguments.
       sharing one tail sum to 44 so the tail is linked rather than copied. No
       primitive in the registry is named for lists, and neither `src/fcg.ts`,
       `src/ducklang_fcg.ts`, nor `src/wasm.ts` contains a list opcode. Recursion
-      works because a sum payload is a managed handle; `planDucklangCoreLayouts`
-      still rejects a self-containing type, so a boxed payload is what the Core
-      layout path will need.
+      works because a recursive sum payload is a managed handle;
+      `planDucklangCoreLayouts` detects self-containment and assigns that boxed
+      representation deterministically.
 - [x] Add deterministic out-of-bounds traps for buffer and aggregate indexing.
       Pinned from both sides rather than only asserting failure: a `Text` index
       of 0 and 2 into `"abc"` return, 3 and 99 trap; a struct index of 0 and 1
@@ -946,8 +942,9 @@ host-boundary plans before flattening.
       since a rewriter could hand back a fresh object while still writing
       through arrays it shares with the snapshot. Rewriting the same module
       twice accepts the same proposals and produces the same columns.
-- [x] Add GPU differential validation against the CPU Core validator and
-      rewriter.
+- [x] Add GPU differential validation against the CPU Core validator and use
+      generated CPU/GPU matcher comparisons as the rewrite oracle. Production
+      GPU compilation then treats the proven GPU proposals as authoritative.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a
@@ -1008,12 +1005,11 @@ policy.
 - [x] Compile and execute grep and tar, including dynamic control flow. grep
       streams a file to `Eof` and returns exit code 0; tar accepts an empty
       archive. Both genuinely exercise dynamic control flow: grep has an
-      unbounded `loop`, a dynamic range `line_start..length pending`, a two
+      unbounded `loop`, a dynamic range `line_start..length pending`, and two
       valued breaks, `break 2` and `break code`, returning exit codes from its
       outer loop; tar has computed dynamic ranges such as
-      `start..start + block_size`. This is the current pipeline, not the Core
-      path; the Phase 4 milestones for grep's valued loop exits and tar's
-      dynamic ranges reaching Core remain open.
+      `start..start + block_size`. Phase 4 Core tests assert grep's valued exit
+      edges and tar's dynamic range header and exit blocks.
 - [x] Compile and execute wav after hexadecimal and bitwise coverage. wav emits
       a complete RIFF buffer, and its source does exercise both: hexadecimal
       literals such as `0x46464952` and `0xff`, and `>>` and `&`.
@@ -1042,7 +1038,8 @@ policy.
       never reach the emitted bytes, so byte equality alone cannot see an
       order-dependent discriminator; the inferred type listing is asserted too,
       and that case is mutation-proved by making the type discriminator a
-      counter, which fails it. GPU/CPU differential emission remains Phase 8.
+      counter, which fails it. GPU/CPU differential emission is covered by
+      Phase 8.
 
 Exit criterion: compatibility and performance claims name the exact recorded
 Binned revision, target set, hardware, execution mode, and measured pipeline
@@ -1116,18 +1113,29 @@ CPU/GPU disagreement, or return partially written output.
       failure reports its seed.
 - [x] Stress concurrent compilations through the shared device and prove
       deterministic isolation, bounded cleanup, and recovery after a failed job.
-      Eight mixed Haskell and Ducklang compilations share the device and pipeline
-      caches while an invalid Core package is rejected. Every result matches its
-      baseline byte-for-byte, Deno's resource sanitizer observes the test
-      boundary, and a subsequent required-GPU compilation completes through
+      Eight mixed Haskell and Ducklang compilations share the device and
+      pipeline caches while an invalid Core package is rejected. Every result
+      matches its baseline byte-for-byte, Deno's resource sanitizer observes the
+      test boundary, and a subsequent required-GPU compilation completes through
       both Core and Wasm.
-- [ ] Define release gates for the frozen corpus, malformed inputs, GPU-required
+- [x] Define release gates for the frozen corpus, malformed inputs, GPU-required
       execution, repeated output identity, and benchmark regressions. Record the
       adapter limits and enough samples to state a break-even interval rather
-      than a single-run speedup.
-- [ ] Reconcile the README, compatibility matrix, live-error inventory, and
+      than a single-run speedup. `deno task release:gpu` runs the repository
+      checks and full suite, rejects malformed source, then compiles all six
+      applications twice in required differential mode. It checks the exact Wasm
+      size, every GPU backend selection, byte identity, and a per-target timing
+      budget. The recorded RTX 4080 SUPER limits and five-sample authoritative
+      grep batches are in `PERFORMANCE.md`; no break-even was observed through
+      eight concurrent compilations.
+- [x] Reconcile the README, compatibility matrix, live-error inventory, and
       performance report with the implemented pipeline. Remove stale
-      proof-of-concept limits and claims contradicted by executable tests.
+      proof-of-concept limits and claims contradicted by executable tests. The
+      README now distinguishes the frozen production contract from general
+      language coverage, the compatibility matrix names authoritative and
+      differential GPU stages, the final inventory points to executable boundary
+      proofs, and the performance report records the current artifact sizes,
+      adapter limits, pipeline timings, and bounded negative break-even result.
 
 Exit criterion: both automatic and required GPU policies have observable, tested
 semantics; no GPU allocation or dispatch is attempted outside a checked device
@@ -1135,22 +1143,28 @@ bound; the returned Wasm and ABI are independently valid; editor, Codex, grep,
 tar, wav, and raytracer compile in required-GPU verification mode; and the
 documented release command passes from a clean checkout.
 
-## Current live first-error inventory
+## Final boundary inventory
 
-This inventory records the first observed failure for each target, not every
-failure hidden behind it. Re-run and update it after each phase.
+The live targets have no remaining first-error boundary inside the admitted
+contract. Each former boundary now has an executable completion proof:
 
-| Boundary                    | Current examples                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Syntax drift                | cleared across 121 legacy and 35 frozen live sources                                                                                                                                                                                                                                                                                                                              |
-| Module graph and namespaces | initial editor and Codex capture failures cleared; the graph now owns every followed import, so linking parses and analyzes each canonical source once; a dependency's private bindings are alpha-renamed on splice, so an importer can neither capture nor read one; module values still use compatibility linking                                                               |
-| Extension dictionaries      | selection is by canonical receiver type within a file, and missing, ambiguous, and incoherent implementations are refused before Core; a dependency's extensions reach the importer once, and an extension body's free names are renamed with its declaring module; selection still cannot resolve two extensions supplying one method for different receivers across files       |
-| CFG and loop edges          | branch lowering verified into Core join blocks, statement-only branches, early return, shadowing, `continue` targeting the nearest header, carried bindings, and mixed break rejection; Core still never sees a loop, and every dynamic collection loop depends on the buffer special case                                                                                        |
-| Staged types and literals   | compile-time products, sums, closures, projection, extension, recursion with a depth guard, `const`/`forall` specialization, protocol evidence with no residual dispatch, and erasure of compile-time-only bindings all verified; structural type reflection answers from real layout through `ducklangReflectedLayout`; the `module` `ConstValue` variant is still unconstructed |
-| Primitive canonicalization  | stable IDs cover scalar, SIMD, buffer, UTF-8, and trap operations, and UTF-8 validates equivalently at both stages; legacy intrinsic dispatch remains                                                                                                                                                                                                                             |
-| Ownership and effects       | linear consumption is path-sensitive with agreeing joins, mutation of a borrowed owner is refused, scratch escapes are closed with `freeze` as the sanctioned exit, resumptions are affine, and the host boundary is typed with async reserved; drops, borrow regions, and freeze lowering await Core resource primitives                                                         |
-| ABI and layout              | `LayoutId` is independent of `TypeId` with deterministic sizes, alignments, offsets, union tags, and payload storage, and owned versus frozen buffer representations are chosen; nothing emits the frozen slice form, and buffer operations are not decomposed because Core has no `memory.*`                                                                                     |
-| Effect bindings             | an effectful module-level binding is computed once into a Wasm global, so a host effect is no longer re-performed per read; this fixed two corpus programs that were passing only because their hosts returned constants                                                                                                                                                          |
+| Boundary                    | Final state                                                                                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Syntax                      | The generated parser accepts all 121 compatibility sources and all 35 frozen live sources.                                                                                                                                           |
+| Modules and namespaces      | Canonical module instances preserve private captures, namespace projections, parameterized modules, and complete transitive declaration environments.                                                                                |
+| Extensions and protocols    | Canonical receiver identities select same-file and cross-file implementations; missing, ambiguous, overlapping, and incoherent implementations fail before Core with receiver evidence.                                              |
+| Staging                     | Scalars, products, sums, types, closures, and modules inhabit one `ConstValue` domain; specialization erases modules, protocols, extensions, type values, and compile-time closures before Core.                                     |
+| Control flow                | Shadowing, joins, early return, nested loops, carried values, valued exits, dynamic ranges, collection loops, and `continue` reach typed Core blocks and edges.                                                                      |
+| Primitives                  | Scalar, SIMD, buffer, UTF-8, conversion, reinterpretation, trap, and host operations use stable primitive IDs before flat Core.                                                                                                      |
+| Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                         |
+| Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, affine resumptions, source handlers, and typed host calls validate before flattening.                                     |
+| ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.           |
+| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, generated differential checks, concurrent isolation, and the six-application release gate are implemented and measured. |
+
+Deliberate exclusions are part of the contract rather than live errors:
+asynchronous effects await a portable task/poll ABI, and raw linear-memory
+payload operations await a payload ABI that needs them. Neither is inferred or
+silently emulated.
 
 ## Completion rule
 
