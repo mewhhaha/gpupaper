@@ -510,6 +510,23 @@ export function createDucklangRuntimeImports(
           throw new TypeError("Ducklang sum payload is not an i64 value");
         };
       }
+      if (
+        property === "sum_payload_f32" ||
+        property === "sum_payload_f64"
+      ) {
+        return (handle: number) => {
+          const sum = sums.get(handle);
+          if (sum === undefined) {
+            throw new RangeError(
+              `Ducklang sum payload operation uses unknown handle ${handle}`,
+            );
+          }
+          if (typeof sum.payload === "number") return sum.payload;
+          throw new TypeError(
+            `Ducklang sum payload is not a ${property.slice(-3)} value`,
+          );
+        };
+      }
       return undefined;
     },
   });

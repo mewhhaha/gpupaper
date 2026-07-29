@@ -25,6 +25,8 @@ export class WasmModuleBuilder {
   readonly #types: WasmNode[][] = [];
   readonly #imports: WasmNode[][] = [];
   readonly #functions: number[] = [];
+  readonly #tables: WasmNode[][] = [];
+  readonly #elements: WasmNode[][] = [];
   readonly #exports: WasmNode[][] = [];
   readonly #exportNames = new Set<string>();
   readonly #globals: WasmNode[][] = [];
@@ -92,6 +94,38 @@ export class WasmModuleBuilder {
     ];
     this.#codes.push([{ kind: "sized", contents: body }]);
     return functionIndex;
+  }
+
+  addFunctionTable(functionIndices: readonly number[]): number {
+    if (functionIndices.length === 0) {
+      throw new TypeError(
+        "Wasm function table must contain at least one function",
+      );
+    }
+    const functionCount = this.#imports.length + this.#functions.length;
+    for (const functionIndex of functionIndices) {
+      if (
+        !Number.isSafeInteger(functionIndex) || functionIndex < 0 ||
+        functionIndex >= functionCount
+      ) {
+        throw new RangeError(
+          `function table uses function index ${functionIndex}; ${functionCount} functions are defined`,
+        );
+      }
+    }
+    const tableIndex = this.#tables.length;
+    this.#tables.push([
+      byte(0x70),
+      byte(0x00),
+      unsigned(functionIndices.length),
+    ]);
+    this.#elements.push([
+      byte(0x00),
+      ...wasmInstruction.i32Constant(0),
+      byte(0x0b),
+      ...vector(functionIndices.map(unsigned)),
+    ]);
+    return tableIndex;
   }
 
   /**
@@ -162,11 +196,17 @@ export class WasmModuleBuilder {
         ...section(3, this.#functions.map((index) => [unsigned(index)])),
       );
     }
+    if (this.#tables.length > 0) {
+      module.push(...section(4, this.#tables));
+    }
     if (this.#globals.length > 0) {
       module.push(...section(6, this.#globals));
     }
     if (this.#exports.length > 0) {
       module.push(...section(7, this.#exports));
+    }
+    if (this.#elements.length > 0) {
+      module.push(...section(9, this.#elements));
     }
     if (this.#codes.length > 0) {
       module.push(...section(10, this.#codes));
@@ -340,10 +380,15 @@ export const wasmType = {
   i64: 0x7e,
   f32: 0x7d,
   f64: 0x7c,
+  v128: 0x7b,
 } as const;
 
 const instruction = (opcode: number): readonly WasmInstruction[] => [
   byte(opcode),
+];
+const simdInstruction = (opcode: number): readonly WasmInstruction[] => [
+  byte(0xfd),
+  unsigned(opcode),
 ];
 
 export const wasmInstruction = {
@@ -361,6 +406,20 @@ export const wasmInstruction = {
   },
   call(index: number): readonly WasmInstruction[] {
     return [byte(0x10), unsigned(index)];
+  },
+  callIndirect(
+    typeIndex: number,
+    tableIndex = 0,
+  ): readonly WasmInstruction[] {
+    return [byte(0x11), unsigned(typeIndex), unsigned(tableIndex)];
+  },
+  blockVoid: [byte(0x02), byte(0x40)],
+  loopVoid: [byte(0x03), byte(0x40)],
+  branch(depth: number): readonly WasmInstruction[] {
+    return [byte(0x0c), unsigned(depth)];
+  },
+  branchIf(depth: number): readonly WasmInstruction[] {
+    return [byte(0x0d), unsigned(depth)];
   },
   return: instruction(0x0f),
   drop: instruction(0x1a),
@@ -388,6 +447,7 @@ export const wasmInstruction = {
   i32DivideSigned: instruction(0x6d),
   i32RemainderSigned: instruction(0x6f),
   i32Equal: instruction(0x46),
+  i32EqualZero: instruction(0x45),
   i32NotEqual: instruction(0x47),
   i32LessThanSigned: instruction(0x48),
   i32GreaterThanSigned: instruction(0x4a),
@@ -428,11 +488,13 @@ export const wasmInstruction = {
   f64LessThanOrEqual: instruction(0x65),
   f64GreaterThanOrEqual: instruction(0x66),
   f32SquareRoot: instruction(0x91),
+  f32Negate: instruction(0x8c),
   f32Add: instruction(0x92),
   f32Subtract: instruction(0x93),
   f32Multiply: instruction(0x94),
   f32Divide: instruction(0x95),
   f64SquareRoot: instruction(0x9f),
+  f64Negate: instruction(0x9a),
   f64Add: instruction(0xa0),
   f64Subtract: instruction(0xa1),
   f64Multiply: instruction(0xa2),
@@ -444,6 +506,19 @@ export const wasmInstruction = {
   i64ExtendI32Unsigned: instruction(0xad),
   f32ConvertI32Signed: instruction(0xb2),
   f64ConvertI32Signed: instruction(0xb7),
+  i32ReinterpretF32: instruction(0xbc),
+  f32ReinterpretI32: instruction(0xbe),
+  f32x4Splat: simdInstruction(19),
+  f32x4ReplaceLane(lane: number): readonly WasmInstruction[] {
+    if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
+      throw new RangeError(`f32x4 lane must be in 0..3; received ${lane}`);
+    }
+    return [byte(0xfd), unsigned(32), byte(lane)];
+  },
+  f32x4Add: simdInstruction(228),
+  f32x4Subtract: simdInstruction(229),
+  f32x4Multiply: simdInstruction(230),
+  f32x4Divide: simdInstruction(231),
   ifI32: [byte(0x04), byte(0x7f)],
   ifI64: [byte(0x04), byte(0x7e)],
   ifF32: [byte(0x04), byte(0x7d)],

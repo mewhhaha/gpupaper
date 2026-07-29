@@ -137,17 +137,13 @@ Deno.test("Ducklang buffers and functions lay out as managed handles", () => {
   assertEquals(plan.typeLayouts[0], plan.typeLayouts[1]);
 });
 
-Deno.test("Ducklang layout planning rejects a self-containing type", () => {
-  try {
-    layoutsOf([{ kind: "product", fields: [0] as never }]);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/recursive and has no direct layout/.test(message)) {
-      throw new Error(`unexpected diagnostic ${JSON.stringify(message)}`);
-    }
-    return;
-  }
-  throw new Error("expected a recursive-layout diagnostic");
+Deno.test("Ducklang layout planning boxes a self-containing type", () => {
+  const plan = layoutsOf([{ kind: "product", fields: [0] as never }]);
+  const layout = plan.layouts[plan.typeLayouts[0]];
+
+  assertEquals(layout.kind, "handle");
+  assertEquals(layout.size, 4);
+  assertEquals(layout.alignment, 4);
 });
 
 Deno.test("Ducklang layout planning is deterministic for a real program", async () => {

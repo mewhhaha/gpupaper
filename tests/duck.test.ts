@@ -2,6 +2,7 @@ import { compileModuleSource, runMain } from "../src/compiler.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inflateFlatFcgPackage } from "../src/flat_fcg.ts";
+import { inflateFlatDucklangCore } from "../src/flat_ducklang_core.ts";
 
 Deno.test("Ducklang parses editor union, lambda, guard, and effect boundaries", async () => {
   const module = await parseDucklangModule(
@@ -1206,6 +1207,11 @@ Deno.test("Ducklang compilation exposes typed Core and FCG stages", async () => 
     ["add", "main"],
   );
   assertEquals(
+    canonicalObject(inflateFlatDucklangCore(artifact.flatCore)),
+    canonicalObject(artifact.core),
+  );
+  inflateFlatDucklangCore(artifact.optimizedFlatCore);
+  assertEquals(
     artifact.fcg.functions.map((function_) => function_.name),
     ["add__duck0", "main"],
   );
@@ -1251,6 +1257,7 @@ Deno.test("Ducklang type and comptime jobs reach the GPU differential passes", a
   );
   assertEquals(artifact.gpuTypeResult === undefined, false);
   assertEquals(artifact.comptimeGpuResult === undefined, false);
+  assertEquals(artifact.gpuCoreResult === undefined, false);
   assertEquals(artifact.gpuWasmResult === undefined, false);
   assertEquals(await runMain(artifact.wasm), 42);
 });
@@ -1277,6 +1284,16 @@ function assertEquals(actual: unknown, expected: unknown): void {
   if (actualJson !== expectedJson) {
     throw new Error(`expected ${expectedJson}, received ${actualJson}`);
   }
+}
+
+function canonicalObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalObject);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, canonicalObject(nested)]),
+  );
 }
 
 async function assertRejects(

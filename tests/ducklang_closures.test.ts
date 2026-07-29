@@ -73,26 +73,14 @@ Deno.test("Ducklang lifts a nested function called more than once", async () => 
   );
 });
 
-Deno.test("Ducklang does not lift a nested function used as a value", async () => {
-  // Lifting appends captures to the parameter list, so a symbol also used as a value
-  // would end up with an arity its uses do not match. Such a function is left in place
-  // and the backend refuses it, which is what the closure-environment item is for.
-  let message = "";
-  try {
+Deno.test("Ducklang calls a nested function through its captured environment", async () => {
+  assertEquals(
     await run(
       "value.duck",
       "let outer = base => {\n  let inner = value => base + value\n  inner\n}\nlet f = outer(40)\nf(2)\n",
-    );
-  } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
-  }
-  if (!/cannot represent i32 -> i32/.test(message)) {
-    throw new Error(
-      `expected a first-class function rejection, received ${
-        JSON.stringify(message)
-      }`,
-    );
-  }
+    ),
+    42,
+  );
 });
 
 Deno.test("Ducklang specialization preserves a capture through two levels", async () => {

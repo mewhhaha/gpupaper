@@ -25,7 +25,7 @@ export function managedSumMakeImportName(tag: number): string {
 }
 
 export function managedSumPayloadImportName(
-  valueType: "i32" | "i64",
+  valueType: "i32" | "i64" | "f32" | "f64",
 ): string {
   return `sum_payload_${valueType}`;
 }

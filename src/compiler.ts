@@ -21,10 +21,16 @@ import {
   type DucklangCoreModule,
   lowerDucklangToCore,
 } from "./ducklang_core.ts";
+import { rewriteFlatDucklangCore } from "./ducklang_core_rewrite.ts";
+import {
+  type FlatDucklangCore,
+  flattenDucklangCore,
+  inflateFlatDucklangCore,
+} from "./flat_ducklang_core.ts";
 import {
   ducklangTextLiteralsSectionName,
-  lowerDucklangToFcgAndWasm,
-} from "./ducklang_fcg.ts";
+  lowerDucklangCoreToFcgAndWasm,
+} from "./ducklang_core_wasm.ts";
 import {
   applyDucklangHostInterface,
   lowerDucklangModuleExports,
@@ -50,6 +56,10 @@ import {
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
 import { type GpuSolveResult, solveTypeEqualitiesOnGpu } from "./gpu_solver.ts";
+import {
+  type GpuDucklangCoreResult,
+  runDucklangCoreGpuPass,
+} from "./gpu_ducklang_core.ts";
 import { emitWasmPlanOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
 import {
   evaluateModuleInteractionComptime,
@@ -80,6 +90,11 @@ export type CompilationTimings = {
   readonly comptimeMilliseconds: number;
   readonly finalTypeMilliseconds: number;
   readonly coreMilliseconds: number;
+  readonly flatCoreMilliseconds: number;
+  readonly coreRewriteMilliseconds: number;
+  readonly gpuCoreInitializationMilliseconds: number;
+  readonly gpuCoreMilliseconds: number;
+  readonly gpuCoreTransferMilliseconds: number;
   readonly wasmMilliseconds: number;
   readonly gpuWasmMilliseconds: number;
 };
@@ -108,6 +123,10 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly language: "ducklang";
   readonly inferred: TypedDucklangModule;
   readonly core: DucklangCoreModule;
+  readonly flatCore: FlatDucklangCore;
+  readonly optimizedFlatCore: FlatDucklangCore;
+  readonly optimizedCore: DucklangCoreModule;
+  readonly gpuCoreResult: GpuDucklangCoreResult | undefined;
   readonly abi: DucklangManagedAbi;
 };
 
@@ -245,6 +264,11 @@ async function compileHaskellModuleSource(
       comptimeMilliseconds,
       finalTypeMilliseconds,
       coreMilliseconds: 0,
+      flatCoreMilliseconds: 0,
+      coreRewriteMilliseconds: 0,
+      gpuCoreInitializationMilliseconds: 0,
+      gpuCoreMilliseconds: 0,
+      gpuCoreTransferMilliseconds: 0,
       wasmMilliseconds,
       gpuWasmMilliseconds,
     },
@@ -346,8 +370,29 @@ async function compileDucklangModuleSource(
   const coreStart = performance.now();
   const core = lowerDucklangToCore(specialized);
   const coreMilliseconds = performance.now() - coreStart;
+  const flatCoreStart = performance.now();
+  const flatCore = flattenDucklangCore(core);
+  const flatCoreMilliseconds = performance.now() - flatCoreStart;
+  const coreRewriteStart = performance.now();
+  const cpuCoreRewrite = rewriteFlatDucklangCore(flatCore);
+  const coreRewriteMilliseconds = performance.now() - coreRewriteStart;
+  const gpuCoreResult = gpuMode === "off"
+    ? undefined
+    : await runDucklangCoreGpuPass(flatCore);
+  if (gpuCoreResult?.status === "unavailable" && gpuMode === "required") {
+    throw new Error(gpuCoreResult.reason);
+  }
+  if (gpuCoreResult?.status === "invalid") {
+    throw new Error(
+      `${file}: GPU rejected CPU-validated flat Core: ${gpuCoreResult.reason}`,
+    );
+  }
+  const optimizedFlatCore = gpuCoreResult?.status === "completed"
+    ? gpuCoreResult.package
+    : cpuCoreRewrite.package;
+  const optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
   const wasmStart = performance.now();
-  const lowered = lowerDucklangToFcgAndWasm(specialized);
+  const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore);
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
@@ -364,6 +409,10 @@ async function compileDucklangModuleSource(
     flatFcg: lowered.flatFcg,
     inferred: specialized,
     core,
+    flatCore,
+    optimizedFlatCore,
+    optimizedCore,
+    gpuCoreResult,
     abi: createDucklangManagedAbi(specialized, lowered.textLiterals),
     initialTypes,
     finalTypes: initialTypes,
@@ -392,6 +441,17 @@ async function compileDucklangModuleSource(
       comptimeMilliseconds,
       finalTypeMilliseconds: 0,
       coreMilliseconds,
+      flatCoreMilliseconds,
+      coreRewriteMilliseconds,
+      gpuCoreInitializationMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.initializationMilliseconds
+        : 0,
+      gpuCoreMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.gpuMilliseconds
+        : 0,
+      gpuCoreTransferMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.transferMilliseconds
+        : 0,
       wasmMilliseconds,
       gpuWasmMilliseconds,
     },

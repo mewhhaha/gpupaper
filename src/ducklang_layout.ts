@@ -128,6 +128,7 @@ export function planDucklangCoreLayouts(
   const typeLayouts: (LayoutId | undefined)[] = module.types.map(() =>
     undefined
   );
+  const recursiveTypes = findRecursiveCoreTypes(module);
   const visiting = new Set<number>();
 
   const intern = (layout: DucklangCoreLayout): LayoutId => {
@@ -143,12 +144,17 @@ export function planDucklangCoreLayouts(
   const layoutOf = (type: CoreTypeId): LayoutId => {
     const cached = typeLayouts[type];
     if (cached !== undefined) return cached;
+    if (recursiveTypes.has(type)) {
+      const id = intern({
+        kind: "handle",
+        size: handleSize,
+        alignment: handleAlignment,
+      });
+      typeLayouts[type] = id;
+      return id;
+    }
     if (visiting.has(type)) {
-      // A type that contains itself has no finite unboxed size. Saying so beats
-      // returning a wrong size or looping.
-      throw new TypeError(
-        `Ducklang Core type ${type} is recursive and has no direct layout`,
-      );
+      throw new Error(`non-recursive Ducklang Core type ${type} forms a cycle`);
     }
     visiting.add(type);
     const entry = module.types[type];
@@ -175,6 +181,36 @@ export function planDucklangCoreLayouts(
       return id;
     }),
   };
+}
+
+function findRecursiveCoreTypes(
+  module: DucklangCoreModule,
+): ReadonlySet<CoreTypeId> {
+  const recursive = new Set<CoreTypeId>();
+  for (let root = 0; root < module.types.length; root += 1) {
+    const pending = [...containedTypes(module.types[root])];
+    const visited = new Set<number>();
+    while (pending.length > 0) {
+      const candidate = pending.pop()!;
+      if (candidate === root) {
+        recursive.add(root as CoreTypeId);
+        break;
+      }
+      if (visited.has(candidate)) continue;
+      visited.add(candidate);
+      const type = module.types[candidate];
+      if (type !== undefined) pending.push(...containedTypes(type));
+    }
+  }
+  return recursive;
+}
+
+function containedTypes(
+  type: DucklangCoreModule["types"][number],
+): readonly CoreTypeId[] {
+  if (type.kind === "product") return type.fields;
+  if (type.kind === "sum") return type.cases;
+  return [];
 }
 
 function computeLayout(
