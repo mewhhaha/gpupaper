@@ -670,7 +670,9 @@ function normalizeExpressionStatementBoundaries(
         ...(functionTypeParameters.length === 0
           ? {}
           : { typeParameters: functionTypeParameters }),
-        body: expression.declaredResultType === undefined
+        body: expression.declaredResultType === undefined ||
+            (expression.declaredResultType.name === "$function" &&
+              body.kind === "function")
           ? body
           : applyNominalProductType(body, expression.declaredResultType),
       };
@@ -1412,7 +1414,13 @@ function lowerModuleStatement(
       : undefined;
     const declaredResultTypeReference = declaredTypeReference === undefined
       ? undefined
-      : finalResultTypeReference(declaredTypeReference);
+      : declaredTypeReference.name === "$array"
+      ? undefined
+      : declaredTypeReference.name === "$function"
+      ? declaredTypeReference.arguments[1]?.name === "$array"
+        ? undefined
+        : declaredTypeReference.arguments[1]
+      : declaredTypeReference;
     const declaredTypeTokens: TokenCursor[] = [];
     if (isCursor(declaredType)) {
       collectAllTokens(declaredType, declaredTypeTokens);
@@ -2048,7 +2056,16 @@ function lowerTypeReference(
   file: string,
   input: SyntaxCursor,
 ): DucklangTypeReference {
-  const functionType = findRule(input, "function_type");
+  const forallType = input.type === "rule" && input.name === "forall_type"
+    ? input
+    : findRule(input, "forall_type");
+  const forallBody = forallType?.field("body");
+  if (forallType !== undefined && isCursor(forallBody)) {
+    return lowerTypeReference(file, forallBody);
+  }
+  const functionType = input.type === "rule" && input.name === "function_type"
+    ? input
+    : findRule(input, "function_type");
   const functionResult = functionType?.field("result");
   if (functionType !== undefined && isCursor(functionResult)) {
     const parameter = functionType.children().find((child) =>
@@ -2070,8 +2087,7 @@ function lowerTypeReference(
   const parenthesized = findRule(input, "type_parenthesized");
   if (
     parenthesized !== undefined &&
-    parenthesized.span.start === input.span.start &&
-    parenthesized.span.end === input.span.end
+    parenthesized.span.start === input.span.start
   ) {
     const nested = parenthesized.children().find((child): child is RuleCursor =>
       child.type === "rule" && child.name === "_type_expression"
@@ -3727,10 +3743,13 @@ function applyNominalProductType(
   declaredType: DucklangTypeReference,
 ): DucklangExpression {
   if (expression.kind === "function") {
+    const bodyType = declaredType.name === "$function"
+      ? declaredType.arguments[1] ?? declaredType
+      : declaredType;
     return {
       ...expression,
       declaredResultType: declaredType,
-      body: applyNominalProductType(expression.body, declaredType),
+      body: applyNominalProductType(expression.body, bodyType),
     };
   }
   if (declaredType.name.startsWith("$")) return expression;
@@ -3779,15 +3798,6 @@ function applyNominalProductType(
     expression: applyNominalProductType(last.expression, declaredType),
   };
   return { ...expression, statements };
-}
-
-function finalResultTypeReference(
-  reference: DucklangTypeReference,
-): DucklangTypeReference | undefined {
-  if (reference.name === "$array") return undefined;
-  return reference.name === "$function" && reference.arguments[1] !== undefined
-    ? finalResultTypeReference(reference.arguments[1])
-    : reference;
 }
 
 function forallTypeParameterNames(

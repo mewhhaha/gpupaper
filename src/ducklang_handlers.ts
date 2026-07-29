@@ -212,6 +212,30 @@ function elaborateTryExpression(
   removedBindings: Set<string>,
 ): DucklangExpression {
   if (
+    expression.kind === "record" &&
+    expression.nominalType?.startsWith("$effect_handler_")
+  ) {
+    const { nominalType: _, ...record } = expression;
+    return {
+      ...record,
+      fields: expression.fields.map((field) => {
+        if (field.value.kind !== "function") return field;
+        const resumption = field.value.parameters.at(-1);
+        if (resumption?.linear !== true) return field;
+        return {
+          ...field,
+          value: {
+            ...field.value,
+            parameters: [
+              ...field.value.parameters.slice(0, -1),
+              { ...resumption, affine: true },
+            ],
+          },
+        };
+      }),
+    };
+  }
+  if (
     expression.kind !== "call" || expression.callee.kind !== "reference" ||
     expression.callee.name.text !== "$duck_try" ||
     expression.arguments.length !== 2

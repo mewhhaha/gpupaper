@@ -568,22 +568,24 @@ class DucklangInference {
           binding.symbol.declaredType,
           binding.symbol.span,
         );
+      const previousType = binding.previous === undefined
+        ? undefined
+        : environment.get(binding.previous.id);
+      if (binding.previous !== undefined && previousType === undefined) {
+        throw new Error(
+          `${this.#file}:${binding.span.start}: missing type for resolved symbol ${binding.previous.text}#${binding.previous.id}`,
+        );
+      }
       const inferred = this.inferExpression(
         binding.value,
         environment,
-        declaredBindingType,
+        declaredBindingType ?? previousType,
       );
       const bindingType = recursiveType ?? inferred.type;
       if (recursiveType !== undefined) {
         this.#unify(recursiveType, inferred.type, binding.span);
       }
-      if (binding.previous !== undefined) {
-        const previousType = environment.get(binding.previous.id);
-        if (previousType === undefined) {
-          throw new Error(
-            `${this.#file}:${binding.span.start}: missing type for resolved symbol ${binding.previous.text}#${binding.previous.id}`,
-          );
-        }
+      if (previousType !== undefined) {
         try {
           this.#unify(previousType, bindingType, binding.span);
         } catch (cause) {
@@ -2225,9 +2227,28 @@ class DucklangInference {
           expression.span,
           expectedUnionName,
         );
-        const scrutineeCandidates = candidates.filter((candidate) =>
+        let scrutineeCandidates = candidates.filter((candidate) =>
           this.#typesCouldMatch(value.type, candidate.union)
         );
+        if (scrutineeCandidates.length > 1) {
+          // An unconstrained pattern keeps the unique maximally polymorphic
+          // declaration. A concrete declaration would prematurely default every
+          // instantiation of a generic constructor with the same spelling.
+          const parameterCounts = scrutineeCandidates.map((candidate) =>
+            this.#unionTypes.find((declaration) =>
+              declaration.name === candidate.unionName
+            )?.parameters.length ?? 0
+          );
+          const highestParameterCount = Math.max(...parameterCounts);
+          const mostGeneralCandidates = scrutineeCandidates.filter(
+            (_, index) => parameterCounts[index] === highestParameterCount,
+          );
+          if (
+            highestParameterCount > 0 && mostGeneralCandidates.length === 1
+          ) {
+            scrutineeCandidates = mostGeneralCandidates;
+          }
+        }
         if (scrutineeCandidates.length === 1) {
           this.#unify(
             value.type,
@@ -2619,6 +2640,7 @@ class DucklangInference {
     if (reference.name === "Text") return textType;
     if (reference.name === "Bytes") return bytesType;
     if (reference.name === "Unit") return unitType;
+    if (reference.name === "typeDescriptor") return typeDescriptorType;
     if (/^U(?:[1-9]|[12][0-9]|3[01])$/.test(reference.name)) return i32Type;
     const structDeclaration =
       this.#structTypes.find((candidate) =>

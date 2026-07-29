@@ -5,6 +5,65 @@ const livePreludeDirectory = new URL(
   import.meta.url,
 );
 
+Deno.test("every frontend prelude reaches its compile-time module boundary", async () => {
+  const expectedExportCounts = new Map<string, number>([
+    ["prelude.duck", 12],
+    ["prelude_abstractions.duck", 71],
+    ["prelude_attributes.duck", 2],
+    ["prelude_base64.duck", 2],
+    ["prelude_collections.duck", 5],
+    ["prelude_csv.duck", 4],
+    ["prelude_effect_defaults.duck", 20],
+    ["prelude_effects.duck", 0],
+    ["prelude_functional.duck", 124],
+    ["prelude_iterators.duck", 8],
+    ["prelude_json.duck", 30],
+    ["prelude_json_encode.duck", 5],
+    ["prelude_json_string.duck", 1],
+    ["prelude_json_values.duck", 24],
+    ["prelude_list.duck", 10],
+    ["prelude_numeric.duck", 29],
+    ["prelude_numeric_parse.duck", 3],
+    ["prelude_path.duck", 5],
+    ["prelude_runtime.duck", 89],
+    ["prelude_testing.duck", 3],
+    ["prelude_text.duck", 32],
+    ["prelude_time.duck", 4],
+    ["prelude_types.duck", 10],
+  ]);
+  const recordedPreludes: string[] = [];
+  for await (const entry of Deno.readDir(livePreludeDirectory)) {
+    if (entry.isFile && /^prelude.*\.duck$/.test(entry.name)) {
+      recordedPreludes.push(entry.name);
+    }
+  }
+  recordedPreludes.sort();
+  assertEquals(recordedPreludes, [...expectedExportCounts.keys()].sort());
+
+  for (const file of recordedPreludes) {
+    const sourceUrl = new URL(file, livePreludeDirectory);
+    let source = await Deno.readTextFile(sourceUrl);
+    if (file === "prelude_collections.duck") {
+      // This prelude deliberately has no imports and is loaded after the ambient
+      // type prelude by Binned; make that compilation environment explicit here.
+      source = source.replace(
+        "module () where",
+        'module () where\n\nconst {} = import "duck:prelude/types" ();',
+      );
+    }
+    const artifact = await normalizeDucklangModuleSource(
+      sourceUrl.pathname,
+      source,
+      { gpuMode: "off" },
+    );
+    assertEquals(artifact.stage, "compileTimeModule");
+    assertEquals(
+      artifact.value.exports.fields.length,
+      expectedExportCounts.get(file),
+    );
+  }
+});
+
 Deno.test("prelude types normalizes to a compile-time export module", async () => {
   const sourceUrl = new URL("prelude_types.duck", livePreludeDirectory);
   const artifact = await normalizeDucklangModuleSource(

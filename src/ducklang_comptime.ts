@@ -26,10 +26,21 @@ export async function evaluateDucklangComptime(
   readonly gpu: ComptimeBatchResult | undefined;
 }> {
   const expressions: TypedDucklangExpression[] = [];
+  const deferredExpressions = new Set<TypedDucklangExpression>();
   for (const binding of module.bindings) {
-    collectComptimeExpressions(binding.value, expressions);
+    collectComptimeExpressions(
+      binding.value,
+      expressions,
+      new Set(),
+      deferredExpressions,
+    );
   }
-  collectComptimeExpressions(module.result, expressions);
+  collectComptimeExpressions(
+    module.result,
+    expressions,
+    new Set(),
+    deferredExpressions,
+  );
 
   // Module-level function bindings are supplied as closures that can see the
   // environment holding them, so a recursive compile-time function finds itself.
@@ -88,7 +99,12 @@ export async function evaluateDucklangComptime(
 
   let valueIndex = 0;
   const replace = (expression: TypedDucklangExpression) =>
-    replaceComptimeExpressions(expression, constValues, () => valueIndex++);
+    replaceComptimeExpressions(
+      expression,
+      constValues,
+      () => valueIndex++,
+      deferredExpressions,
+    );
   return {
     module: {
       ...module,
@@ -106,12 +122,25 @@ export async function evaluateDucklangComptime(
 function collectComptimeExpressions(
   expression: TypedDucklangExpression,
   expressions: TypedDucklangExpression[],
+  boundSymbols: ReadonlySet<number>,
+  deferredExpressions: Set<TypedDucklangExpression>,
 ): void {
   if (expression.kind === "comptime") {
     if (expression.expression.kind === "function") return;
+    if (referencesBoundSymbol(expression.expression, boundSymbols)) {
+      deferredExpressions.add(expression);
+      return;
+    }
     expressions.push(expression.expression);
     return;
   }
+  const collect = (child: TypedDucklangExpression) =>
+    collectComptimeExpressions(
+      child,
+      expressions,
+      boundSymbols,
+      deferredExpressions,
+    );
   switch (expression.kind) {
     case "integer":
     case "integer64":
@@ -125,94 +154,125 @@ function collectComptimeExpressions(
     case "reference":
       return;
     case "unionCase":
-      collectComptimeExpressions(expression.value, expressions);
+      collect(expression.value);
       return;
     case "product":
       for (const value of expression.values) {
-        collectComptimeExpressions(value, expressions);
+        collect(value);
       }
       return;
     case "project":
-      collectComptimeExpressions(expression.product, expressions);
+      collect(expression.product);
       return;
     case "namedProject":
-      collectComptimeExpressions(expression.product, expressions);
+      collect(expression.product);
       return;
     case "recordUpdate":
-      collectComptimeExpressions(expression.product, expressions);
+      collect(expression.product);
       for (const field of expression.fields) {
-        collectComptimeExpressions(field.value, expressions);
+        collect(field.value);
       }
       return;
-    case "function":
-      collectComptimeExpressions(expression.body, expressions);
+    case "function": {
+      const functionSymbols = new Set(boundSymbols);
+      for (const parameter of expression.parameters) {
+        functionSymbols.add(parameter.id);
+      }
+      collectComptimeExpressions(
+        expression.body,
+        expressions,
+        functionSymbols,
+        deferredExpressions,
+      );
       return;
+    }
     case "call":
-      collectComptimeExpressions(expression.callee, expressions);
+      collect(expression.callee);
       for (const argument of expression.arguments) {
-        collectComptimeExpressions(argument, expressions);
+        collect(argument);
       }
       return;
     case "hostCall":
       for (const argument of expression.arguments) {
-        collectComptimeExpressions(argument, expressions);
+        collect(argument);
       }
       return;
     case "optionDo":
-      collectComptimeExpressions(expression.option, expressions);
+      collect(expression.option);
       return;
     case "index":
-      collectComptimeExpressions(expression.collection, expressions);
-      collectComptimeExpressions(expression.index, expressions);
+      collect(expression.collection);
+      collect(expression.index);
       return;
     case "selectProductElement":
       for (const value of expression.values) {
-        collectComptimeExpressions(value, expressions);
+        collect(value);
       }
-      collectComptimeExpressions(expression.index, expressions);
+      collect(expression.index);
       return;
     case "indexUpdate":
-      collectComptimeExpressions(expression.product, expressions);
-      collectComptimeExpressions(expression.index, expressions);
-      collectComptimeExpressions(expression.value, expressions);
+      collect(expression.product);
+      collect(expression.index);
+      collect(expression.value);
       return;
     case "textAppend":
-      collectComptimeExpressions(expression.left, expressions);
-      collectComptimeExpressions(expression.right, expressions);
+      collect(expression.left);
+      collect(expression.right);
       return;
     case "binary":
-      collectComptimeExpressions(expression.left, expressions);
-      collectComptimeExpressions(expression.right, expressions);
+      collect(expression.left);
+      collect(expression.right);
       return;
     case "ownership":
-      collectComptimeExpressions(expression.expression, expressions);
+      collect(expression.expression);
       return;
     case "return":
-      collectComptimeExpressions(expression.expression, expressions);
+      collect(expression.expression);
       return;
     case "scratch":
-      collectComptimeExpressions(expression.body, expressions);
+      collect(expression.body);
       return;
     case "if":
-      collectComptimeExpressions(expression.condition, expressions);
-      collectComptimeExpressions(expression.consequence, expressions);
-      collectComptimeExpressions(expression.alternative, expressions);
+      collect(expression.condition);
+      collect(expression.consequence);
+      collect(expression.alternative);
       return;
     case "ifUnion":
-      collectComptimeExpressions(expression.value, expressions);
-      collectComptimeExpressions(expression.consequence, expressions);
-      collectComptimeExpressions(expression.alternative, expressions);
+      collect(expression.value);
+      collect(expression.consequence);
+      collect(expression.alternative);
       return;
     case "block":
       for (const step of expression.steps) {
-        collectComptimeExpressions(
-          step.kind === "binding" ? step.binding.value : step.expression,
-          expressions,
-        );
+        collect(step.kind === "binding" ? step.binding.value : step.expression);
       }
-      collectComptimeExpressions(expression.result, expressions);
+      collect(expression.result);
       return;
   }
+}
+
+function referencesBoundSymbol(
+  expression: TypedDucklangExpression,
+  boundSymbols: ReadonlySet<number>,
+): boolean {
+  const pending: unknown[] = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    const candidate = current as {
+      readonly kind?: unknown;
+      readonly symbol?: { readonly id?: unknown };
+    };
+    if (
+      candidate.kind === "reference" &&
+      typeof candidate.symbol?.id === "number" &&
+      boundSymbols.has(candidate.symbol.id)
+    ) {
+      return true;
+    }
+    pending.push(...Object.values(current));
+  }
+  return false;
 }
 
 function scalarExpression(
@@ -279,8 +339,10 @@ function replaceComptimeExpressions(
   expression: TypedDucklangExpression,
   values: readonly DucklangConstValue[],
   nextValueIndex: () => number,
+  deferredExpressions: ReadonlySet<TypedDucklangExpression>,
 ): TypedDucklangExpression {
   if (expression.kind === "comptime") {
+    if (deferredExpressions.has(expression)) return expression;
     if (expression.expression.kind === "function") {
       return expression.expression;
     }
@@ -311,13 +373,19 @@ function replaceComptimeExpressions(
           expression.value,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "product":
       return {
         ...expression,
         values: expression.values.map((value) =>
-          replaceComptimeExpressions(value, values, nextValueIndex)
+          replaceComptimeExpressions(
+            value,
+            values,
+            nextValueIndex,
+            deferredExpressions,
+          )
         ),
       };
     case "project":
@@ -327,6 +395,7 @@ function replaceComptimeExpressions(
           expression.product,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "namedProject":
@@ -336,6 +405,7 @@ function replaceComptimeExpressions(
           expression.product,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "recordUpdate":
@@ -345,6 +415,7 @@ function replaceComptimeExpressions(
           expression.product,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         fields: expression.fields.map((field) => ({
           ...field,
@@ -352,6 +423,7 @@ function replaceComptimeExpressions(
             field.value,
             values,
             nextValueIndex,
+            deferredExpressions,
           ),
         })),
       };
@@ -362,6 +434,7 @@ function replaceComptimeExpressions(
           expression.body,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "ownership":
@@ -371,6 +444,7 @@ function replaceComptimeExpressions(
           expression.expression,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "call":
@@ -380,16 +454,27 @@ function replaceComptimeExpressions(
           expression.callee,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         arguments: expression.arguments.map((argument) =>
-          replaceComptimeExpressions(argument, values, nextValueIndex)
+          replaceComptimeExpressions(
+            argument,
+            values,
+            nextValueIndex,
+            deferredExpressions,
+          )
         ),
       };
     case "hostCall":
       return {
         ...expression,
         arguments: expression.arguments.map((argument) =>
-          replaceComptimeExpressions(argument, values, nextValueIndex)
+          replaceComptimeExpressions(
+            argument,
+            values,
+            nextValueIndex,
+            deferredExpressions,
+          )
         ),
       };
     case "optionDo":
@@ -399,6 +484,7 @@ function replaceComptimeExpressions(
           expression.option,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "index":
@@ -408,23 +494,31 @@ function replaceComptimeExpressions(
           expression.collection,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         index: replaceComptimeExpressions(
           expression.index,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "selectProductElement":
       return {
         ...expression,
         values: expression.values.map((value) =>
-          replaceComptimeExpressions(value, values, nextValueIndex)
+          replaceComptimeExpressions(
+            value,
+            values,
+            nextValueIndex,
+            deferredExpressions,
+          )
         ),
         index: replaceComptimeExpressions(
           expression.index,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "indexUpdate":
@@ -434,16 +528,19 @@ function replaceComptimeExpressions(
           expression.product,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         index: replaceComptimeExpressions(
           expression.index,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         value: replaceComptimeExpressions(
           expression.value,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "textAppend":
@@ -453,11 +550,13 @@ function replaceComptimeExpressions(
           expression.left,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         right: replaceComptimeExpressions(
           expression.right,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "binary": {
@@ -467,11 +566,13 @@ function replaceComptimeExpressions(
           expression.left,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         right: replaceComptimeExpressions(
           expression.right,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
       if (binary.operator === ":>" || binary.operator === ":<") {
@@ -513,6 +614,7 @@ function replaceComptimeExpressions(
           expression.expression,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "scratch":
@@ -522,6 +624,7 @@ function replaceComptimeExpressions(
           expression.body,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "if":
@@ -531,16 +634,19 @@ function replaceComptimeExpressions(
           expression.condition,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         consequence: replaceComptimeExpressions(
           expression.consequence,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         alternative: replaceComptimeExpressions(
           expression.alternative,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "ifUnion":
@@ -550,16 +656,19 @@ function replaceComptimeExpressions(
           expression.value,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         consequence: replaceComptimeExpressions(
           expression.consequence,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
         alternative: replaceComptimeExpressions(
           expression.alternative,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
     case "block":
@@ -573,6 +682,7 @@ function replaceComptimeExpressions(
                 step.expression,
                 values,
                 nextValueIndex,
+                deferredExpressions,
               ),
             }
             : {
@@ -583,6 +693,7 @@ function replaceComptimeExpressions(
                   step.binding.value,
                   values,
                   nextValueIndex,
+                  deferredExpressions,
                 ),
               },
             }
@@ -591,6 +702,7 @@ function replaceComptimeExpressions(
           expression.result,
           values,
           nextValueIndex,
+          deferredExpressions,
         ),
       };
   }

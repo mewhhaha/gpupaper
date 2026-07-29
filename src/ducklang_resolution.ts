@@ -29,6 +29,7 @@ export type DucklangSymbol = {
   readonly identityPolymorphic?: boolean;
   readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
+  readonly affine?: boolean;
   readonly span: SourceSpan;
 };
 
@@ -397,6 +398,29 @@ class DucklangResolver {
 
   constructor(file: string) {
     this.#file = file;
+    const span = { file, start: 0, end: 0 };
+    this.#unionTypes.push({
+      name: "$CompilerAttribute",
+      parameters: [],
+      cases: [
+        {
+          name: "Export",
+          payloadType: { name: "Unit", arguments: [], span },
+          span,
+        },
+        {
+          name: "Drop",
+          payloadType: { name: "Unit", arguments: [], span },
+          span,
+        },
+        {
+          name: "Replace",
+          payloadType: { name: "typeDescriptor", arguments: [], span },
+          span,
+        },
+      ],
+      span,
+    });
   }
 
   get symbols(): readonly DucklangSymbol[] {
@@ -441,6 +465,7 @@ class DucklangResolver {
   requireLinearUses(): void {
     for (const symbol of this.#symbols) {
       if (!symbol.linear) continue;
+      if (symbol.affine === true) continue;
       if ((this.#linearUseCounts.get(symbol.id) ?? 0) > 0) continue;
       throw new TypeError(
         `${symbol.span.file}:${symbol.span.start}: linear Ducklang value ${symbol.text} was not consumed`,
@@ -1414,11 +1439,54 @@ class DucklangResolver {
       }
       case "call": {
         if (
+          expression.callee.kind === "reference" &&
+          expression.callee.name.linear === true &&
+          environment.get(expression.callee.name.text)?.linear !== true
+        ) {
+          return this.#resolveExpression(
+            {
+              kind: "unary",
+              operator: "!",
+              operand: {
+                ...expression,
+                callee: {
+                  ...expression.callee,
+                  name: { ...expression.callee.name, linear: false },
+                },
+              },
+              span: expression.span,
+            },
+            environment,
+            currentRecursive,
+          );
+        }
+        if (
           expression.callee.kind === "field" &&
           expression.callee.product.kind === "reference"
         ) {
           const structName = expression.callee.product.name.text;
           const memberName = expression.callee.fieldName;
+          const typeOperator = structName === "@type"
+            ? {
+              extend: ":+",
+              union: ":|",
+              intersection: ":&",
+              difference: ":-",
+            }[memberName]
+            : undefined;
+          if (typeOperator !== undefined && expression.arguments.length === 2) {
+            return this.#resolveExpression(
+              {
+                kind: "binary",
+                operator: typeOperator,
+                left: expression.arguments[0],
+                right: expression.arguments[1],
+                span: expression.span,
+              },
+              environment,
+              currentRecursive,
+            );
+          }
           const primitive = resolveSourcePrimitive(
             `@${structName}.${memberName}`,
           );
@@ -1771,6 +1839,7 @@ class DucklangResolver {
         ? {}
         : { compileTimeRecord: name.compileTimeRecord }),
       ...(name.linear === undefined ? {} : { linear: name.linear }),
+      ...(name.affine === undefined ? {} : { affine: name.affine }),
       span: name.span,
     } satisfies DucklangSymbol;
     this.#symbols.push(symbol);

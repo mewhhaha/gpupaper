@@ -122,6 +122,15 @@ Deno.test("Ducklang rejects reading a value after it is moved", async () => {
   );
 });
 
+Deno.test("Ducklang negates a call to a reusable function", async () => {
+  assertEquals(
+    await run(
+      "let is_zero = value => value == 0\nif !is_zero(1) { 42 } else { 0 }\n",
+    ),
+    42,
+  );
+});
+
 /**
  * Scratch region escapes.
  *

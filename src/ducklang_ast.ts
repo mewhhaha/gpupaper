@@ -9,6 +9,7 @@ export type DucklangName = {
   readonly variadic?: boolean;
   readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
+  readonly affine?: boolean;
   readonly span: SourceSpan;
 };
 
