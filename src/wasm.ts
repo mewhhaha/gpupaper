@@ -17,6 +17,20 @@ export type WasmBinaryPlan = {
   readonly maximumDependencyLevel: number;
 };
 
+export type WasmLengthLevel = {
+  readonly dependencyLevel: number;
+  readonly atoms: readonly {
+    readonly atomIndex: number;
+    readonly rangeStart: number;
+    readonly rangeCount: number;
+  }[];
+};
+
+export type WasmBinaryPlanAnalysis = {
+  readonly byteLength: number;
+  readonly lengthLevels: readonly WasmLengthLevel[];
+};
+
 type WasmNode =
   | WasmInstruction
   | { readonly kind: "sized"; readonly contents: readonly WasmNode[] };
@@ -232,37 +246,35 @@ export class WasmModuleBuilder {
 }
 
 export function emitWasmPlanOnCpu(plan: WasmBinaryPlan): Uint8Array {
-  validateWasmBinaryPlan(plan);
+  const lengthLevels = validateWasmBinaryPlan(plan);
   const encoded = new Array<readonly number[]>(plan.atoms.length);
-  for (let level = 0; level <= plan.maximumDependencyLevel; level += 1) {
-    for (const [atomIndex, atom] of plan.atoms.entries()) {
-      if (atom.kind === "length") {
-        if (atom.dependencyLevel !== level) continue;
-        let byteLength = 0;
-        for (
-          let dependencyIndex = atom.rangeStart;
-          dependencyIndex < atom.rangeStart + atom.rangeCount;
-          dependencyIndex += 1
-        ) {
-          const dependency = encoded[dependencyIndex];
-          if (dependency === undefined) {
-            throw new Error(
-              `Wasm length atom ${atomIndex} at level ${level} depends on unresolved atom ${dependencyIndex}`,
-            );
-          }
-          byteLength += dependency.length;
+  for (const [atomIndex, atom] of plan.atoms.entries()) {
+    if (atom.kind === "length") continue;
+    encoded[atomIndex] = atom.kind === "byte"
+      ? [atom.value]
+      : atom.kind === "unsigned"
+      ? encodeUnsigned(atom.value)
+      : atom.kind === "signed32"
+      ? encodeSigned(atom.value)
+      : encodeSigned64(atom.value);
+  }
+  for (const level of lengthLevels) {
+    for (const atom of level.atoms) {
+      let byteLength = 0;
+      for (
+        let dependencyIndex = atom.rangeStart;
+        dependencyIndex < atom.rangeStart + atom.rangeCount;
+        dependencyIndex += 1
+      ) {
+        const dependency = encoded[dependencyIndex];
+        if (dependency === undefined) {
+          throw new Error(
+            `Wasm length atom ${atom.atomIndex} at level ${level.dependencyLevel} depends on unresolved atom ${dependencyIndex}`,
+          );
         }
-        encoded[atomIndex] = encodeUnsigned(byteLength);
-        continue;
+        byteLength += dependency.length;
       }
-      if (level !== 0) continue;
-      encoded[atomIndex] = atom.kind === "byte"
-        ? [atom.value]
-        : atom.kind === "unsigned"
-        ? encodeUnsigned(atom.value)
-        : atom.kind === "signed32"
-        ? encodeSigned(atom.value)
-        : encodeSigned64(atom.value);
+      encoded[atom.atomIndex] = encodeUnsigned(byteLength);
     }
   }
   const byteLength = encoded.reduce((total, atom, atomIndex) => {
@@ -286,7 +298,9 @@ export function emitWasmPlanOnCpu(plan: WasmBinaryPlan): Uint8Array {
   return bytes;
 }
 
-export function validateWasmBinaryPlan(plan: WasmBinaryPlan): void {
+export function validateWasmBinaryPlan(
+  plan: WasmBinaryPlan,
+): readonly WasmLengthLevel[] {
   if (plan.atoms.length === 0) {
     throw new TypeError("Wasm binary plan must contain at least one atom");
   }
@@ -299,6 +313,10 @@ export function validateWasmBinaryPlan(plan: WasmBinaryPlan): void {
     );
   }
   let maximumDependencyLevel = 0;
+  const lengthAtomsByLevel = new Map<
+    number,
+    { atomIndex: number; rangeStart: number; rangeCount: number }[]
+  >();
   for (const [atomIndex, atom] of plan.atoms.entries()) {
     if (atom.kind === "byte") {
       if (
@@ -367,45 +385,59 @@ export function validateWasmBinaryPlan(plan: WasmBinaryPlan): void {
       maximumDependencyLevel,
       atom.dependencyLevel,
     );
+    const lengthAtoms = lengthAtomsByLevel.get(atom.dependencyLevel);
+    const lengthAtom = {
+      atomIndex,
+      rangeStart: atom.rangeStart,
+      rangeCount: atom.rangeCount,
+    };
+    if (lengthAtoms === undefined) {
+      lengthAtomsByLevel.set(atom.dependencyLevel, [lengthAtom]);
+    } else {
+      lengthAtoms.push(lengthAtom);
+    }
   }
   if (maximumDependencyLevel !== plan.maximumDependencyLevel) {
     throw new RangeError(
       `Wasm plan declares maximum dependency level ${plan.maximumDependencyLevel}; atoms require ${maximumDependencyLevel}`,
     );
   }
+  return [...lengthAtomsByLevel.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([dependencyLevel, atoms]) => ({ dependencyLevel, atoms }));
 }
 
-export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {
-  validateWasmBinaryPlan(plan);
+export function analyzeWasmBinaryPlan(
+  plan: WasmBinaryPlan,
+): WasmBinaryPlanAnalysis {
+  const lengthLevels = validateWasmBinaryPlan(plan);
   const sizes = new Uint8Array(plan.atoms.length);
-  for (let level = 0; level <= plan.maximumDependencyLevel; level += 1) {
-    for (const [atomIndex, atom] of plan.atoms.entries()) {
-      if (atom.kind === "length") {
-        if (atom.dependencyLevel !== level) continue;
-        let byteLength = 0;
-        for (
-          let dependencyIndex = atom.rangeStart;
-          dependencyIndex < atom.rangeStart + atom.rangeCount;
-          dependencyIndex += 1
-        ) {
-          byteLength += sizes[dependencyIndex];
-        }
-        if (byteLength > 0xffff_ffff) {
-          throw new RangeError(
-            `Wasm length atom ${atomIndex} encodes ${byteLength} bytes; maximum is 4294967295`,
-          );
-        }
-        sizes[atomIndex] = unsignedEncodingByteLength(byteLength);
-        continue;
+  for (const [atomIndex, atom] of plan.atoms.entries()) {
+    if (atom.kind === "length") continue;
+    sizes[atomIndex] = atom.kind === "byte"
+      ? 1
+      : atom.kind === "unsigned"
+      ? unsignedEncodingByteLength(atom.value)
+      : atom.kind === "signed32"
+      ? signed32EncodingByteLength(atom.value)
+      : signed64EncodingByteLength(atom.value);
+  }
+  for (const level of lengthLevels) {
+    for (const atom of level.atoms) {
+      let atomByteLength = 0;
+      for (
+        let dependencyIndex = atom.rangeStart;
+        dependencyIndex < atom.rangeStart + atom.rangeCount;
+        dependencyIndex += 1
+      ) {
+        atomByteLength += sizes[dependencyIndex];
       }
-      if (level !== 0) continue;
-      sizes[atomIndex] = atom.kind === "byte"
-        ? 1
-        : atom.kind === "unsigned"
-        ? unsignedEncodingByteLength(atom.value)
-        : atom.kind === "signed32"
-        ? signed32EncodingByteLength(atom.value)
-        : signed64EncodingByteLength(atom.value);
+      if (atomByteLength > 0xffff_ffff) {
+        throw new RangeError(
+          `Wasm length atom ${atom.atomIndex} encodes ${atomByteLength} bytes; maximum is 4294967295`,
+        );
+      }
+      sizes[atom.atomIndex] = unsignedEncodingByteLength(atomByteLength);
     }
   }
   let byteLength = 0;
@@ -417,7 +449,11 @@ export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {
       );
     }
   }
-  return byteLength;
+  return { byteLength, lengthLevels };
+}
+
+export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {
+  return analyzeWasmBinaryPlan(plan).byteLength;
 }
 
 function unsignedEncodingByteLength(value: number): number {

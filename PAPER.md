@@ -921,9 +921,32 @@ maximum level before GPU allocation.
 For `A` atoms and maximum length level `D`, emission performs:
 
 1. one full-array pass computing the encoded size of non-length atoms;
-2. `D` full-array passes, in increasing level order, resolving length atoms;
+2. one compacted dispatch for each nonempty length level, in increasing order;
 3. an inclusive prefix sum of all resolved sizes;
 4. one full-array pass writing each atom into its assigned byte interval.
+
+The validated host plan groups length-atom indices stably by dependency level.
+Let \(K_d\) be the number of length atoms at level \(d\), and let
+\(J=\{d\mid K_d>0\}\). A level dispatch schedules \(L(K_d)\) lanes and uses the
+compacted index to reach the atom's global range and size columns. Induction on
+increasing \(d\) proves readiness: validation requires every length dependency
+of a level-\(d\) atom to have a strictly smaller level, and all lower nonempty
+levels have completed. Empty levels carry no dependency and require no
+dispatch. Stable ordering is not necessary for the size result, but makes the
+frontier and diagnostics deterministic.
+
+The index frontier takes \(4\sum_d K_d\) transfer bytes. It replaces the old
+`4A`-byte dependency-level column. The scheduled length work changes from
+\(D L(A)\) lanes to:
+
+```text
+length_dispatches = |J|
+length_invocations = Σ[d in J] L(K_d)
+```
+
+Each active lane still sums its declared dependency range, so the non-padding
+arithmetic remains \(\sum_i range_count_i\). The compaction removes inactive
+atom tests; it does not change that intrinsic range work.
 
 The prefix implementation is a hierarchical inclusive scan with workgroup width
 \(W=64\). Define:
@@ -959,7 +982,7 @@ Let \(L(n)=W\lceil n/W\rceil\). The exact scheduled lane counts are:
 ```text
 scan_dispatches = 2h - 1
 scan_invocations = Σ[l=0..h-1] L(nₗ) + Σ[l=0..h-2] L(nₗ)
-all_invocations = L(A)(2 + D) + scan_invocations
+all_invocations = 2L(A) + length_invocations + scan_invocations
 ```
 
 The block-local implementation performs six Hillis–Steele shared-memory steps.
@@ -980,11 +1003,9 @@ scan_storage_bytes = 4(A + 2(H + 2))
 ```
 
 The previous global Hillis–Steele scan required two \(A\)-word prefix buffers,
-\(8A\) bytes, and \(\lceil\log_2 A\rceil\) full-width dispatches. Only length
-atoms at the active level do useful work during a length pass, so the reported
-all-invocation count still includes those inactive lanes. The profile reports
-`A`, `D`, hierarchical scan dispatches, and the exact scheduled invocation
-count.
+\(8A\) bytes, and \(\lceil\log_2 A\rceil\) full-width dispatches. The profile
+reports atom and length-frontier sizes, length and scan dispatches, their
+scheduled lanes, and the exact total scheduled invocation count.
 
 Each atom owns a disjoint byte interval from the prefix result. Adjacent atoms
 may share a `u32` output word, so writers use `atomicOr` into a zeroed buffer.
@@ -1003,12 +1024,14 @@ B_output = 4 ceil(B_exact / 4)
 ```
 
 The plan validator has already proved that every referenced dependency has a
-lower level, so induction on levels makes every \(s_j\) available. This takes
-\(O(A + \sum_i range_count_i)\) work and one byte of host memory per atom
-because all admitted widths are at most 10. It is not CPU emission: no encoded
-byte or offset is constructed. The GPU independently executes its size, length,
-scan, and write passes, and the returned final prefix must equal
-\(B_\text{exact}\).
+lower level, so induction on ordered nonempty levels makes every \(s_j\)
+available. With \(K=\sum_dK_d\), this takes
+\(O(A + K\log|J| + \sum_i range_count_i)\) work, `A` bytes for widths, and
+\(O(K)\) frontier memory. Iterating nonempty levels is essential: a valid sparse
+plan may declare a very large numeric level without requiring work proportional
+to that number. It is not CPU emission: no encoded byte or offset is
+constructed. The GPU independently executes its size, length, scan, and write
+passes, and the returned final prefix must equal \(B_\text{exact}\).
 
 An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
 case analysis but conservative. Exact host sizing removes their slack without a
@@ -1859,6 +1882,26 @@ scheduled invocations to 5 and 1,231,424. Its scan storage changes from
 not timing claims. Generated-plan and CPU-byte differentials, shared-word
 determinism, engine validation, and the full required-GPU gate are the
 executable evidence; latency improvement remains an empirical question.
+
+### 2026-07-31: Wasm length work becomes a sparse frontier
+
+The hierarchical scan exposed the remaining two full-width length passes as
+mostly inactive work. The host plan now groups known length-atom indices by
+dependency level, transfers only that stable frontier, and dispatches its
+nonempty levels in order. Section 7.4 derives readiness from the strict
+dependency-level relation and records the exact work and transfer equations. A
+level-1,000,000,000 plan with every lower level empty is the executable
+counterexample ensuring that a numeric maximum is not confused with either
+dispatch count or host iteration count.
+
+The frozen modules contain only 14–348 length atoms among 2,477–204,099 total
+atoms. Their length work changes from 4,992–408,320 scheduled lanes to 128–448,
+a 97.44–99.89% reduction. Codex total Wasm-emission invocations change from
+1,231,424 after hierarchical scan to 823,552; its dependency metadata transfer
+changes from 816,396 to 1,392 bytes. These are deterministic counts. Generated
+plan differentials, the sparse-level regression, packed emission, engine
+validation, and the full required-GPU gate are executable evidence; no latency
+distribution is claimed.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

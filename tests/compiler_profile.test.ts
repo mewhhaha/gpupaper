@@ -106,10 +106,17 @@ Deno.test("GPU Wasm profile exposes hierarchical scan work", async () => {
       0,
     );
   const expectedInvocationCount = paddedInvocationCount(work.wasmAtomCount) *
-      (2 + work.gpuWasmLengthRoundCount) +
+      2 +
+    work.gpuWasmLengthDispatchedInvocationCount +
     scanInvocationCount;
   if (
-    work.gpuWasmLengthRoundCount === 0 ||
+    work.gpuWasmLengthAtomCount === 0 ||
+    work.gpuWasmLengthDispatchCount === 0 ||
+    work.gpuWasmLengthDispatchedInvocationCount <
+      work.gpuWasmLengthAtomCount ||
+    work.gpuWasmLengthDispatchedInvocationCount >
+      work.gpuWasmLengthAtomCount +
+        63 * work.gpuWasmLengthDispatchCount ||
     work.gpuWasmScanDispatchCount !== hierarchyCounts.length * 2 - 1 ||
     work.gpuWasmDispatchedInvocationCount !== expectedInvocationCount ||
     work.wasmOutputBufferBytes < work.wasmBytes ||

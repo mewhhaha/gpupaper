@@ -280,6 +280,36 @@ These are deterministic execution and allocation counts, not a latency claim.
 All six outputs remain byte-identical to CPU emission and validate in the Wasm
 engine.
 
+### Compacted Wasm length frontiers
+
+Length atoms are sparse in every frozen plan. Grouping their indices by
+dependency level removes full-array level filtering:
+
+| Target    | Length atoms | Old length lanes | New length lanes | Length reduction | New total lanes |
+| --------- | -----------: | ---------------: | ---------------: | ---------------: | --------------: |
+| Editor    |          135 |           47,872 |              256 |           99.47% |          96,832 |
+| Codex     |          348 |          408,320 |              448 |           99.89% |         823,552 |
+| grep      |           17 |            7,808 |              128 |           98.36% |          15,808 |
+| tar       |           20 |           44,416 |              128 |           99.71% |          89,792 |
+| wav       |           14 |            4,992 |              128 |           97.44% |          10,176 |
+| raytracer |           23 |            7,808 |              128 |           98.36% |          15,808 |
+
+The previous dependency-level column transferred four bytes per atom. The
+frontier transfers four bytes per length atom:
+
+| Target    | Old metadata bytes | Frontier bytes | Reduction |
+| --------- | -----------------: | -------------: | --------: |
+| Editor    |             95,692 |            540 |    99.44% |
+| Codex     |            816,396 |          1,392 |    99.83% |
+| grep      |             15,588 |             68 |    99.56% |
+| tar       |             88,804 |             80 |    99.91% |
+| wav       |              9,908 |             56 |    99.43% |
+| raytracer |             15,404 |             92 |    99.40% |
+
+Each target has two nonempty levels. The profile counts above come from one
+required-GPU differential compilation per target. They are deterministic work
+and payload measurements, not latency samples.
+
 ### Scalar comptime stack capacity
 
 The bytecode validator derives stack depth at every instruction. GPU scalar

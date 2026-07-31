@@ -12,9 +12,9 @@ import {
   submitCompilerGpuCommand,
 } from "./gpu_device.ts";
 import {
+  analyzeWasmBinaryPlan,
   type WasmAtom,
   type WasmBinaryPlan,
-  wasmBinaryPlanByteLength,
 } from "./wasm.ts";
 
 export type GpuWasmEmissionResult =
@@ -24,7 +24,9 @@ export type GpuWasmEmissionResult =
     readonly atomCount: number;
     readonly byteCount: number;
     readonly outputBufferBytes: number;
-    readonly lengthRounds: number;
+    readonly lengthAtomCount: number;
+    readonly lengthDispatchCount: number;
+    readonly lengthDispatchedInvocationCount: number;
     readonly scanDispatchCount: number;
     readonly dispatchedInvocationCount: number;
     readonly submissionBatchSize: number;
@@ -138,25 +140,18 @@ fn calculate_sizes(@builtin(global_invocation_id) invocation: vec3<u32>) {
 
 const lengthShader = `
 ${encodingFunctions}
-struct Parameters { count: u32, level: u32 }
-@group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
+struct Parameters { count: u32, start: u32 }
+@group(0) @binding(0) var<storage, read> length_atom_indices: array<u32>;
 @group(0) @binding(1) var<storage, read_write> low_words: array<u32>;
 @group(0) @binding(2) var<storage, read> range_starts: array<u32>;
 @group(0) @binding(3) var<storage, read> range_counts: array<u32>;
-@group(0) @binding(4) var<storage, read> dependency_levels: array<u32>;
-@group(0) @binding(5) var<storage, read_write> atom_sizes: array<u32>;
-@group(0) @binding(6) var<uniform> parameters: Parameters;
+@group(0) @binding(4) var<storage, read_write> atom_sizes: array<u32>;
+@group(0) @binding(5) var<uniform> parameters: Parameters;
 
 @compute @workgroup_size(64)
 fn calculate_lengths(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  let index = invocation.x;
-  if (
-    index >= parameters.count ||
-    atom_kinds[index] != ${atomLength}u ||
-    dependency_levels[index] != parameters.level
-  ) {
-    return;
-  }
+  if (invocation.x >= parameters.count) { return; }
+  let index = length_atom_indices[parameters.start + invocation.x];
   let range_start = range_starts[index];
   let range_end = range_start + range_counts[index];
   var byte_length = 0u;
@@ -331,6 +326,13 @@ type PreparedWasmGpuJob = {
   readonly expectedByteCount: number;
   readonly outputWordCount: number;
   readonly workgroupCount: number;
+  readonly lengthAtomIndices: Uint32Array;
+  readonly lengthLevels: readonly {
+    readonly dependencyLevel: number;
+    readonly start: number;
+    readonly count: number;
+  }[];
+  readonly lengthDispatchedInvocationCount: number;
   readonly scan: HierarchicalScanPlan;
 };
 
@@ -411,8 +413,8 @@ async function emitPackedWasmPlanBatch(
     4,
     storageAlignment,
   );
-  const dependencyLevels = packWasmColumns(
-    jobs.map((job) => job.columns.dependencyLevels),
+  const lengthAtomIndices = packWasmColumns(
+    jobs.map((job) => job.lengthAtomIndices),
     4,
     storageAlignment,
   );
@@ -456,15 +458,12 @@ async function emitPackedWasmPlanBatch(
   );
   const passParameterWords: Uint32Array[] = [];
   const lengthParameterIndices = jobs.map((job) =>
-    Array.from(
-      { length: job.plan.maximumDependencyLevel },
-      (_, index) => {
-        passParameterWords.push(
-          new Uint32Array([job.plan.atoms.length, index + 1, 0, 0]),
-        );
-        return passParameterWords.length - 1;
-      },
-    )
+    job.lengthLevels.map((level) => {
+      passParameterWords.push(
+        new Uint32Array([level.count, level.start, 0, 0]),
+      );
+      return passParameterWords.length - 1;
+    })
   );
   const scanParameterIndices = jobs.map((job) =>
     job.scan.levelCounts.map((count, levelIndex) => {
@@ -539,10 +538,10 @@ async function emitPackedWasmPlanBatch(
     rangeCounts,
     GPUBufferUsage.STORAGE,
   );
-  const dependencyLevelBuffer = createPackedWasmBuffer(
+  const lengthAtomIndexBuffer = createPackedWasmBuffer(
     device,
-    "Wasm batch dependency levels",
-    dependencyLevels,
+    "Wasm batch length atom indices",
+    lengthAtomIndices,
     GPUBufferUsage.STORAGE,
   );
   const sizeBuffer = createPackedWasmBuffer(
@@ -607,7 +606,7 @@ async function emitPackedWasmPlanBatch(
     highWordBuffer,
     rangeStartBuffer,
     rangeCountBuffer,
-    dependencyLevelBuffer,
+    lengthAtomIndexBuffer,
     sizeBuffer,
     prefixBuffer,
     ...hierarchySumBuffers,
@@ -652,18 +651,18 @@ async function emitPackedWasmPlanBatch(
     const lengthPass = encoder.beginComputePass();
     lengthPass.setPipeline(lengthPipeline);
     for (const [jobIndex, job] of jobs.entries()) {
-      for (
-        let level = 1;
-        level <= job.plan.maximumDependencyLevel;
-        level += 1
-      ) {
-        const parameterIndex = lengthParameterIndices[jobIndex][level - 1];
+      for (const [levelIndex, level] of job.lengthLevels.entries()) {
+        const parameterIndex = lengthParameterIndices[jobIndex][levelIndex];
         lengthPass.setBindGroup(
           0,
           device.createBindGroup({
             layout: lengthPipeline.getBindGroupLayout(0),
             entries: [
-              wasmBindGroupEntry(0, kindBuffer, kinds.regions[jobIndex]),
+              wasmBindGroupEntry(
+                0,
+                lengthAtomIndexBuffer,
+                lengthAtomIndices.regions[jobIndex],
+              ),
               wasmBindGroupEntry(
                 1,
                 lowWordBuffer,
@@ -679,14 +678,9 @@ async function emitPackedWasmPlanBatch(
                 rangeCountBuffer,
                 rangeCounts.regions[jobIndex],
               ),
+              wasmBindGroupEntry(4, sizeBuffer, sizes.regions[jobIndex]),
               wasmBindGroupEntry(
-                4,
-                dependencyLevelBuffer,
-                dependencyLevels.regions[jobIndex],
-              ),
-              wasmBindGroupEntry(5, sizeBuffer, sizes.regions[jobIndex]),
-              wasmBindGroupEntry(
-                6,
+                5,
                 passParameterBuffer,
                 passParameters.regions[parameterIndex],
               ),
@@ -696,8 +690,8 @@ async function emitPackedWasmPlanBatch(
         dispatchCompilerGpuWorkgroups(
           device,
           lengthPass,
-          `Wasm batch length job ${jobIndex} level ${level}`,
-          job.workgroupCount,
+          `Wasm batch length job ${jobIndex} level ${level.dependencyLevel}`,
+          Math.ceil(level.count / wasmWorkgroupSize),
         );
       }
     }
@@ -873,10 +867,12 @@ async function emitPackedWasmPlanBatch(
         atomCount: job.plan.atoms.length,
         byteCount,
         outputBufferBytes: job.outputWordCount * 4,
-        lengthRounds: job.plan.maximumDependencyLevel,
+        lengthAtomCount: job.lengthAtomIndices.length,
+        lengthDispatchCount: job.lengthLevels.length,
+        lengthDispatchedInvocationCount: job.lengthDispatchedInvocationCount,
         scanDispatchCount: job.scan.dispatchCount,
-        dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize *
-            (2 + job.plan.maximumDependencyLevel) +
+        dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize * 2 +
+          job.lengthDispatchedInvocationCount +
           job.scan.dispatchedInvocationCount,
         submissionBatchSize: submission.submissionBatchSize,
         payloadBatchSize: jobs.length,
@@ -890,7 +886,25 @@ async function emitPackedWasmPlanBatch(
 }
 
 function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
-  const expectedByteCount = wasmBinaryPlanByteLength(plan);
+  const analysis = analyzeWasmBinaryPlan(plan);
+  const columns = atomColumns(plan.atoms);
+  const lengthAtomIndices: number[] = [];
+  const lengthLevels: {
+    dependencyLevel: number;
+    start: number;
+    count: number;
+  }[] = [];
+  for (const level of analysis.lengthLevels) {
+    const start = lengthAtomIndices.length;
+    for (const atom of level.atoms) {
+      lengthAtomIndices.push(atom.atomIndex);
+    }
+    lengthLevels.push({
+      dependencyLevel: level.dependencyLevel,
+      start,
+      count: level.atoms.length,
+    });
+  }
   const levelCounts = [plan.atoms.length];
   while (levelCounts.at(-1)! > wasmWorkgroupSize) {
     levelCounts.push(
@@ -922,10 +936,18 @@ function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   );
   return {
     plan,
-    columns: atomColumns(plan.atoms),
-    expectedByteCount,
-    outputWordCount: Math.ceil(expectedByteCount / 4),
+    columns,
+    expectedByteCount: analysis.byteLength,
+    outputWordCount: Math.ceil(analysis.byteLength / 4),
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
+    lengthAtomIndices: new Uint32Array(lengthAtomIndices),
+    lengthLevels,
+    lengthDispatchedInvocationCount: lengthLevels.reduce(
+      (total, level) =>
+        total +
+        Math.ceil(level.count / wasmWorkgroupSize) * wasmWorkgroupSize,
+      0,
+    ),
     scan: {
       levelCounts,
       hierarchyOffsets,
@@ -1010,6 +1032,9 @@ async function emitWasmPlanWithGpu(
   const {
     columns,
     expectedByteCount,
+    lengthAtomIndices,
+    lengthDispatchedInvocationCount,
+    lengthLevels,
     outputWordCount,
     scan,
     workgroupCount,
@@ -1025,6 +1050,7 @@ async function emitWasmPlanWithGpu(
     sizePipeline,
   } = context;
   const atomBytes = Math.max(4, columns.kinds.byteLength);
+  const lengthAtomIndexBytes = Math.max(4, lengthAtomIndices.byteLength);
   const hierarchyBytes = scan.hierarchyWordCounts.map((count) => count * 4);
   const outputBytes = outputWordCount * 4;
   const capacityRequests = [
@@ -1033,7 +1059,7 @@ async function emitWasmPlanWithGpu(
     ["atom high words", atomBytes, "storage"],
     ["range starts", atomBytes, "storage"],
     ["range counts", atomBytes, "storage"],
-    ["dependency levels", atomBytes, "storage"],
+    ["length atom indices", lengthAtomIndexBytes, "storage"],
     ["atom sizes", atomBytes, "storage"],
     ["prefixes", atomBytes, "storage"],
     ["scan hierarchy sums 0", hierarchyBytes[0], "storage"],
@@ -1093,10 +1119,10 @@ async function emitWasmPlanWithGpu(
     columns.rangeCounts,
     GPUBufferUsage.STORAGE,
   );
-  const dependencyLevelBuffer = createBuffer(
+  const lengthAtomIndexBuffer = createBuffer(
     device,
-    "Wasm dependency levels",
-    columns.dependencyLevels,
+    "Wasm length atom indices",
+    lengthAtomIndices,
     GPUBufferUsage.STORAGE,
   );
   const sizeBuffer = createCompilerGpuBuffer(
@@ -1165,7 +1191,7 @@ async function emitWasmPlanWithGpu(
     highWordBuffer,
     rangeStartBuffer,
     rangeCountBuffer,
-    dependencyLevelBuffer,
+    lengthAtomIndexBuffer,
     sizeBuffer,
     prefixBuffer,
     ...hierarchySumBuffers,
@@ -1198,28 +1224,23 @@ async function emitWasmPlanWithGpu(
     );
     sizePass.end();
 
-    for (
-      let level = 1;
-      level <= plan.maximumDependencyLevel;
-      level += 1
-    ) {
+    for (const level of lengthLevels) {
       const parameterBuffer = createBuffer(
         device,
-        `Wasm length parameters ${level}`,
-        new Uint32Array([plan.atoms.length, level]),
+        `Wasm length parameters ${level.dependencyLevel}`,
+        new Uint32Array([level.count, level.start, 0, 0]),
         GPUBufferUsage.UNIFORM,
       );
       transientParameterBuffers.push(parameterBuffer);
       const bindGroup = device.createBindGroup({
         layout: lengthPipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: kindBuffer } },
+          { binding: 0, resource: { buffer: lengthAtomIndexBuffer } },
           { binding: 1, resource: { buffer: lowWordBuffer } },
           { binding: 2, resource: { buffer: rangeStartBuffer } },
           { binding: 3, resource: { buffer: rangeCountBuffer } },
-          { binding: 4, resource: { buffer: dependencyLevelBuffer } },
-          { binding: 5, resource: { buffer: sizeBuffer } },
-          { binding: 6, resource: { buffer: parameterBuffer } },
+          { binding: 4, resource: { buffer: sizeBuffer } },
+          { binding: 5, resource: { buffer: parameterBuffer } },
         ],
       });
       const pass = encoder.beginComputePass();
@@ -1228,8 +1249,8 @@ async function emitWasmPlanWithGpu(
       dispatchCompilerGpuWorkgroups(
         device,
         pass,
-        `Wasm length level ${level}`,
-        workgroupCount,
+        `Wasm length level ${level.dependencyLevel}`,
+        Math.ceil(level.count / wasmWorkgroupSize),
       );
       pass.end();
     }
@@ -1401,10 +1422,12 @@ async function emitWasmPlanWithGpu(
       atomCount: plan.atoms.length,
       byteCount,
       outputBufferBytes: outputWordCount * 4,
-      lengthRounds: plan.maximumDependencyLevel,
+      lengthAtomCount: lengthAtomIndices.length,
+      lengthDispatchCount: lengthLevels.length,
+      lengthDispatchedInvocationCount,
       scanDispatchCount: scan.dispatchCount,
-      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize *
-          (2 + plan.maximumDependencyLevel) +
+      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize * 2 +
+        lengthDispatchedInvocationCount +
         scan.dispatchedInvocationCount,
       submissionBatchSize: submission.submissionBatchSize,
       payloadBatchSize: 1,
@@ -1428,14 +1451,12 @@ function atomColumns(atoms: readonly WasmAtom[]): {
   readonly highWords: Uint32Array;
   readonly rangeStarts: Uint32Array;
   readonly rangeCounts: Uint32Array;
-  readonly dependencyLevels: Uint32Array;
 } {
   const kinds = new Uint32Array(atoms.length);
   const lowWords = new Uint32Array(atoms.length);
   const highWords = new Uint32Array(atoms.length);
   const rangeStarts = new Uint32Array(atoms.length);
   const rangeCounts = new Uint32Array(atoms.length);
-  const dependencyLevels = new Uint32Array(atoms.length);
   for (const [index, atom] of atoms.entries()) {
     if (atom.kind === "byte") {
       kinds[index] = atomByte;
@@ -1461,7 +1482,6 @@ function atomColumns(atoms: readonly WasmAtom[]): {
     kinds[index] = atomLength;
     rangeStarts[index] = atom.rangeStart;
     rangeCounts[index] = atom.rangeCount;
-    dependencyLevels[index] = atom.dependencyLevel;
   }
   return {
     kinds,
@@ -1469,7 +1489,6 @@ function atomColumns(atoms: readonly WasmAtom[]): {
     highWords,
     rangeStarts,
     rangeCounts,
-    dependencyLevels,
   };
 }
 
