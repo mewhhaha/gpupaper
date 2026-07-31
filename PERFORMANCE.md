@@ -653,23 +653,23 @@ target twice.
 Length validation must inspect every dependency to prove the level invariant,
 but sizing need not reread the same ranges. The adaptive selector compares
 direct range work \(D\) with a conservative sparse estimate
-\(A+K(1+5\lceil\log_2(K+1)\rceil)\). The sparse path uses one scalar prefix and
-a Fenwick tree over resolved length positions:
+\(A+5K\lceil\log_2(K+1)\rceil\). The sparse path uses one scalar prefix and a
+Fenwick tree over validated stable length ranks:
 
 | Target    | Atoms \(A\) | Lengths \(K\) | Direct \(D\) | Selected work | Reduction |
 | --------- | ----------: | ------------: | -----------: | ------------: | --------: |
-| Editor    |      23,923 |           135 |       45,418 |        29,458 |    35.14% |
-| Codex     |     204,099 |           348 |      403,062 |       220,107 |    45.39% |
-| grep      |       3,897 |            17 |        7,286 |         4,339 |    40.45% |
-| tar       |      22,201 |            20 |       43,479 |        22,721 |    47.74% |
-| wav       |       2,477 |            14 |        4,609 |         2,771 |    39.88% |
-| raytracer |       3,851 |            23 |        7,282 |         4,449 |    38.90% |
+| Editor    |      23,923 |           135 |       45,418 |        29,323 |    35.44% |
+| Codex     |     204,099 |           348 |      403,062 |       219,759 |    45.48% |
+| grep      |       3,897 |            17 |        7,286 |         4,322 |    40.68% |
+| tar       |      22,201 |            20 |       43,479 |        22,701 |    47.79% |
+| wav       |       2,477 |            14 |        4,609 |         2,757 |    40.18% |
+| raytracer |       3,851 |            23 |        7,282 |         4,426 |    39.22% |
 
 Every frozen plan selects sparse sizing. The batch model falls from 511,136 to
-283,845 operations, a 44.46% reduction. Direct ties and small-range plans keep
+283,288 operations, a 44.58% reduction. Direct ties and small-range plans keep
 the old loop. The scalar prefix reuses the final offset vector; sparse-only
-logical storage is an \(8(K+1)\)-byte exact-integer tree and a \(K\)-entry
-position map.
+logical storage is an \(8(K+1)\)-byte exact-integer tree. Stable length ranks
+remove the former \(K\)-entry position map.
 Post-change dense/ranked medians were 27.92/27.88 ms for Editor and
 36.61/36.65 ms for Codex; no isolated latency improvement is resolved. The
 503-test required-GPU gate passed and compiled every frozen target twice.
@@ -796,6 +796,34 @@ CPU-oracle protocol and required byte equality on every observation. All six
 medians regressed by 55.05–93.82%, despite an 88.75% aggregate cache hit rate.
 Map lookup and insertion cost therefore exceeds the avoided encoding and
 short-array allocation cost on this runtime. The memoization was removed.
+
+### CPU Wasm emission writes directly
+
+The retained array emitter stored one reference for every atom and allocated
+one array for every remaining multi-byte scalar or derived length. The direct
+emitter instead validates widths into a `Uint8Array`, stores only the \(K\)
+derived payload widths, allocates the exact output, and writes each encoding at
+a rolling offset.
+
+| Target    | Reference entries removed | Encoding arrays removed | Typed temporary bytes | CPU array emitter | CPU direct emitter |
+| --------- | ------------------------: | ----------------------: | --------------------: | ----------------: | -----------------: |
+| Editor    |                    23,923 |                     629 |                25,003 |          0.850 ms |           0.616 ms |
+| Codex     |                   204,099 |                  22,101 |               206,883 |          8.936 ms |           5.697 ms |
+| grep      |                     3,897 |                      19 |                 4,033 |          0.142 ms |           0.115 ms |
+| tar       |                    22,201 |                   3,892 |                22,361 |          0.856 ms |           0.585 ms |
+| wav       |                     2,477 |                      34 |                 2,589 |          0.088 ms |           0.070 ms |
+| raytracer |                     3,851 |                      26 |                 4,035 |          0.138 ms |           0.095 ms |
+
+The frozen batch removes 260,448 reference entries, 26,701 dynamic encoding
+arrays, and the 256-entry persistent canonical table. Its replacement uses
+264,904 logical typed-array bytes plus the required output. Structural
+atom/range visits remain \(2A+2D\); the emitter writes each of the \(B\) output
+bytes once instead of constructing and then copying encoding arrays. Relative
+to the last retained array-emitter run under the same protocol, all medians
+fell by 19.22–36.24%. This comparison is consistent with the exact allocation
+model but is not a counterbalanced causal estimate. Every benchmark observation
+was byte-identical to the direct CPU oracle. The 504-test required-GPU gate
+passed and compiled every frozen target twice.
 
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host

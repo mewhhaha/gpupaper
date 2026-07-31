@@ -1267,16 +1267,18 @@ same-level independence.
 
 For \(K\) length atoms and \(b=\lceil\log_2(K+1)\rceil\), direct summation has
 modeled work \(E_d=D\). Sparse sizing has the conservative iteration estimate
-\(E_s=A+K(1+5b)\): one scalar-prefix pass, one position-map insertion, two
-binary searches, two tree-prefix queries, and one tree update per length atom.
-The implementation selects sparse sizing only when \(E_s<E_d\), so ties retain
-the allocation-free direct loop. The scalar prefix reuses the final offset
-vector and the sparse path adds one \(8(K+1)\)-byte tree plus a \(K\)-entry
-position map. Tree sums use exact 53-bit JavaScript integers so an invalid plan
-cannot wrap before the u32 module-size boundary rejects it. This avoids the
-\(O(JK)\) counterexample of rebuilding a sparse prefix after every dependency
-level and the \(JA\) work of rebuilding dense prefixes. Validation still reads
-\(D\) dependencies independently; only sizing uses the selector.
+\(E_s=A+5Kb\): one scalar-prefix pass, two binary searches, two tree-prefix
+queries, and one tree update per length atom. Validation assigns every length
+atom its stable rank among length atoms in source order. The tree update uses
+that rank directly; no atom-to-position map is reconstructed. The
+implementation selects sparse sizing only when \(E_s<E_d\), so ties retain the
+allocation-free direct loop. The scalar prefix reuses the final offset vector
+and the sparse path adds one \(8(K+1)\)-byte tree. Tree sums use exact 53-bit
+JavaScript integers so an invalid plan cannot wrap before the u32 module-size
+boundary rejects it. This avoids the \(O(JK)\) counterexample of rebuilding a
+sparse prefix after every dependency level and the \(JA\) work of rebuilding
+dense prefixes. Validation still reads \(D\) dependencies independently; only
+sizing uses the selector.
 
 Rank construction and packing remain \(O(A)\). Four adjacent packed bytes are
 accumulated before one physical-word store, reducing byte-stream stores from
@@ -1316,71 +1318,43 @@ model. Host analysis work is
 \(O(A+D+\min(D,A+K\log K))\): validation retains \(D\), while length sizing
 chooses the smaller modeled representation.
 
-The default CPU differential independently evaluates the length DAG, encodes
-LEB128 values, concatenates atoms, and compares every byte. It deliberately
-retains direct range summation rather than sharing the adaptive GPU-boundary
-analysis. Scalar validation and encoding form one inspection product, and the
-same inspection accumulates scalar byte length; each topological length fold
-adds its encoding length. Addition is associative and every atom belongs to
-exactly one variant, so the accumulated total equals the sum formerly computed
-by a separate traversal. CPU-oracle atom/range visits fall from \(4A+2D\) to
-\(2A+2D\): validation/encoding and final copy each visit \(A\), while dependency
-validation and independent sizing each retain \(D\). Once inspection proves a
-scalar value's range, it calls an internal encoder whose domain is that proof.
-Public encoders and derived length encodings retain their boundary checks. This
-removes one duplicate predicate family for every unsigned, signed-32, and
-signed-64 scalar without weakening the trust boundary. Engine validation then
-checks the selected module. The same level invariant also proves by induction
-that every CPU length dependency has an encoding: scalars are encoded during
-inspection, and a level-\(\ell\) length can reference only levels below
-\(\ell\), which the sorted topological fold has completed. The interior sizing
-loop therefore reads the encoding directly rather than rechecking its presence
-for every dependency. With differential verification disabled, engine validity
-does not prove semantic equality to the plan; that mode deliberately trades
-away the independent byte oracle.
-
-Byte encodings have the finite domain \(B=\{0,\ldots,255\}\) and the extensional
-definition \(E_b(v)=[v]\). The encoder never mutates an encoding, so replacing
-each fresh \(E_b(v)\) with the corresponding member of one private canonical
-table is observationally equivalent. It changes per-emission byte-array
-allocation from \(Q\) to zero at a one-time cost of 256 singleton arrays. The
-first compilation batch breaks even when its aggregate \(Q>256\); every frozen
-target individually satisfies that condition.
-
-The same table represents the one-byte LEB subsets
-\(U_1=\{0,\ldots,127\}\) and \(S_1=\{-64,\ldots,63\}\), with signed index
-\(v\bmod128\). Validated internal unsigned and signed encoders may therefore
-reuse it. Exported encoders continue to return fresh mutable arrays, preventing
-external mutation from entering compiler state. Values outside these subsets
-retain their ordinary variable-length encoders.
-
-Memoizing the remaining multi-byte encodings is extensionally sound but not
-automatically cheaper. Let \(N\) be their occurrence count in one emission,
-\(M\) the number of distinct values after keeping unsigned, signed-32, and
-signed-64 domains separate, \(c_e\) the encoding and allocation cost,
-\(c_l\) the cache lookup cost, \(c_i\) the insertion cost, and \(c_0\) the
-three-cache initialization cost. Fresh encoding costs
+The default CPU differential independently evaluates the length DAG and compares
+every emitted byte. It deliberately retains direct range summation rather than
+sharing the adaptive GPU-boundary analysis. Inspection validates scalars,
+records their exact widths in a one-byte column, and accumulates their total
+width. Let
 
 ```text
-C_fresh = N c_e
-C_memo  = N c_l + M(c_e + c_i) + c₀
+rankL(i) = |{j < i | atom j is a length}|
 ```
 
-so memoization is justified only when
-\((N-M)c_e>Nc_l+Mc_i+c_0\). The frozen plans have \(N=26{,}701\),
-\(M=3{,}003\), and an 88.75% hit rate, yet a direct experiment made every
-target slower. Short LEB arrays are cheap enough that JavaScript `Map` work
-dominates. The implementation therefore retains fresh multi-byte encodings.
-This is an empirical rejection of the cost inequality on the measured runtime,
-not a semantic objection to memoization.
+Validation records `rankL` in every length-frontier entry. The topological
+direct fold records each derived payload width in an eight-byte column indexed
+by `rankL`, records its LEB width in the atom-width column, and adds that width
+to the total. Strict dependency-level descent proves by induction that every
+range width is available before its consumer.
 
-Unsigned table reuse is valid only on \(U_1\). An initially unguarded lookup
-exposed the counterexample \(128\): selecting table entry `[128]` is not the
-unsigned LEB encoding `[128, 1]`. The focused LEB and Wasm-validation tests
-caught the error before benchmarking. Signed and unsigned caches, if ever
-reconsidered under a different representation, must remain distinct because
-the same mathematical integer need not have the same signed and unsigned LEB
-encoding.
+After allocating the exact result, one source-order pass writes each byte or
+LEB value directly at a rolling offset. The width functions and writers
+implement the same stopping predicates, so each writer advances by exactly the
+validated width. Induction over source order proves that the final offset is
+the accumulated module width and that concatenation order is preserved. The
+oracle performs \(2A+2D\) atom/range visits plus \(B\) output-byte writes and
+uses exactly \(A+8K+B\) logical typed-array bytes. It allocates no internal
+per-atom encoding arrays, reference vector, canonical byte table, or value
+cache. Public LEB encoders remain checked array-returning boundaries.
+
+This direct representation supersedes two sound but more expensive
+representations: canonical singleton arrays still required an \(A\)-entry
+reference vector, while memoizing multi-byte arrays paid hash-map work. The
+memoization experiment had an 88.75% hit rate and nevertheless regressed every
+frozen target. An initially unguarded canonical lookup also exposed the
+counterexample that unsigned 128 is `[128, 1]`, not `[128]`. Both failed
+alternatives remain recorded in the continuous log.
+
+Engine validation then checks the selected module. With differential
+verification disabled, engine validity does not prove semantic equality to the
+plan; that mode deliberately trades away the independent byte oracle.
 
 ### 7.5 Type equality as a certified conformance experiment
 
@@ -3219,6 +3193,40 @@ instead of `[128, 1]`; five focused tests failed, including engine validation
 and a GPU differential. Adding the \(v<128\) guard made all 84 focused tests
 pass and allowed the performance experiment to measure the intended
 memoization. The rejected implementation left no production code change.
+
+### 2026-07-31: CPU Wasm emission writes bytes directly
+
+The retained CPU oracle still represented every encoded atom as an array
+reference. Length resolution needs widths rather than byte arrays, so Section
+7.4 now derives a smaller sufficient statistic: one byte of width per atom and
+one eight-byte payload width per length atom. Validation assigns every length
+atom its stable source-order rank. The same rank removes the sparse
+GPU-boundary analysis's atom-to-position map.
+
+The CPU oracle retains exactly \(2A+2D\) atom/range visits. It replaces the
+\(A\)-entry reference vector, 26,701 frozen dynamic encoding arrays, and
+256-entry canonical table with \(A+8K=264{,}904\) typed temporary bytes across
+the frozen batch. One final source-order pass writes all \(B\) bytes directly
+at a rolling offset. Existing LEB-boundary, nested-length, engine-validation,
+and generated CPU/GPU differential tests establish executable agreement for 84
+focused cases.
+
+Stable ranks also change sparse length sizing from
+\(A+K(1+5\lceil\log_2(K+1)\rceil)\) to
+\(A+5K\lceil\log_2(K+1)\rceil\). Frozen selected work falls by another 557
+operations, from 283,845 to 283,288, and sparse-only storage loses its
+\(K\)-entry position map. The direct/sparse boundary fixture now checks the
+revised estimate.
+
+The 101-sample CPU medians are Editor 0.616 ms, Codex 5.697 ms, grep
+0.115 ms, Tar 0.585 ms, wav 0.070 ms, and raytracer 0.095 ms. Relative to the
+last retained array-emitter run under the same protocol, all six are lower by
+19.22–36.24%. This is empirical evidence consistent with the allocation and
+write model, not a counterbalanced causal estimate. The required-GPU gate
+passed 504 tests and compiled every frozen target twice. Its advisory samples
+in milliseconds were Editor 354.60/224.22, Codex 939.47/921.55, grep
+139.67/135.81, Tar 205.56/204.96, wav 123.86/118.93, and raytracer
+117.08/101.31.
 
 ## References
 

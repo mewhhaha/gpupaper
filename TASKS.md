@@ -1061,6 +1061,10 @@ Core receives no source handler or open effect row.
       An 88.75% frozen-batch hit rate still regressed every CPU-oracle median by
       55.05–93.82%, so retain fresh encodings and record the rejected cost model
       and unsigned-128 counterexample.
+- [x] Replace the CPU oracle's per-atom encoding graph with width analysis and
+      direct rolling-offset emission. Stable length ranks index the \(K\)
+      derived payloads and remove the sparse GPU analysis's position map; the
+      final representation allocates no compiler-internal encoding arrays.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

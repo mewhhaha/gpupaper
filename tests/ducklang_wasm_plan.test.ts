@@ -161,7 +161,13 @@ Deno.test("Ducklang Wasm analysis counts only resolved lengths inside a range", 
 
   assertEquals(analysis.lengthSizing, "sparse");
   assertEquals(analysis.lengthSizingDependencyAtomCount, 82);
-  assertEquals(analysis.lengthSizingWorkEstimate, 77);
+  assertEquals(analysis.lengthSizingWorkEstimate, 74);
+  assertEquals(
+    analysis.lengthLevels.flatMap((level) =>
+      level.atoms.map((atom) => [atom.atomIndex, atom.lengthAtomRank])
+    ),
+    [[40, 0], [42, 1], [43, 2]],
+  );
   assertEquals([...analysis.atomByteOffsets.slice(40)], [40, 41, 43, 44, 45]);
 });
 
