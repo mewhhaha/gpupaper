@@ -5127,6 +5127,28 @@ must measure whether caching invariant subtree rewrites by source object and
 captured environment actually reduces entries, because contextual `values`
 lookups can invalidate a parameter-only criterion across environments.
 
+### 2026-07-31: per-request identity memoization is unprofitable
+
+Review 79 implements the narrow safe cache experimentally. Each active request
+owns a weak map from expression object to rewritten result. An environment epoch
+increments on every lexical `values` insertion, deletion, or restoration; a hit
+requires object identity and the same epoch. The substitution environment is
+fixed for the lifetime of that request, and nested requests own separate caches,
+so the key preserves shadowing and nested-specialization semantics.
+
+Fifteen direct Codex samples in baseline/cache/baseline order measured
+pre-specialization rewrite median/MAD 70.379/1.648, 76.230/2.688, and
+71.077/3.744 ms. The cache regresses both neighboring baseline medians by 5.15
+and 5.85 ms. Focused specialization tests passed, but semantic safety is not a
+performance argument; the implementation was removed.
+
+This counterexample distinguishes repeated traversal from repeated
+object-and-context pairs. Paying a weak-map lookup at all 130,143 rewrite
+entries cannot be justified by the 79% final identity-preservation rate. A
+future template must mark invariant regions ahead of execution and bypass them
+at their roots; it must not ask a dynamic cache at every visited node. The next
+review measures the cache's actual hit rate to quantify that distinction.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

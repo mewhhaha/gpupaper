@@ -563,6 +563,12 @@ Bottom-up free-parameter counts find only 12 dependent occurrences in the
 This justifies an encoder-focused invariant-subtree experiment, not a universal
 template policy. Temporary counters were removed.
 
+A safe per-request weak cache keyed by expression object and lexical-environment
+epoch was rejected. Fifteen direct Codex baseline/cache/baseline rewrite
+samples measured median/MAD 70.379/1.648, 76.230/2.688, and 71.077/3.744 ms.
+Dynamic lookup at every entry costs more than same-context identity reuse; no
+cache code remains.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

@@ -1495,6 +1495,9 @@ resource cost, and corpus measurements.
 - [x] Measure free-parameter dependence in each large factory body. Establish
       the encoder's 12-of-5,298 sparse boundary and distinguish it from the
       25--35% dependent JSON parsing bodies.
+- [x] Test a semantically safe per-request expression cache keyed by lexical
+      environment epoch. Reject its 5--6 ms Codex rewrite regression and retain
+      the requirement to bypass invariant regions at their roots.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
