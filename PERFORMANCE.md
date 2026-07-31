@@ -415,6 +415,20 @@ Its excess is broad body specialization—162.56 substitution entries per
 distinct result key—not deep recursion. The hot counters were removed after
 measurement.
 
+Substitution lookup work is shallow despite broad specialization:
+
+| Target | Reference queries | Map probes | Hits | Extra depth probes |
+| ------ | ----------------: | ---------: | ---: | -----------------: |
+| Editor | 823 | 883 | 125 | 60 |
+| Codex | 31,660 | 31,669 | 2,705 | 9 |
+| grep | 1 | 1 | 1 | 0 |
+| Tar/wav/raytracer | 0 | 0 | 0 | 0 |
+
+Flattening the environment stack could save only nine Codex reads while adding
+overlay updates and rollback for 703 requests. It is rejected. The 28,955
+Codex misses motivate measuring symbol scope before attempting a semantic
+non-parameter fast path.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

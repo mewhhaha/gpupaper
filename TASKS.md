@@ -1450,6 +1450,9 @@ resource cost, and corpus measurements.
 - [x] Partition rewrite entries by substitution activity and maximum depth.
       Identify Codex's 87.81% shallow breadth, reject deep recursion as the
       cause, and state the dependency proof needed before parallel scheduling.
+- [x] Measure substitution reference queries, probes, and hits. Reject stack
+      flattening because Codex has only nine depth probes, and identify symbol
+      scope as the proof boundary for bypassing guaranteed misses.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

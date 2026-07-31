@@ -4792,6 +4792,28 @@ is admissible only after dependencies through captured environments and nested
 requests form an explicit acyclic frontier; the shallow stack alone is not a
 proof of independence.
 
+### 2026-07-31: substitution-stack flattening is rejected
+
+Review 64 temporarily counts reference queries made while a substitution
+environment is active, individual environment-map probes, and successful
+substitutions. The `(queries, probes, hits)` vectors are Editor
+`(823,883,125)`, Codex `(31,660,31,669,2,705)`, grep `(1,1,1)`, and zero for
+Tar, wav, and raytracer.
+
+Reverse stack search implements lexical shadowing: the newest parameter
+substitution wins. An overlay map with rollback would reduce probes from
+\(\sum q_i d_i\) to \(\sum q_i\), but must update and restore entries at every
+request boundary. Codex has only nine probes beyond one per query, so its
+maximum possible lookup saving is nine map reads against 703 push/pop updates.
+Editor has 60 extra probes but only 823 queries in a 4 ms stage. The derived
+inequality cannot hold on this corpus.
+
+The counters were removed. Codex's 8.54% hit rate instead suggests a different
+boundary: substitutions contain function parameter symbols, so references from
+provably disjoint symbol scopes can bypass the stack entirely. Review 65 must
+measure query scope before adding that guard; symbol scope is semantic evidence,
+whereas a name or ID-range heuristic would be unsound.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
