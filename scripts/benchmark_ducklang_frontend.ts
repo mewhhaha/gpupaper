@@ -65,7 +65,7 @@ const defaultTargets = [
     hostInterface: undefined,
   },
 ] as const;
-const warmIterationCount = 5;
+const warmIterationCount = 6;
 
 const targets = Deno.args.length === 0
   ? defaultTargets
@@ -89,17 +89,10 @@ try {
     const hostInterface = target.hostInterface === undefined
       ? undefined
       : await Deno.realPath(target.hostInterface);
-    const cpuCompilation = await measureCompilationMode(
+    const compilations = await measureCompilationModes(
       file,
       source,
       hostInterface,
-      "off",
-    );
-    const gpuCompilation = await measureCompilationMode(
-      file,
-      source,
-      hostInterface,
-      "required",
     );
 
     console.log(JSON.stringify({
@@ -137,8 +130,10 @@ try {
         },
       },
       compilation: {
-        cpu: cpuCompilation,
-        gpu: gpuCompilation,
+        pairOrder: "alternatingCpuFirst",
+        pairCount: warmIterationCount / 2,
+        cpu: compilations.cpu,
+        gpu: compilations.gpu,
       },
     }));
   }
@@ -230,31 +225,65 @@ async function measureCompilation(
   }
 }
 
-async function measureCompilationMode(
-  file: string,
-  source: string,
-  hostInterface: string | undefined,
-  gpuMode: "off" | "required",
-): Promise<{
+type CompilationModeReport = {
   readonly first: CompilationMeasurement;
   readonly warmIterationCount: number;
   readonly warmMedianTotalMilliseconds: number;
-  readonly warmMedianProfile?: DucklangCompilationProfile;
+  readonly warmRepresentativeProfile?: DucklangCompilationProfile;
   readonly warmHotStages?: readonly {
     readonly stage: keyof DucklangCompilationProfile["stages"];
     readonly milliseconds: number;
     readonly percentageOfTotal: number;
   }[];
   readonly warmErrors?: readonly string[];
+};
+
+async function measureCompilationModes(
+  file: string,
+  source: string,
+  hostInterface: string | undefined,
+): Promise<{
+  readonly cpu: CompilationModeReport;
+  readonly gpu: CompilationModeReport;
 }> {
   await clearDucklangParserCache();
-  const first = await measureCompilation(file, source, hostInterface, gpuMode);
-  const warm: CompilationMeasurement[] = [];
+  const cpuFirst = await measureCompilation(file, source, hostInterface, "off");
+  await clearDucklangParserCache();
+  const gpuFirst = await measureCompilation(
+    file,
+    source,
+    hostInterface,
+    "required",
+  );
+  const cpuWarm: CompilationMeasurement[] = [];
+  const gpuWarm: CompilationMeasurement[] = [];
   for (let iteration = 0; iteration < warmIterationCount; iteration += 1) {
-    warm.push(
-      await measureCompilation(file, source, hostInterface, gpuMode),
-    );
+    if (iteration % 2 === 0) {
+      cpuWarm.push(
+        await measureCompilation(file, source, hostInterface, "off"),
+      );
+      gpuWarm.push(
+        await measureCompilation(file, source, hostInterface, "required"),
+      );
+    } else {
+      gpuWarm.push(
+        await measureCompilation(file, source, hostInterface, "required"),
+      );
+      cpuWarm.push(
+        await measureCompilation(file, source, hostInterface, "off"),
+      );
+    }
   }
+  return {
+    cpu: summarizeCompilationMode(cpuFirst, cpuWarm),
+    gpu: summarizeCompilationMode(gpuFirst, gpuWarm),
+  };
+}
+
+function summarizeCompilationMode(
+  first: CompilationMeasurement,
+  warm: readonly CompilationMeasurement[],
+): CompilationModeReport {
   const completed = warm.filter(
     (
       measurement,

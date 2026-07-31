@@ -42,8 +42,9 @@ belong to one real compilation and retain their accounting identity. The
 break-even benchmark alternates CPU-first and GPU-first pairs within every batch
 size and policy, requires an even sample count, and uses the midpoint of the two
 central observations as the even-sample median. This counterbalances first-order
-run-order drift but does not remove autocorrelation or turn five or sixteen
-samples into a population-level performance claim.
+run-order drift but does not remove autocorrelation or turn six or sixteen
+samples into a population-level performance claim. The frontend comparison uses
+six warm observations as three complete CPU-first/GPU-first pairs.
 
 ```sh
 deno task benchmark:frontend

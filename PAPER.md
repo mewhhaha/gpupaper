@@ -1793,9 +1793,11 @@ backend indistinguishable from within-run order. It now uses complete,
 even-counted CPU-first and GPU-first pairs and the conventional midpoint median.
 The frontend harness previously assembled profiles from independent field
 medians; such a vector need not correspond to any execution or preserve
-accounting sums. It now reports the observed profile nearest median total while
-retaining the scalar median as the latency summary. No historical timing was
-rewritten; future measurements use the corrected design.
+accounting sums. It now uses three complete CPU-first/GPU-first warm pairs and
+reports the observed profile nearest median total while retaining the scalar
+median as the latency summary. Each mode's first observation resets parser state
+independently. No historical timing was rewritten; future measurements use the
+corrected design.
 
 ## References
 
