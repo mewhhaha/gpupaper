@@ -138,6 +138,9 @@ async function measureEmission(
     resolvedOffsetBytes: emitted.resolvedOffsetBytes,
     resolvedOffsetBitWidth: emitted.resolvedOffsetBitWidth,
     dispatchedInvocationCount: emitted.dispatchedInvocationCount,
+    sparseLengthSizing: emitted.sparseLengthSizing,
+    lengthSizingDependencyAtomCount: emitted.lengthSizingDependencyAtomCount,
+    lengthSizingWorkEstimate: emitted.lengthSizingWorkEstimate,
     lowWordBytes: emitted.lowWordBytes,
     byteRankBitWidth: emitted.byteRankBitWidth,
     byteRankBytes: emitted.byteRankBytes,
@@ -162,6 +165,9 @@ function reportLayout(
     resolvedOffsetBytes: work.resolvedOffsetBytes,
     resolvedOffsetBitWidth: work.resolvedOffsetBitWidth,
     dispatchedInvocationCount: work.dispatchedInvocationCount,
+    sparseLengthSizing: work.sparseLengthSizing,
+    lengthSizingDependencyAtomCount: work.lengthSizingDependencyAtomCount,
+    lengthSizingWorkEstimate: work.lengthSizingWorkEstimate,
   };
 }
 

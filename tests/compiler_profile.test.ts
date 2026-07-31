@@ -118,6 +118,16 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const lowWordBytes = lowWordLayout === "ranked"
     ? rankedLowWordBytes
     : work.wasmAtomCount * 4;
+  const sparseLengthSizingWork = work.wasmAtomCount +
+    work.gpuWasmLengthAtomCount *
+      (1 + 5 * Math.ceil(Math.log2(work.gpuWasmLengthAtomCount + 1)));
+  const sparseLengthSizing = sparseLengthSizingWork <
+      work.gpuWasmLengthSizingDependencyAtomCount
+    ? 1
+    : 0;
+  const lengthSizingWork = sparseLengthSizing === 1
+    ? sparseLengthSizingWork
+    : work.gpuWasmLengthSizingDependencyAtomCount;
   if (
     work.gpuRewriteCandidateCount === 0 ||
     work.gpuRewriteCandidateCount > work.coreOperationCount ||
@@ -128,6 +138,9 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     work.gpuRewriteDispatchedInvocationCount !==
       expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
+    work.gpuWasmLengthSizingDependencyAtomCount === 0 ||
+    work.gpuWasmSparseLengthSizing !== sparseLengthSizing ||
+    work.gpuWasmLengthSizingWorkEstimate !== lengthSizingWork ||
     work.gpuWasmResolvedOffsetBitWidth !== resolvedOffsetBitWidth ||
     work.gpuWasmResolvedOffsetBytes !== resolvedOffsetBytes ||
     work.gpuWasmRankedLowWords !== (lowWordLayout === "ranked" ? 1 : 0) ||

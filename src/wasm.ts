@@ -33,6 +33,9 @@ export type WasmBinaryPlanAnalysis = {
   readonly byteAtomCount: number;
   readonly maximumByteRank: number;
   readonly signed64AtomCount: number;
+  readonly lengthSizing: "direct" | "sparse";
+  readonly lengthSizingDependencyAtomCount: number;
+  readonly lengthSizingWorkEstimate: number;
 };
 
 type WasmBinaryPlanInspection = {
@@ -40,6 +43,8 @@ type WasmBinaryPlanInspection = {
   readonly byteAtomCount: number;
   readonly maximumByteRank: number;
   readonly signed64AtomCount: number;
+  readonly dependencyAtomCount: number;
+  readonly lengthAtomIndices: readonly number[];
 };
 
 type WasmNode =
@@ -334,6 +339,8 @@ function inspectWasmBinaryPlan(
   let byteAtomCount = 0;
   let maximumByteRank = 0;
   let signed64AtomCount = 0;
+  let dependencyAtomCount = 0;
+  const lengthAtomIndices: number[] = [];
   const lengthAtomsByLevel = new Map<
     number,
     { atomIndex: number; rangeStart: number; rangeCount: number }[]
@@ -419,6 +426,8 @@ function inspectWasmBinaryPlan(
         );
       }
     }
+    dependencyAtomCount += atom.rangeCount;
+    lengthAtomIndices.push(atomIndex);
     maximumDependencyLevel = Math.max(
       maximumDependencyLevel,
       atom.dependencyLevel,
@@ -448,6 +457,8 @@ function inspectWasmBinaryPlan(
     byteAtomCount,
     maximumByteRank,
     signed64AtomCount,
+    dependencyAtomCount,
+    lengthAtomIndices,
   };
 }
 
@@ -460,27 +471,112 @@ export function analyzeWasmBinaryPlan(
     byteAtomCount,
     maximumByteRank,
     signed64AtomCount,
+    dependencyAtomCount,
+    lengthAtomIndices,
   } = inspectWasmBinaryPlan(plan, sizes);
-  for (const level of lengthLevels) {
-    for (const atom of level.atoms) {
-      let atomByteLength = 0;
-      for (
-        let dependencyIndex = atom.rangeStart;
-        dependencyIndex < atom.rangeStart + atom.rangeCount;
-        dependencyIndex += 1
-      ) {
-        atomByteLength += sizes[dependencyIndex];
+  const sparseSearchDepth = Math.ceil(
+    Math.log2(lengthAtomIndices.length + 1),
+  );
+  const sparseWorkEstimate = plan.atoms.length +
+    lengthAtomIndices.length * (1 + 5 * sparseSearchDepth);
+  const lengthSizing = sparseWorkEstimate < dependencyAtomCount
+    ? "sparse"
+    : "direct";
+  const atomByteOffsets = new Uint32Array(plan.atoms.length + 1);
+  if (lengthSizing === "direct") {
+    for (const level of lengthLevels) {
+      for (const atom of level.atoms) {
+        let atomByteLength = 0;
+        for (
+          let dependencyIndex = atom.rangeStart;
+          dependencyIndex < atom.rangeStart + atom.rangeCount;
+          dependencyIndex += 1
+        ) {
+          atomByteLength += sizes[dependencyIndex];
+        }
+        if (atomByteLength > 0xffff_ffff) {
+          throw new RangeError(
+            `Wasm length atom ${atom.atomIndex} encodes ${atomByteLength} bytes; maximum is 4294967295`,
+          );
+        }
+        sizes[atom.atomIndex] = unsignedEncodingByteLength(atomByteLength);
       }
-      if (atomByteLength > 0xffff_ffff) {
+    }
+  } else {
+    let scalarByteLength = 0;
+    for (const [atomIndex, size] of sizes.entries()) {
+      scalarByteLength += size;
+      if (scalarByteLength > 0xffff_ffff) {
         throw new RangeError(
-          `Wasm length atom ${atom.atomIndex} encodes ${atomByteLength} bytes; maximum is 4294967295`,
+          `Wasm plan byte length exceeds u32 at atom ${atomIndex}; partial length ${scalarByteLength}`,
         );
       }
-      sizes[atom.atomIndex] = unsignedEncodingByteLength(atomByteLength);
+      atomByteOffsets[atomIndex + 1] = scalarByteLength;
+    }
+    const lengthPositionByAtom = new Map(
+      lengthAtomIndices.map((atomIndex, position) => [atomIndex, position]),
+    );
+    const resolvedLengthSizes = new Float64Array(
+      lengthAtomIndices.length + 1,
+    );
+    for (const level of lengthLevels) {
+      for (const atom of level.atoms) {
+        const rangeEnd = atom.rangeStart + atom.rangeCount;
+        let lower = 0;
+        let upper = lengthAtomIndices.length;
+        while (lower < upper) {
+          const middle = lower + ((upper - lower) >> 1);
+          if (lengthAtomIndices[middle] < atom.rangeStart) {
+            lower = middle + 1;
+          } else {
+            upper = middle;
+          }
+        }
+        const firstLengthPosition = lower;
+        lower = 0;
+        upper = lengthAtomIndices.length;
+        while (lower < upper) {
+          const middle = lower + ((upper - lower) >> 1);
+          if (lengthAtomIndices[middle] < rangeEnd) {
+            lower = middle + 1;
+          } else {
+            upper = middle;
+          }
+        }
+        const finalLengthPosition = lower;
+        let precedingLengthBytes = 0;
+        let prefixPosition = firstLengthPosition;
+        while (prefixPosition > 0) {
+          precedingLengthBytes += resolvedLengthSizes[prefixPosition];
+          prefixPosition -= prefixPosition & -prefixPosition;
+        }
+        let finalLengthBytes = 0;
+        prefixPosition = finalLengthPosition;
+        while (prefixPosition > 0) {
+          finalLengthBytes += resolvedLengthSizes[prefixPosition];
+          prefixPosition -= prefixPosition & -prefixPosition;
+        }
+        const atomByteLength = atomByteOffsets[rangeEnd] -
+          atomByteOffsets[atom.rangeStart] +
+          finalLengthBytes -
+          precedingLengthBytes;
+        if (atomByteLength > 0xffff_ffff) {
+          throw new RangeError(
+            `Wasm length atom ${atom.atomIndex} encodes ${atomByteLength} bytes; maximum is 4294967295`,
+          );
+        }
+        sizes[atom.atomIndex] = unsignedEncodingByteLength(atomByteLength);
+      }
+      for (const atom of level.atoms) {
+        let position = lengthPositionByAtom.get(atom.atomIndex)! + 1;
+        while (position < resolvedLengthSizes.length) {
+          resolvedLengthSizes[position] += sizes[atom.atomIndex];
+          position += position & -position;
+        }
+      }
     }
   }
   let byteLength = 0;
-  const atomByteOffsets = new Uint32Array(plan.atoms.length + 1);
   for (const [atomIndex, size] of sizes.entries()) {
     byteLength += size;
     if (byteLength > 0xffff_ffff) {
@@ -497,6 +593,11 @@ export function analyzeWasmBinaryPlan(
     byteAtomCount,
     maximumByteRank,
     signed64AtomCount,
+    lengthSizing,
+    lengthSizingDependencyAtomCount: dependencyAtomCount,
+    lengthSizingWorkEstimate: lengthSizing === "sparse"
+      ? sparseWorkEstimate
+      : dependencyAtomCount,
   };
 }
 

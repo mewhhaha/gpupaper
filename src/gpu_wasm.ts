@@ -26,6 +26,9 @@ export type GpuWasmEmissionResult =
     readonly byteCount: number;
     readonly outputBufferBytes: number;
     readonly lengthAtomCount: number;
+    readonly sparseLengthSizing: boolean;
+    readonly lengthSizingDependencyAtomCount: number;
+    readonly lengthSizingWorkEstimate: number;
     readonly resolvedOffsetBytes: number;
     readonly resolvedOffsetBitWidth: 16 | 32;
     readonly atomInputBytes: number;
@@ -245,6 +248,9 @@ type PreparedWasmGpuJob = {
   readonly atomByteOffsets: Uint32Array;
   readonly resolvedOffsetBitWidth: 16 | 32;
   readonly lengthAtomCount: number;
+  readonly sparseLengthSizing: boolean;
+  readonly lengthSizingDependencyAtomCount: number;
+  readonly lengthSizingWorkEstimate: number;
 };
 
 type PackedWasmColumn = {
@@ -489,6 +495,9 @@ async function emitPackedWasmPlanBatch(
         byteCount: job.expectedByteCount,
         outputBufferBytes: job.outputWordCount * 4,
         lengthAtomCount: job.lengthAtomCount,
+        sparseLengthSizing: job.sparseLengthSizing,
+        lengthSizingDependencyAtomCount: job.lengthSizingDependencyAtomCount,
+        lengthSizingWorkEstimate: job.lengthSizingWorkEstimate,
         resolvedOffsetBytes: job.atomByteOffsets.byteLength,
         resolvedOffsetBitWidth: job.resolvedOffsetBitWidth,
         atomInputBytes: job.columns.kinds.byteLength +
@@ -556,6 +565,9 @@ function prepareWasmGpuJob(
       (count, level) => count + level.atoms.length,
       0,
     ),
+    sparseLengthSizing: analysis.lengthSizing === "sparse",
+    lengthSizingDependencyAtomCount: analysis.lengthSizingDependencyAtomCount,
+    lengthSizingWorkEstimate: analysis.lengthSizingWorkEstimate,
   };
 }
 
@@ -634,8 +646,11 @@ async function emitWasmPlanWithGpu(
     columns,
     expectedByteCount,
     lengthAtomCount,
+    lengthSizingDependencyAtomCount,
+    lengthSizingWorkEstimate,
     outputWordCount,
     resolvedOffsetBitWidth,
+    sparseLengthSizing,
     workgroupCount,
   } = job;
   const context = await requestGpuWasmContext();
@@ -812,6 +827,9 @@ async function emitWasmPlanWithGpu(
       byteCount: expectedByteCount,
       outputBufferBytes: outputWordCount * 4,
       lengthAtomCount,
+      sparseLengthSizing,
+      lengthSizingDependencyAtomCount,
+      lengthSizingWorkEstimate,
       resolvedOffsetBytes: atomByteOffsets.byteLength,
       resolvedOffsetBitWidth,
       atomInputBytes: columns.kinds.byteLength +

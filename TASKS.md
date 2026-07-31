@@ -1040,6 +1040,9 @@ Core receives no source handler or open effect row.
 - [x] Fuse scalar validation and sizing into one plan inspection while retaining
       validation-only operation without a size allocation. Length sizing remains
       a separate topological fold.
+- [x] Select direct or sparse Wasm length sizing from an explicit cost model.
+      The sparse path uses a scalar prefix and level-batched Fenwick updates;
+      profiles expose both the direct dependency count and selected work.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -1245,14 +1245,47 @@ subsequent topological fold because a length atom depends on already-sized
 atoms. Relative to separate validation, sizing, and statistics traversals, the
 product fold removes \(2A\) atom visits. A validation-only caller supplies no
 size column and allocates none; it pays one predictable sink-presence branch per
-scalar atom. Rank construction and packing remain \(O(A)\). Four adjacent
-packed bytes are accumulated before one physical-word store, reducing
-byte-stream stores from \(Q\) to \(\lceil Q/4\rceil\). Ranked GPU lookup now has
-four constant shifts, three ORs, three masks/complements, and one population
-count rather than zero to seven data-dependent tag comparisons. Rank lookup
-adds one shift and mask on the 16-bit path. Its two adjacent ranks are likewise
-assembled before one physical word store. Five frozen targets use 16-bit ranks;
-Codex uses 32. Relative to
+scalar atom.
+
+Let \(D=\sum_i\mathrm{rangeCount}_i\), let \(s_0(i)\) be the encoded size of a
+scalar atom and zero for a length atom, and define
+\(P_0(t)=\sum_{i<t}s_0(i)\). Length atom indices are kept in source order. A
+Fenwick tree [22] stores encoded sizes only for length atoms from completed
+dependency levels. For a length range \([u,v)\):
+
+```text
+payload_size(u, v) =
+    P₀(v) - P₀(u)
+  + resolved_length_prefix(v) - resolved_length_prefix(u)
+```
+
+The dependency validator proves that a level-\(\ell\) range contains no length
+at level \(\ell\) or above. Induction on \(\ell\) therefore shows that the
+scalar prefix and tree contain every and only the already-known contributors to
+that range. Updates occur only after the complete level is sized, preserving
+same-level independence.
+
+For \(K\) length atoms and \(b=\lceil\log_2(K+1)\rceil\), direct summation has
+modeled work \(E_d=D\). Sparse sizing has the conservative iteration estimate
+\(E_s=A+K(1+5b)\): one scalar-prefix pass, one position-map insertion, two
+binary searches, two tree-prefix queries, and one tree update per length atom.
+The implementation selects sparse sizing only when \(E_s<E_d\), so ties retain
+the allocation-free direct loop. The scalar prefix reuses the final offset
+vector and the sparse path adds one \(8(K+1)\)-byte tree plus a \(K\)-entry
+position map. Tree sums use exact 53-bit JavaScript integers so an invalid plan
+cannot wrap before the u32 module-size boundary rejects it. This avoids the
+\(O(JK)\) counterexample of rebuilding a sparse prefix after every dependency
+level and the \(JA\) work of rebuilding dense prefixes. Validation still reads
+\(D\) dependencies independently; only sizing uses the selector.
+
+Rank construction and packing remain \(O(A)\). Four adjacent packed bytes are
+accumulated before one physical-word store, reducing byte-stream stores from
+\(Q\) to \(\lceil Q/4\rceil\). Ranked GPU lookup now has four constant shifts,
+three ORs, three masks/complements, and one population count rather than zero to
+seven data-dependent tag comparisons. Rank lookup adds one shift and mask on
+the 16-bit path. Its two adjacent ranks are likewise assembled before one
+physical word store. Five frozen targets use 16-bit ranks; Codex uses 32.
+Relative to
 dense low words, adaptive ranking removes 3,856–245,336 bytes and 14.14–25.05%
 of complete atom input. A 21-pair counterbalanced experiment measured
 ranked/dense median ratios from 0.9771 to 1.0015, so no latency improvement is
@@ -1279,8 +1312,9 @@ logical device bytes:
 The old inclusive-prefix readback word exactly offsets the new vector's one
 extra boundary word, so neither appears in the difference. Packed batches add
 device-required alignment between logical jobs; it does not change this per-job
-model. Host work is \(O(A+\sum_i\mathrm{rangeCount}_i+|J|\log\max(1,|J|))\), as
-it already was for exact capacity.
+model. Host analysis work is
+\(O(A+D+\min(D,A+K\log K))\): validation retains \(D\), while length sizing
+chooses the smaller modeled representation.
 
 The default CPU differential independently evaluates the length DAG, encodes
 LEB128 values, concatenates atoms, and compares every byte. Engine validation
@@ -2966,6 +3000,33 @@ compiled every frozen target twice. Its advisory samples in milliseconds were
 Editor 341.45/224.94, Codex 955.82/840.71, grep 130.55/124.65, Tar
 196.14/177.78, wav 115.04/113.19, and raytracer 100.00/90.38.
 
+### 2026-07-31: Wasm length sizing uses adaptive sparse prefixes
+
+Direct length sizing reread every dependency range after validation had already
+traversed it. A dense prefix per dependency level initially appeared attractive
+but loses on every frozen plan: two levels cost \(2A\) prefix visits versus
+only 1.86–1.98\(A\) direct range visits, plus an \(A+1\)-word buffer. Rebuilding
+a sparse prefix by level instead has an \(O(JK)\) deeply nested counterexample.
+
+Section 7.4 now derives an adaptive alternative. A scalar prefix plus a Fenwick
+tree over resolved length positions answers each range with prefix differences.
+The direct path remains available, and the conservative selector admits sparse
+sizing only when \(A+K(1+5\lceil\log_2(K+1)\rceil)<D\). Both sides and the
+selected estimate are exposed in compiler profiles and the emitter benchmark.
+
+All six frozen plans select sparse sizing. Their combined model falls from
+511,136 dependency reads to 283,845 prefix/search/tree operations, a 44.46%
+reduction. A focused counterexample proves that a level-two range counts a
+resolved level-one length inside its interval but excludes one outside it;
+another fixture selects the direct path. Focused compiler, profile, and
+generated CPU/GPU differentials pass. Post-change 21-round dense/ranked medians
+were 27.92/27.88 ms for Editor and 36.61/36.65 ms for Codex. The modeled host
+reduction is below run-to-run variation at the complete emitter boundary, so no
+latency claim is made. The required-GPU release gate passed 503 tests and
+compiled every frozen target twice. Its advisory samples in milliseconds were
+Editor 328.50/243.97, Codex 961.70/827.96, grep 129.25/123.81, Tar
+226.99/174.06, wav 110.53/112.98, and raytracer 94.62/92.01.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -3020,3 +3081,6 @@ Editor 341.45/224.94, Codex 955.82/840.71, grep 130.55/124.65, Tar
     <https://doi.org/10.1145/800078.802557>
 21. Luc Maranget. “Compiling Pattern Matching to Good Decision Trees.” ML
     2008. <https://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf>
+22. Peter M. Fenwick. “A New Data Structure for Cumulative Frequency Tables.”
+    Software: Practice and Experience 24(3), 1994.
+    <https://onlinelibrary.wiley.com/doi/10.1002/spe.4380240306>

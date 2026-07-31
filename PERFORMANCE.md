@@ -648,6 +648,32 @@ sink-presence branch per scalar atom. Post-change dense/ranked medians were
 claim is made. The 502-test required-GPU gate passed and compiled every frozen
 target twice.
 
+### Adaptive sparse Wasm length sizing
+
+Length validation must inspect every dependency to prove the level invariant,
+but sizing need not reread the same ranges. The adaptive selector compares
+direct range work \(D\) with a conservative sparse estimate
+\(A+K(1+5\lceil\log_2(K+1)\rceil)\). The sparse path uses one scalar prefix and
+a Fenwick tree over resolved length positions:
+
+| Target    | Atoms \(A\) | Lengths \(K\) | Direct \(D\) | Selected work | Reduction |
+| --------- | ----------: | ------------: | -----------: | ------------: | --------: |
+| Editor    |      23,923 |           135 |       45,418 |        29,458 |    35.14% |
+| Codex     |     204,099 |           348 |      403,062 |       220,107 |    45.39% |
+| grep      |       3,897 |            17 |        7,286 |         4,339 |    40.45% |
+| tar       |      22,201 |            20 |       43,479 |        22,721 |    47.74% |
+| wav       |       2,477 |            14 |        4,609 |         2,771 |    39.88% |
+| raytracer |       3,851 |            23 |        7,282 |         4,449 |    38.90% |
+
+Every frozen plan selects sparse sizing. The batch model falls from 511,136 to
+283,845 operations, a 44.46% reduction. Direct ties and small-range plans keep
+the old loop. The scalar prefix reuses the final offset vector; sparse-only
+logical storage is an \(8(K+1)\)-byte exact-integer tree and a \(K\)-entry
+position map.
+Post-change dense/ranked medians were 27.92/27.88 ms for Editor and
+36.61/36.65 ms for Codex; no isolated latency improvement is resolved. The
+503-test required-GPU gate passed and compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

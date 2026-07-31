@@ -101,6 +101,9 @@ Deno.test("Ducklang Wasm analysis resolves exact atom byte boundaries", () => {
   assertEquals(analysis.byteAtomCount, 1);
   assertEquals(analysis.maximumByteRank, 0);
   assertEquals(analysis.signed64AtomCount, 0);
+  assertEquals(analysis.lengthSizing, "direct");
+  assertEquals(analysis.lengthSizingDependencyAtomCount, 3);
+  assertEquals(analysis.lengthSizingWorkEstimate, 3);
 });
 
 Deno.test("Ducklang Wasm analysis rejects an invalid scalar before sizing", () => {
@@ -118,6 +121,28 @@ Deno.test("Ducklang Wasm analysis rejects an invalid scalar before sizing", () =
     caught instanceof Error ? caught.message : caught,
     "Wasm byte atom 0 must fit u8; received 256",
   );
+});
+
+Deno.test("Ducklang Wasm analysis counts only resolved lengths inside a range", () => {
+  const scalarAtoms = Array.from(
+    { length: 40 },
+    () => ({ kind: "byte" as const, value: 0xaa }),
+  );
+  const analysis = analyzeWasmBinaryPlan({
+    atoms: [
+      ...scalarAtoms,
+      { kind: "length", rangeStart: 0, rangeCount: 40, dependencyLevel: 1 },
+      { kind: "unsigned", value: 128 },
+      { kind: "length", rangeStart: 0, rangeCount: 40, dependencyLevel: 1 },
+      { kind: "length", rangeStart: 40, rangeCount: 2, dependencyLevel: 2 },
+    ],
+    maximumDependencyLevel: 2,
+  });
+
+  assertEquals(analysis.lengthSizing, "sparse");
+  assertEquals(analysis.lengthSizingDependencyAtomCount, 82);
+  assertEquals(analysis.lengthSizingWorkEstimate, 77);
+  assertEquals([...analysis.atomByteOffsets.slice(40)], [40, 41, 43, 44, 45]);
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {

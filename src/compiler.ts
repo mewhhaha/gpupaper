@@ -253,6 +253,9 @@ export type DucklangCompilationWork = {
   readonly gpuRewriteProposalCount: number;
   readonly wasmAtomCount: number;
   readonly gpuWasmLengthAtomCount: number;
+  readonly gpuWasmSparseLengthSizing: 0 | 1;
+  readonly gpuWasmLengthSizingDependencyAtomCount: number;
+  readonly gpuWasmLengthSizingWorkEstimate: number;
   readonly gpuWasmResolvedOffsetBytes: number;
   readonly gpuWasmResolvedOffsetBitWidth: 0 | 16 | 32;
   readonly gpuWasmRankedLowWords: 0 | 1;
@@ -1190,6 +1193,9 @@ async function elaborateDucklangModuleSource(
         gpuRewriteProposalCount: 0,
         wasmAtomCount: 0,
         gpuWasmLengthAtomCount: 0,
+        gpuWasmSparseLengthSizing: 0,
+        gpuWasmLengthSizingDependencyAtomCount: 0,
+        gpuWasmLengthSizingWorkEstimate: 0,
         gpuWasmResolvedOffsetBytes: 0,
         gpuWasmResolvedOffsetBitWidth: 0,
         gpuWasmRankedLowWords: 0,
@@ -1583,6 +1589,17 @@ async function compileDucklangModuleSource(
       wasmAtomCount: lowered.wasmPlan.atoms.length,
       gpuWasmLengthAtomCount: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.lengthAtomCount
+        : 0,
+      gpuWasmSparseLengthSizing: gpuWasmResult?.status === "completed" &&
+          gpuWasmResult.sparseLengthSizing
+        ? 1
+        : 0,
+      gpuWasmLengthSizingDependencyAtomCount:
+        gpuWasmResult?.status === "completed"
+          ? gpuWasmResult.lengthSizingDependencyAtomCount
+          : 0,
+      gpuWasmLengthSizingWorkEstimate: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.lengthSizingWorkEstimate
         : 0,
       gpuWasmResolvedOffsetBytes: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.resolvedOffsetBytes
