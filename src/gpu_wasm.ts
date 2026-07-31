@@ -897,6 +897,7 @@ function atomColumns(
   let byteIndex = 0;
   let nonByteIndex = 0;
   let signed64Index = 0;
+  let kindWord = 0;
   for (const [index, atom] of atoms.entries()) {
     if (lowWordLayout === "ranked" && (index & 7) === 0) {
       const rankIndex = index >> 3;
@@ -907,17 +908,18 @@ function atomColumns(
       }
     }
     let lowWord: number;
+    let encodedKind: number;
     if (atom.kind === "byte") {
-      writeAtomKind(kinds, index, atomByte);
+      encodedKind = atomByte;
       lowWord = atom.value;
     } else if (atom.kind === "unsigned") {
-      writeAtomKind(kinds, index, atomUnsigned);
+      encodedKind = atomUnsigned;
       lowWord = atom.value;
     } else if (atom.kind === "signed32") {
-      writeAtomKind(kinds, index, atomSigned32);
+      encodedKind = atomSigned32;
       lowWord = atom.value >>> 0;
     } else if (atom.kind === "signed64") {
-      writeAtomKind(kinds, index, atomSigned64);
+      encodedKind = atomSigned64;
       lowWord = Number(BigInt.asUintN(32, atom.value));
       const highWord = Number(BigInt.asUintN(32, atom.value >> 32n));
       if (sparseSigned64HighWords) {
@@ -928,9 +930,14 @@ function atomColumns(
         highWords[index] = highWord;
       }
     } else {
-      writeAtomKind(kinds, index, atomLength);
+      encodedKind = atomLength;
       lowWord = atomByteOffsets[atom.rangeStart + atom.rangeCount] -
         atomByteOffsets[atom.rangeStart];
+    }
+    kindWord |= encodedKind << ((index & 7) << 2);
+    if ((index & 7) === 7 || index + 1 === atoms.length) {
+      kinds[index >> 3] = kindWord;
+      kindWord = 0;
     }
     if (lowWordLayout === "dense") {
       primaryLowWords[index] = lowWord;
@@ -962,15 +969,6 @@ function representationFlags(job: PreparedWasmGpuJob): number {
     (job.resolvedOffsetBitWidth === 16 ? 2 : 0) |
     (job.columns.lowWordLayout === "ranked" ? 4 : 0) |
     (job.columns.byteRankBitWidth === 16 ? 8 : 0);
-}
-
-function writeAtomKind(
-  words: Uint32Array,
-  atomIndex: number,
-  kind: number,
-): void {
-  const wordIndex = atomIndex >> 3;
-  words[wordIndex] |= kind << ((atomIndex & 7) << 2);
 }
 
 function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {

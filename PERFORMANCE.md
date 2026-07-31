@@ -432,6 +432,25 @@ resolved offsets. It excludes output/readback and packed-job alignment. The
 intermediate formula was `8A + 4(A + 1) + 4 ceil(A / 8)`; the adaptive high-word
 section below supersedes it. Dispatch count and scheduled lanes were unchanged.
 
+Kind construction originally performed one typed-array read/modify/write per
+atom despite producing only one word per eight atoms. Accumulating disjoint
+nibbles locally changes host kind-column stores as follows:
+
+| Target    | Per-atom stores | Group stores | Reduction |
+| --------- | --------------: | -----------: | --------: |
+| Editor    |          23,923 |        2,991 |    87.50% |
+| Codex     |         204,099 |       25,513 |    87.50% |
+| grep      |           3,897 |          488 |    87.48% |
+| tar       |          22,201 |        2,776 |    87.50% |
+| wav       |           2,477 |          310 |    87.48% |
+| raytracer |           3,851 |          482 |    87.48% |
+
+This changes no allocation, transfer, dispatch, or shader work. Successive
+isolated emitter runs moved by less than 2.3%; they were not interleaved
+implementation pairs, so no latency improvement is claimed. The exact grouped
+writer passed the 501-test required-GPU gate and compiled every frozen target
+twice.
+
 ### Adaptive signed64 high words
 
 Kind-distribution measurement found no signed-64 atom in any frozen target:

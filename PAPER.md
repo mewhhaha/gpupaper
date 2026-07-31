@@ -1141,7 +1141,11 @@ kind(i) = (kind_words[i >> 3] >> (4(i & 7))) & 15
 Tags 0 through 4 map injectively to the atom variants; the remaining nibble
 values are invalid and emit nothing, which the byte differential detects. This
 keeps \(O(1)\) lane-local lookup using shifts and masks while changing the kind
-column from `4A` to \(4\lceil A/8\rceil\) bytes.
+column from `4A` to \(4\lceil A/8\rceil\) bytes. On the host, disjoint nibble
+masks are ORed into one scalar accumulator and committed at the end of each
+eight-atom group. The construction therefore performs \(A\) local shifts/ORs
+but only \(\lceil A/8\rceil\) typed-array stores; per-atom read/modify/write is
+unnecessary.
 
 Only signed-64 atoms read the high-word column. Let \(S\) be their count. Two
 representations are available:
@@ -2836,6 +2840,24 @@ no material measured regression, not a speedup claim. The required-GPU gate
 passed 501 tests. Paired target samples in milliseconds were Editor
 329.96/226.44, Codex 907.51/830.48, grep 123.49/128.36, Tar 191.72/175.71,
 wav 120.78/111.96, and raytracer 97.33/93.22.
+
+### 2026-07-31: kind packing commits once per physical word
+
+The host tag packer still updated the typed array once per logical atom. Since
+the eight four-bit destination masks in one word are pairwise disjoint, Section
+7.4 now accumulates them in a scalar and commits only at a group boundary.
+Formally, OR is associative and commutative on disjoint masks, so replacing
+eight ordered read/modify/writes with one store preserves the packed word.
+
+Frozen kind-column stores fall from 2,477–204,099 to 310–25,513, reductions of
+87.48–87.50%. Allocated bytes, GPU bindings, scheduled lanes, and shader work
+are identical. Successive isolated-emitter medians moved by less than 2.3%, but
+the implementations were not interleaved and the boundary is dominated by
+submission/readback, so no latency improvement is claimed. All 256 byte-tag
+masks and every atom variant remain covered by GPU/CPU differentials. The exact
+required-GPU gate passed 501 tests. Paired target samples in milliseconds were
+Editor 344.68/227.20, Codex 951.33/803.70, grep 131.24/134.15, Tar
+201.21/185.90, wav 115.76/108.91, and raytracer 96.58/92.49.
 
 ## References
 

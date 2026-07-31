@@ -1006,6 +1006,9 @@ Core receives no source handler or open effect row.
 - [x] Pack the five Wasm atom tags as eight random-access nibbles per word.
       Profiles prove the exact input-byte formula, and generated CPU/GPU
       differentials cross tag-word boundaries.
+- [x] Accumulate each eight-atom kind word locally and commit it once. Disjoint
+      nibble masks reduce host typed-array stores from `A` to `ceil(A / 8)`
+      without changing representation or GPU work.
 - [x] Represent signed-64 high words by the smaller of a dense column and a
       sorted sparse frontier. The `min(4A, 8S)` rule has dense and sparse
       byte-differential regressions and executable capacity metrics.
