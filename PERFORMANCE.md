@@ -1645,6 +1645,31 @@ regressed and the latency-policy reduction was smaller than its 21.91 ms MAD.
 The cap therefore remains 16. This is a rejected empirical optimization, not a
 claim that 16 is universally optimal.
 
+## Backend selection policy
+
+Compilation now defaults to CPU rather than treating device availability as a
+latency decision. Optional GPU execution remains available explicitly through
+the API or `--try-gpu`, and required execution remains the benchmark and release
+policy.
+
+The current isolated emitter medians justify eliminating the default attempt:
+
+| Target | CPU emitter | Adaptive GPU emitter | GPU/CPU |
+| ------ | ----------: | -------------------: | ------: |
+| Editor | 0.412 ms | 28.008 ms | 67.93× |
+| Codex | 3.395 ms | 35.804 ms | 10.55× |
+| grep | 0.069 ms | 27.286 ms | 396.75× |
+| tar | 0.347 ms | 28.028 ms | 80.75× |
+| wav | 0.041 ms | 27.067 ms | 665.53× |
+| raytracer | 0.061 ms | 27.175 ms | 442.59× |
+
+These 21-sample emitter measurements use already-constructed plans and do not
+predict another adapter. Together with the bounded negative 64-job experiment,
+they show that this implementation has no measured basis for automatically
+selecting GPU latency. Default CPU removes device initialization, Core queueing,
+GPU Wasm packing, dispatch, mapping, and differential comparison. Explicit GPU
+modes retain all conformance and production-GPU behavior.
+
 ## Peer boundaries
 
 `benchmark:peers` isolates unlike compiler boundaries instead of presenting one

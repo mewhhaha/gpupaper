@@ -1278,6 +1278,7 @@ Deno.test("Ducklang Core and Wasm jobs reach the GPU passes", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let answer = comptime 6 * 7\nanswer\n",
+    { gpuMode: "optional" },
   );
   assertEquals(artifact.gpuCoreResult === undefined, false);
   assertEquals(artifact.gpuWasmResult === undefined, false);

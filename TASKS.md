@@ -1180,14 +1180,14 @@ boundaries.
 
 Production here means the admitted Ducklang corpus can be compiled
 deterministically by a long-lived process or the CLI on a conforming WebGPU
-implementation, with explicit resource bounds, recoverable automatic fallback,
-strict required-GPU behavior, and an independently validated Wasm artifact. It
-does not mean accepting source outside the language contract or hiding CPU
-frontend work behind a GPU label.
+implementation, with explicit resource bounds, recoverable optional-GPU
+fallback, strict required-GPU behavior, and an independently validated Wasm
+artifact. It does not mean accepting source outside the language contract or
+hiding CPU frontend work behind a GPU label.
 
 The theoretical basis is fail-stop stage composition: every stage either
 produces a validated value for the next stage or returns a typed inability to
-run. Automatic mode may replace only an unavailable GPU implementation with the
+run. Optional mode may replace only an unavailable GPU implementation with the
 equivalent CPU implementation. It may not reinterpret invalid IR, ignore a
 CPU/GPU disagreement, or return partially written output.
 
@@ -1246,10 +1246,10 @@ CPU/GPU disagreement, or return partially written output.
       compile-time evaluation, Core validation and rewrite matching, and Wasm
       emission have no direct `createBuffer` or `dispatchWorkgroups` calls
       outside that boundary. Capacity tests pin exact-limit acceptance and
-      evidence-bearing rejection; automatic compilation receives `unavailable`,
+      evidence-bearing rejection; optional compilation receives `unavailable`,
       while required mode promotes the same reason to failure.
 - [x] Treat device loss and out-of-memory as recoverable GPU unavailability in
-      automatic mode, invalidate every cached pipeline tied to that device, and
+      optional mode, invalidate every cached pipeline tied to that device, and
       retry a later compilation on a newly requested device. Every submitted
       readback races the device-loss promise and carries its reason and driver
       message. The shared device, Core, comptime, Wasm, and union caches all
@@ -1258,7 +1258,7 @@ CPU/GPU disagreement, or return partially written output.
       disagreement, and malformed GPU output remain hard failures.
 - [x] Separate production execution from differential verification.
       `gpuWasmVerification: "none"` lowers only a Wasm plan, lets GPU emission
-      produce the first byte buffer, and encodes on CPU only if automatic mode
+      produce the first byte buffer, and encodes on CPU only if optional mode
       needs a fallback. Differential byte comparison remains the default.
       Focused Haskell and Ducklang tests compare authoritative and verified GPU
       output.
@@ -1307,10 +1307,10 @@ CPU/GPU disagreement, or return partially written output.
       proofs, and the performance report records the current artifact sizes,
       adapter limits, pipeline timings, and bounded negative break-even result.
 
-Exit criterion: both automatic and required GPU policies have observable, tested
-semantics; no GPU allocation or dispatch is attempted outside a checked device
-bound; the returned Wasm and ABI are independently valid; editor, Codex, grep,
-tar, wav, and raytracer compile in required-GPU verification mode; and the
+Exit criterion: CPU, optional-GPU, and required-GPU policies have observable,
+tested semantics; no GPU allocation or dispatch is attempted outside a checked
+device bound; the returned Wasm and ABI are independently valid; editor, Codex,
+grep, tar, wav, and raytracer compile in required-GPU verification mode; and the
 documented release command passes from a clean checkout.
 
 ## Phase 11: Demand-specialization boundary
@@ -1396,6 +1396,9 @@ resource cost, and corpus measurements.
 - [x] Audit a 64-job physical GPU batch cap. Confirm that larger payloads form,
       reject the inconsistent latency result against paired MAD, and retain the
       measured 16-job cap.
+- [x] Separate availability policy from performance selection. Default to CPU,
+      rename explicit best-effort GPU execution to `optional`, retain fail-stop
+      `required`, and preserve portable differential GPU coverage.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

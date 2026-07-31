@@ -26,7 +26,7 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     !["compile", "run", "experiments"].includes(command)
   ) {
     throw new Error(
-      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
+      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--try-gpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
     );
   }
   const positional: string[] = [];
@@ -35,7 +35,8 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
   while (index < rest.length) {
     const argument = rest[index];
     if (
-      argument === "--cpu" || argument === "--require-gpu" ||
+      argument === "--cpu" || argument === "--try-gpu" ||
+      argument === "--require-gpu" ||
       argument === "--no-gpu-verification"
     ) {
       index += 1;
@@ -62,6 +63,14 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
   if (rest.includes("--cpu") && rest.includes("--require-gpu")) {
     throw new Error("--cpu and --require-gpu cannot be used together");
   }
+  if (
+    rest.includes("--try-gpu") &&
+    (rest.includes("--cpu") || rest.includes("--require-gpu"))
+  ) {
+    throw new Error(
+      "--try-gpu cannot be combined with --cpu or --require-gpu",
+    );
+  }
   const maximumPositionals = command === "compile" ? 1 : 0;
   if (positional.length > maximumPositionals) {
     throw new Error(
@@ -77,11 +86,11 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     command: command as CliInvocation["command"],
     file,
     output: positional[0],
-    gpuMode: rest.includes("--cpu")
-      ? "off"
-      : rest.includes("--require-gpu")
+    gpuMode: rest.includes("--require-gpu")
       ? "required"
-      : "auto",
+      : rest.includes("--try-gpu")
+      ? "optional"
+      : "off",
     gpuWasmVerification: rest.includes("--no-gpu-verification")
       ? "none"
       : "differential",

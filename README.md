@@ -56,19 +56,21 @@ deno task compile \
 
 The compiler has three GPU policies:
 
-- default `auto` uses a GPU when available and falls back only when a GPU stage
+- default CPU execution does not request WebGPU;
+- `--try-gpu` uses a GPU when available and falls back only when a GPU stage
   reports device unavailability, device loss, capacity exhaustion, or
   out-of-memory;
 - `--require-gpu` makes the same condition a compilation failure;
-- `--cpu` disables WebGPU.
+- `--cpu` explicitly selects the default CPU policy.
 
-GPU Wasm emission is CPU-differential by default. Pass `--no-gpu-verification`
-to make the GPU-produced byte buffer authoritative and avoid CPU encoding unless
-automatic mode needs a fallback. GPU Core rewrite matching is authoritative in
-either GPU mode. Compilation output reports the backend that completed type
-checking, compile-time evaluation, Core rewriting, Wasm emission, and
-verification. `core=identity` means CPU validation proved the rewrite frontier
-empty and no Core command was submitted; it is not reported as GPU execution.
+GPU Wasm emission is CPU-differential by default under either GPU policy. Pass
+`--no-gpu-verification` to make the GPU-produced byte buffer authoritative and
+avoid CPU encoding unless optional mode needs a fallback. GPU Core rewrite
+matching is authoritative in either GPU mode. Compilation output reports the
+backend that completed type checking, compile-time evaluation, Core rewriting,
+Wasm emission, and verification. `core=identity` means CPU validation proved the
+rewrite frontier empty and no Core command was submitted; it is not reported as
+GPU execution.
 
 Useful project commands are:
 
@@ -177,9 +179,9 @@ resulting payload runs as WebAssembly.
 Every GPU allocation, binding span, pipeline binding count, and dispatch is
 checked against the selected device before use. Submitted readbacks race the
 device-loss promise. A lost device invalidates the shared device and every
-pipeline cache so a later automatic compilation can request a fresh device.
-Invalid IR, CPU/GPU disagreement, and malformed GPU output are hard failures,
-never fallback conditions.
+pipeline cache so a later optional or required compilation can request a fresh
+device. Invalid IR, CPU/GPU disagreement, and malformed GPU output are hard
+failures, never fallback conditions.
 
 ## Implemented Ducklang semantics
 

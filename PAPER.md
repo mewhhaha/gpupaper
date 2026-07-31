@@ -809,7 +809,7 @@ validate_cpu(P)
 No buffer is created and no dispatch is encoded before the capacity judgment. An
 out-of-memory error, unavailable adapter, or lost device yields `unavailable`;
 malformed payload or CPU/GPU disagreement yields `invalid`. Only unavailability
-may select a CPU fallback, and only under the `auto` policy. The queue,
+may select a CPU fallback, and only under the `optional` policy. The queue,
 error-scope, device-loss, buffer-mapping, and device-limit mechanisms used for
 these transitions are defined by the WebGPU specification; the failure
 classification itself is this compiler's policy. The public policies are:
@@ -817,7 +817,7 @@ classification itself is this compiler's policy. The public policies are:
 | Policy     | GPU unavailable                         | GPU semantic failure |
 | ---------- | --------------------------------------- | -------------------- |
 | `off`      | GPU is not requested                    | not applicable       |
-| `auto`     | execute the corresponding CPU stage     | fail compilation     |
+| `optional` | execute the corresponding CPU stage     | fail compilation     |
 | `required` | fail compilation with the device reason | fail compilation     |
 
 Authority is stage-specific. Type equality and scalar comptime use CPU semantics
@@ -825,9 +825,11 @@ in production; direct GPU invocations add differential evidence without entering
 the compilation dependency graph. Core input is CPU-validated, the GPU
 authoritatively selects rewrite proposals, and the CPU validates and
 deterministically commits those proposals. Wasm bytes are GPU-authoritative when
-GPU emission completes. The default additionally emits CPU bytes and requires
-byte-for-byte equality; `gpuWasmVerification: "none"` omits that oracle but
-still performs engine and managed-artifact validation.
+GPU emission completes. A GPU policy additionally emits CPU bytes by default and
+requires byte-for-byte equality; `gpuWasmVerification: "none"` omits that oracle
+but still performs engine and managed-artifact validation. The compilation
+default is `off`, so ordinary latency does not include an uncalibrated GPU
+attempt.
 
 Batching changes scheduling, not meaning. A payload belongs to exactly one
 logical job, offsets are assigned in enqueue order, and every returned slice is
@@ -1085,7 +1087,7 @@ Backend provenance is part of the result type:
 ```text
 backend = identity  iff C is empty and no Core command is submitted
 backend = gpu       iff a nonempty C is executed by a GPU command
-backend = cpu       iff compilation selects the CPU fallback
+backend = cpu       iff compilation selects CPU rewriting
 ```
 
 An identity result has zero descriptor bytes, lanes, initialization, transfer,
@@ -1580,9 +1582,10 @@ model. Host analysis work is
 \(O(A+D+\min(D,A+K\log K))\): validation retains \(D\), while length sizing
 chooses the smaller modeled representation.
 
-The default CPU differential independently evaluates the length DAG and compares
-every emitted byte. It deliberately retains direct range summation rather than
-sharing the adaptive GPU-boundary analysis. Inspection validates scalars,
+The default verification for a GPU policy independently evaluates the length
+DAG on the CPU and compares every emitted byte. It deliberately retains direct
+range summation rather than sharing the adaptive GPU-boundary analysis.
+Inspection validates scalars,
 records their exact widths in a one-byte column, and accumulates their total
 width. Let
 
@@ -1661,7 +1664,7 @@ boundary therefore has two explicit responsibilities:
    after which the CPU requires exact representative equality and checks the
    quotient graph for a cycle.
 
-A mismatch is a compiler error, never an `auto` fallback. Constructor-clash
+A mismatch is a compiler error, never an `optional` fallback. Constructor-clash
 provenance remains at the CPU semantic boundary because the union kernel cannot
 represent a clash. The number of child equations considered while constructing
 the closure is a work metric rather than a semantic result: pairwise and
@@ -3029,10 +3032,10 @@ and 30.91 ms. Those observations measure the discarded stage, not a paired
 end-to-end speedup.
 
 The semantic argument is noninterference: successful validation had no consumer,
-invalid source failed during prior CPU inference, and automatic unavailability
-already discarded the result. Required mode continues to require authoritative
-GPU Core rewriting and Wasm emission. Removing an unused validator cannot alter
-accepted Wasm; the release gate checks this directly.
+invalid source failed during prior CPU inference, and optional-mode
+unavailability already discarded the result. Required mode continues to require
+authoritative GPU Core rewriting and Wasm emission. Removing an unused validator
+cannot alter accepted Wasm; the release gate checks this directly.
 
 The post-removal sixteen-sample concurrent grep sweep reports throughput
 GPU/CPU ratios of 1.520, 1.242, 1.130, 1.027, and 1.015 at 1, 2, 4, 8, and 16
@@ -3131,7 +3134,8 @@ The rule-head frontier makes raytracer a Core identity job. The completed result
 previously caused compiler orchestration to report `core=gpu` even though its
 submission count and every GPU timing were zero. Section 7.3 now makes
 provenance a disjoint result: `identity` is a host proof that the matcher domain
-is empty, `gpu` requires a submitted nonempty frontier, and `cpu` is a fallback.
+is empty, `gpu` requires a submitted nonempty frontier, and `cpu` is an explicit
+CPU selection or optional fallback.
 
 This is an accounting invariant rather than a semantic transformation. Focused
 single and packed empty-frontier tests assert the identity label together with
@@ -4094,6 +4098,66 @@ not resolve a benefit. The implementation therefore restores \(K=16\). This is
 empirical rejection on the current adapter and arrival protocol; it neither
 proves global optimality of 16 nor rules out a different scheduler that avoids
 host packing and readback boundaries altogether.
+
+### 2026-07-31: GPU availability is not a performance oracle
+
+The former default `auto` policy always attempted Core and Wasm GPU execution
+when a device existed. It selected on availability, not predicted completion
+time. With default differential verification, it also encoded CPU Wasm before
+waiting for GPU Wasm. Calling this behavior automatic performance selection had
+no supporting model.
+
+Let \(T_C(x)\) be CPU completion time for workload \(x\), \(T_G(x)\) successful
+GPU completion time, and \(T_U(x)\) the cost of discovering GPU unavailability.
+An availability-driven attempt has latency
+
+\[
+T_{\rm optional}(x)=
+\begin{cases}
+T_G(x), & \text{GPU succeeds without differential verification},\\
+T_C(x)+T_G(x), & \text{GPU succeeds with sequential differential work},\\
+T_U(x)+T_C(x), & \text{GPU is unavailable}.
+\end{cases}
+\]
+
+It minimizes latency only under an independently justified selector. The
+implementation has no online calibration, hardware-portable constants, or
+proved crossover. The isolated emitter medians on the RTX 4080 SUPER were CPU
+0.412/3.395/0.069/0.347/0.041/0.061 ms and adaptive GPU
+28.008/35.804/27.286/28.028/27.067/27.175 ms for Editor, Codex, grep, Tar, wav,
+and raytracer. CPU was 10.55--665.53 times faster at this boundary. Section
+7.1's concurrency experiment also found no whole-compiler GPU crossover through
+64 grep jobs.
+
+The policy model is therefore explicit:
+
+1. omitted mode or `off` selects CPU and never requests a device;
+2. `optional` attempts GPU and falls back only on typed unavailability;
+3. `required` attempts GPU and promotes the same unavailability to failure;
+4. invalid IR, disagreement, and malformed output fail under both GPU modes.
+
+This is a semantic simplification and a latency work-elimination rule, not a
+claim that CPU is universally faster. Users asking for GPU execution select it
+explicitly. The CLI spells optional execution `--try-gpu`; `--require-gpu`
+retains the release and benchmark contract.
+
+The first attempted simplification removed optional execution entirely. That
+made portable differential tests stop exercising GPU work on available devices,
+which is a counterexample to a two-policy model: optional execution has a
+conformance and recovery role even though it is not a performance oracle. The
+final disjoint policy retains that role without making it the default.
+
+Executable evidence includes API and CLI default-CPU assertions, explicit
+optional differential tests, explicit required-GPU tests, unavailable-device
+classification tests, and the release gate. The isolated measurements are
+empirical; the policy truth table and fail-stop conditions are specified
+invariants.
+
+The 513-test release gate passed after the policy split. Required-GPU
+byte-identical, engine-valid samples in milliseconds were Editor
+272.61/140.03, Codex 715.70/517.82, grep 42.97/44.77, Tar 143.47/132.24, wav
+36.32/35.93, and raytracer 41.68/39.83. These correctness samples do not
+measure the default-CPU latency removal.
 
 ## References
 

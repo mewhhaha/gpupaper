@@ -58,11 +58,12 @@ and aggregate-shape failures therefore report the original file offset and the
 values that violated the invariant.
 
 Every GPU buffer, binding span, pipeline shape, and dispatch is preflighted
-against the selected adapter. Automatic mode falls back only for GPU
-unavailability; required mode fails on the same condition. Invalid compiler IR,
-CPU/GPU disagreement, and malformed output are hard failures. The default Wasm
-policy compares CPU and GPU bytes, while production authoritative mode returns
-the GPU-emitted bytes without first encoding them on the CPU.
+against the selected adapter. Compilation defaults to CPU. Optional GPU mode
+falls back only for GPU unavailability; required mode fails on the same
+condition. Invalid compiler IR, CPU/GPU disagreement, and malformed output are
+hard failures. GPU policies compare CPU and GPU bytes by default, while
+authoritative mode returns the GPU-emitted bytes without first encoding them on
+the CPU.
 
 ## Implemented semantic families
 

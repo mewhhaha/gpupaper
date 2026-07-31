@@ -44,6 +44,24 @@ Deno.test("CLI rejects contradictory GPU execution policies", () => {
   );
 });
 
+Deno.test("CLI rejects optional and required GPU execution together", () => {
+  assertThrows(
+    () => parseCommandLine(["run", "test.hs", "--try-gpu", "--require-gpu"]),
+    /--try-gpu cannot be combined with --cpu or --require-gpu/,
+  );
+});
+
+Deno.test("CLI defaults to CPU execution", () => {
+  assertEquals(parseCommandLine(["run", "test.hs"]).gpuMode, "off");
+});
+
+Deno.test("CLI accepts optional GPU execution", () => {
+  assertEquals(
+    parseCommandLine(["run", "test.hs", "--try-gpu"]).gpuMode,
+    "optional",
+  );
+});
+
 Deno.test("CLI cannot overwrite its Haskell input with Wasm", () => {
   assertThrows(
     () => parseCommandLine(["compile", "test.hs", "test.hs"]),
@@ -118,6 +136,13 @@ Deno.test("Ducklang compilation sessions are rejected for Haskell", async () => 
       ),
     /session is available only for Ducklang compilation; received test\.hs/,
   );
+});
+
+Deno.test("default compilation uses the CPU backend", async () => {
+  const artifact = await compileModuleSource("test.hs", "main = 42\n");
+
+  assertEquals(artifact.backends.wasmEmission, "cpu");
+  assertEquals(artifact.gpuWasmResult, undefined);
 });
 
 Deno.test("rank-1 inference generalizes identity across integer and boolean uses", () => {
@@ -827,7 +852,7 @@ Deno.test("ADTs classes macros and both comptime backends compile to executable 
     new URL("../examples/all.hs", import.meta.url),
   );
   const artifact = await compileModuleSource("examples/all.hs", source, {
-    gpuMode: "auto",
+    gpuMode: "off",
   });
   assertEquals(await runMain(artifact.wasm), 42);
   assertEquals(
@@ -905,7 +930,9 @@ Deno.test("plan-only lowering does not materialize CPU Wasm", async () => {
 
 Deno.test("GPU-authoritative emission matches differential emission", async () => {
   const source = "main = 42\n";
-  const differential = await compileModuleSource("test.hs", source);
+  const differential = await compileModuleSource("test.hs", source, {
+    gpuMode: "optional",
+  });
   if (differential.gpuWasmResult?.status !== "completed") return;
 
   const authoritative = await compileModuleSource("test.hs", source, {
@@ -923,7 +950,9 @@ Deno.test("GPU-authoritative emission matches differential emission", async () =
 
 Deno.test("Ducklang GPU-authoritative emission matches differential emission", async () => {
   const source = "42\n";
-  const differential = await compileModuleSource("test.duck", source);
+  const differential = await compileModuleSource("test.duck", source, {
+    gpuMode: "optional",
+  });
   if (differential.gpuWasmResult?.status !== "completed") return;
 
   const authoritative = await compileModuleSource("test.duck", source, {

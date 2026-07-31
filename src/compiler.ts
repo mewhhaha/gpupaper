@@ -91,7 +91,7 @@ import { parseModule } from "./parser.ts";
 import { formatScheme, inferModule, type InferredModule } from "./types.ts";
 import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "./wasm.ts";
 
-export type GpuMode = "auto" | "off" | "required";
+export type GpuMode = "off" | "optional" | "required";
 export type GpuWasmVerification = "differential" | "none";
 export type GpuSchedulingPolicy = CompilerGpuSchedulingPolicy;
 
@@ -422,7 +422,7 @@ async function compileHaskellModuleSource(
   source: string,
   options: CompilationOptions,
 ): Promise<HaskellCompilationArtifact> {
-  const gpuMode = options.gpuMode ?? "auto";
+  const gpuMode = options.gpuMode ?? "off";
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
   const parseStart = performance.now();
   const parsed = parseModule(file, source);
@@ -625,7 +625,7 @@ async function prepareDucklangModuleSource(
     schema: 1,
     file,
     hostInterface: hostInterfaceIdentity,
-    gpuMode: options.gpuMode ?? "auto",
+    gpuMode: options.gpuMode ?? "off",
     gpuWasmVerification: options.gpuWasmVerification ?? "differential",
   });
   const semanticContextMilliseconds = performance.now() -
@@ -670,7 +670,7 @@ async function prepareDucklangModuleSource(
       file,
       module: syntaxFingerprint.identity,
       hostInterface: hostInterfaceIdentity,
-      gpuMode: options.gpuMode ?? "auto",
+      gpuMode: options.gpuMode ?? "off",
       gpuWasmVerification: options.gpuWasmVerification ?? "differential",
     });
     semanticIdentities.set(semanticContextIdentity, semanticIdentity);
@@ -1273,7 +1273,7 @@ async function compileDucklangModuleSource(
   options: CompilationOptions,
 ): Promise<DucklangCompilationArtifact> {
   const compilationStart = performance.now();
-  const gpuMode = options.gpuMode ?? "auto";
+  const gpuMode = options.gpuMode ?? "off";
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
   const prepared = await prepareDucklangModuleSource(file, source, options);
   let semanticReuseValidationMilliseconds = 0;
