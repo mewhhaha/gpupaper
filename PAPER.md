@@ -5442,6 +5442,20 @@ The counters were removed. Zero-capture frequency must be measured next; if
 material, an early identity return is a semantics-preserving first reduction
 independent of the larger one-pass lifting redesign.
 
+### 2026-07-31: over one-third of Codex lifts have no captures
+
+Review 94 counts accepted functions whose capture vector is empty. Codex has
+143 of 403 zero-capture lifts, 35.48%. Editor has 20 of 55, grep three of 13,
+Tar one of six, and raytracer six of nine. Wav lifts no functions.
+
+For these functions, both uses of `appendCaptures` are provably identity:
+parameters append `[]`, call arguments append `[]`, and no closure environment
+is introduced. Returning the candidate object directly preserves IDs, spans,
+types, and sharing while eliminating traversal and reconstruction. The
+temporary counters were removed. Review 95 implements this rule and must retain
+it only if focused semantics, deterministic binaries, and A/B/A lifting timing
+agree.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

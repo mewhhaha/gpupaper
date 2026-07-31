@@ -1540,6 +1540,8 @@ resource cost, and corpus measurements.
 - [x] Count capture-argument insertion traversal. Identify 206,835 Codex visits
       and the empty-capture identity rule before attempting the larger one-pass
       lifting redesign.
+- [x] Count zero-capture lifts. Establish a 143-of-403 Codex target for the
+      empty-vector identity rule, then remove the counters before implementation.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

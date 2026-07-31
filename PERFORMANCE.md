@@ -622,6 +622,11 @@ traversals and 1.93× capture discovery. Tar visits 11,841 for six lifts. This
 includes identity traversals for empty capture arrays; counters were removed and
 zero-capture frequency is the next decision boundary.
 
+Zero-capture lifts are material: 143 of 403 for Codex (35.48%), 20 of 55 for
+Editor, and 6 of 9 for raytracer. Each currently triggers two identity
+capture-argument traversals. Counters were removed; the empty-vector identity
+fast path is the next measured implementation.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
