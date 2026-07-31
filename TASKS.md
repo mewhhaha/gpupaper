@@ -1055,6 +1055,8 @@ Core receives no source handler or open effect row.
 - [x] Canonicalize the finite set of immutable one-byte encodings. CPU emission
       reuses 256 private singleton arrays instead of allocating one per byte
       atom.
+- [x] Reuse the private byte table for validated one-byte unsigned and signed
+      LEB values while keeping exported mutable-array encoders fresh.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

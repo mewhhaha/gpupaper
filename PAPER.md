@@ -1347,6 +1347,13 @@ allocation from \(Q\) to zero at a one-time cost of 256 singleton arrays. The
 first compilation batch breaks even when its aggregate \(Q>256\); every frozen
 target individually satisfies that condition.
 
+The same table represents the one-byte LEB subsets
+\(U_1=\{0,\ldots,127\}\) and \(S_1=\{-64,\ldots,63\}\), with signed index
+\(v\bmod128\). Validated internal unsigned and signed encoders may therefore
+reuse it. Exported encoders continue to return fresh mutable arrays, preventing
+external mutation from entering compiler state. Values outside these subsets
+retain their ordinary variable-length encoders.
+
 ### 7.5 Type equality as a certified conformance experiment
 
 The direct GPU type experiment consumes first-order equality constraints over
@@ -3133,6 +3140,26 @@ passed 504 tests and compiled every frozen target twice. Its advisory samples in
 milliseconds were Editor 349.09/243.67, Codex 948.26/839.47, grep
 145.16/136.63, Tar 255.35/197.77, wav 126.10/124.12, and raytracer
 105.14/98.83.
+
+### 2026-07-31: canonical bytes cover one-byte LEB values
+
+The existing private byte table also denotes every one-byte unsigned and signed
+LEB encoding. Validated internal scalars now reuse it for unsigned 0–127 and
+signed −64–63 values. Public encoders remain fresh-array APIs, so canonical
+storage is not exposed to mutation.
+
+This removes another 85,328 arrays per frozen CPU-oracle batch: 9,399 Editor,
+66,201 Codex, 1,530 grep, 5,835 Tar, 950 wav, and 1,413 raytracer, with no new
+persistent table. In an immediately consecutive identical 101-sample protocol,
+all CPU medians fell: Editor 1.077→0.850 ms, Codex 14.294→8.936 ms, grep
+0.169→0.142 ms, Tar 0.969→0.856 ms, wav 0.103→0.088 ms, and raytracer
+0.199→0.138 ms. This is empirical evidence consistent with the allocation
+model, not a counterbalanced causal estimate. Focused LEB boundaries and
+CPU/GPU differentials pass. The required-GPU gate passed 504 tests and compiled
+every frozen target twice. Its advisory samples in milliseconds were Editor
+333.55/225.53, Codex
+906.47/807.11, grep 128.21/132.47, Tar 232.97/180.96, wav 115.42/109.62, and
+raytracer 93.73/89.05.
 
 ## References
 

@@ -379,7 +379,9 @@ function inspectWasmBinaryPlan(
       if (output?.kind === "sizes") {
         output.scalarSizes[atomIndex] = unsignedEncodingByteLength(atom.value);
       } else if (output?.kind === "encodings") {
-        const encoding = encodeValidatedUnsigned(atom.value);
+        const encoding = atom.value < 0x80
+          ? singleByteEncodings[atom.value]
+          : encodeValidatedUnsigned(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }
@@ -390,7 +392,9 @@ function inspectWasmBinaryPlan(
       if (output?.kind === "sizes") {
         output.scalarSizes[atomIndex] = signed32EncodingByteLength(atom.value);
       } else if (output?.kind === "encodings") {
-        const encoding = encodeValidatedSigned(atom.value);
+        const encoding = atom.value >= -64 && atom.value < 64
+          ? singleByteEncodings[atom.value & 0x7f]
+          : encodeValidatedSigned(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }
@@ -402,7 +406,9 @@ function inspectWasmBinaryPlan(
         output.scalarSizes[atomIndex] = signed64EncodingByteLength(atom.value);
         signed64AtomCount += 1;
       } else if (output?.kind === "encodings") {
-        const encoding = encodeValidatedSigned64(atom.value);
+        const encoding = atom.value >= -64n && atom.value < 64n
+          ? singleByteEncodings[Number(atom.value & 0x7fn)]
+          : encodeValidatedSigned64(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }

@@ -754,6 +754,28 @@ were 1.077 ms Editor, 14.294 Codex, 0.169 grep, 0.969 Tar, 0.103 wav, and
 0.199 raytracer. The timing changes are mixed, so no latency claim is made. The
 504-test required-GPU gate passed and compiled every frozen target twice.
 
+### Canonical one-byte LEB encodings
+
+Validated internal unsigned values 0–127 and signed values −64–63 reuse the
+same private byte table. Exported mutable-array encoders remain fresh. Additional
+per-emission allocations removed are:
+
+| Target    | Arrays removed |
+| --------- | -------------: |
+| Editor    |          9,399 |
+| Codex     |         66,201 |
+| grep      |          1,530 |
+| tar       |          5,835 |
+| wav       |            950 |
+| raytracer |          1,413 |
+
+The batch removes 85,328 arrays without new persistent storage. Consecutive
+identical-protocol CPU medians changed from 1.077 to 0.850 ms for Editor and
+14.294 to 8.936 ms for Codex; the other four improved by 11.68–30.55%. These
+measurements are consistent with the allocation model but are not a
+counterbalanced causal estimate. The 504-test required-GPU gate passed and
+compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:
