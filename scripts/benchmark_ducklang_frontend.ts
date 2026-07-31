@@ -81,9 +81,19 @@ try {
     for (let iteration = 0; iteration < warmIterationCount; iteration += 1) {
       warmMeasurements.push(await measureParser(file, source));
     }
-    const warmTimings = warmMeasurements.map((measurement) =>
-      measurement.timings
+    const warmMedianTotalMilliseconds = median(
+      warmMeasurements.map((measurement) => measurement.totalMilliseconds),
     );
+    const warmRepresentative = [...warmMeasurements].sort((left, right) => {
+      const leftDistance = Math.abs(
+        left.totalMilliseconds - warmMedianTotalMilliseconds,
+      );
+      const rightDistance = Math.abs(
+        right.totalMilliseconds - warmMedianTotalMilliseconds,
+      );
+      return leftDistance - rightDistance ||
+        left.totalMilliseconds - right.totalMilliseconds;
+    })[0];
 
     await clearDucklangParserCache();
     const hostInterface = target.hostInterface === undefined
@@ -104,30 +114,10 @@ try {
         coldTotalMilliseconds: cold.totalMilliseconds,
         coldTimingsMilliseconds: cold.timings,
         warmIterationCount,
-        warmMedianTotalMilliseconds: median(
-          warmMeasurements.map((measurement) => measurement.totalMilliseconds),
-        ),
-        warmMedianTimingsMilliseconds: {
-          parserInitializationMilliseconds: median(
-            warmTimings.map((timings) =>
-              timings.parserInitializationMilliseconds
-            ),
-          ),
-          contextualClassificationMilliseconds: median(
-            warmTimings.map((timings) =>
-              timings.contextualClassificationMilliseconds
-            ),
-          ),
-          parserExecutionMilliseconds: median(
-            warmTimings.map((timings) => timings.parserExecutionMilliseconds),
-          ),
-          syntaxMilliseconds: median(
-            warmTimings.map((timings) => timings.syntaxMilliseconds),
-          ),
-          astLoweringMilliseconds: median(
-            warmTimings.map((timings) => timings.astLoweringMilliseconds),
-          ),
-        },
+        warmMedianTotalMilliseconds,
+        warmRepresentativeTotalMilliseconds:
+          warmRepresentative.totalMilliseconds,
+        warmRepresentativeTimingsMilliseconds: warmRepresentative.timings,
       },
       compilation: {
         pairOrder: "alternatingCpuFirst",

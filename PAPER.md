@@ -780,9 +780,10 @@ observations. This cancels a linear run-order trend within adjacent pairs. A
 reported stage breakdown is one observed profile nearest the scalar median
 total, not a vector of independently selected component medians. Thus
 `accounted + unattributed = total` and all stage percentages refer to a possible
-execution. Medians and nearest-rank p95 values remain descriptive statistics;
-without independent repetitions and uncertainty intervals they do not establish
-a general speedup.
+execution. Parser sub-stage reports select an observed parse by the same rule.
+Medians and nearest-rank p95 values remain descriptive statistics; without
+independent repetitions and uncertainty intervals they do not establish a
+general speedup.
 
 Executable evidence consists of capacity-boundary tests, device-loss recovery,
 physical-batch isolation tests, generated CPU/GPU differentials for type
@@ -1797,7 +1798,9 @@ accounting sums. It now uses three complete CPU-first/GPU-first warm pairs and
 reports the observed profile nearest median total while retaining the scalar
 median as the latency summary. Each mode's first observation resets parser state
 independently. No historical timing was rewritten; future measurements use the
-corrected design.
+corrected design. Parser sub-stage vectors now follow the same observed-run rule
+instead of combining independently selected initialization, classification,
+syntax, and lowering times.
 
 ## References
 
