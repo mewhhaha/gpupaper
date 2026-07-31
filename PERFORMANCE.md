@@ -612,6 +612,11 @@ summary metadata is about 11.5 KiB for Codex, making compositional capture
 summaries the first lifting change with a positive work/memory case. Counters
 were removed.
 
+Maximum pre-lift function nesting is six for Codex and at most four for every
+other target except Tar at three. Direct owner-stack propagation therefore has
+at most 2,508 Codex capture insertion attempts, versus 107,069 current scan
+visits. The depth counter was removed; no tree-query structure is warranted.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

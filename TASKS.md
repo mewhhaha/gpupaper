@@ -1534,6 +1534,9 @@ resource cost, and corpus measurements.
 - [x] Derive one-pass capture summaries from lexical symbol ownership and
       function-stack propagation. Reject transformed function-object caching and
       state the stable pre-lift binding key requirement.
+- [x] Measure pre-lift function nesting depth. Keep direct owner-stack capture
+      propagation after bounding Codex at depth six and 2,508 insertion
+      attempts, then remove the counter.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

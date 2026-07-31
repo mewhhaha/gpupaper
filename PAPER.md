@@ -5409,6 +5409,21 @@ binding to its pre-lift summary, preserved across deterministic renaming. This
 is naturally the binding symbol ID plus an occurrence ordinal for duplicated
 IDs; function object identity is not the proof key.
 
+### 2026-07-31: capture propagation depth is bounded by six
+
+Review 92 measures pre-lift function nesting. Maximum depth is six for Codex,
+four for Editor, grep, and raytracer, three for Tar, and one for wav. Therefore
+the direct owner-stack algorithm from Review 91 performs at most
+\(C d=418\cdot6=2{,}508\) Codex capture insertion attempts before deduplication,
+only 2.34% of the 107,069 occurrences currently scanned.
+
+This rejects path-difference accumulation and tree-query machinery for the
+frozen corpus. A six-element stack is bounded local state, and straightforward
+propagation keeps ordering and ownership proofs visible. The temporary depth
+counter was removed. A future corpus crossing a declared depth threshold can
+reopen the choice, but generalized deep-nesting machinery would currently be
+speculative complexity.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
