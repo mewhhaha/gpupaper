@@ -4682,8 +4682,44 @@ Codex's corrected interpretation is 884 scans plus 630 avoided scans, a 41.61%
 hit share among 1,514 analysis requests. This does not reduce the measured
 68.594 ms rewrite stage; it removes a false optimization lead. The four
 completed-result hits beside 703 distinct specialization keys remain a separate
-cache domain for Review 60. Pending-cycle encounters are not counted, so these
-two values alone do not define an exact result-cache hit rate.
+cache domain for Review 60.
+
+The specialization-result key is
+
+\[
+K=(function,callsite,static\ arguments,captured\ environment).
+\]
+
+`function` is immutable object identity; static arguments and captured values
+use structural identities where defined and stable object IDs otherwise. The
+call-site file/start/end preserves source provenance in substituted output.
+Removing it defines a coarser semantic key \(K_s\), but reuse under \(K_s\)
+would return expressions carrying the first call site's substituted spans.
+Semantic equality is insufficient for diagnostic equivalence unless a separate
+provenance-relabeling operation is proved.
+
+### 2026-07-31: specialization provenance is not the cache frontier
+
+Review 60 temporarily counted distinct \(K_s\) keys alongside the existing
+provenance-aware \(K\). The six `(K, K_s)` pairs were Editor `(47,46)`, Codex
+`(703,698)`, grep `(1,1)`, and zero/zero for Tar, wav, and raytracer. Thus
+call-site provenance distinguishes only one Editor key and five Codex keys.
+Even perfect span-insensitive reuse could merge at most 0.71% of Codex's
+distinct entries, while returning incorrect source provenance without a
+relabeling pass.
+
+The semantic-key set was removed before commit. During its instrumented run,
+Codex rewrite measured 71.300 ms versus the preceding 68.594 ms baseline; this
+single consecutive change is not an attributed regression, but it confirms
+that permanent duplicate key construction needs a stronger benefit.
+
+The cheap pending-cycle counter remains. Result-cache lookup requests partition
+exactly into distinct insertions \(D\), complete hits \(H\), and pending-cycle
+hits \(P\), so the hit rate is \(H/(D+H+P)\). Codex reports
+\((D,H,P)=(703,4,0)\), or 0.566%; Editor reports `(47,2,0)`, or 4.082%.
+A focused non-recursive two-call test pins positive analysis-cache reuse and
+zero pending result cycles. The next review must inspect argument/environment
+identity dispersion rather than call-site spans.
 
 ## References
 

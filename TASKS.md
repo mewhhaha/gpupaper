@@ -1438,6 +1438,9 @@ resource cost, and corpus measurements.
 - [x] Audit the specialization function-analysis counter. Rename it as cache
       hits, prove its object-identity key is context independent, and add a
       focused reuse regression before pursuing the result-cache frontier.
+- [x] Decompose specialization result keys into semantic identity and call-site
+      provenance. Reject span elision from its negligible merge ceiling, count
+      pending recursion, and derive the exact result-cache request partition.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

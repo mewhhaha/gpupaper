@@ -23,6 +23,7 @@ export type DucklangSpecializationMetrics = {
   readonly residualNodeCount: number;
   readonly distinctSpecializationKeyCount: number;
   readonly specializationCacheHitCount: number;
+  readonly pendingSpecializationCycleCount: number;
   readonly distinctFunctionAnalysisCount: number;
   readonly functionAnalysisCacheHitCount: number;
   readonly rewrittenBlockCount: number;
@@ -79,6 +80,7 @@ type SpecializationContext = {
   nextFunctionId: number;
   nextValueId: number;
   cacheHitCount: number;
+  pendingCycleCount: number;
   distinctFunctionAnalysisCount: number;
   functionAnalysisCacheHitCount: number;
   rewrittenBlockCount: number;
@@ -174,6 +176,7 @@ export function specializeStaticDucklangClosures(
     nextFunctionId: 0,
     nextValueId: 0,
     cacheHitCount: 0,
+    pendingCycleCount: 0,
     distinctFunctionAnalysisCount: 0,
     functionAnalysisCacheHitCount: 0,
     rewrittenBlockCount: 0,
@@ -321,6 +324,7 @@ export function specializeStaticDucklangClosures(
     ),
     distinctSpecializationKeyCount: specialization.requests.size,
     specializationCacheHitCount: specialization.cacheHitCount,
+    pendingSpecializationCycleCount: specialization.pendingCycleCount,
     distinctFunctionAnalysisCount: specialization.distinctFunctionAnalysisCount,
     functionAnalysisCacheHitCount: specialization.functionAnalysisCacheHitCount,
     rewrittenBlockCount: specialization.rewrittenBlockCount,
@@ -1121,7 +1125,10 @@ function rewriteExpression(
     specialization.cacheHitCount += 1;
     return cached.expression;
   }
-  if (cached?.status === "pending") return collapseEmptyBlock(rewritten);
+  if (cached?.status === "pending") {
+    specialization.pendingCycleCount += 1;
+    return collapseEmptyBlock(rewritten);
+  }
   specialization.requests.set(requestKey, { status: "pending" });
   const substitutions = new Map(
     factory.parameters.map((parameter, index) => [

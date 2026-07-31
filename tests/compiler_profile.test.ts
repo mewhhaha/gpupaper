@@ -344,6 +344,11 @@ apply(inc, 20) + apply(inc, 20)
       `profile omitted function-analysis reuse: ${JSON.stringify(work)}`,
     );
   }
+  if (work.specializationPendingCycleCount !== 0) {
+    throw new Error(
+      `non-recursive specialization reported ${work.specializationPendingCycleCount} pending cycles`,
+    );
+  }
 });
 
 Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {

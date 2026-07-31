@@ -350,6 +350,24 @@ scans and 630 avoided scans, a 41.61% hit share over 1,514 requests. The metric
 is now named `specializationFunctionAnalysisCacheHitCount`; a focused two-call
 higher-order program requires positive analysis reuse.
 
+The specialization-result key includes function identity, call-site span,
+static arguments, and captured environment. Temporary instrumentation counted
+the same key without call-site provenance:
+
+| Target | Provenance keys | Semantic keys | Merge ceiling |
+| ------ | --------------: | ------------: | ------------: |
+| Editor | 47 | 46 | 2.13% |
+| Codex | 703 | 698 | 0.71% |
+| grep | 1 | 1 | 0% |
+| Tar/wav/raytracer | 0 | 0 | 0% |
+
+Span elision is rejected: it offers negligible reuse and would substitute the
+first call site's source provenance without a separate relabeling proof. The
+temporary semantic-key instrumentation was removed. A retained pending-cycle
+counter gives exact Codex result-cache requests `(distinct, complete hit,
+pending) = (703,4,0)`, a 0.566% complete-hit rate; Editor is `(47,2,0)`, or
+4.082%.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
