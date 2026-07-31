@@ -638,6 +638,11 @@ Post-change instrumentation shows why: Codex capture-argument visits fall from
 raytracer 53.19%. The temporary counter was removed; the production profile is
 unchanged.
 
+Block-step lookup and removal perform only 6,258 Codex comparisons, 6.37% of
+the remaining 98,211 capture-argument visits. Other targets perform at most
+1,360. The counter was removed; indexed mutable step lists are rejected for the
+current corpus.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

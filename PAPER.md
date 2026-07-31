@@ -5490,6 +5490,19 @@ cost model at the actual traversal boundary and explains the directional timing
 improvement. The counter was removed again; the retained implementation remains
 one branch and no profile surface.
 
+### 2026-07-31: lifting step-list scans are secondary
+
+Review 97 counts comparisons in the per-binding `block.steps.find` and
+`removeGeneratedFunctionStep` filter. Codex performs 6,258 comparisons, only
+6.37% of the remaining 98,211 capture-argument visits. Editor performs 1,360,
+Tar 553, raytracer 225, grep 180, and wav zero.
+
+An index from symbol to step could reduce lookup but would not remove filtering,
+would require updates after every removal, and would add allocation at every
+block. The measured comparison count is below one third of a residual traversal
+and does not justify that representation. The temporary counter was removed;
+capturing-function call rewriting remains the lifting frontier.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

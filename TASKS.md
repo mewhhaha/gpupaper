@@ -1547,6 +1547,9 @@ resource cost, and corpus measurements.
       lifting reduction in a 15-sample A/B/A comparison.
 - [x] Remeasure capture-argument traversal after the fast path. Confirm a 52.52%
       Codex visit reduction and remove the temporary structural counter.
+- [x] Count lifting step lookup/removal comparisons. Reject indexed step lists
+      after only 6,258 Codex comparisons versus 98,211 remaining call-rewrite
+      visits, then remove the counter.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
