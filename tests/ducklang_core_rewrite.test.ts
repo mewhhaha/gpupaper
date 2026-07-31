@@ -1,5 +1,6 @@
 import {
   proposeDucklangCoreRewrites,
+  resolveDucklangCoreRewriteConflicts,
   rewriteFlatDucklangCore,
 } from "../src/ducklang_core_rewrite.ts";
 import { lowerDucklangToCore } from "../src/ducklang_core.ts";
@@ -64,6 +65,24 @@ sum * one
   assertEquals(proposals, []);
 });
 
+Deno.test("Core commit rejects a structurally valid false rewrite", async () => {
+  const snapshot = await flat(
+    "let value = 42\nlet zero = 0\nvalue + zero\n",
+  );
+  const proposal = proposeDucklangCoreRewrites(snapshot)[0];
+  const operandStart = snapshot.operationOperandStarts[proposal.operationId];
+  const falseReplacement = snapshot.operandValueIds[operandStart + 1];
+
+  assertThrows(
+    () =>
+      resolveDucklangCoreRewriteConflicts(snapshot, [{
+        ...proposal,
+        replacementValueId: falseReplacement,
+      }]),
+    /does not match the validated snapshot/,
+  );
+});
+
 async function flat(source: string) {
   const parsed = await parseDucklangModule("rewrite_core.duck", source);
   return flattenDucklangCore(
@@ -92,4 +111,15 @@ function assertEquals(actual: unknown, expected: unknown): void {
       }`,
     );
   }
+}
+
+function assertThrows(action: () => unknown, pattern: RegExp): void {
+  try {
+    action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (pattern.test(message)) return;
+    throw new Error(`expected ${pattern}; received ${message}`);
+  }
+  throw new Error(`expected action to throw ${pattern}`);
 }

@@ -67,50 +67,58 @@ function proposeValidatedDucklangCoreRewrites(
     operationId < snapshot.operationKinds.length;
     operationId += 1
   ) {
-    if (
-      snapshot.operationKinds[operationId] !==
-        FlatDucklangCoreKind.operation.scalarBinary ||
-      snapshot.operationOperandCounts[operationId] !== 2 ||
-      snapshot.operationAttributeCounts[operationId] !== 1 ||
-      !hasIntegerScalarResult(snapshot, operationId)
-    ) {
-      continue;
-    }
-    const attributeId = snapshot.operationAttributeStarts[operationId];
-    if (
-      snapshot.attributeKinds[attributeId] !==
-        FlatDucklangCoreKind.attribute.unsigned
-    ) {
-      continue;
-    }
-    const operator = snapshot.attributeLowWords[attributeId];
-    const operandStart = snapshot.operationOperandStarts[operationId];
-    const left = snapshot.operandValueIds[operandStart];
-    const right = snapshot.operandValueIds[operandStart + 1];
-    const rule = operator === FlatDucklangCoreKind.binaryOperator.add
-      ? "addZero"
-      : operator === FlatDucklangCoreKind.binaryOperator.multiply
-      ? "multiplyOne"
-      : undefined;
-    if (rule === undefined) continue;
-    const identity = rule === "addZero" ? 0 : 1;
-    const replacement = coreConstantEquals(snapshot, right, identity)
-      ? left
-      : coreConstantEquals(snapshot, left, identity)
-      ? right
-      : undefined;
-    if (replacement === undefined) continue;
-    proposals.push({
-      rule,
-      functionId:
-        snapshot.blockFunctionIds[snapshot.operationBlockIds[operationId]],
-      operationId,
-      resultValueId: snapshot.operationResultValueIds[operationId],
-      replacementValueId: replacement,
-      profit: 1,
-    });
+    const proposal = matchValidatedDucklangCoreRewrite(snapshot, operationId);
+    if (proposal !== undefined) proposals.push(proposal);
   }
   return proposals;
+}
+
+function matchValidatedDucklangCoreRewrite(
+  snapshot: FlatDucklangCore,
+  operationId: number,
+): DucklangCoreRewriteProposal | undefined {
+  if (
+    snapshot.operationKinds[operationId] !==
+      FlatDucklangCoreKind.operation.scalarBinary ||
+    snapshot.operationOperandCounts[operationId] !== 2 ||
+    snapshot.operationAttributeCounts[operationId] !== 1 ||
+    !hasIntegerScalarResult(snapshot, operationId)
+  ) {
+    return undefined;
+  }
+  const attributeId = snapshot.operationAttributeStarts[operationId];
+  if (
+    snapshot.attributeKinds[attributeId] !==
+      FlatDucklangCoreKind.attribute.unsigned
+  ) {
+    return undefined;
+  }
+  const operator = snapshot.attributeLowWords[attributeId];
+  const operandStart = snapshot.operationOperandStarts[operationId];
+  const left = snapshot.operandValueIds[operandStart];
+  const right = snapshot.operandValueIds[operandStart + 1];
+  const rule = operator === FlatDucklangCoreKind.binaryOperator.add
+    ? "addZero"
+    : operator === FlatDucklangCoreKind.binaryOperator.multiply
+    ? "multiplyOne"
+    : undefined;
+  if (rule === undefined) return undefined;
+  const identity = rule === "addZero" ? 0 : 1;
+  const replacement = coreConstantEquals(snapshot, right, identity)
+    ? left
+    : coreConstantEquals(snapshot, left, identity)
+    ? right
+    : undefined;
+  if (replacement === undefined) return undefined;
+  return {
+    rule,
+    functionId:
+      snapshot.blockFunctionIds[snapshot.operationBlockIds[operationId]],
+    operationId,
+    resultValueId: snapshot.operationResultValueIds[operationId],
+    replacementValueId: replacement,
+    profit: 1,
+  };
 }
 
 function hasIntegerScalarResult(
@@ -556,6 +564,20 @@ function validateProposal(
   ) {
     throw new RangeError(
       `Ducklang Core rewrite ${proposal.rule} profit must be a non-negative integer; received ${proposal.profit}`,
+    );
+  }
+  const expected = matchValidatedDucklangCoreRewrite(
+    snapshot,
+    proposal.operationId,
+  );
+  if (
+    expected === undefined ||
+    proposal.rule !== expected.rule ||
+    proposal.replacementValueId !== expected.replacementValueId ||
+    proposal.profit !== expected.profit
+  ) {
+    throw new TypeError(
+      `Ducklang Core rewrite ${proposal.rule} for operation ${proposal.operationId} does not match the validated snapshot`,
     );
   }
 }

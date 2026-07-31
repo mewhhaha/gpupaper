@@ -843,6 +843,48 @@ allocation, not its allocation formula. Each stage calculates those additional
 bytes explicitly and checks both individual binding limits and device buffer
 limits before allocation.
 
+### 7.3 Rewrite proposals as checked certificates
+
+Core optimization follows snapshot, propose, validate, resolve, and rebuild. For
+valid snapshot `S` and operation `o`, the CPU defines a partial matching
+function:
+
+```text
+M(S, o) =
+  addZero(result(o), x)       when o = iadd(x, 0) or iadd(0, x)
+  multiplyOne(result(o), x)   when o = imul(x, 1) or imul(1, x)
+  undefined                   otherwise
+```
+
+The rules are restricted to `i32` and `i64`, whose Wasm arithmetic is modular.
+They are deliberately not applied to floating point: `x + 0` can change negative
+zero, and `x * 1` participates in NaN behavior.
+
+The GPU returns proposal certificates containing rule, function, operation,
+result, replacement, and profit. A proposal `p` is admissible exactly when:
+
+```text
+M(S, p.operation) = p
+```
+
+The CPU recomputes `M` from the immutable snapshot. Structural validity alone is
+insufficient: before this review, a false GPU proposal could name an arbitrary
+same-function replacement and pass commit validation. Exact semantic
+revalidation closes that boundary. A faulty GPU may omit an optimization, which
+changes performance only; it cannot introduce an unproved rewrite.
+
+Accepted proposals are ordered by descending profit and then stable function,
+operation, result, and rule IDs. At most one proposal claims an operation.
+Rebuild removes claimed operations, resolves replacement chains with cycle
+detection, remaps every use, retains source order, and validates the complete
+new snapshot. The original snapshot is immutable.
+
+Executable evidence checks CPU/GPU proposal equality, immutable rebuild,
+multi-step replacement, floating-point exclusion, and rejection of a
+structurally valid but semantically false certificate. A general optimization
+framework would require a preservation proof and certificate checker for every
+additional rule.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -868,6 +910,8 @@ The implementation must establish:
     into a successful artifact by partial fallback.
 11. **Job isolation**: batching cannot make one job observe another job's
     payload, diagnostics, or output bytes.
+12. **Rewrite certification**: every committed GPU proposal is re-derived from
+    the immutable CPU-validated snapshot.
 
 ## 9. Cost model
 
