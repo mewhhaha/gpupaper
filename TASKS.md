@@ -992,6 +992,9 @@ Core receives no source handler or open effect row.
 - [x] Validate flat Core once at the CPU trust boundary and use generated exact
       CPU/GPU matcher comparisons as the rewrite oracle. Production GPU
       compilation treats only CPU-checked GPU proposals as authoritative.
+- [x] Treat an empty Core rewrite frontier as a validated identity before GPU
+      preparation. Packed execution removes identity jobs while preserving
+      logical result order; zero-work tests do not require an adapter.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -385,6 +385,22 @@ All bytes remained identical to CPU emission and passed engine validation. The
 samples are integration evidence, not a controlled before/after experiment: they
 do not isolate this pass from temperature, scheduling, or process-order effects.
 
+### Empty Core rewrite frontier
+
+When the stable `scalarBinary` frontier is empty, the exact matcher domain is
+empty. The pass now returns the validated input before GPU context acquisition.
+It avoids five derived host tables totaling
+`32 × operations + 20 × attributes + 16 × values + 8 × types` typed-array bytes,
+including the temporary zero attribute column, plus ten device buffers, one
+empty command submission, and one eight-byte map.
+
+The constant-only single-job regression reports zero initialization, transfer,
+GPU, commit, submission, candidates, and proposals. A two-job throughput
+regression reports one logical payload batch but zero physical submissions for
+both results. These are executable zero-work invariants, not timing samples.
+Every frozen target has a nonempty frontier, so the six-target release table is
+unaffected.
+
 ### Scalar comptime stack capacity
 
 The bytecode validator derives stack depth at every instruction. GPU scalar

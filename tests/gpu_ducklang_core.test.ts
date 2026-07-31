@@ -48,18 +48,45 @@ Deno.test("CPU Core boundary rejects an out-of-range type before GPU work", asyn
   }
 });
 
-Deno.test("WebGPU Core rewrite admits an empty candidate frontier", async () => {
+Deno.test("empty Core rewrite frontier completes without WebGPU work", async () => {
   const snapshot = await flat("42\n");
 
   const result = await runDucklangCoreGpuPass(snapshot);
 
-  if (result.status === "unavailable") return;
   if (result.status !== "completed") {
-    throw new Error(`GPU rejected accepted Core: ${result.reason}`);
+    throw new Error(`Core identity pass failed: ${result.reason}`);
+  }
+  if (result.package !== snapshot) {
+    throw new Error("empty Core rewrite frontier replaced its snapshot");
   }
   assertEquals(result.rewriteCandidateCount, 0);
   assertEquals(result.rewriteDispatchedInvocationCount, 0);
   assertEquals(result.proposals, []);
+  assertEquals(result.accepted, []);
+  assertEquals(result.initializationMilliseconds, 0);
+  assertEquals(result.gpuMilliseconds, 0);
+  assertEquals(result.transferMilliseconds, 0);
+  assertEquals(result.commitMilliseconds, 0);
+  assertEquals(result.submissionBatchSize, 0);
+});
+
+Deno.test("throughput batch discards every empty Core rewrite frontier", async () => {
+  const snapshots = await Promise.all([flat("42\n"), flat("7\n")]);
+
+  const results = await Promise.all(
+    snapshots.map((snapshot) =>
+      runDucklangCoreGpuPass(snapshot, { scheduling: "throughput" })
+    ),
+  );
+
+  for (const result of results) {
+    if (result.status !== "completed") {
+      throw new Error(`Core identity batch failed: ${result.reason}`);
+    }
+    assertEquals(result.payloadBatchSize, 2);
+    assertEquals(result.submissionBatchSize, 0);
+    assertEquals(result.gpuMilliseconds, 0);
+  }
 });
 
 async function flat(source: string) {

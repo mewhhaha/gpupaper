@@ -889,8 +889,11 @@ The partial matcher is undefined for every operation outside \(C\), so:
 The host therefore sends the stable increasing IDs in \(C\) as the rewrite
 frontier. This is scheduling classification, not CPU rewrite matching: operator,
 arity, attributes, result type, and constant operands remain GPU decisions. An
-empty frontier encodes no rewrite dispatch. For nonempty \(C\), scheduled lanes
-are \(64\lceil|C|/64\rceil\), replacing \(64\lceil O/64\rceil\).
+empty frontier proves that `M` is undefined for every operation, so the pass
+returns the branded input with empty proposal and acceptance sets before
+requesting a device. Packed execution partitions identity jobs from nonempty
+frontiers and preserves their logical result positions. For nonempty \(C\),
+scheduled lanes are \(64\lceil|C|/64\rceil\), replacing \(64\lceil O/64\rceil\).
 
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects the untrusted
@@ -918,6 +921,34 @@ buffers, and \(64\lceil R/64\rceil\) scheduled lanes. It also removes the
 eight-byte validation prefix from nonempty rewrite readback. CPU validation
 remains \(O(B_{\mathrm{flat}})\); this change removes repeated device work but
 does not change asymptotic host validation.
+
+The discriminant scan costs \(O(O)\) work and is already required to construct
+the frontier. Classifying the prepared job as the disjoint union
+`invalid |
+identity | rewrite` prevents GPU columns from existing for the first
+two cases. For an empty frontier, this avoids host preparation of:
+
+```text
+B_empty_host = 32O + 20A + 16V + 8T
+```
+
+bytes, where \(A,V,T\) are attribute, value, and type counts. These are the two
+four-word operation tables, a temporary one-word zero attribute column and its
+four-word interleaved table, one four-word value table, and one two-word type
+table. It also avoids all ten single-job device buffers. If \(E\) is the operand
+count, their logical capacities were:
+
+```text
+B_empty_device =
+    max(4, 16O) + max(4, 16O) + max(4, 4E)
+  + max(4, 16A) + max(4, 16V) + max(8, 8T)
+  + 4 + 4 + 24 + 8
+```
+
+as well as context initialization, command submission, and mapping the
+eight-byte minimum readback. The transformation has no empirical break-even:
+once \(C=\varnothing\), those resources cannot affect the result, and the
+classification branch uses information already computed by the frontier scan.
 
 The rule buffer initially contains the candidate IDs. Lane \(q\) reads its
 operation ID and then replaces only slot \(q\) with its rule result; the
@@ -2039,6 +2070,26 @@ The post-removal gate passed all 493 tests and compiled each frozen application
 twice with byte-identical CPU/GPU emission and engine validation. Codex's two
 correctness samples were 1,016.31 ms and 847.40 ms; Editor's were 377.55 ms and
 270.31 ms. They are not a controlled latency comparison.
+
+### 2026-07-31: an empty Core frontier is an identity
+
+The Core boundary previously encoded zero rewrite dispatches for
+\(C=\varnothing\) but still constructed five derived host tables, requested the
+GPU context, allocated ten buffers, submitted an empty command buffer, and
+mapped an eight-byte readback. Section 7.3 proves that the candidate
+discriminant is a complete outer filter for the current matcher. The prepared
+job is now a tagged `invalid | identity | rewrite` state: only `rewrite` can
+contain GPU columns, and an `identity` returns its validated package before
+device acquisition.
+
+Single-job and two-job throughput regressions require zero initialization,
+transfer, execution, commit, submission, proposals, and accepted rewrites for
+constant-only Core. They do not skip on GPU unavailability, so the identity path
+is executable without an adapter. Packed execution removes identity jobs before
+packing nonempty jobs and restores results in logical order. All frozen targets
+have nonempty frontiers, so this change has no claimed effect on their release
+samples. The full required-GPU gate passed 494 tests and compiled every frozen
+target twice with byte-identical CPU/GPU emission and engine validation.
 
 ### 2026-07-31: type closure gains a semantic oracle
 
