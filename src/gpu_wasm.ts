@@ -151,9 +151,10 @@ struct Parameters { count: u32, start: u32 }
 @compute @workgroup_size(64)
 fn calculate_lengths(@builtin(global_invocation_id) invocation: vec3<u32>) {
   if (invocation.x >= parameters.count) { return; }
-  let index = length_atom_indices[parameters.start + invocation.x];
-  let range_start = range_starts[index];
-  let range_end = range_start + range_counts[index];
+  let frontier_index = parameters.start + invocation.x;
+  let index = length_atom_indices[frontier_index];
+  let range_start = range_starts[frontier_index];
+  let range_end = range_start + range_counts[frontier_index];
   var byte_length = 0u;
   for (
     var dependency = range_start;
@@ -327,6 +328,8 @@ type PreparedWasmGpuJob = {
   readonly outputWordCount: number;
   readonly workgroupCount: number;
   readonly lengthAtomIndices: Uint32Array;
+  readonly lengthRangeStarts: Uint32Array;
+  readonly lengthRangeCounts: Uint32Array;
   readonly lengthLevels: readonly {
     readonly dependencyLevel: number;
     readonly start: number;
@@ -404,12 +407,12 @@ async function emitPackedWasmPlanBatch(
     storageAlignment,
   );
   const rangeStarts = packWasmColumns(
-    jobs.map((job) => job.columns.rangeStarts),
+    jobs.map((job) => job.lengthRangeStarts),
     4,
     storageAlignment,
   );
   const rangeCounts = packWasmColumns(
-    jobs.map((job) => job.columns.rangeCounts),
+    jobs.map((job) => job.lengthRangeCounts),
     4,
     storageAlignment,
   );
@@ -528,13 +531,13 @@ async function emitPackedWasmPlanBatch(
   );
   const rangeStartBuffer = createPackedWasmBuffer(
     device,
-    "Wasm batch range starts",
+    "Wasm batch length range starts",
     rangeStarts,
     GPUBufferUsage.STORAGE,
   );
   const rangeCountBuffer = createPackedWasmBuffer(
     device,
-    "Wasm batch range counts",
+    "Wasm batch length range counts",
     rangeCounts,
     GPUBufferUsage.STORAGE,
   );
@@ -889,6 +892,8 @@ function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   const analysis = analyzeWasmBinaryPlan(plan);
   const columns = atomColumns(plan.atoms);
   const lengthAtomIndices: number[] = [];
+  const lengthRangeStarts: number[] = [];
+  const lengthRangeCounts: number[] = [];
   const lengthLevels: {
     dependencyLevel: number;
     start: number;
@@ -898,6 +903,8 @@ function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
     const start = lengthAtomIndices.length;
     for (const atom of level.atoms) {
       lengthAtomIndices.push(atom.atomIndex);
+      lengthRangeStarts.push(atom.rangeStart);
+      lengthRangeCounts.push(atom.rangeCount);
     }
     lengthLevels.push({
       dependencyLevel: level.dependencyLevel,
@@ -941,6 +948,8 @@ function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
     outputWordCount: Math.ceil(analysis.byteLength / 4),
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
     lengthAtomIndices: new Uint32Array(lengthAtomIndices),
+    lengthRangeStarts: new Uint32Array(lengthRangeStarts),
+    lengthRangeCounts: new Uint32Array(lengthRangeCounts),
     lengthLevels,
     lengthDispatchedInvocationCount: lengthLevels.reduce(
       (total, level) =>
@@ -1035,6 +1044,8 @@ async function emitWasmPlanWithGpu(
     lengthAtomIndices,
     lengthDispatchedInvocationCount,
     lengthLevels,
+    lengthRangeCounts,
+    lengthRangeStarts,
     outputWordCount,
     scan,
     workgroupCount,
@@ -1051,14 +1062,15 @@ async function emitWasmPlanWithGpu(
   } = context;
   const atomBytes = Math.max(4, columns.kinds.byteLength);
   const lengthAtomIndexBytes = Math.max(4, lengthAtomIndices.byteLength);
+  const lengthRangeBytes = Math.max(4, lengthRangeStarts.byteLength);
   const hierarchyBytes = scan.hierarchyWordCounts.map((count) => count * 4);
   const outputBytes = outputWordCount * 4;
   const capacityRequests = [
     ["atom kinds", atomBytes, "storage"],
     ["atom low words", atomBytes, "storage"],
     ["atom high words", atomBytes, "storage"],
-    ["range starts", atomBytes, "storage"],
-    ["range counts", atomBytes, "storage"],
+    ["length range starts", lengthRangeBytes, "storage"],
+    ["length range counts", lengthRangeBytes, "storage"],
     ["length atom indices", lengthAtomIndexBytes, "storage"],
     ["atom sizes", atomBytes, "storage"],
     ["prefixes", atomBytes, "storage"],
@@ -1109,14 +1121,14 @@ async function emitWasmPlanWithGpu(
   );
   const rangeStartBuffer = createBuffer(
     device,
-    "Wasm range starts",
-    columns.rangeStarts,
+    "Wasm length range starts",
+    lengthRangeStarts,
     GPUBufferUsage.STORAGE,
   );
   const rangeCountBuffer = createBuffer(
     device,
-    "Wasm range counts",
-    columns.rangeCounts,
+    "Wasm length range counts",
+    lengthRangeCounts,
     GPUBufferUsage.STORAGE,
   );
   const lengthAtomIndexBuffer = createBuffer(
@@ -1449,14 +1461,10 @@ function atomColumns(atoms: readonly WasmAtom[]): {
   readonly kinds: Uint32Array;
   readonly lowWords: Uint32Array;
   readonly highWords: Uint32Array;
-  readonly rangeStarts: Uint32Array;
-  readonly rangeCounts: Uint32Array;
 } {
   const kinds = new Uint32Array(atoms.length);
   const lowWords = new Uint32Array(atoms.length);
   const highWords = new Uint32Array(atoms.length);
-  const rangeStarts = new Uint32Array(atoms.length);
-  const rangeCounts = new Uint32Array(atoms.length);
   for (const [index, atom] of atoms.entries()) {
     if (atom.kind === "byte") {
       kinds[index] = atomByte;
@@ -1480,15 +1488,11 @@ function atomColumns(atoms: readonly WasmAtom[]): {
       continue;
     }
     kinds[index] = atomLength;
-    rangeStarts[index] = atom.rangeStart;
-    rangeCounts[index] = atom.rangeCount;
   }
   return {
     kinds,
     lowWords,
     highWords,
-    rangeStarts,
-    rangeCounts,
   };
 }
 

@@ -925,19 +925,20 @@ For `A` atoms and maximum length level `D`, emission performs:
 3. an inclusive prefix sum of all resolved sizes;
 4. one full-array pass writing each atom into its assigned byte interval.
 
-The validated host plan groups length-atom indices stably by dependency level.
-Let \(K_d\) be the number of length atoms at level \(d\), and let
+The validated host plan groups length records
+`(atom_id, range_start, range_count)` stably by dependency level. Let \(K_d\)
+be the number of length atoms at level \(d\), and let
 \(J=\{d\mid K_d>0\}\). A level dispatch schedules \(L(K_d)\) lanes and uses the
-compacted index to reach the atom's global range and size columns. Induction on
-increasing \(d\) proves readiness: validation requires every length dependency
-of a level-\(d\) atom to have a strictly smaller level, and all lower nonempty
-levels have completed. Empty levels carry no dependency and require no
-dispatch. Stable ordering is not necessary for the size result, but makes the
-frontier and diagnostics deterministic.
+compacted record to reach the atom's global size column. Induction on increasing
+\(d\) proves readiness: validation requires every length dependency of a
+level-\(d\) atom to have a strictly smaller level, and all lower nonempty levels
+have completed. Empty levels carry no dependency and require no dispatch.
+Stable ordering is not necessary for the size result, but makes the frontier
+and diagnostics deterministic.
 
-The index frontier takes \(4\sum_d K_d\) transfer bytes. It replaces the old
-`4A`-byte dependency-level column. The scheduled length work changes from
-\(D L(A)\) lanes to:
+The record frontier takes \(12\sum_d K_d\) transfer bytes. It replaces dense
+atom-indexed dependency-level, range-start, and range-count columns totaling
+`12A` bytes. The scheduled length work changes from \(D L(A)\) lanes to:
 
 ```text
 length_dispatches = |J|
@@ -1902,6 +1903,21 @@ changes from 816,396 to 1,392 bytes. These are deterministic counts. Generated
 plan differentials, the sparse-level regression, packed emission, engine
 validation, and the full required-GPU gate are executable evidence; no latency
 distribution is claimed.
+
+### 2026-07-31: Wasm length ranges join their frontier
+
+The first sparse frontier carried only atom IDs and retained two dense
+atom-indexed range columns. Since range start and count are immutable properties
+of the same length record, that representation had no semantic justification.
+The transferred frontier now carries all three words and the GPU indexes them
+by frontier position. Its representation invariant is column-length equality:
+position \(q\) contains one atom ID and exactly that atom's validated range.
+
+Across the frozen plans, length metadata changes from `8A + 4K` to `12K` bytes,
+a 99.11–99.86% reduction. Codex changes from 1,634,184 to 4,176 bytes. GPU work
+and emitted bytes are unchanged. Generated and frozen CPU-byte differentials,
+packed emission, engine validation, and the full required-GPU gate are the
+executable evidence.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

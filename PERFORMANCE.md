@@ -310,6 +310,22 @@ Each target has two nonempty levels. The profile counts above come from one
 required-GPU differential compilation per target. They are deterministic work
 and payload measurements, not latency samples.
 
+The initial frontier still used two four-byte-per-atom range columns. Packing
+range start and count beside each frontier atom ID changes total length metadata
+from `8A + 4K` to `12K`:
+
+| Target    | Index plus dense ranges | Complete frontier | Reduction |
+| --------- | ----------------------: | ----------------: | --------: |
+| Editor    |                 191,924 |             1,620 |    99.16% |
+| Codex     |               1,634,184 |             4,176 |    99.74% |
+| grep      |                  31,244 |               204 |    99.35% |
+| tar       |                 177,688 |               240 |    99.86% |
+| wav       |                  19,872 |               168 |    99.15% |
+| raytracer |                  30,900 |               276 |    99.11% |
+
+This removes transfer and storage only; dispatch and arithmetic counts are
+unchanged.
+
 ### Scalar comptime stack capacity
 
 The bytecode validator derives stack depth at every instruction. GPU scalar
