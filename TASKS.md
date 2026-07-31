@@ -1444,6 +1444,9 @@ resource cost, and corpus measurements.
 - [x] Test final specialization-expression identity memoization. Reject it with
       a 15-sample stage-specific median/MAD comparison and require substage
       decisions to estimate the substage rather than reuse total-median profiles.
+- [x] Measure recursive specialization rewrite entries without retaining a
+      hot-path counter. Identify Codex's 8.07× rewrite amplification and show
+      that its 1.46× residual-size growth does not explain the work alone.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

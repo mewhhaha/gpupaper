@@ -383,6 +383,22 @@ descriptive of a whole compilation, not an estimator of every contained stage.
 Optimization decisions for a substage now use that substage's own sample median
 and MAD.
 
+Temporary rewrite-entry instrumentation measured specialization amplification:
+
+| Target | Rewrite entries | Demanded nodes | Entries/node | Residual nodes |
+| ------ | --------------: | -------------: | -----------: | -------------: |
+| Editor | 6,718 | 4,150 | 1.62× | 2,845 |
+| Codex | 130,143 | 16,119 | 8.07× | 23,594 |
+| grep | 670 | 707 | 0.95× | 419 |
+| Tar | 3,499 | 4,411 | 0.79× | 3,220 |
+| wav | 269 | 269 | 1.00× | 215 |
+| raytracer | 458 | 458 | 1.00× | 433 |
+
+Codex's 1.46× residual-size expansion is far smaller than its 8.07× rewrite
+amplification, so generated output size is not the whole cost. The hot-path
+counter was removed after measurement; its latency is not treated as a
+baseline.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

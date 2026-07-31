@@ -4747,6 +4747,28 @@ smaller than either MAD and rejects the mechanism. The implementation and its
 metric were removed before commit. Future substage decisions use samples and
 statistics for that substage directly, not the total-median representative.
 
+### 2026-07-31: rewrite amplification is measured
+
+Review 62 temporarily counted every recursive `rewriteExpression` entry. Let
+\(C\) be entries and \(N_d\) demanded input nodes. The measured
+\(C/N_d\) factors were Editor 6,718/4,150 = 1.62, Codex
+130,143/16,119 = 8.07, grep 670/707 = 0.95, Tar 3,499/4,411 = 0.79,
+wav 269/269 = 1.00, and raytracer 458/458 = 1.00.
+
+Codex's residual program has 23,594 nodes, only 1.46 times demanded input, so
+output expansion alone cannot explain 8.07 traversals per input node. At least
+106,549 rewrite entries exceed one visit per residual node, although this
+subtraction is an empirical work comparison rather than an object-identity
+proof: generated and eliminated expressions inhabit different sets.
+
+The entry counter was removed before commit because it executes on the exact
+hot recursion being measured. Its instrumented representative was 78.107 ms
+and is not compared to an uninstrumented latency baseline. The work vector is
+the evidence. The next decomposition separates entries under a specialization
+substitution environment from ordinary top-level rewriting, which tests the
+hypothesis that repeated partial-evaluation expansion—not generic traversal—is
+Codex-specific.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
