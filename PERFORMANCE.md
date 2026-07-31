@@ -1621,7 +1621,29 @@ the paired 30.975 ms premium amortizes to 0.484 ms/job. This is a bounded
 negative result. It does not imply that 64 is a lower bound on a crossover or
 that the latency difference is monotone. Physical Wasm packing saturates at the
 configured 16-job boundary, so a larger physical batch remains a separate
-unmeasured policy experiment.
+policy experiment.
+
+That experiment was run immediately afterward with the shared payload and
+submission cap changed from 16 to 64. For \(N\) simultaneously ready jobs, the
+idealized physical-batch count falls from \(\lceil N/16\rceil\) to
+\(\lceil N/64\rceil\), while atom work and logical payload bytes remain
+unchanged. Each removed physical batch can avoid nine buffer allocations, one
+map/readback boundary, and one packed command construction. The opposing costs
+are larger host columns and device buffers, alignment padding, and a longer
+single packing loop.
+
+| Policy | Jobs | Cap 16 paired median/MAD | Cap 64 paired median/MAD | Cap 16→64 physical payload |
+| ------ | ---: | -----------------------: | -----------------------: | -------------------------: |
+| latency | 32 | 24.74/12.21 ms | 40.80/19.94 ms | 16→32 |
+| latency | 64 | 41.32/13.78 ms | 36.43/21.91 ms | 16→64 |
+| throughput | 32 | 26.99/11.51 ms | 44.27/8.96 ms | 16→20.5 |
+| throughput | 64 | 30.98/8.84 ms | 35.61/15.12 ms | 16→34.5 |
+
+The larger cap reached larger physical batches but did not produce a consistent
+latency improvement. At 32 jobs both policies regressed; at 64, throughput
+regressed and the latency-policy reduction was smaller than its 21.91 ms MAD.
+The cap therefore remains 16. This is a rejected empirical optimization, not a
+claim that 16 is universally optimal.
 
 ## Peer boundaries
 

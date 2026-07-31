@@ -1393,6 +1393,9 @@ resource cost, and corpus measurements.
 - [x] Apply the paired estimator to concurrency break-even, stop treating a
       finite non-observation as a monotone lower bound, and extend the measured
       domain through 64 concurrent grep compilations.
+- [x] Audit a 64-job physical GPU batch cap. Confirm that larger payloads form,
+      reject the inconsistent latency result against paired MAD, and retain the
+      measured 16-job cap.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

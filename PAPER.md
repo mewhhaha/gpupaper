@@ -4053,6 +4053,48 @@ break-even merely by presenting up to 64 concurrent grep compilations. Raising
 the 16-job physical batch limit remains an unverified experiment rather than an
 inferred optimization.
 
+### 2026-07-31: larger physical Wasm batches are rejected
+
+The next experiment changed the common payload/submission cap from 16 to 64.
+Let \(K\) be that cap and suppose \(N\) jobs are ready together and within
+device capacity. The number of physical payload batches is
+\(b_K(N)=\lceil N/K\rceil\). Increasing \(K\) from 16 to 64 therefore removes
+up to three physical boundaries at \(N=64\), without changing the sum of atom
+work or logical payload bytes.
+
+The possible saving is
+
+\[
+(b_{16}(N)-b_{64}(N))
+  (T_{\rm allocate9}+T_{\rm encode}+T_{\rm map}),
+\]
+
+while the larger batch retains \(O(\sum_i A_i)\) host packing, GPU dispatch,
+and copied output work and increases the live packed-buffer footprint and
+alignment padding. Capacity preflight and stable recursive splitting preserve
+correctness for oversized batches, so this was a performance-policy experiment
+rather than a semantic change.
+
+At 32 and 64 jobs, cap-16 to cap-64 physical payload medians changed from 16 to
+32 and 16 to 64 under latency scheduling, and from 16 to 20.5 and 16 to 34.5
+under throughput scheduling. The larger cap therefore exercised its intended
+mechanism. Nevertheless, paired GPU-minus-CPU median/MAD milliseconds changed
+as follows:
+
+| Policy | \(N\) | Cap 16 | Cap 64 |
+| ------ | ----: | -----: | -----: |
+| latency | 32 | 24.739/12.212 | 40.804/19.935 |
+| latency | 64 | 41.324/13.775 | 36.428/21.910 |
+| throughput | 32 | 26.990/11.506 | 44.275/8.959 |
+| throughput | 64 | 30.975/8.843 | 35.606/15.120 |
+
+Both 32-job comparisons and 64-job throughput regressed. The sole lower median,
+64-job latency, moved by 4.896 ms against a 21.910 ms post-change MAD and does
+not resolve a benefit. The implementation therefore restores \(K=16\). This is
+empirical rejection on the current adapter and arrival protocol; it neither
+proves global optimality of 16 nor rules out a different scheduler that avoids
+host packing and readback boundaries altogether.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
