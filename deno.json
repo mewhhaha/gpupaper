@@ -16,6 +16,7 @@
     "benchmark:frontend": "deno run --unstable-webgpu --allow-read scripts/benchmark_ducklang_frontend.ts",
     "benchmark:rebuild": "deno run --unstable-webgpu --allow-read --allow-write=/tmp scripts/benchmark_ducklang_rebuild.ts",
     "benchmark:break-even": "deno run --unstable-webgpu --allow-read scripts/benchmark_gpu_break_even.ts",
+    "benchmark:wasm": "deno run --unstable-webgpu --allow-read scripts/benchmark_wasm_emission.ts",
     "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno scripts/benchmark_peer_compilers.ts",
     "release:gpu": "deno task check && deno task test && deno run --unstable-webgpu --allow-read scripts/release_gpu.ts",
     "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_ducklang_parser.ts grammar/duck.baba grammar/duck.baba.json grammar/generated",

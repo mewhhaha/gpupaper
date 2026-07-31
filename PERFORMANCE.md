@@ -55,12 +55,34 @@ six warm observations as three complete CPU-first/GPU-first pairs.
 deno task benchmark:frontend
 deno task benchmark:rebuild
 deno task benchmark:break-even
+deno task benchmark:wasm
 deno task benchmark:peers
 ```
 
 `benchmark:rebuild` distinguishes a cold compilation, an identical-source
 rebuild, trailing and internal comment edits, a one-function edit, and a
 dependency edit. It checks that semantic no-ops emit byte-identical Wasm.
+`benchmark:wasm` constructs each frozen target's final plan once, performs one
+unrecorded warm emission, and measures 21 emissions while alternating forward
+and reverse target order. Its boundary starts before host plan analysis and
+ends after mapped GPU readback and the final byte copy. Every observation must
+equal the independently emitted CPU artifact.
+
+The first isolated run established the dense-low-word baseline used by the
+deferred rank/select experiment:
+
+| Target    | Median |   p95 | Minimum | Maximum |
+| --------- | -----: | ----: | ------: | ------: |
+| Editor    |  27.99 | 28.74 |   26.78 |   28.90 |
+| Codex     |  37.09 | 38.36 |   34.34 |   43.73 |
+| grep      |  27.01 | 27.18 |   26.02 |   27.35 |
+| tar       |  27.76 | 28.02 |   27.55 |   28.02 |
+| wav       |  26.96 | 27.19 |   26.41 |   27.19 |
+| raytracer |  27.02 | 27.16 |   26.86 |   27.20 |
+
+Times are milliseconds. The near-constant 27 ms small-plan floor includes host
+packing, one submission, mapping, readback, and the copied result; it is not
+evidence that kernel work itself takes 27 ms.
 
 ## From-scratch warm compilation
 

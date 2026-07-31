@@ -2704,6 +2704,30 @@ Editor 1078.18/846.76, Codex 3395.07/2651.37, grep 441.34/333.38, Tar
 non-randomized correctness samples are recorded for reproducibility; the exact
 capacity reductions do not establish a latency improvement.
 
+### 2026-07-31: Wasm emission receives an isolated real-plan benchmark
+
+The release gate and whole-compiler profiles cannot identify a small emitter
+change beneath parser, specialization, Core, and validation variance. The new
+benchmark constructs the final plan for each frozen application once, performs
+one unrecorded warm emission, then samples only the boundary from host plan
+analysis through mapped GPU readback and the final byte copy. It alternates
+forward and reverse target order across 21 rounds to counterbalance monotone
+thermal or temporal drift.
+
+Every observation must equal the CPU-emitted artifact byte for byte. The report
+couples median and p95 latency to atom count, input capacity, offset width,
+output bytes, and scheduled lanes. These measurements do not separate host
+packing, device execution, and readback, and alternating target order does not
+remove autocorrelation; the benchmark therefore supports a paired
+representation experiment but not a hardware-independent performance claim.
+
+The first 21-round dense-low-word run measured median/p95 milliseconds of
+27.99/28.74 for Editor, 37.09/38.36 for Codex, 27.01/27.18 for grep,
+27.76/28.02 for Tar, 26.96/27.19 for wav, and 27.02/27.16 for raytracer. The
+five small plans cluster near 27 ms despite a 9.66-fold atom-count range, which
+is empirical evidence of a large fixed boundary cost, not a decomposition of
+that cost. Codex adds roughly 10 ms at 204,099 atoms.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

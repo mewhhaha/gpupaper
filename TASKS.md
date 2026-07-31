@@ -1143,6 +1143,11 @@ CPU/GPU disagreement, or return partially written output.
       most 65,535 bytes. Five frozen targets use lossless u16 boundaries; Codex
       retains u32. Boundary tests pin both sides of the threshold and profiles
       report the selected width.
+- [x] Isolate real-plan Wasm emission measurement from frontend and backend
+      lowering. The benchmark constructs each frozen plan once, warms the
+      persistent GPU context, alternates target order, reports median and p95
+      for analysis through mapped readback, and rejects every byte disagreement
+      with independent CPU emission.
 - [x] Hash-cons repeated type constructors before solving, derive the least
       constructor congruence on the CPU, validate its complete equality
       certificate with one GPU union/compression submission, and pack four
