@@ -1719,10 +1719,37 @@ current index, so classification no longer constructs an unconditional prefix
 or suffix. The base state scan is \(O(n)\). Its conservative total bound is
 \(O(n + Q + \sum_a L_a)\), where \(Q\) is text inspected by contextual
 candidate patterns and \(L_a\) is the backward context inspected for each
-possible single-parameter arrow. Accepted candidates advance past their entire
-interval. This is not yet a proof of worst-case linear time: adversarial failed
-record candidates or many arrow-like identifiers can make the residual terms
-superlinear.
+lexical single-parameter arrow candidate. Accepted candidates advance past
+their entire interval. This is not yet a proof of worst-case linear time:
+adversarial failed record candidates or many arrow-like identifiers can make
+the residual terms superlinear.
+
+Arrow classification has two independent predicates at position \(i\):
+
+```text
+arrow(i) = lexical_arrow(i) ∧ arrow_context(i)
+```
+
+Both predicates are pure functions of the immutable source, and the sticky
+lexical matcher resets its cursor to \(i\) before every test. Commutativity of
+conjunction therefore permits lexical evaluation first. Let \(H\) be
+letter-headed positions, \(B\subseteq H\) the positions admitted by the cheap
+bare-context prefix, \(M\subseteq H\) lexical arrow spellings, and
+\(K=B\cap M\). The previous order performed \(H\) bare-context checks, \(B\)
+complete-prefix checks, and \(B\) lexical matches. The new order performs \(H\)
+lexical matches, \(M\) bare-context checks, and only \(K\) complete-prefix
+checks. The change is profitable when:
+
+```text
+H Clex + M Cbare + K Cprefix
+  < H Cbare + B Cprefix + B Clex
+```
+
+This is not true for every regex engine or corpus, so the inequality is an
+empirical selection criterion rather than a semantic premise. On the Editor
+root, \(H=14,945\), \(B=858\), \(M=147\), and \(K=11\). Logical complete-prefix
+extent falls from 10,153,696 to 178,601 characters, a 98.24% reduction.
+Discarded-parameter arrows use the same lexical-first conjunction.
 
 Record-context recognition is derived from the old predicate rather than
 approximated. After skipping whitespace backwards from `{`, the prefix is empty
@@ -3351,6 +3378,30 @@ release gate. The required-GPU gate passed all 505 tests and compiled every
 frozen target twice. Its advisory samples in milliseconds were Editor
 305.95/184.75, Codex 815.87/609.12, grep 69.84/70.94, Tar 137.94/123.68, wav
 62.89/61.86, and raytracer 45.85/40.59.
+
+### 2026-07-31: arrow spelling filters context work
+
+The remaining contextual-classifier term came from evaluating arrow context
+before establishing that the current identifier was followed by `=>`. Section
+9 factors recognition into pure lexical and context predicates and derives the
+cost inequality for commuting that conjunction. The implementation now tests
+the anchored spelling first for both named and discarded parameters.
+
+Against the immediately preceding 31-sample Editor-root protocol, contextual
+classification fell from 4.670 to 1.455 ms, another 68.84%, and complete syntax
+fell from 11.845 to 8.613 ms, another 27.29%. Generated parser execution remained
+6.917 versus 7.033 ms. The exact complete-prefix extent falls 98.24%, from
+10,153,696 to 178,601 characters; this is the deterministic work claim. The
+focused syntax and corpus suites passed all 94 tests.
+
+The subsequent six-sample alternating frontend run measured CPU/GPU medians of
+98.09/153.37 ms for Editor, 513.01/587.65 for Codex, 13.72/70.24 for grep,
+66.26/122.54 for Tar, 7.43/64.31 for wav, and 11.72/42.18 for raytracer.
+Only the isolated classifier comparison supports attribution; the mixed
+end-to-end changes are run noise outside the optimized stage. The required-GPU
+gate passed all 505 tests and compiled every target twice. Its advisory samples
+in milliseconds were Editor 332.50/195.31, Codex 894.57/679.17, grep
+73.22/75.66, Tar 137.88/140.06, wav 63.89/63.88, and raytracer 44.88/43.54.
 
 ## References
 

@@ -282,6 +282,9 @@ source-language special case to bypass an unfinished earlier phase.
       constructing unconditional source prefixes and suffixes. Preserve source
       length and spans, dispatch only by necessary first characters, and retain
       the quote, escape, comment, and delimiter state machine.
+- [x] Filter arrow spellings before evaluating their backward context. The two
+      predicates are pure and conjunctive, so lexical-first evaluation preserves
+      acceptance while discarding context work for non-arrows.
 
 Exit criterion: every recorded target reaches semantic analysis, so no remaining
 target is hidden behind a syntax error.

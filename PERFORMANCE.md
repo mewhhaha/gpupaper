@@ -105,12 +105,12 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    | 103.66 ms | 164.34 ms |     24,460 |
-| Codex     | 506.72 ms | 582.58 ms |    226,134 |
-| grep      |  13.26 ms |  67.41 ms |      3,911 |
-| tar       |  66.40 ms | 120.86 ms |     26,106 |
-| wav       |   7.55 ms |  61.79 ms |      2,520 |
-| raytracer |  11.37 ms |  40.75 ms |      3,864 |
+| Editor    |  98.09 ms | 153.37 ms |     24,460 |
+| Codex     | 513.01 ms | 587.65 ms |    226,134 |
+| grep      |  13.72 ms |  70.24 ms |      3,911 |
+| tar       |  66.26 ms | 122.54 ms |     26,106 |
+| wav       |   7.43 ms |  64.31 ms |      2,520 |
+| raytracer |  11.72 ms |  42.18 ms |      3,864 |
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
@@ -137,7 +137,7 @@ at 299.96→297.30 ms. The deterministic work and code-size reductions are the
 supported performance claim.
 
 Single dirty compilations remain faster on CPU. On Editor the warm GPU path is
-1.59× the CPU time; on Codex it is 1.15×. The GPU stages are useful validation
+1.56× the CPU time; on Codex it is 1.15×. The GPU stages are useful validation
 and batching boundaries, but these measurements do not justify moving effect
 inference or handler lowering past the semantic CPU boundary.
 
@@ -203,6 +203,26 @@ from 114.37 to 103.66 ms for Editor, 514.93 to 506.72 ms for Codex, 14.63 to
 9.36%; they are consistent with the isolated classifier result but are not a
 causal estimate. The required-GPU release gate passed 505 tests and compiled
 all six targets twice with byte-identical Wasm and engine validation.
+
+The next audit commuted arrow recognition's pure lexical and context predicates.
+For the Editor root, letter-headed positions \(H=14,945\), bare-context
+candidates \(B=858\), lexical arrow spellings \(M=147\), and accepted
+intersections \(K=11\). Complete-prefix logical extent therefore falls from
+10,153,696 to 178,601 characters, or 98.24%.
+
+| Syntax component          | Lexical last | Lexical first | Change |
+| ------------------------- | -----------: | ------------: | -----: |
+| Contextual classification |        4.670 |         1.455 | -68.84% |
+| Generated parser          |        6.917 |         7.033 |  +1.68% |
+| AST lowering              |       10.775 |        12.202 | +13.24% |
+| Complete syntax stage     |       11.845 |         8.613 | -27.29% |
+
+These are 31 warm observations after one unrecorded warmup. Parser and AST
+movements are not attributed to the classifier. The subsequent full frontend
+run measured 98.09/153.37 ms CPU/GPU for Editor, 513.01/587.65 for Codex,
+13.72/70.24 for grep, 66.26/122.54 for Tar, 7.43/64.31 for wav, and
+11.72/42.18 for raytracer. Mixed changes outside Editor are run noise; the
+isolated classifier and exact discarded work support the optimization.
 
 ### Demand-specialization audit
 

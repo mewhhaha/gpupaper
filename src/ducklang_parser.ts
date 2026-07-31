@@ -919,12 +919,12 @@ function classifyContextualTokens(source: string): string {
         continue;
       }
     }
-    if (
-      character === "_" &&
-      canStartBareArrowFunction(source, index)
-    ) {
+    if (character === "_") {
       const discardedArrow = matchAt(patterns.discardedArrow, index);
-      if (discardedArrow !== null) {
+      if (
+        discardedArrow !== null &&
+        canStartBareArrowFunction(source, index)
+      ) {
         classified[index] = "\\";
         classified[index + 1] = "D";
         for (
@@ -938,15 +938,15 @@ function classifyContextualTokens(source: string): string {
         continue;
       }
     }
-    if (
-      /[A-Za-z]/.test(character) &&
-      canStartSingleArrowFunction(source, index)
-    ) {
+    if (/[A-Za-z]/.test(character)) {
       const singleArrowParameter = matchAt(
         patterns.singleArrowParameter,
         index,
       );
-      if (singleArrowParameter !== null) {
+      if (
+        singleArrowParameter !== null &&
+        canStartSingleArrowFunction(source, index)
+      ) {
         classified[index] = "\\";
         classified[index + singleArrowParameter[0].length - 1] =
           singleArrowParameter[1][0];
