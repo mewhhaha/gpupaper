@@ -5101,6 +5101,32 @@ the induction boundaries and must be represented explicitly. The temporary
 counters were removed. The next review should measure free-parameter dependency
 at subtree granularity rather than infer it from final object identity.
 
+### 2026-07-31: encoder parameter dependence is structurally sparse
+
+Review 78 computes occurrence counts bottom-up on each large factory body. An
+occurrence is parameter-dependent when its subtree contains a reference to one
+of the factory's parameters. The encoder body has 5,298 occurrences but only 12
+dependent occurrences, 0.23%; both 32,184-entry requests share this body. The
+protocol encoder has 9 of 4,514, 0.20%. By contrast, `parse_json_document` has
+3,007 of 8,618 (34.89%), `parse_json` has 2,283 of 7,088 (32.21%), and each
+`parse_json_string` request has 382 of 1,518 (25.16%).
+
+The count follows directly from the free-variable equation
+\(FV(n)=local(n)\cup\bigcup FV(child(n))\), intersected with the parameter set.
+It is an executable measurement over occurrences, not unique DAG vertices. A
+subtree with empty intersection can be rewritten once for a fixed captured
+environment and reused for all substitutions. However, the body count alone
+does not explain the encoder's 6.07 rewrite entries per source occurrence;
+selected branches and recursively constructed expressions create additional
+work. A template mechanism should therefore begin with the encoder's 5,286
+independent occurrences and retain ordinary rewriting at the 12 dependent
+boundary nodes, while parse requests need a different cost decision.
+
+The dependency counters were removed. Before implementation, the next review
+must measure whether caching invariant subtree rewrites by source object and
+captured environment actually reduces entries, because contextual `values`
+lookups can invalidate a parameter-only criterion across environments.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

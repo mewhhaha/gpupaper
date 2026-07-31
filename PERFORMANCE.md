@@ -557,6 +557,12 @@ perform 940 direct substitutions (1.04%). Each dominant encoder request returns
 reuse ceiling, not a dependency proof; the counters were removed before the
 next subtree-dependency measurement.
 
+Bottom-up free-parameter counts find only 12 dependent occurrences in the
+5,298-occurrence encoder body (0.23%) and 9 of 4,514 in the protocol encoder
+(0.20%). Parsing bodies are less sparse: 34.89%, 32.21%, and 25.16% dependent.
+This justifies an encoder-focused invariant-subtree experiment, not a universal
+template policy. Temporary counters were removed.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

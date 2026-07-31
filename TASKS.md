@@ -1492,6 +1492,9 @@ resource cost, and corpus measurements.
 - [x] Classify unchanged entries and parameter substitutions in large requests.
       Establish a 79.00% identity-preserving lower bound and require a subtree
       free-symbol proof before introducing template reuse.
+- [x] Measure free-parameter dependence in each large factory body. Establish
+      the encoder's 12-of-5,298 sparse boundary and distinguish it from the
+      25--35% dependent JSON parsing bodies.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
