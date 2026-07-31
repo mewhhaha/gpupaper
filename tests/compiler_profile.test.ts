@@ -90,6 +90,27 @@ add(20, 22)
   }
 });
 
+Deno.test("independent compilation skips session identity work", async () => {
+  const artifact = await compileModuleSource(
+    "independent.duck",
+    "40 + 2\n",
+    { gpuMode: "off" },
+  );
+  const { stages, work } = artifact.profile;
+
+  if (
+    stages.semanticContextMilliseconds !== 0 ||
+    stages.semanticFingerprintMilliseconds !== 0 ||
+    work.semanticFingerprintReuseCount !== 0
+  ) {
+    throw new Error(
+      `independent compilation performed session identity work: ${
+        JSON.stringify({ stages, work })
+      }`,
+    );
+  }
+});
+
 Deno.test("Core identity reuses its structured round-trip witness", async () => {
   const artifact = await compileModuleSource(
     "core_identity_profile.duck",

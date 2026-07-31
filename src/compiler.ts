@@ -547,7 +547,7 @@ type PreparedDucklangSource = {
   readonly parsedResult: Awaited<
     ReturnType<typeof parseDucklangModuleWithTimings>
   >;
-  readonly semanticIdentity: string;
+  readonly sessionSemanticIdentity: string | undefined;
   readonly semanticFingerprintReused: boolean;
   readonly revisionReuse: "none" | "exact" | "trailingTrivia";
   readonly sourceExpansionMilliseconds: number;
@@ -599,37 +599,40 @@ async function prepareDucklangModuleSource(
   const expandedSource = await expandDucklangIncludes(file, source);
   const sourceExpansionMilliseconds = performance.now() - includeStart;
 
-  const semanticContextStart = performance.now();
   let hostInterfaceIdentity: unknown;
-  if (options.hostInterface !== undefined) {
-    try {
-      const canonicalHost = await Deno.realPath(options.hostInterface);
-      const hostSource = await expandDucklangIncludes(
-        canonicalHost,
-        await Deno.readTextFile(canonicalHost),
-      );
-      hostInterfaceIdentity = {
-        canonicalHost,
-        sourceHash: await ducklangSourceHash(hostSource),
-      };
-    } catch (cause) {
-      throw new TypeError(
-        `${file}: cannot resolve Ducklang host interface ${
-          JSON.stringify(options.hostInterface)
-        }`,
-        { cause },
-      );
+  let semanticContextIdentity: string | undefined;
+  let semanticContextMilliseconds = 0;
+  if (options.session !== undefined) {
+    const semanticContextStart = performance.now();
+    if (options.hostInterface !== undefined) {
+      try {
+        const canonicalHost = await Deno.realPath(options.hostInterface);
+        const hostSource = await expandDucklangIncludes(
+          canonicalHost,
+          await Deno.readTextFile(canonicalHost),
+        );
+        hostInterfaceIdentity = {
+          canonicalHost,
+          sourceHash: await ducklangSourceHash(hostSource),
+        };
+      } catch (cause) {
+        throw new TypeError(
+          `${file}: cannot resolve Ducklang host interface ${
+            JSON.stringify(options.hostInterface)
+          }`,
+          { cause },
+        );
+      }
     }
+    semanticContextIdentity = contentIdentity({
+      schema: 1,
+      file,
+      hostInterface: hostInterfaceIdentity,
+      gpuMode: options.gpuMode ?? "off",
+      gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+    });
+    semanticContextMilliseconds = performance.now() - semanticContextStart;
   }
-  const semanticContextIdentity = contentIdentity({
-    schema: 1,
-    file,
-    hostInterface: hostInterfaceIdentity,
-    gpuMode: options.gpuMode ?? "off",
-    gpuWasmVerification: options.gpuWasmVerification ?? "differential",
-  });
-  const semanticContextMilliseconds = performance.now() -
-    semanticContextStart;
 
   const parsingStart = performance.now();
   const previousRevision = options.session?.sourceRevisions.get(file);
@@ -652,32 +655,36 @@ async function prepareDucklangModuleSource(
     ? performance.now() - parsingStart
     : 0;
 
-  const semanticFingerprintStart = performance.now();
-  const syntaxFingerprint = revisionReuse === "none"
-    ? ducklangSyntaxFingerprint(parsedResult.module, expandedSource)
-    : {
-      identity: previousRevision!.syntaxIdentity,
-      dependencyEnd: previousRevision!.syntaxDependencyEnd,
-    };
-  const semanticIdentities = revisionReuse === "none"
-    ? new Map<string, string>()
-    : previousRevision!.semanticIdentities;
-  let semanticIdentity = semanticIdentities.get(semanticContextIdentity);
-  const semanticFingerprintReused = semanticIdentity !== undefined;
-  if (semanticIdentity === undefined) {
-    semanticIdentity = contentIdentity({
-      schema: 1,
-      file,
-      module: syntaxFingerprint.identity,
-      hostInterface: hostInterfaceIdentity,
-      gpuMode: options.gpuMode ?? "off",
-      gpuWasmVerification: options.gpuWasmVerification ?? "differential",
-    });
-    semanticIdentities.set(semanticContextIdentity, semanticIdentity);
-  }
-  const semanticFingerprintMilliseconds = performance.now() -
-    semanticFingerprintStart;
+  let sessionSemanticIdentity: string | undefined;
+  let semanticFingerprintReused = false;
+  let semanticFingerprintMilliseconds = 0;
   if (options.session !== undefined) {
+    const sessionContextIdentity = semanticContextIdentity!;
+    const semanticFingerprintStart = performance.now();
+    const syntaxFingerprint = revisionReuse === "none"
+      ? ducklangSyntaxFingerprint(parsedResult.module, expandedSource)
+      : {
+        identity: previousRevision!.syntaxIdentity,
+        dependencyEnd: previousRevision!.syntaxDependencyEnd,
+      };
+    const semanticIdentities = revisionReuse === "none"
+      ? new Map<string, string>()
+      : previousRevision!.semanticIdentities;
+    sessionSemanticIdentity = semanticIdentities.get(sessionContextIdentity);
+    semanticFingerprintReused = sessionSemanticIdentity !== undefined;
+    if (sessionSemanticIdentity === undefined) {
+      sessionSemanticIdentity = contentIdentity({
+        schema: 1,
+        file,
+        module: syntaxFingerprint.identity,
+        hostInterface: hostInterfaceIdentity,
+        gpuMode: options.gpuMode ?? "off",
+        gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+      });
+      semanticIdentities.set(sessionContextIdentity, sessionSemanticIdentity);
+    }
+    semanticFingerprintMilliseconds = performance.now() -
+      semanticFingerprintStart;
     options.session.sourceRevisions.set(file, {
       expandedSource,
       parsedResult,
@@ -692,7 +699,7 @@ async function prepareDucklangModuleSource(
     source,
     expandedSource,
     parsedResult,
-    semanticIdentity,
+    sessionSemanticIdentity,
     semanticFingerprintReused,
     revisionReuse,
     sourceExpansionMilliseconds,
@@ -1277,9 +1284,9 @@ async function compileDucklangModuleSource(
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
   const prepared = await prepareDucklangModuleSource(file, source, options);
   let semanticReuseValidationMilliseconds = 0;
-  const cachedCompilation = options.session?.compilations.get(
-    prepared.semanticIdentity,
-  );
+  const cachedCompilation = prepared.sessionSemanticIdentity === undefined
+    ? undefined
+    : options.session?.compilations.get(prepared.sessionSemanticIdentity);
   if (cachedCompilation !== undefined) {
     const semanticReuseValidationStart = performance.now();
     const sourceProvider = createDucklangFilesystemSourceProvider();
@@ -1788,10 +1795,17 @@ async function compileDucklangModuleSource(
       gpuWasmMilliseconds,
     },
   };
-  options.session?.compilations.set(prepared.semanticIdentity, {
-    artifact,
-    dependencies: frontend.dependencies,
-  });
+  if (options.session !== undefined) {
+    if (prepared.sessionSemanticIdentity === undefined) {
+      throw new Error(
+        `${file}: compilation session has no semantic identity`,
+      );
+    }
+    options.session.compilations.set(prepared.sessionSemanticIdentity, {
+      artifact,
+      dependencies: frontend.dependencies,
+    });
+  }
   return artifact;
 }
 

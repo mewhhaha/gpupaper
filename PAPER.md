@@ -757,6 +757,48 @@ and Core-identity paths. CPU workers were not introduced because cloning the
 pointer-rich Core into `P` workers would add `O(P × Core_bytes)` memory before
 any measured benefit.
 
+### 6.4 Cache identities are owned by compilation sessions
+
+A semantic identity is not part of Ducklang program meaning. It is an
+operational key for one explicit `DucklangCompilationSession`:
+
+```text
+Session = absent
+        | present(source_revisions, compilations, module_instances,
+                  module_syntax, backend_functions)
+```
+
+The identity judgment is therefore partial:
+
+```text
+present(S) ⊢ identity(source, syntax, host, policy) ⇓ k
+absent     ⊢ identity(source, syntax, host, policy) ⇓ unused
+```
+
+Only the first judgment admits `lookup(compilations, k)`,
+`insert(compilations, k, artifact)`, revision reuse, or dependency validation.
+With `Session = absent`, no continuation in the compiler can observe \(k\).
+Constructing it would violate the discard-before-parallelize rule by performing
+bookkeeping without an owner.
+
+For \(N\) parsed syntax nodes, \(S\) source bytes, normalized identity length
+\(L\), and \(H\) host-interface bytes, the skipped work is
+\(O(N+S+L+H)\). Normalizing syntax constructs \(O(N)\) transient objects and
+content encoding constructs \(O(L)\) string storage. Host identity adds file
+resolution, reading, and hashing over \(H\); the semantic host-interface
+application still reads the interface at its actual elaboration boundary.
+
+The preservation argument is noninterference. Without a session there is no
+cache lookup before elaboration and no insertion after artifact validation.
+Deleting the unused key computation cannot change parsing, elaboration, Core,
+Wasm, ABI construction, diagnostics, or artifact validation. With a session,
+the identity construction and all exact, trailing-trivia, dependency, and
+backend-function reuse rules are unchanged.
+
+Profiles enforce the boundary: an independent compilation reports zero
+semantic-context and semantic-fingerprint milliseconds and zero fingerprint
+reuse. A session compilation retains the existing identity and reuse evidence.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4158,6 +4200,43 @@ byte-identical, engine-valid samples in milliseconds were Editor
 272.61/140.03, Codex 715.70/517.82, grep 42.97/44.77, Tar 143.47/132.24, wav
 36.32/35.93, and raytracer 41.68/39.83. These correctness samples do not
 measure the default-CPU latency removal.
+
+### 2026-07-31: sessionless compilation discards cache identities
+
+Profiling exposed semantic-context and semantic-fingerprint stages in every
+from-scratch benchmark even though those runs pass no compilation session.
+Inspection found exactly two consumers of the resulting identity: a session
+compilation lookup and the corresponding validated-artifact insertion. Section
+6.4 now makes identity construction conditional on ownership by that session.
+
+Independent compilation no longer resolves and hashes the host interface for a
+cache key, normalizes the full syntax tree, scans the source dependency suffix,
+or content-encodes the normalized tree. The real host-interface elaboration,
+all semantic stages, and all artifact validation remain. Session-backed
+compilation executes the former code unchanged.
+
+An executable profile regression requires both session-only stages and
+fingerprint reuse count to be zero without a session. The existing exact-source,
+trailing-trivia, internal-edit, dependency, and backend-function session tests
+remain the counterboundary. Every post-change frozen CPU and required-GPU
+representative reported exactly zero milliseconds for both removed stages.
+
+Consecutive six-sample runs against detached parent `eede66b` measured CPU
+medians changing from 88.388→83.309 ms Editor, 456.536→433.900 Codex,
+14.487→11.649 grep, 69.623→65.890 Tar, 7.623→5.580 wav, and 11.738→9.208
+raytracer. Required-GPU medians changed from 125.252→105.125, 489.596→477.767,
+42.219→40.272, 124.367→122.679, 34.255→32.914, and 39.064→37.909 ms.
+
+The parent CPU representative spent context/fingerprint milliseconds of
+0.133/11.348, 0.172/1.679, 0.131/0.904, 0.160/2.201, 0.005/0.831, and
+0.005/1.324 in target order. Removal of those stages is an implementation
+invariant. The uniformly lower end-to-end observations are empirical and are
+not wholly attributed because the comparisons are consecutive rather than
+interleaved across commits.
+
+The 514-test required-GPU release gate passed. Its byte-identical, engine-valid
+samples in milliseconds were Editor 271.99/148.69, Codex 785.39/547.92, grep
+43.09/46.37, Tar 160.52/135.64, wav 37.75/33.74, and raytracer 39.07/37.88.
 
 ## References
 

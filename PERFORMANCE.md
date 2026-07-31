@@ -115,30 +115,30 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    |  90.99 ms | 115.27 ms |     24,460 |
-| Codex     | 409.07 ms | 440.27 ms |    226,134 |
-| grep      |  12.30 ms |  40.43 ms |      3,911 |
-| tar       |  65.51 ms | 120.65 ms |     26,106 |
-| wav       |   5.73 ms |  33.95 ms |      2,520 |
-| raytracer |  10.25 ms |  38.50 ms |      3,864 |
+| Editor    |  83.31 ms | 105.12 ms |     24,460 |
+| Codex     | 433.90 ms | 477.77 ms |    226,134 |
+| grep      |  11.65 ms |  40.27 ms |      3,911 |
+| tar       |  65.89 ms | 122.68 ms |     26,106 |
+| wav       |   5.58 ms |  32.91 ms |      2,520 |
+| raytracer |   9.21 ms |  37.91 ms |      3,864 |
 
 The corresponding paired GPU-minus-CPU measurements are:
 
 | Target    | Median difference | MAD | Dominant required-GPU stage |
 | --------- | ----------------: | --: | --------------------------- |
-| Editor    |          24.48 ms | 3.49 ms | Wasm emission, 28.67 ms |
-| Codex     |          23.50 ms | 5.05 ms | specialization, 105.24 ms |
-| grep      |          28.23 ms | 0.38 ms | Wasm emission, 27.48 ms |
-| tar       |          55.29 ms | 5.07 ms | Core pass, 34.38 ms |
-| wav       |          28.02 ms | 0.51 ms | Wasm emission, 27.81 ms |
-| raytracer |          28.38 ms | 1.31 ms | Wasm emission, 28.63 ms |
+| Editor    |          21.79 ms | 5.34 ms | Wasm emission, 33.84 ms |
+| Codex     |         33.36 ms | 11.89 ms | elaboration, 106.63 ms |
+| grep      |          28.86 ms | 1.37 ms | Wasm emission, 27.91 ms |
+| tar       |          58.50 ms | 2.44 ms | Core pass, 34.15 ms |
+| wav       |          27.38 ms | 0.42 ms | Wasm emission, 28.09 ms |
+| raytracer |          28.11 ms | 1.24 ms | Wasm emission, 28.32 ms |
 
 These are one six-observation run, not confidence intervals. Five targets have
 an exact Core identity frontier, so their required-GPU latency premium is close
 to the isolated 27 ms Wasm boundary. Tar alone has 24 physical Core rewrites
-and pays both a 34.38 ms Core pass and a 29.70 ms Wasm pass. Codex's marginal
-median difference is 31.20 ms, while its median paired difference is 23.50 ms;
-this 7.70 ms discrepancy is a concrete counterexample to treating a difference
+and pays both a 34.15 ms Core pass and a 28.63 ms Wasm pass. Codex's marginal
+median difference is 43.87 ms, while its median paired difference is 33.36 ms;
+this 10.50 ms discrepancy is a concrete counterexample to treating a difference
 of marginal medians as the paired effect.
 
 An immediately preceding run reported a 352.97 ms Editor GPU median and a
@@ -147,6 +147,35 @@ observations, so that excursion cannot be classified as a queue stall, thermal
 event, or repeated backend cost. It is retained as an inconclusive failed
 measurement and is the reason raw observations are now part of the benchmark
 contract.
+
+### Session identities stop at the session boundary
+
+From-scratch compilation previously normalized every parsed AST, encoded that
+normalized tree into a content identity, scanned the source's trailing semantic
+dependency, and hashed host-interface contents. Those values are read only by a
+`DucklangCompilationSession` cache. Independent compilation now performs
+exactly zero semantic-context and semantic-fingerprint work; session-backed
+exact, trailing-trivia, dependency, and backend-function reuse are unchanged.
+
+For \(N\) syntax nodes, \(S\) source bytes, normalized identity length \(L\),
+and host bytes \(H\), the removed independent-compilation work is
+\(O(N+S+L+H)\), with \(O(N+L)\) transient allocation. It removes no semantic
+analysis and changes no emitted byte.
+
+Consecutive six-sample runs against detached parent `eede66b` measured:
+
+| Target | CPU before→after | CPU change | GPU before→after | GPU change | Removed CPU context/fingerprint |
+| ------ | ---------------: | ---------: | ---------------: | ---------: | ------------------------------: |
+| Editor | 88.39→83.31 ms | -5.75% | 125.25→105.12 ms | -16.07% | 0.13/11.35 ms |
+| Codex | 456.54→433.90 ms | -4.96% | 489.60→477.77 ms | -2.42% | 0.17/1.68 ms |
+| grep | 14.49→11.65 ms | -19.59% | 42.22→40.27 ms | -4.61% | 0.13/0.90 ms |
+| tar | 69.62→65.89 ms | -5.36% | 124.37→122.68 ms | -1.36% | 0.16/2.20 ms |
+| wav | 7.62→5.58 ms | -26.80% | 34.25→32.91 ms | -3.92% | 0.00/0.83 ms |
+| raytracer | 11.74→9.21 ms | -21.55% | 39.06→37.91 ms | -2.96% | 0.00/1.32 ms |
+
+The removed stage is exact; the end-to-end deltas are empirical and include
+run-order noise. In particular, they are not wholly attributed to the smaller
+measured stage.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

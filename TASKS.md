@@ -1399,6 +1399,9 @@ resource cost, and corpus measurements.
 - [x] Separate availability policy from performance selection. Default to CPU,
       rename explicit best-effort GPU execution to `optional`, retain fail-stop
       `required`, and preserve portable differential GPU coverage.
+- [x] Stop semantic context and normalized-syntax identity construction at the
+      compilation-session boundary. Independent builds report zero cache-key
+      work; all session reuse semantics remain covered.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
