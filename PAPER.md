@@ -766,11 +766,13 @@ Whole compilation also includes CPU parsing, semantic lowering, flattening, Wasm
 planning, ABI construction, and final validation. Consequently a faster kernel
 does not imply a faster compilation. `gpu_*_queue_wait`,
 `gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
-submission batch sizes, validation records, proposal counts, Wasm atoms, and
-output-buffer bytes expose the terms that the current implementation can
-measure. Pipeline initialization and capacity/packing are currently combined
-with their containing stage except where Core initialization is reported
-separately; this is a stated instrumentation limit.
+submission batch sizes, validation records, Core candidate/proposal/scheduled
+lane counts, Wasm atom and length-frontier counts, length and scan dispatches,
+total Wasm scheduled lanes, and output-buffer bytes expose the terms that the
+current implementation can measure. Pipeline initialization and
+capacity/packing are currently combined with their containing stage except
+where Core initialization is reported separately; this is a stated
+instrumentation limit.
 
 Comparative timing uses paired, counterbalanced observations: even samples run
 CPU then GPU and odd samples run GPU then CPU for the same workload, batch size,
@@ -963,9 +965,12 @@ have completed. Empty levels carry no dependency and require no dispatch.
 Stable ordering is not necessary for the size result, but makes the frontier
 and diagnostics deterministic.
 
-The record frontier takes \(12\sum_d K_d\) transfer bytes. It replaces dense
-atom-indexed dependency-level, range-start, and range-count columns totaling
-`12A` bytes. The scheduled length work changes from \(D L(A)\) lanes to:
+The logical record frontier takes \(12\sum_d K_d\) transfer bytes. It replaces
+dense atom-indexed dependency-level, range-start, and range-count columns
+totaling `12A` bytes. When the frontier is empty, WebGPU's nonzero binding
+requirement reserves one word for each of the three physical columns but
+transfers no semantic record. The scheduled length work changes from
+\(D L(A)\) lanes to:
 
 ```text
 length_dispatches = |J|
@@ -1053,13 +1058,14 @@ B_output = 4 ceil(B_exact / 4)
 
 The plan validator has already proved that every referenced dependency has a
 lower level, so induction on ordered nonempty levels makes every \(s_j\)
-available. With \(K=\sum_dK_d\), this takes
-\(O(A + K\log|J| + \sum_i range_count_i)\) work, `A` bytes for widths, and
-\(O(K)\) frontier memory. Iterating nonempty levels is essential: a valid sparse
-plan may declare a very large numeric level without requiring work proportional
-to that number. It is not CPU emission: no encoded byte or offset is
-constructed. The GPU independently executes its size, length, scan, and write
-passes, and the returned final prefix must equal \(B_\text{exact}\).
+available. With \(K=\sum_dK_d\), grouping takes \(O(A)\), sorting the nonempty
+levels takes \(O(|J|\log\max(1,|J|))\), and width evaluation takes
+\(O(A+\sum_i range_count_i)\). Host storage is `A` bytes for widths plus
+\(O(K+|J|)\) frontier records. Iterating nonempty levels is essential: a valid
+sparse plan may declare a very large numeric level without requiring work
+proportional to that number. It is not CPU emission: no encoded byte or offset
+is constructed. The GPU independently executes its size, length, scan, and
+write passes, and the returned final prefix must equal \(B_\text{exact}\).
 
 An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
 case analysis but conservative. Exact host sizing removes their slack without a
