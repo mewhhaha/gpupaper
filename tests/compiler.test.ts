@@ -417,7 +417,7 @@ Deno.test("WebGPU equality closure preserves unrelated type classes", async () =
   assertEquals(result.representatives[0] !== result.representatives[2], true);
 });
 
-Deno.test("WebGPU constructor decomposition generates child equalities", async () => {
+Deno.test("GPU-validated closure generates constructor child equalities", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
   const left: Type = {
@@ -441,6 +441,7 @@ Deno.test("WebGPU constructor decomposition generates child equalities", async (
   }
   assertEquals(result.equalityCount, 2);
   assertEquals(result.decompositionCount > 0, true);
+  assertEquals(result.unionRounds, 1);
 });
 
 Deno.test("WebGPU type graphs share repeated constructor terms", async () => {
@@ -483,7 +484,7 @@ Deno.test("WebGPU equality closure reports constructor clashes", async () => {
   assertEquals(result.status, "constructorClash");
 });
 
-Deno.test("WebGPU quotient reachability reports infinite types", async () => {
+Deno.test("GPU-validated closure rejects cyclic quotient graphs", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const list: Type = {
     kind: "constructor",
@@ -516,7 +517,7 @@ Deno.test("one WebGPU union pass closes a maximum-length equality chain", async 
   assertEquals(representatives, new Array(512).fill(0));
 });
 
-Deno.test("WebGPU closes constructor equalities beyond the quadratic kernel size", async () => {
+Deno.test("GPU validates large constructor congruence closures", async () => {
   let left: Type = { kind: "variable", id: 0 };
   let right: Type = { kind: "variable", id: 1 };
   for (let depth = 0; depth < 300; depth += 1) {

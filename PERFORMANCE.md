@@ -561,6 +561,37 @@ removed work is one device request/cache selection rather than a kernel or byte
 count. Frozen application type graphs are nonempty; no release timing change is
 claimed.
 
+### Certified type-closure boundary
+
+The type solver now uses one algorithm at every nonempty graph size. The CPU
+derives the least constructor congruence and diagnostic provenance; one GPU
+union/compression submission validates the complete closed equality set; the CPU
+requires exact representatives and checks the sparse quotient graph for cycles.
+The former at-most-64-term branch allocated a quadratic constructor-pair
+frontier and used cubic scheduled work for dense reachability.
+
+Frozen required-GPU profiles before the removal showed that no application
+entered that branch:
+
+| Target    | Source equalities | Flat terms | Closed equalities | Child-equation work | GPU union rounds |
+| --------- | ----------------: | ---------: | ----------------: | ------------------: | ---------------: |
+| Editor    |             3,556 |      1,706 |             3,838 |               8,035 |                1 |
+| Codex     |            25,358 |     11,593 |            28,138 |              83,484 |                1 |
+| grep      |             1,164 |        773 |             1,292 |               2,528 |                1 |
+| tar       |             7,888 |      3,838 |             9,174 |              24,102 |                1 |
+| wav       |               241 |         99 |               264 |                 180 |                1 |
+| raytracer |               292 |         86 |               292 |                  72 |                1 |
+
+Thus the frozen production work is unchanged: it already used certified CPU
+closure, one GPU union/compression submission, and sparse CPU cycle detection.
+The deterministic reduction is implementation surface—four shader pipelines and
+955 source lines—and removal of an unused \(T^2/T^3\) resource hazard. A small
+closure regression now also requires one union round, while compatible,
+clashing, cyclic, deep, concurrent, and generated differential cases preserve
+their results. No latency reduction is claimed without a counterbalanced
+measurement of affected small graphs. The full 498-test and six-target
+required-GPU release gate passed.
+
 ## Incremental rebuild
 
 Each target and backend receives one explicit compilation session. The session

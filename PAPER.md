@@ -1214,45 +1214,64 @@ result.
 A compressed parent forest alone is not a certificate of this judgment. It can
 show that the reported relation is an equivalence, but cannot show minimality:
 the forest that places every term in one class is compressed and satisfies all
-input equalities while spuriously equating unconstrained terms. Therefore the
-current stage independently computes the deterministic CPU closure, using the
-lowest term ID as class representative, and requires exact agreement with the
-GPU representatives, clash diagnostic, or minimum cyclic class. A mismatch is a
-compiler error, never an `auto` fallback. The number of explicitly generated
-child equations is a work metric rather than a semantic result: pairwise and
+input equalities while spuriously equating unconstrained terms. The selected
+boundary therefore has two explicit responsibilities:
+
+1. the CPU computes the deterministic least constructor congruence, using the
+   lowest term ID as class representative, and rejects the first constructor
+   clash;
+2. the GPU unions the complete closed equality set and compresses every path,
+   after which the CPU requires exact representative equality and checks the
+   quotient graph for a cycle.
+
+A mismatch is a compiler error, never an `auto` fallback. Constructor-clash
+provenance remains at the CPU semantic boundary because the union kernel cannot
+represent a clash. The number of child equations considered while constructing
+the closure is a work metric rather than a semantic result: pairwise and
 star-shaped constructor decomposition can prove the same partition with
 different redundant equation sets.
 
 For \(T\) flat terms, \(E\) source equalities, \(K\) distinct equalities added
-by constructor injectivity, and \(F\) nonempty closure frontiers, the CPU oracle
-uses \(O(T + E + K)\) memory and \(O(F(T + K) + (E + K)\alpha(T))\) work in the
-current implementation, with the coarse bound \(F \leq K + 1\). The small GPU
-path admits at most 64 terms, considers \(T^2\) constructor pairs per closure
-frontier, and uses \(T\) transitive-closure dispatches of \(T^2\) lanes for the
-occurs check. Larger graphs perform constructor closure and the quotient-cycle
-check on the CPU, then differentially check the final union on the GPU.
-Consequently this stage is validation evidence, not an end-to-end type-checking
-speedup. Removing the CPU oracle would require a GPU-produced derivation forest
-proving that every union follows from an input equality or equal-constructor
-child position, plus independently checkable clash and acyclicity certificates.
-
-The 64-term switch is a resource policy, not a measured break-even. For one
-small-path constructor frontier, let \(C\) be maximum constructor arity, \(Q =
-T^2\), and \(L = 64\lceil Q/64\rceil\). Pair counts and two scan columns use
-\(12Q\) bytes; equality and parent output columns reserve
-\(12\min(1{,}048{,}576, QC)\) bytes. Count, scan, and emit schedule:
+by constructor injectivity, \(M=E+K\), and \(F\) nonempty closure frontiers, the
+CPU closure uses \(O(T+M)\) memory and
+\(O(F(T+K)+M\alpha(T))\) work in the current implementation, with the coarse
+bound \(F\leq K+1\). Sparse quotient-cycle detection takes \(O(T+D)\) work and
+memory for \(D\) distinct constructor-child edges. The GPU validation uses:
 
 ```text
-pair_passes = 2 + ceil(log₂ Q)
-pair_invocations = L × pair_passes
+logical device bytes = 4T parents + 8M equalities + 4T readback
+compute passes        = 1 union + 1 path compression
+scheduled lanes       = 64 ceil(M / 64) + 64 ceil(T / 64)
+submissions/readbacks = 1 / 1
 ```
 
-At \(T=64\), \(Q=4{,}096\), so one frontier schedules 14 pair passes and 57,344
-lanes. Since all child terms are included in \(T\), \(C \leq 63\), giving a
-worst-case quadratic allocation below 3.2 MiB before linear metadata. These
-bounds explain the conservative cutoff but do not show that 64 minimizes wall
-time. A threshold change requires a counterbalanced sweep of neighboring graph
-sizes and constructor shapes.
+Packed batches add alignment but not logical per-job work. Union by minimum
+representative makes the canonical result independent of successful atomic
+order; exact CPU comparison detects missing or excess unions.
+
+This stage is validation evidence, not an end-to-end GPU type-checking speedup.
+An earlier implementation used two different algorithms separated by an
+arbitrary 64-term cutoff. Its small branch compared \(T^2\) constructor pairs
+per frontier, scanned that dense pair column, and performed \(T\) dense
+reachability passes of \(T^2\) lanes. At the cutoff, one constructor frontier
+alone scheduled 57,344 lanes, while reachability could schedule another 262,144
+lanes and allocate \(4T^2=16{,}384\) bytes. Every frozen application exceeded
+the cutoff, so the branch provided no production work and no measured
+break-even. It has been removed rather than retained as an unscalable second
+semantic implementation.
+
+A future end-to-end GPU solver requires primitives justified independently of
+this cutoff. Constructor terms can be keyed by
+\((\operatorname{rep}(t),\operatorname{label}(t),\operatorname{arity}(t))\);
+stable sort/group or an equivalently deterministic join can expose conflicting
+labels and star-shaped child equations without enumerating all pairs. Sparse
+cycle or strongly connected component analysis can replace dense transitive
+closure. Hash tables are not yet selected because collision resolution,
+capacity, and atomic insertion order would add unproved failure and
+determinism obligations. Removing the CPU closure additionally requires a
+GPU-produced derivation forest proving that every union follows from an input
+equality or equal-constructor child position, plus independently checkable clash
+and acyclicity certificates.
 
 ### 7.6 Scalar comptime integer semantics
 
@@ -2345,6 +2364,33 @@ job with derived height 2, reducing its stack buffer from 256 to 8 bytes
 These exact capacities establish memory reduction, not a measurable latency
 change for such a small job.
 
+### 2026-07-31: type validation has one scalable boundary
+
+The type stage previously retained a dense GPU constructor-decomposition and
+transitive-reachability implementation for graphs of at most 64 terms. Every
+frozen application bypassed it: term counts were 1,706 for Editor, 11,593 for
+Codex, 773 for grep, 3,838 for tar, 99 for wav, and 86 for raytracer. Those jobs
+already computed exact closure on the CPU and submitted its equality certificate
+to one GPU union/compression command.
+
+Section 7.5 now makes that boundary uniform. Removing the cutoff and four dormant
+pipelines deletes 955 source lines. At the former cutoff, one constructor
+frontier scheduled 57,344 lanes and dense reachability could schedule 262,144
+more; the selected boundary schedules only the padded closed equalities and
+terms. Frozen closed-equality counts are 3,838, 28,138, 1,292, 9,174, 264, and
+292 in the same target order, each with one union round. Because the removed
+branch ran for none of them, this is a scalability and specification result, not
+a frozen latency improvement.
+
+Compatible constructors, unrelated classes, child injectivity, clashes, cyclic
+quotients, a 600-plus-term deep closure, maximum-length union, concurrent
+isolation, and generated partitions are executable validations. Stable
+sort/group plus sparse cycle analysis is the stated prerequisite for moving
+closure itself to the GPU; dense pair enumeration is no longer an admitted
+prototype. The full required-GPU gate passed 498 tests and compiled every frozen
+application twice with byte-identical differential emission and engine
+validation.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -2392,3 +2438,6 @@ change for such a small job.
     Parallel Scan Algorithms for GPUs.” NVIDIA Technical Report NVR-2008-003,
     2008.
     <https://research.nvidia.com/publication/2008-12_efficient-parallel-scan-algorithms-gpus>
+19. Robert Tarjan. “Depth-First Search and Linear Graph Algorithms.” SIAM
+    Journal on Computing 1(2), 1972.
+    <https://doi.org/10.1137/0201010>

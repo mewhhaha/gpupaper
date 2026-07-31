@@ -1129,9 +1129,12 @@ CPU/GPU disagreement, or return partially written output.
 - [x] Make GPU Core rewrite proposals authoritative, resolve them in stable
       order, compact the flat package directly, and validate the rebuilt
       snapshot before lowering.
-- [x] Hash-cons repeated type constructors before upload, use the scalable
-      representative algorithm beyond the measured quadratic crossover, and pack
-      four emitted Wasm bytes into each output word.
+- [x] Hash-cons repeated type constructors before solving, derive the least
+      constructor congruence on the CPU, validate its complete equality
+      certificate with one GPU union/compression submission, and pack four
+      emitted Wasm bytes into each output word. The removed alternative compared
+      all term pairs and formed a dense transitive closure; neither operation
+      scales with the admitted corpus.
 - [x] Admit algebraic rewrites only where the value type proves the required
       law. `x + 0` and `x * 1` are currently integer rules: bypassing an
       IEEE-754 operation can change signed-zero or NaN payload bits observable
@@ -1149,8 +1152,8 @@ CPU/GPU disagreement, or return partially written output.
       automatic mode, invalidate every cached pipeline tied to that device, and
       retry a later compilation on a newly requested device. Every submitted
       readback races the device-loss promise and carries its reason and driver
-      message. The shared device, Core, comptime, Wasm, union, decomposition,
-      and reachability caches all discard state tied to a lost device. Required
+      message. The shared device, Core, comptime, Wasm, and union caches all
+      discard state tied to a lost device. Required
       mode promotes unavailability to failure; validation errors, semantic
       disagreement, and malformed GPU output remain hard failures.
 - [x] Separate production execution from differential verification.
