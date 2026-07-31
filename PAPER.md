@@ -1061,19 +1061,19 @@ has positive width, hence:
 ```
 
 The resolved representation contains the \(A+1\) `u32` boundaries. For a length
-atom with range \([r,r+c)\), its encoded value is
-\(p_{r+c}-p_r\). Thus the same boundaries resolve both nested lengths and
-output placement. The GPU receives atom kinds, resolved low/high value words,
-and the boundary vector. Lane \(i\) owns exactly \([p_i,p_{i+1})\), encodes its
-atom there, and no sizing or scan kernel is required.
+atom with range \([r,r+c)\), its encoded value is \(p_{r+c}-p_r\). Thus the same
+boundaries resolve both nested lengths and output placement. The GPU receives
+atom kinds, resolved low/high value words, and the boundary vector. Lane \(i\)
+owns exactly \([p_i,p_{i+1})\), encodes its atom there, and no sizing or scan
+kernel is required.
 
 Adjacent intervals may share a `u32` output word, so writers use `atomicOr` into
 a zeroed buffer. The byte masks of distinct intervals are disjoint; the atomic
 operations therefore commute. Per-atom correctness plus ordered disjoint
 intervals proves that the final buffer is the source-ordered concatenation.
 
-This division follows the trust boundary rather than a CPU/GPU preference.
-Exact output allocation already requires the host to validate the atom DAG and
+This division follows the trust boundary rather than a CPU/GPU preference. Exact
+output allocation already requires the host to validate the atom DAG and
 evaluate every \(s_i\). Recording each partial sum adds one \(O(A)\) store
 sequence to work that cannot be discarded. Recomputing sizes, length values, and
 prefixes on the GPU duplicated that resolved information. If a future pipeline
@@ -1086,9 +1086,32 @@ emission dispatch and \(L(A)\) scheduled lanes. The boundary vector transfers
 word, boundaries, and output—and one count uniform. Output capacity is exactly
 \(4\lceil B/4\rceil\), and readback contains only that output.
 
+The kind domain has five inhabitants. It is represented as eight four-bit tags
+per `u32`:
+
+```text
+kind(i) = (kind_words[i >> 3] >> (4(i & 7))) & 15
+```
+
+Tags 0 through 4 map injectively to the atom variants; the remaining nibble
+values are invalid and emit nothing, which the byte differential detects. This
+keeps \(O(1)\) lane-local lookup using shifts and masks while changing the kind
+column from `4A` to \(4\lceil A/8\rceil\) bytes. Including two full-width value
+columns and boundaries, logical atom input is:
+
+```text
+B_atom_input = 8A + 4(A + 1) + 4 ceil(A / 8)
+```
+
+The uncompressed kind representation required `16A + 4`, so the exact saving is
+\(4(A-\lceil A/8\rceil)\) bytes. A three-bit packing is denser but makes some
+tags cross word boundaries or restricts each word to ten tags; the nibble
+representation trades at most one bit per tag for one-word, shift-and-mask
+random access.
+
 For comparison with the superseded hierarchy, let \(K\) be the number of length
-atoms, \(J\) its nonempty dependency levels, \(n_0=A\),
-\(n_{\ell+1}=\lceil n_\ell/W\rceil\), \(h\) the number of hierarchy levels, and
+atoms, \(J\) its nonempty dependency levels, \(n_0=A\), \(n_{\ell+1}=\lceil
+n_\ell/W\rceil\), \(h\) the number of hierarchy levels, and
 \(H=\sum_{\ell=1}^{h-1}n_\ell\). Resolving before GPU execution removes these
 logical device bytes:
 
@@ -1102,9 +1125,8 @@ logical device bytes:
 The old inclusive-prefix readback word exactly offsets the new vector's one
 extra boundary word, so neither appears in the difference. Packed batches add
 device-required alignment between logical jobs; it does not change this per-job
-model. Host work is
-\(O(A+\sum_i\mathrm{rangeCount}_i+|J|\log\max(1,|J|))\), as it already was for
-exact capacity.
+model. Host work is \(O(A+\sum_i\mathrm{rangeCount}_i+|J|\log\max(1,|J|))\), as
+it already was for exact capacity.
 
 The default CPU differential independently evaluates the length DAG, encodes
 LEB128 values, concatenates atoms, and compares every byte. Engine validation
@@ -2115,9 +2137,9 @@ establish a latency distribution.
 
 Exact output allocation already traversed the validated atom DAG, resolved every
 nested length, and summed every encoded width. The GPU nevertheless repeated
-size calculation, length evaluation, and a hierarchical prefix scan. Section
-7.4 now records every partial sum during the mandatory host traversal and sends
-the resulting \(A+1\) boundaries to one parallel emission kernel.
+size calculation, length evaluation, and a hierarchical prefix scan. Section 7.4
+now records every partial sum during the mandatory host traversal and sends the
+resulting \(A+1\) boundaries to one parallel emission kernel.
 
 The representation proof is \(p_{i+1}=p_i+s_i\): lane \(i\) owns
 \([p_i,p_{i+1})\), while a length range \([r,r+c)\) has byte value
@@ -2127,12 +2149,26 @@ jobs, signed LEB boundaries, and shared output words. Engine validation remains
 the final binary conformance check. The full 496-test gate and two deterministic
 compilations of every frozen target passed.
 
-Across the frozen applications, scheduled Wasm lanes fall from 10,176–823,552
-to 2,496–204,160, a 75.21–75.47% reduction. The change deletes three shader
+Across the frozen applications, scheduled Wasm lanes fall from 10,176–823,552 to
+2,496–204,160, a 75.21–75.47% reduction. The change deletes three shader
 modules, four compute pipelines, all length and scan dispatches, size and
 hierarchy buffers, length-frontier buffers, and pass uniforms. Resolved-offset
 bytes and the single padded emission frontier are executable profile fields.
 These deterministic work reductions do not establish a latency distribution.
+
+### 2026-07-31: Wasm atom tags become packed random-access nibbles
+
+After redundant layout passes were deleted, the five-valued atom kind still
+occupied one `u32` per atom. Section 7.4 now packs eight tags per word. The
+mapping is injective over the source sum type, lanes decode in constant time,
+and invalid spare tags cannot silently select signed-64 emission.
+
+The frozen inputs fall by 8,668–714,344 logical bytes, or approximately 21.87%
+of resolved atom input. Codex changes from 3,265,588 to 2,551,244 bytes. The
+exact atom-input formula is an executable profile invariant; the existing
+generated GPU/CPU differential exercises tag-word boundaries and all atom
+variants. The full 496-test and six-target release gate passed. This is a
+deterministic transfer/capacity reduction, not a latency claim.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

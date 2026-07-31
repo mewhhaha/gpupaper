@@ -333,14 +333,14 @@ length. Recording its partial sums as `A + 1` byte boundaries makes the GPU
 size, length, and hierarchical-scan passes redundant. The GPU now runs only the
 parallel emission frontier:
 
-| Target    | Atoms | Previous lanes | Emission lanes | Lane reduction | Offset bytes |
-| --------- | ----: | -------------: | -------------: | -------------: | -----------: |
-| Editor    | 23,923 |         96,832 |         23,936 |         75.28% |       95,696 |
+| Target    |   Atoms | Previous lanes | Emission lanes | Lane reduction | Offset bytes |
+| --------- | ------: | -------------: | -------------: | -------------: | -----------: |
+| Editor    |  23,923 |         96,832 |         23,936 |         75.28% |       95,696 |
 | Codex     | 204,099 |        823,552 |        204,160 |         75.21% |      816,400 |
-| grep      | 3,897 |         15,808 |          3,904 |         75.30% |       15,592 |
-| tar       | 22,201 |         89,792 |         22,208 |         75.27% |       88,808 |
-| wav       | 2,477 |         10,176 |          2,496 |         75.47% |        9,912 |
-| raytracer | 3,851 |         15,808 |          3,904 |         75.30% |       15,408 |
+| grep      |   3,897 |         15,808 |          3,904 |         75.30% |       15,592 |
+| tar       |  22,201 |         89,792 |         22,208 |         75.27% |       88,808 |
+| wav       |   2,477 |         10,176 |          2,496 |         75.47% |        9,912 |
+| raytracer |   3,851 |         15,808 |          3,904 |         75.30% |       15,408 |
 
 The preceding hierarchical-scan and compacted-length sections are retained as
 the measured path by which the redundant work was identified; this section
@@ -360,6 +360,26 @@ This is 10,484–846,612 bytes across the frozen targets. Packed-region alignmen
 is additional physical capacity. The byte differential, shared-word packed
 regression, sparse-level regression, and engine validator test correctness.
 Counts are deterministic; latency still requires counterbalanced samples.
+
+### Packed Wasm atom tags
+
+Five atom variants need three information bits. Eight four-bit tags now share
+one `u32`, preserving one-word random access with shifts and masks. The kind
+column falls from `4A` to `4 ceil(A / 8)` bytes:
+
+| Target    |   Atoms | Old atom input | Packed atom input | Bytes removed | Reduction |
+| --------- | ------: | -------------: | ----------------: | ------------: | --------: |
+| Editor    |  23,923 |        382,772 |           299,044 |        83,728 |    21.87% |
+| Codex     | 204,099 |      3,265,588 |         2,551,244 |       714,344 |    21.87% |
+| grep      |   3,897 |         62,356 |            48,720 |        13,636 |    21.87% |
+| tar       |  22,201 |        355,220 |           277,520 |        77,700 |    21.87% |
+| wav       |   2,477 |         39,636 |            30,968 |         8,668 |    21.87% |
+| raytracer |   3,851 |         61,620 |            48,144 |        13,476 |    21.87% |
+
+Atom input includes packed kinds, two `u32` value columns, and the `A + 1`
+resolved offsets. It excludes output/readback and packed-job alignment. The
+profile checks the exact formula `8A + 4(A + 1) + 4 ceil(A / 8)`. Dispatch count
+and scheduled lanes are unchanged.
 
 ### Compacted Core rewrite frontier
 

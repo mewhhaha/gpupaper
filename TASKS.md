@@ -1002,6 +1002,9 @@ Core receives no source handler or open effect row.
       the CPU trust boundary. One GPU emission frontier consumes those
       boundaries; size, nested-length, and hierarchical-scan kernels are
       deleted, with exact-offset and byte-differential regressions.
+- [x] Pack the five Wasm atom tags as eight random-access nibbles per word.
+      Profiles prove the exact input-byte formula, and generated CPU/GPU
+      differentials cross tag-word boundaries.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -262,6 +262,7 @@ export type DucklangCompilationWork = {
   readonly wasmAtomCount: number;
   readonly gpuWasmLengthAtomCount: number;
   readonly gpuWasmResolvedOffsetBytes: number;
+  readonly gpuWasmAtomInputBytes: number;
   readonly gpuWasmDispatchedInvocationCount: number;
   readonly wasmOutputBufferBytes: number;
   readonly wasmBytes: number;
@@ -1258,6 +1259,7 @@ async function elaborateDucklangModuleSource(
         wasmAtomCount: 0,
         gpuWasmLengthAtomCount: 0,
         gpuWasmResolvedOffsetBytes: 0,
+        gpuWasmAtomInputBytes: 0,
         gpuWasmDispatchedInvocationCount: 0,
         wasmOutputBufferBytes: 0,
         wasmBytes: 0,
@@ -1655,6 +1657,9 @@ async function compileDucklangModuleSource(
         : 0,
       gpuWasmResolvedOffsetBytes: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.resolvedOffsetBytes
+        : 0,
+      gpuWasmAtomInputBytes: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.atomInputBytes
         : 0,
       gpuWasmDispatchedInvocationCount: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.dispatchedInvocationCount

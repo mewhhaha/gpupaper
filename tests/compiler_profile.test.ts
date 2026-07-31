@@ -107,6 +107,10 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
       expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
     work.gpuWasmResolvedOffsetBytes !== (work.wasmAtomCount + 1) * 4 ||
+    work.gpuWasmAtomInputBytes !==
+      Math.ceil(work.wasmAtomCount / 8) * 4 +
+        work.wasmAtomCount * 8 +
+        (work.wasmAtomCount + 1) * 4 ||
     work.gpuWasmDispatchedInvocationCount !==
       paddedInvocationCount(work.wasmAtomCount) ||
     work.wasmOutputBufferBytes < work.wasmBytes ||

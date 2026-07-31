@@ -991,6 +991,12 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     (plan.atoms.length + 1) * 4,
   );
   assertEquals(
+    gpu.atomInputBytes,
+    Math.ceil(plan.atoms.length / 8) * 4 +
+      plan.atoms.length * 8 +
+      (plan.atoms.length + 1) * 4,
+  );
+  assertEquals(
     WebAssembly.validate(
       new Uint8Array(gpu.bytes).buffer as ArrayBuffer,
     ),
