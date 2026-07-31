@@ -5149,6 +5149,23 @@ future template must mark invariant regions ahead of execution and bypass them
 at their roots; it must not ask a dynamic cache at every visited node. The next
 review measures the cache's actual hit rate to quantify that distinction.
 
+### 2026-07-31: epoch-cache hits are too sparse
+
+Review 80 adds temporary hit counters to the rejected Review 79 cache. Codex
+records 4,869 hits against the uncached 130,143-entry work count, an upper-bound
+hit rate of 3.74%. Editor records 65 against 6,718, 0.97%. Grep, Tar, wav, and
+raytracer record zero. A hit may skip more than one descendant entry, so this
+ratio is not an exact saved-work fraction, but it establishes the lookup domain:
+more than 96% of Codex baseline entries cannot be direct hits.
+
+Let \(L\) be lookup cost, \(H\) hits, \(E\) baseline entries, and \(R\) the
+average work avoided per hit. A cache requires \(EL < HR\). With
+\(E/H=26.73\), each hit must repay at least 26.73 lookups. The observed 5--6 ms
+regression proves that this implementation does not. Precomputed root markers
+invert the domain: they pay a branch at candidate roots rather than a map lookup
+at all entries. The cache and counters were removed; the evidence closes dynamic
+identity memoization for this corpus.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

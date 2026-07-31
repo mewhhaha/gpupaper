@@ -1498,6 +1498,9 @@ resource cost, and corpus measurements.
 - [x] Test a semantically safe per-request expression cache keyed by lexical
       environment epoch. Reject its 5--6 ms Codex rewrite regression and retain
       the requirement to bypass invariant regions at their roots.
+- [x] Measure the rejected epoch cache's hit rate. Close dynamic identity
+      memoization after Codex reaches at most 3.74% hits and must repay 26.73
+      lookups per hit.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

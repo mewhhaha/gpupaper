@@ -569,6 +569,12 @@ samples measured median/MAD 70.379/1.648, 76.230/2.688, and 71.077/3.744 ms.
 Dynamic lookup at every entry costs more than same-context identity reuse; no
 cache code remains.
 
+The rejected cache produces 4,869 Codex hits against 130,143 baseline rewrite
+entries (at most 3.74%) and 65 Editor hits against 6,718 (0.97%); the other four
+targets produce none. Codex needs each hit to repay at least 26.73 lookups before
+constant costs. It does not, matching the measured regression. Counters and
+cache were removed.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
