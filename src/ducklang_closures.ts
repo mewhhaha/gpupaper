@@ -2072,18 +2072,25 @@ function staticValue(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
 ): TypedDucklangExpression {
-  const visited = new Set<number>();
   let value = expression;
+  while (value.kind === "comptime") value = value.expression;
+  if (value.kind !== "reference") return value;
+  const resolved = values.get(value.symbol.id);
+  if (resolved === undefined) return value;
+  let unwrapped = resolved;
+  while (unwrapped.kind === "comptime") unwrapped = unwrapped.expression;
+  if (unwrapped.kind !== "reference") return unwrapped;
+  if (unwrapped.symbol.id === value.symbol.id) return unwrapped;
+
+  const visited = new Set([value.symbol.id]);
+  value = unwrapped;
   while (true) {
-    if (value.kind === "comptime") {
-      value = value.expression;
-      continue;
-    }
     if (value.kind !== "reference" || visited.has(value.symbol.id)) break;
     visited.add(value.symbol.id);
-    const resolved = values.get(value.symbol.id);
-    if (resolved === undefined) break;
-    value = resolved;
+    const next = values.get(value.symbol.id);
+    if (next === undefined) break;
+    value = next;
+    while (value.kind === "comptime") value = value.expression;
   }
   return value;
 }

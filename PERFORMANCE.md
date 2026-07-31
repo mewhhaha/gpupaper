@@ -455,6 +455,20 @@ precise percentage inappropriate. The exact work reduction is 16,660 Codex and
 406 Editor map queries. A mixed module/local/parameter capture test returns 42,
 and the ten-test specialization suite passes.
 
+`staticValue` now allocates its cycle-detection set only after reaching a second
+distinct reference. Non-references, unresolved references, one-edge aliases to
+values, and self-cycles terminate without that allocation. Direct Codex rewrite
+sampling was:
+
+| Sequence | Variant | Samples | Median | MAD |
+| -------: | ------- | ------: | -----: | --: |
+| A | lazy set | 15 | 66.819 ms | 1.244 ms |
+| B | eager set | 15 | 72.842 ms | 4.014 ms |
+| A | lazy set | 15 | 67.403 ms | 2.324 ms |
+
+Both lazy medians beat the intervening baseline. The eleven-test
+specialization suite, including direct aliases and multi-scope captures, passes.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

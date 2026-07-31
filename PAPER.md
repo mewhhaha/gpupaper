@@ -4858,6 +4858,29 @@ variation warns against a sharper attributed percentage. The deterministic
 claim is removal of 16,660 proved-negative Codex map queries. The observed
 latency direction supports retaining the guard.
 
+### 2026-07-31: static alias cycle sets are allocated lazily
+
+Review 67 models `staticValue` as following the partial alias function
+\(A:symbol\rightharpoonup expression\) through transparent `comptime` wrappers
+until reaching a non-reference, an unresolved reference, or a repeated symbol.
+The former implementation allocated an empty cycle-detection set before knowing
+whether any alias edge existed.
+
+The new evaluator first strips wrappers and handles, without allocation: an
+initial non-reference, an unresolved reference, a reference resolving to a
+non-reference, and a self-cycle. Only a chain reaching a second distinct
+reference allocates a set seeded with the first symbol and enters the general
+cycle algorithm. Case analysis gives the same terminal expression and source
+provenance as the former loop; multi-node cycles still stop on the first
+repeated reference.
+
+A direct-alias execution regression returns 42, and all eleven specialization
+tests pass. Fifteen direct Codex rewrite samples in A/B/A order measured lazy
+median/MAD 66.819/1.244 ms, eager 72.842/4.014, and lazy 67.403/2.324. Both
+lazy medians beat the intervening eager baseline. This supports retaining the
+zero-allocation terminating cases; no claim is made for programs dominated by
+long alias chains.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

@@ -109,6 +109,16 @@ outer(12)
   assertEquals(await run("substitution_scopes.duck", source), 42);
 });
 
+Deno.test("Ducklang specialization resolves direct static aliases", async () => {
+  assertEquals(
+    await run(
+      "static_aliases.duck",
+      "let direct = 42\nlet first = direct\nlet second = first\nsecond\n",
+    ),
+    42,
+  );
+});
+
 Deno.test("Ducklang specialization visits only demanded bindings", async () => {
   const source =
     "let unused = (value: I32) => value * 100\nlet answer = 42\nanswer\n";

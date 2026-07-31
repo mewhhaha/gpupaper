@@ -1459,6 +1459,9 @@ resource cost, and corpus measurements.
 - [x] Skip substitution-map search for resolver-proved module/local symbols.
       Validate mixed-scope captures and retain the guard only after a 15-sample
       Codex A/B/A rewrite comparison.
+- [x] Derive a lazy cycle-detection boundary for static alias resolution.
+      Preserve unresolved, direct, self-cycle, and general-cycle semantics and
+      retain it after a 15-sample Codex A/B/A rewrite comparison.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
