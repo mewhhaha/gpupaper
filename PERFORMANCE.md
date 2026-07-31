@@ -1265,12 +1265,38 @@ raytracer then spend 0.004–0.159 ms in the complete rewrite stage. Tar accepts
 validating the changed package.
 
 This experiment covers only the internal CPU edge. The public GPU API still
-validates its raw package; a later review must carry construction provenance
-through GPU batching before claiming that cost there.
+validates its raw package.
 
 The 508-test required-GPU gate passed; raw GPU validation and malformed-package
 rejection remained active, and all six targets compiled twice to byte-identical,
 engine-valid Wasm.
+
+### Construction provenance through GPU batching
+
+Compiler GPU jobs now retain their construction wrapper through queueing,
+identity filtering, mixed batches, and capacity splits. Public raw jobs remain
+on validation provenance. An alternating 21-pair Codex required-GPU experiment
+after one unrecorded warmup compared the current tree with detached commit
+`8076dff`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| GPU Core pass | 62.562 ms | 27.871 ms | -55.45% |
+| Complete compilation | 508.445 ms | 472.598 ms | -7.05% |
+| GPU execution | 25.026 ms | 25.070 ms | +0.18% |
+| Core transfer | 0.174 ms | 0.187 ms | +7.53% |
+| Core commit | 0.008 ms | 0.006 ms | -26.18% |
+| GPU Wasm emission | 36.321 ms | 37.065 ms | +2.05% |
+
+Transfer and commit changes are below 0.02 ms. The Core-pass reduction matches
+the removed 34.708-ms validation observed in the preceding decomposition.
+Stable GPU execution is a negative control; all observations emitted identical
+226,134-byte Wasm. Result provenance makes the trust path executable:
+compiler-owned jobs report `construction`, while direct raw GPU tests report
+`validation`.
+
+The 508-test gate passed and compiled every target twice with byte-identical,
+engine-valid output; malformed raw Core still failed before device work.
 
 ### Rejected Core rule expansion
 

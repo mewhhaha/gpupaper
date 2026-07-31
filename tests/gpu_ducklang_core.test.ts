@@ -26,6 +26,7 @@ unmatched - 2
     throw new Error(`GPU rejected accepted Core: ${result.reason}`);
   }
   assertEquals(result.backend, "gpu");
+  assertEquals(result.inputProvenance, "validation");
   assertEquals(result.proposals, expected.proposals);
   assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
@@ -64,6 +65,7 @@ Deno.test("empty Core rewrite frontier completes without WebGPU work", async () 
     throw new Error("empty Core rewrite frontier replaced its snapshot");
   }
   assertEquals(result.backend, "identity");
+  assertEquals(result.inputProvenance, "validation");
   assertEquals(result.rewriteCandidateCount, 0);
   assertEquals(result.candidateDescriptorBytes, 0);
   assertEquals(result.logicalDeviceBufferBytes, 0);

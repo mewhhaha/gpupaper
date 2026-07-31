@@ -149,6 +149,14 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     },
   );
   const work = artifact.profile.work;
+  if (artifact.gpuCoreResult?.status !== "completed") {
+    throw new Error("GPU profile omitted its completed Core result");
+  }
+  if (artifact.gpuCoreResult.inputProvenance !== "construction") {
+    throw new Error(
+      `compiler GPU Core used ${artifact.gpuCoreResult.inputProvenance} provenance`,
+    );
+  }
   const paddedInvocationCount = (count: number) => Math.ceil(count / 64) * 64;
   const signed64HighWordBytes =
     work.gpuWasmSigned64AtomCount * 2 < work.wasmAtomCount

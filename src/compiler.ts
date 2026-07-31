@@ -78,7 +78,7 @@ import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
 import {
   type GpuDucklangCoreResult,
-  runDucklangCoreGpuPass,
+  runTrustedDucklangCoreGpuPass,
 } from "./gpu_ducklang_core.ts";
 import { emitWasmPlanOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
 import type { CompilerGpuSchedulingPolicy } from "./gpu_device.ts";
@@ -1464,7 +1464,7 @@ async function compileDucklangModuleSource(
   const gpuCorePassStart = performance.now();
   const gpuCoreResult = gpuMode === "off"
     ? undefined
-    : await runDucklangCoreGpuPass(flatCore, {
+    : await runTrustedDucklangCoreGpuPass(trustedFlatCore, {
       scheduling: options.gpuScheduling,
     });
   const gpuCorePassMilliseconds = gpuMode === "off"

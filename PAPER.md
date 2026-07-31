@@ -1068,14 +1068,29 @@ GPU, commit, and physical submissions. It is a proof that the transformation is
 unnecessary, not an execution backend. This distinction prevents zero-work jobs
 from inflating GPU coverage.
 
+The GPU queue preserves the trust derivation in a disjoint payload:
+
+```text
+GpuInput = raw(FlatCore) | trusted(TrustedFlatCore)
+```
+
+`raw` must pass complete validation before candidate discovery. `trusted`
+already contains either validation or construction provenance and proceeds
+directly. Stable batching, identity filtering, and capacity splitting carry the
+tag rather than extracting an unbranded package, so no scheduling path can
+silently downgrade a raw input into trusted input. Completed results report the
+input provenance. This is an information-flow invariant: batching changes
+physical grouping, not the proof attached to a logical job.
+
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects an untrusted
 input or returns a validation-provenance snapshot held read-only by this stage.
 The compiler's CPU path instead receives construction provenance from Section
-7.2. The public GPU boundary still validates raw input before device work. The
-GPU does not re-encode those invariants as validation records because it can
-neither commit a mutation nor manufacture trusted Core: it can only return a
-proposal that must satisfy the independent matcher equation below.
+7.2, and compiler-owned GPU jobs carry that same provenance. The public GPU
+boundary still validates raw input before device work. The GPU does not
+re-encode those invariants as validation records because it can neither commit
+a mutation nor manufacture trusted Core: it can only return a proposal that
+must satisfy the independent matcher equation below.
 
 The theorem assumes exclusive read ownership of the flat package from validation
 through commit. Compiler orchestration satisfies this condition because it
@@ -3776,6 +3791,31 @@ The 508-test required-GPU gate passed after the trust split. Its paired
 byte-identical, engine-valid samples in milliseconds were Editor 287.80/172.28,
 Codex 769.42/525.35, grep 71.03/69.57, Tar 138.07/130.93, wav 63.31/61.89, and
 raytracer 43.20/40.97.
+
+### 2026-07-31: GPU batching preserves flat-Core provenance
+
+The first smart-constructor change accelerated only CPU rewrite; compiler GPU
+jobs discarded their construction wrapper at the queue boundary and re-earned
+trust by complete inflation validation. Section 7.3 now models queue input as
+the disjoint sum `raw | trusted`. Every identity filter, mixed batch, and
+capacity split preserves that tag. Raw public calls still validate and report
+validation provenance; compiler jobs report construction provenance.
+
+An alternating 21-pair Codex required-GPU experiment against detached commit
+`8076dff` changed median GPU Core-pass time from 62.562 to 27.871 ms (-55.45%)
+and complete compilation from 508.445 to 472.598 ms (-7.05%). GPU execution was
+stable at 25.026 versus 25.070 ms, transfer at 0.174 versus 0.187 ms, commit at
+0.008 versus 0.006 ms, and Wasm emission at 36.321 versus 37.065 ms. Every
+observation emitted the same 226,134-byte module.
+
+The timing delta is consistent with removal of the previously measured
+34.708-ms Codex flat validation, while stable GPU execution is a negative
+control. Provenance assertions, malformed raw input, mixed concurrency,
+generated proposal equality, and the release gate are executable evidence.
+
+The 508-test required-GPU gate passed. Its paired byte-identical, engine-valid
+samples in milliseconds were Editor 270.61/175.51, Codex 684.59/510.98, grep
+69.97/68.66, Tar 146.07/127.98, wav 62.10/62.04, and raytracer 43.31/42.54.
 
 ## References
 

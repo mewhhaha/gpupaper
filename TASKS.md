@@ -1375,6 +1375,9 @@ resource cost, and corpus measurements.
 - [x] Give flat Core an explicit smart-constructor trust derivation. Internal
       CPU rewrite consumes construction provenance without reinflation; raw
       packages retain full validation and malformed-package rejection.
+- [x] Preserve the flat-Core trust derivation through GPU queueing, identity
+      filtering, mixed batches, and capacity splitting. Compiler jobs report
+      construction provenance; direct raw jobs validate and report validation.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

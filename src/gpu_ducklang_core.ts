@@ -26,6 +26,7 @@ export type GpuDucklangCoreResult =
   | {
     readonly status: "completed";
     readonly backend: "gpu" | "identity";
+    readonly inputProvenance: "construction" | "validation";
     readonly package: FlatDucklangCore;
     readonly proposals: readonly DucklangCoreRewriteProposal[];
     readonly accepted: readonly DucklangCoreRewriteProposal[];
@@ -156,15 +157,23 @@ fn propose_rewrites(@builtin(global_invocation_id) invocation: vec3<u32>) {
 `;
 
 let contextPromise: Promise<GpuCoreContext> | undefined;
+type CoreGpuInput =
+  | {
+    readonly kind: "raw";
+    readonly package: FlatDucklangCore;
+  }
+  | {
+    readonly kind: "trusted";
+    readonly snapshot: TrustedFlatDucklangCore;
+  };
+
 const coreBatchQueue = createCompilerGpuBatchQueue(
-  (snapshots: readonly FlatDucklangCore[]) =>
-    snapshots.length === 1
+  (inputs: readonly CoreGpuInput[]) =>
+    inputs.length === 1
       ? Promise.all(
-        snapshots.map((snapshot) =>
-          runDucklangCoreWithGpu(snapshot, "latency")
-        ),
+        inputs.map((input) => runDucklangCoreWithGpu(input, "latency")),
       )
-      : runDucklangCoreGpuBatch(snapshots),
+      : runDucklangCoreGpuBatch(inputs),
 );
 
 export async function runDucklangCoreGpuPass(
@@ -173,10 +182,32 @@ export async function runDucklangCoreGpuPass(
     readonly scheduling?: CompilerGpuSchedulingPolicy;
   } = {},
 ): Promise<GpuDucklangCoreResult> {
+  return await enqueueDucklangCoreGpuPass(
+    { kind: "raw", package: snapshot },
+    options.scheduling ?? "latency",
+  );
+}
+
+export async function runTrustedDucklangCoreGpuPass(
+  snapshot: TrustedFlatDucklangCore,
+  options: {
+    readonly scheduling?: CompilerGpuSchedulingPolicy;
+  } = {},
+): Promise<GpuDucklangCoreResult> {
+  return await enqueueDucklangCoreGpuPass(
+    { kind: "trusted", snapshot },
+    options.scheduling ?? "latency",
+  );
+}
+
+async function enqueueDucklangCoreGpuPass(
+  input: CoreGpuInput,
+  scheduling: CompilerGpuSchedulingPolicy,
+): Promise<GpuDucklangCoreResult> {
   try {
     const batch = await coreBatchQueue.enqueue(
-      snapshot,
-      options.scheduling ?? "latency",
+      input,
+      scheduling,
     );
     return batch.output.status === "completed"
       ? {
@@ -234,16 +265,16 @@ type PackedCoreColumn = {
 };
 
 async function runDucklangCoreGpuBatch(
-  snapshots: readonly FlatDucklangCore[],
+  inputs: readonly CoreGpuInput[],
 ): Promise<readonly GpuDucklangCoreResult[]> {
   try {
-    return await runPackedDucklangCoreGpuBatch(snapshots);
+    return await runPackedDucklangCoreGpuBatch(inputs);
   } catch (error) {
-    if (error instanceof CompilerGpuCapacityError && snapshots.length > 1) {
-      const split = Math.ceil(snapshots.length / 2);
+    if (error instanceof CompilerGpuCapacityError && inputs.length > 1) {
+      const split = Math.ceil(inputs.length / 2);
       const [left, right] = await Promise.all([
-        runDucklangCoreGpuBatch(snapshots.slice(0, split)),
-        runDucklangCoreGpuBatch(snapshots.slice(split)),
+        runDucklangCoreGpuBatch(inputs.slice(0, split)),
+        runDucklangCoreGpuBatch(inputs.slice(split)),
       ]);
       return [...left, ...right];
     }
@@ -252,9 +283,9 @@ async function runDucklangCoreGpuBatch(
 }
 
 async function runPackedDucklangCoreGpuBatch(
-  snapshots: readonly FlatDucklangCore[],
+  inputs: readonly CoreGpuInput[],
 ): Promise<readonly GpuDucklangCoreResult[]> {
-  const jobs = snapshots.map(prepareCoreJob);
+  const jobs = inputs.map(prepareCoreJob);
   if (jobs.some((job) => job.status === "invalid")) {
     return await Promise.all(
       jobs.map((job) =>
@@ -265,7 +296,10 @@ async function runPackedDucklangCoreGpuBatch(
           }
           : job.status === "identity"
           ? completeEmptyCoreRewriteFrontier(job.snapshot)
-          : runDucklangCoreWithGpu(job.snapshot.package, "latency")
+          : runDucklangCoreWithGpu(
+            { kind: "trusted", snapshot: job.snapshot },
+            "latency",
+          )
       ),
     );
   }
@@ -278,12 +312,15 @@ async function runPackedDucklangCoreGpuBatch(
       : rewriteJobs.length === 1
       ? [
         await runDucklangCoreWithGpu(
-          rewriteJobs[0].snapshot.package,
+          { kind: "trusted", snapshot: rewriteJobs[0].snapshot },
           "latency",
         ),
       ]
       : await runDucklangCoreGpuBatch(
-        rewriteJobs.map((job) => job.snapshot.package),
+        rewriteJobs.map((job) => ({
+          kind: "trusted" as const,
+          snapshot: job.snapshot,
+        })),
       );
     let rewriteResultIndex = 0;
     return jobs.map((job, index) => {
@@ -309,7 +346,7 @@ async function runPackedDucklangCoreGpuBatch(
   const initializationStart = performance.now();
   const context = await requestGpuCoreContext();
   if (context.status === "unavailable") {
-    return snapshots.map(() => context);
+    return inputs.map(() => context);
   }
   const initializationMilliseconds = performance.now() - initializationStart;
   const { device, rewritePipeline } = context;
@@ -485,6 +522,7 @@ async function runPackedDucklangCoreGpuBatch(
       return {
         status: "completed",
         backend: "gpu",
+        inputProvenance: job.snapshot.provenance,
         package: committed.package,
         proposals,
         accepted: committed.accepted,
@@ -507,11 +545,14 @@ async function runPackedDucklangCoreGpuBatch(
   }
 }
 
-function prepareCoreJob(snapshot: FlatDucklangCore): PreparedCoreJob {
-  const cpuValidation = validateCoreSnapshotForGpu(snapshot);
+function prepareCoreJob(input: CoreGpuInput): PreparedCoreJob {
+  const cpuValidation = input.kind === "trusted"
+    ? { status: "valid" as const, snapshot: input.snapshot }
+    : validateCoreSnapshotForGpu(input.package);
   if (cpuValidation.status === "invalid") {
     return { status: "invalid", reason: cpuValidation.reason };
   }
+  const snapshot = cpuValidation.snapshot.package;
   const rewriteCandidateOperationIds: number[] = [];
   // This is the common structural head of every shader rule. A new rule must
   // widen this necessary condition; exact constants remain a GPU decision.
@@ -719,10 +760,10 @@ function coreBindGroupEntry(
 }
 
 async function runDucklangCoreWithGpu(
-  untrustedSnapshot: FlatDucklangCore,
+  input: CoreGpuInput,
   scheduling: CompilerGpuSchedulingPolicy,
 ): Promise<GpuDucklangCoreResult> {
-  const job = prepareCoreJob(untrustedSnapshot);
+  const job = prepareCoreJob(input);
   if (job.status === "invalid") {
     return { status: "invalid", reason: job.reason };
   }
@@ -898,6 +939,7 @@ async function runDucklangCoreWithGpu(
     return {
       status: "completed",
       backend: "gpu",
+      inputProvenance: validatedSnapshot.provenance,
       package: committed.package,
       proposals: gpuProposals,
       accepted: committed.accepted,
@@ -933,6 +975,7 @@ function completeEmptyCoreRewriteFrontier(
   return {
     status: "completed",
     backend: "identity",
+    inputProvenance: snapshot.provenance,
     package: snapshot.package,
     proposals: [],
     accepted: [],
