@@ -234,6 +234,30 @@ answer
   assertBytesEqual(rebuilt.wasm, first.wasm);
 });
 
+Deno.test("Ducklang independent compilations reuse unchanged bundled prelude syntax", async () => {
+  const source = `const types = import "duck:prelude/types"
+0
+`;
+  const first = await compileModuleSource("shared-prelude.duck", source, {
+    gpuMode: "off",
+  });
+  const second = await compileModuleSource("shared-prelude.duck", source, {
+    gpuMode: "off",
+  });
+
+  if (
+    second.profile.work.moduleSyntaxAnalysisCount !== 0 ||
+    second.profile.work.moduleSyntaxReuseCount === 0
+  ) {
+    throw new Error(
+      `second compilation repeated bundled syntax analysis: ${
+        JSON.stringify(second.profile.work)
+      }`,
+    );
+  }
+  assertBytesEqual(second.wasm, first.wasm);
+});
+
 Deno.test("Ducklang compilation session discards a trailing comment without parsing", async () => {
   const source = `let add = (left: I32, right: I32) => left + right
 add(20, 22)

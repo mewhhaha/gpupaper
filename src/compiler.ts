@@ -48,9 +48,9 @@ import {
   resolveDucklangLocalImports,
 } from "./ducklang_modules.ts";
 import {
+  createDucklangCompilerModuleSyntaxCache,
   createDucklangFilesystemSourceProvider,
   createDucklangModuleInstanceCache,
-  createDucklangModuleSyntaxCache,
   type DucklangModuleGraph,
   type DucklangModuleInstances,
   type DucklangModuleSyntaxCache,
@@ -356,7 +356,7 @@ export type DucklangCompilationSession = {
 export function createDucklangCompilationSession(): DucklangCompilationSession {
   return {
     moduleInstances: createDucklangModuleInstanceCache<DucklangModule>(),
-    moduleSyntax: createDucklangModuleSyntaxCache(),
+    moduleSyntax: createDucklangCompilerModuleSyntaxCache(),
     backendFunctions: createDucklangBackendFunctionCache(),
     compilations: new Map(),
     sourceRevisions: new Map(),
@@ -885,7 +885,7 @@ async function elaborateDucklangModuleSource(
   const moduleInstances = options.session?.moduleInstances ??
     createDucklangModuleInstanceCache<DucklangModule>();
   const moduleSyntax = options.session?.moduleSyntax ??
-    createDucklangModuleSyntaxCache();
+    createDucklangCompilerModuleSyntaxCache();
   const moduleAnalysesBefore = moduleInstances.analyses;
   const moduleReusesBefore = moduleInstances.reuses;
   const moduleSyntaxAnalysesBefore = moduleSyntax.analyses;

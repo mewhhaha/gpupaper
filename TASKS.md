@@ -345,6 +345,10 @@ than interpreting source names repeatedly.
       of scalar, type, product, sum, and module arguments. Closures are not
       canonical values and deliberately disable reuse rather than receiving an
       unstable identity.
+- [x] Share immutable syntax for the fixed compiler-owned prelude set across
+      independent compilations. Canonical path plus source hash guards reuse,
+      changed sources replace their entry, and user/custom-prelude syntax
+      remains scoped to one compilation or explicit session.
 - [x] Delete the exported-function hoisting path. Selected exports are now
       ordinary aliases to linked definitions, while namespace imports are
       compile-time export modules. Functions therefore use the same closure and

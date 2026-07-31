@@ -1667,6 +1667,31 @@ continuation storage is:
 Source substitution has no comparable linear bound and can duplicate a nested
 callee at every call site. It is therefore excluded from the normative lowering.
 
+Bundled-prelude parsing is a content-addressed pure function. For compiler
+frontend version \(V\), canonical prelude path \(p\), and source hash \(h(s)\),
+define:
+
+```text
+syntax_key(V, p, s) = (V, p, h(s))
+parse(V, p, s) = immutable syntax tree
+```
+
+Within one compiler process \(V\) is constant. The cache stores at most one
+current `(source_hash, pending_parse)` entry for each compiler-owned bundled
+prelude path. Reusing an entry with the same path and hash is observationally
+equivalent to reparsing because the parser is deterministic and the tree is
+immutable. A changed hash replaces the entry before it can be reused. Ordinary
+user and custom-prelude sources remain compilation- or session-scoped, so the
+process cache is bounded by the fixed bundled set—23 paths in this repository—
+rather than by the number of user files or edits.
+
+For \(C\) independent compilations whose bundled import multisets contain
+\(R\) total syntax requests and \(U\) distinct current bundled sources, parsing
+work falls from \(R\) parses to \(U\) parses. Each request still resolves and
+hashes its source, preserving change detection. Retained memory is
+\(O(\sum_{p=1}^{U}|AST_p|)\) with \(U\le23\); the cache does not retain
+elaboration, types, specialization state, or artifacts across compilations.
+
 The frozen applications measured on 2026-07-31 contain sparse effect metadata
 and only one locally handled region:
 
@@ -3227,6 +3252,34 @@ passed 504 tests and compiled every frozen target twice. Its advisory samples
 in milliseconds were Editor 354.60/224.22, Codex 939.47/921.55, grep
 139.67/135.81, Tar 205.56/204.96, wav 123.86/118.93, and raytracer
 117.08/101.31.
+
+### 2026-07-31: compiler-owned prelude syntax is process-shared
+
+The frontend benchmark exposed a 50 ms `localImportResolution` floor on the
+small targets and 161 ms on Codex. Work profiles showed that independent
+compilations reparsed the same immutable bundled preludes: the six warm targets
+performed 23 bundled syntax analyses even though the compiler owns a fixed
+23-file prelude set.
+
+Section 9 now defines a bounded content-addressed cache for only those
+compiler-owned sources. One current AST per canonical prelude path is shared
+across independent compilation caches. The source hash must match; a changed
+source replaces the old entry. Custom prelude directories and user modules are
+never admitted to the process cache. An executable regression compiles the same
+prelude import without a session and requires the second artifact to report zero
+syntax analyses, at least one syntax reuse, and byte-identical Wasm.
+
+In the consecutive six-sample frontend protocol, warm bundled analyses fell
+from 23 to zero. Codex still analyzed its two ordinary local modules.
+`localImportResolution` fell from 25.79→1.41 ms for Editor,
+160.90→24.53 ms for Codex, 50.60→0.81 ms for grep, 51.00→0.74 ms for Tar,
+51.80→0.81 ms for wav, and 50.73→0.44 ms for raytracer. End-to-end CPU
+medians fell respectively by 18.64%, 20.64%, 77.36%, 41.32%, 87.26%, and
+81.60%. These are consecutive identical-protocol observations, not a
+counterbalanced causal estimate. The required-GPU gate passed 505 tests and
+compiled every frozen target twice. Its advisory samples in milliseconds were
+Editor 402.79/228.33, Codex 1016.46/699.71, grep 72.24/74.98, Tar
+140.71/133.29, wav 63.75/62.70, and raytracer 45.44/43.87.
 
 ## References
 

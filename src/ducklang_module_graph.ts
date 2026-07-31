@@ -23,6 +23,7 @@ export type DucklangModuleSource = {
   readonly canonicalSource: string;
   readonly file: string;
   readonly source: string;
+  readonly sharedBundledSyntax?: true;
 };
 
 export type DucklangModuleImport = {
@@ -216,9 +217,65 @@ export function createDucklangModuleSyntaxCache(): DucklangModuleSyntaxCache {
   };
 }
 
+// Only the default compiler-owned provider marks sources for process reuse.
+// Keeping one current hash per fixed prelude path bounds retention across edits.
+const sharedBundledSyntax = new Map<
+  string,
+  {
+    readonly sourceHash: string;
+    readonly pending: Promise<{
+      readonly module: DucklangModule;
+      readonly sourceHash: string;
+    }>;
+  }
+>();
+
+export function createDucklangCompilerModuleSyntaxCache(): DucklangModuleSyntaxCache {
+  const compilation = createDucklangModuleSyntaxCache();
+  let sharedAnalyses = 0;
+  let sharedReuses = 0;
+  return {
+    async parse(source) {
+      if (source.sharedBundledSyntax !== true) {
+        return await compilation.parse(source);
+      }
+      const sourceHash = await ducklangSourceHash(source.source);
+      const existing = sharedBundledSyntax.get(source.canonicalSource);
+      if (existing?.sourceHash === sourceHash) {
+        sharedReuses += 1;
+        return await existing.pending;
+      }
+      sharedAnalyses += 1;
+      const pending = parseDucklangModule(source.file, source.source)
+        .then((module) => ({ module, sourceHash }));
+      sharedBundledSyntax.set(source.canonicalSource, {
+        sourceHash,
+        pending,
+      });
+      try {
+        return await pending;
+      } catch (cause) {
+        if (
+          sharedBundledSyntax.get(source.canonicalSource)?.pending === pending
+        ) {
+          sharedBundledSyntax.delete(source.canonicalSource);
+        }
+        throw cause;
+      }
+    },
+    get analyses() {
+      return compilation.analyses + sharedAnalyses;
+    },
+    get reuses() {
+      return compilation.reuses + sharedReuses;
+    },
+  };
+}
+
 export function createDucklangFilesystemSourceProvider(options: {
   readonly bundledPreludeDirectory?: URL;
 } = {}): DucklangSourceProvider {
+  const sharesBundledSyntax = options.bundledPreludeDirectory === undefined;
   const bundledPreludeDirectory = options.bundledPreludeDirectory ??
     new URL("../examples/binned/live/src/frontend/", import.meta.url);
 
@@ -244,6 +301,9 @@ export function createDucklangFilesystemSourceProvider(options: {
         canonicalSource: file,
         file,
         source: await expandDucklangIncludes(file, source),
+        ...(sharesBundledSyntax && importPath.startsWith("duck:")
+          ? { sharedBundledSyntax: true as const }
+          : {}),
       };
     },
   };

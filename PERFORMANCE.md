@@ -101,24 +101,22 @@ backend stage executes.
 | wav       |  65.85 ms | 152.88 ms |      2,520 |
 | raytracer |  68.45 ms | 161.15 ms |      3,864 |
 
-The current 2026-07-31 five-sample warm medians are:
+The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    | 158.00 ms | 257.49 ms |     24,460 |
-| Codex     | 755.73 ms | 952.45 ms |    226,134 |
-| grep      |  73.59 ms | 156.61 ms |      3,911 |
-| tar       | 129.43 ms | 250.68 ms |     26,106 |
-| wav       |  61.37 ms | 150.86 ms |      2,520 |
-| raytracer |  65.07 ms | 163.76 ms |      3,864 |
+| Editor    | 114.37 ms | 173.73 ms |     24,460 |
+| Codex     | 514.93 ms | 605.79 ms |    226,134 |
+| grep      |  14.63 ms |  70.56 ms |      3,911 |
+| tar       |  68.12 ms | 122.80 ms |     26,106 |
+| wav       |   7.73 ms |  63.49 ms |      2,520 |
+| raytracer |  11.60 ms |  41.75 ms |      3,864 |
 
-The largest current CPU stages remain semantic:
-
-- Editor: elaboration 41.08 ms, parsing 36.32 ms, and semantic fingerprinting
-  13.33 ms;
-- Codex: elaboration 252.85 ms, pre-comptime specialization 127.79 ms, and Wasm
-  planning/emission 87.13 ms;
-- grep: elaboration 57.42 ms.
+The largest remaining CPU costs are target-specific. Editor retains its root
+parser and semantic passes. Codex retains two ordinary local-module parses,
+specialization of 703 distinct keys, and a 23,594-node residual program. The
+former near-constant 50 ms small-target elaboration floor was bundled-prelude
+parsing and is removed below.
 
 The effect measurements expose the structural-lowering boundary. Editor has 10
 row memberships, one root capability, one direct-state handler region, nine
@@ -139,7 +137,7 @@ at 299.96→297.30 ms. The deterministic work and code-size reductions are the
 supported performance claim.
 
 Single dirty compilations remain faster on CPU. On Editor the warm GPU path is
-1.63× the CPU time; on Codex it is 1.26×. The GPU stages are useful validation
+1.52× the CPU time; on Codex it is 1.18×. The GPU stages are useful validation
 and batching boundaries, but these measurements do not justify moving effect
 inference or handler lowering past the semantic CPU boundary.
 
@@ -148,6 +146,32 @@ contains a zero-job program whose second pass exposes and eliminates the
 compiler-only `:+` operator. Dirty compilations therefore retain both passes;
 unchanged compilations avoid both through the stronger semantic artifact
 identity.
+
+### Bounded bundled-prelude syntax reuse
+
+Independent compilations formerly created independent syntax caches for every
+imported module. The compiler now process-shares only its fixed bundled
+preludes. The key is canonical path plus source hash; one changed source
+replaces that path's old entry. User modules and custom prelude directories
+remain compilation/session-scoped, bounding shared retention to 23 ASTs.
+
+| Target    | Bundled analyses before → after | Import resolution before → after | CPU median before → after | Reduction |
+| --------- | --------------------------------: | -------------------------------: | ------------------------: | --------: |
+| Editor    |                            4 → 0 |                  25.79 → 1.41 ms |        140.56 → 114.37 ms |    18.64% |
+| Codex     |                            9 → 0 |                160.90 → 24.53 ms |        648.89 → 514.93 ms |    20.64% |
+| grep      |                            3 → 0 |                   50.60 → 0.81 ms |          64.60 → 14.63 ms |    77.36% |
+| tar       |                            3 → 0 |                   51.00 → 0.74 ms |         116.08 → 68.12 ms |    41.32% |
+| wav       |                            2 → 0 |                   51.80 → 0.81 ms |           60.69 → 7.73 ms |    87.26% |
+| raytracer |                            2 → 0 |                   50.73 → 0.44 ms |          63.03 → 11.60 ms |    81.60% |
+
+Codex still performs two analyses for ordinary local modules; the table counts
+only the nine avoided bundled analyses. Across the batch, all 23 bundled
+analyses disappear. The six-sample benchmark alternates CPU/GPU order and
+selects a real profile nearest each median. The consecutive before/after runs
+are consistent with the exact analysis counts but are not a counterbalanced
+causal experiment. A no-session regression requires zero second-compilation
+analysis, positive reuse, and byte-identical Wasm. The 505-test required-GPU
+gate passed and compiled every frozen target twice.
 
 ### Demand-specialization audit
 
