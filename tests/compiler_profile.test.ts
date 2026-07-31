@@ -92,23 +92,7 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     },
   );
   const work = artifact.profile.work;
-  const hierarchyCounts = [work.wasmAtomCount];
-  while (hierarchyCounts.at(-1)! > 64) {
-    hierarchyCounts.push(Math.ceil(hierarchyCounts.at(-1)! / 64));
-  }
   const paddedInvocationCount = (count: number) => Math.ceil(count / 64) * 64;
-  const scanInvocationCount = hierarchyCounts.reduce(
-    (total, count) => total + paddedInvocationCount(count),
-    0,
-  ) +
-    hierarchyCounts.slice(0, -1).reduce(
-      (total, count) => total + paddedInvocationCount(count),
-      0,
-    );
-  const expectedInvocationCount = paddedInvocationCount(work.wasmAtomCount) *
-      2 +
-    work.gpuWasmLengthDispatchedInvocationCount +
-    scanInvocationCount;
   const expectedCoreRewriteInvocations = work.gpuRewriteCandidateCount === 0
     ? 0
     : paddedInvocationCount(work.gpuRewriteCandidateCount);
@@ -122,14 +106,9 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     work.gpuRewriteDispatchedInvocationCount !==
       expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
-    work.gpuWasmLengthDispatchCount === 0 ||
-    work.gpuWasmLengthDispatchedInvocationCount <
-      work.gpuWasmLengthAtomCount ||
-    work.gpuWasmLengthDispatchedInvocationCount >
-      work.gpuWasmLengthAtomCount +
-        63 * work.gpuWasmLengthDispatchCount ||
-    work.gpuWasmScanDispatchCount !== hierarchyCounts.length * 2 - 1 ||
-    work.gpuWasmDispatchedInvocationCount !== expectedInvocationCount ||
+    work.gpuWasmResolvedOffsetBytes !== (work.wasmAtomCount + 1) * 4 ||
+    work.gpuWasmDispatchedInvocationCount !==
+      paddedInvocationCount(work.wasmAtomCount) ||
     work.wasmOutputBufferBytes < work.wasmBytes ||
     work.wasmOutputBufferBytes >= work.wasmBytes + 4
   ) {

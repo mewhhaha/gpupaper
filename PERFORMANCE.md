@@ -326,6 +326,41 @@ from `8A + 4K` to `12K`:
 This removes transfer and storage only; dispatch and arithmetic counts are
 unchanged.
 
+### Resolved Wasm offsets
+
+The exact-capacity host analysis already resolves every atom width and nested
+length. Recording its partial sums as `A + 1` byte boundaries makes the GPU
+size, length, and hierarchical-scan passes redundant. The GPU now runs only the
+parallel emission frontier:
+
+| Target    | Atoms | Previous lanes | Emission lanes | Lane reduction | Offset bytes |
+| --------- | ----: | -------------: | -------------: | -------------: | -----------: |
+| Editor    | 23,923 |         96,832 |         23,936 |         75.28% |       95,696 |
+| Codex     | 204,099 |        823,552 |        204,160 |         75.21% |      816,400 |
+| grep      | 3,897 |         15,808 |          3,904 |         75.30% |       15,592 |
+| tar       | 22,201 |         89,792 |         22,208 |         75.27% |       88,808 |
+| wav       | 2,477 |         10,176 |          2,496 |         75.47% |        9,912 |
+| raytracer | 3,851 |         15,808 |          3,904 |         75.30% |       15,408 |
+
+The preceding hierarchical-scan and compacted-length sections are retained as
+the measured path by which the redundant work was identified; this section
+supersedes their implementation status. Three shader modules and four pipelines
+are deleted. Five storage bindings remain: atom kind, low word, high word,
+resolved offsets, and output.
+
+Let `K` be the length-atom count, `H` the total non-root hierarchy words, `J`
+the nonempty length levels, and `h` the hierarchy depth. Relative to the
+immediately preceding implementation, logical device capacity falls by:
+
+```text
+4A + 12K + 8(H + 2) + 16(|J| + 2h - 1)
+```
+
+This is 10,484–846,612 bytes across the frozen targets. Packed-region alignment
+is additional physical capacity. The byte differential, shared-word packed
+regression, sparse-level regression, and engine validator test correctness.
+Counts are deterministic; latency still requires counterbalanced samples.
+
 ### Compacted Core rewrite frontier
 
 The current rewrite rules can match only `scalarBinary` operations. Dispatching

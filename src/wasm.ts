@@ -28,6 +28,7 @@ export type WasmLengthLevel = {
 
 export type WasmBinaryPlanAnalysis = {
   readonly byteLength: number;
+  readonly atomByteOffsets: Uint32Array;
   readonly lengthLevels: readonly WasmLengthLevel[];
 };
 
@@ -441,6 +442,7 @@ export function analyzeWasmBinaryPlan(
     }
   }
   let byteLength = 0;
+  const atomByteOffsets = new Uint32Array(plan.atoms.length + 1);
   for (const [atomIndex, size] of sizes.entries()) {
     byteLength += size;
     if (byteLength > 0xffff_ffff) {
@@ -448,8 +450,9 @@ export function analyzeWasmBinaryPlan(
         `Wasm plan byte length exceeds u32 at atom ${atomIndex}; partial length ${byteLength}`,
       );
     }
+    atomByteOffsets[atomIndex + 1] = byteLength;
   }
-  return { byteLength, lengthLevels };
+  return { byteLength, atomByteOffsets, lengthLevels };
 }
 
 export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {

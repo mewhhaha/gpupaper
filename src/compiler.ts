@@ -261,9 +261,7 @@ export type DucklangCompilationWork = {
   readonly gpuRewriteProposalCount: number;
   readonly wasmAtomCount: number;
   readonly gpuWasmLengthAtomCount: number;
-  readonly gpuWasmLengthDispatchCount: number;
-  readonly gpuWasmLengthDispatchedInvocationCount: number;
-  readonly gpuWasmScanDispatchCount: number;
+  readonly gpuWasmResolvedOffsetBytes: number;
   readonly gpuWasmDispatchedInvocationCount: number;
   readonly wasmOutputBufferBytes: number;
   readonly wasmBytes: number;
@@ -1259,9 +1257,7 @@ async function elaborateDucklangModuleSource(
         gpuRewriteProposalCount: 0,
         wasmAtomCount: 0,
         gpuWasmLengthAtomCount: 0,
-        gpuWasmLengthDispatchCount: 0,
-        gpuWasmLengthDispatchedInvocationCount: 0,
-        gpuWasmScanDispatchCount: 0,
+        gpuWasmResolvedOffsetBytes: 0,
         gpuWasmDispatchedInvocationCount: 0,
         wasmOutputBufferBytes: 0,
         wasmBytes: 0,
@@ -1657,15 +1653,8 @@ async function compileDucklangModuleSource(
       gpuWasmLengthAtomCount: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.lengthAtomCount
         : 0,
-      gpuWasmLengthDispatchCount: gpuWasmResult?.status === "completed"
-        ? gpuWasmResult.lengthDispatchCount
-        : 0,
-      gpuWasmLengthDispatchedInvocationCount:
-        gpuWasmResult?.status === "completed"
-          ? gpuWasmResult.lengthDispatchedInvocationCount
-          : 0,
-      gpuWasmScanDispatchCount: gpuWasmResult?.status === "completed"
-        ? gpuWasmResult.scanDispatchCount
+      gpuWasmResolvedOffsetBytes: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.resolvedOffsetBytes
         : 0,
       gpuWasmDispatchedInvocationCount: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.dispatchedInvocationCount

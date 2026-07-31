@@ -25,9 +25,7 @@ export type GpuWasmEmissionResult =
     readonly byteCount: number;
     readonly outputBufferBytes: number;
     readonly lengthAtomCount: number;
-    readonly lengthDispatchCount: number;
-    readonly lengthDispatchedInvocationCount: number;
-    readonly scanDispatchCount: number;
+    readonly resolvedOffsetBytes: number;
     readonly dispatchedInvocationCount: number;
     readonly submissionBatchSize: number;
     readonly payloadBatchSize: number;
@@ -39,10 +37,6 @@ type GpuWasmContextRequest =
   | {
     readonly status: "available";
     readonly device: GPUDevice;
-    readonly sizePipeline: GPUComputePipeline;
-    readonly lengthPipeline: GPUComputePipeline;
-    readonly scanPipeline: GPUComputePipeline;
-    readonly scanAddPipeline: GPUComputePipeline;
     readonly emissionPipeline: GPUComputePipeline;
   }
   | { readonly status: "unavailable"; readonly reason: string };
@@ -63,186 +57,14 @@ const wasmBatchQueue = createCompilerGpuBatchQueue(
       : emitPackedWasmPlansOnGpu(plans),
 );
 
-const encodingFunctions = `
-fn unsigned_size(value: u32) -> u32 {
-  var remaining = value;
-  var size = 1u;
-  while (remaining >= 128u) {
-    remaining >>= 7u;
-    size += 1u;
-  }
-  return size;
-}
-
-fn signed32_size(value_bits: u32) -> u32 {
-  var remaining = bitcast<i32>(value_bits);
-  var size = 0u;
-  loop {
-    let encoded_byte = u32(remaining) & 127u;
-    remaining >>= 7;
-    size += 1u;
-    let sign_set = (encoded_byte & 64u) != 0u;
-    if ((remaining == 0 && !sign_set) || (remaining == -1 && sign_set)) {
-      return size;
-    }
-  }
-  return size;
-}
-
-fn signed64_size(low_value: u32, high_value: u32) -> u32 {
-  var low = low_value;
-  var high = high_value;
-  var size = 0u;
-  loop {
-    let encoded_byte = low & 127u;
-    let next_low = (low >> 7u) | (high << 25u);
-    let next_high = bitcast<u32>(bitcast<i32>(high) >> 7);
-    size += 1u;
-    let sign_set = (encoded_byte & 64u) != 0u;
-    let positive_end = next_low == 0u && next_high == 0u && !sign_set;
-    let negative_end =
-      next_low == 0xffffffffu && next_high == 0xffffffffu && sign_set;
-    if (positive_end || negative_end) { return size; }
-    low = next_low;
-    high = next_high;
-  }
-  return size;
-}
-`;
-
-const sizeShader = `
-${encodingFunctions}
-struct Parameters { count: u32 }
-@group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
-@group(0) @binding(1) var<storage, read> low_words: array<u32>;
-@group(0) @binding(2) var<storage, read> high_words: array<u32>;
-@group(0) @binding(3) var<storage, read_write> atom_sizes: array<u32>;
-@group(0) @binding(4) var<uniform> parameters: Parameters;
-
-@compute @workgroup_size(64)
-fn calculate_sizes(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  let index = invocation.x;
-  if (index >= parameters.count) { return; }
-  let kind = atom_kinds[index];
-  if (kind == ${atomByte}u) {
-    atom_sizes[index] = 1u;
-  } else if (kind == ${atomUnsigned}u) {
-    atom_sizes[index] = unsigned_size(low_words[index]);
-  } else if (kind == ${atomSigned32}u) {
-    atom_sizes[index] = signed32_size(low_words[index]);
-  } else if (kind == ${atomSigned64}u) {
-    atom_sizes[index] = signed64_size(low_words[index], high_words[index]);
-  } else {
-    atom_sizes[index] = 0u;
-  }
-}
-`;
-
-const lengthShader = `
-${encodingFunctions}
-struct Parameters { count: u32, start: u32 }
-@group(0) @binding(0) var<storage, read> length_atom_indices: array<u32>;
-@group(0) @binding(1) var<storage, read_write> low_words: array<u32>;
-@group(0) @binding(2) var<storage, read> range_starts: array<u32>;
-@group(0) @binding(3) var<storage, read> range_counts: array<u32>;
-@group(0) @binding(4) var<storage, read_write> atom_sizes: array<u32>;
-@group(0) @binding(5) var<uniform> parameters: Parameters;
-
-@compute @workgroup_size(64)
-fn calculate_lengths(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  if (invocation.x >= parameters.count) { return; }
-  let frontier_index = parameters.start + invocation.x;
-  let index = length_atom_indices[frontier_index];
-  let range_start = range_starts[frontier_index];
-  let range_end = range_start + range_counts[frontier_index];
-  var byte_length = 0u;
-  for (
-    var dependency = range_start;
-    dependency < range_end;
-    dependency += 1u
-  ) {
-    byte_length += atom_sizes[dependency];
-  }
-  low_words[index] = byte_length;
-  atom_sizes[index] = unsigned_size(byte_length);
-}
-`;
-
-const scanShader = `
-struct Parameters {
-  count: u32,
-  input_offset: u32,
-  output_offset: u32,
-  block_sum_offset: u32,
-}
-@group(0) @binding(0) var<storage, read> input_prefixes: array<u32>;
-@group(0) @binding(1) var<storage, read_write> output_prefixes: array<u32>;
-@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;
-@group(0) @binding(3) var<uniform> parameters: Parameters;
-var<workgroup> block_values: array<u32, ${wasmWorkgroupSize}>;
-
-@compute @workgroup_size(${wasmWorkgroupSize})
-fn scan_blocks(
-  @builtin(global_invocation_id) invocation: vec3<u32>,
-  @builtin(local_invocation_id) local: vec3<u32>,
-  @builtin(workgroup_id) workgroup: vec3<u32>,
-) {
-  let index = invocation.x;
-  var value = 0u;
-  if (index < parameters.count) {
-    value = input_prefixes[parameters.input_offset + index];
-  }
-  block_values[local.x] = value;
-  workgroupBarrier();
-  for (var distance = 1u; distance < ${wasmWorkgroupSize}u; distance *= 2u) {
-    var addend = 0u;
-    if (local.x >= distance) {
-      addend = block_values[local.x - distance];
-    }
-    workgroupBarrier();
-    block_values[local.x] += addend;
-    workgroupBarrier();
-  }
-  if (index < parameters.count) {
-    output_prefixes[parameters.output_offset + index] =
-      block_values[local.x];
-  }
-  if (local.x == ${wasmWorkgroupSize - 1}u) {
-    block_sums[parameters.block_sum_offset + workgroup.x] =
-      block_values[local.x];
-  }
-}
-
-struct AddParameters {
-  count: u32,
-  child_offset: u32,
-  parent_offset: u32,
-}
-@group(0) @binding(0) var<storage, read_write> child_prefixes: array<u32>;
-@group(0) @binding(1) var<storage, read> parent_prefixes: array<u32>;
-@group(0) @binding(2) var<uniform> add_parameters: AddParameters;
-
-@compute @workgroup_size(${wasmWorkgroupSize})
-fn add_block_prefixes(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  let index = invocation.x;
-  if (index >= add_parameters.count) { return; }
-  let block = index / ${wasmWorkgroupSize}u;
-  if (block > 0u) {
-    child_prefixes[add_parameters.child_offset + index] +=
-      parent_prefixes[add_parameters.parent_offset + block - 1u];
-  }
-}
-`;
-
 const emissionShader = `
 struct Parameters { count: u32 }
 @group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
 @group(0) @binding(1) var<storage, read> low_words: array<u32>;
 @group(0) @binding(2) var<storage, read> high_words: array<u32>;
-@group(0) @binding(3) var<storage, read> atom_sizes: array<u32>;
-@group(0) @binding(4) var<storage, read> inclusive_offsets: array<u32>;
-@group(0) @binding(5) var<storage, read_write> output_words: array<atomic<u32>>;
-@group(0) @binding(6) var<uniform> parameters: Parameters;
+@group(0) @binding(3) var<storage, read> atom_offsets: array<u32>;
+@group(0) @binding(4) var<storage, read_write> output_words: array<atomic<u32>>;
+@group(0) @binding(5) var<uniform> parameters: Parameters;
 
 fn emit_byte(offset: u32, value: u32) {
   let word_index = offset >> 2u;
@@ -255,8 +77,8 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let index = invocation.x;
   if (index >= parameters.count) { return; }
   let kind = atom_kinds[index];
-  let size = atom_sizes[index];
-  let output_start = inclusive_offsets[index] - size;
+  let output_start = atom_offsets[index];
+  let size = atom_offsets[index + 1u] - output_start;
   if (kind == ${atomByte}u) {
     emit_byte(output_start, low_words[index]);
     return;
@@ -327,25 +149,8 @@ type PreparedWasmGpuJob = {
   readonly expectedByteCount: number;
   readonly outputWordCount: number;
   readonly workgroupCount: number;
-  readonly lengthAtomIndices: Uint32Array;
-  readonly lengthRangeStarts: Uint32Array;
-  readonly lengthRangeCounts: Uint32Array;
-  readonly lengthLevels: readonly {
-    readonly dependencyLevel: number;
-    readonly start: number;
-    readonly count: number;
-  }[];
-  readonly lengthDispatchedInvocationCount: number;
-  readonly scan: HierarchicalScanPlan;
-};
-
-type HierarchicalScanPlan = {
-  readonly levelCounts: readonly number[];
-  readonly hierarchyOffsets: readonly number[];
-  readonly hierarchyWordCounts: readonly [number, number];
-  readonly scratchOffsets: readonly [number, number];
-  readonly dispatchCount: number;
-  readonly dispatchedInvocationCount: number;
+  readonly atomByteOffsets: Uint32Array;
+  readonly lengthAtomCount: number;
 };
 
 type PackedWasmColumn = {
@@ -381,14 +186,7 @@ async function emitPackedWasmPlanBatch(
   const jobs = plans.map(prepareWasmGpuJob);
   const context = await requestGpuWasmContext();
   if (context.status === "unavailable") return plans.map(() => context);
-  const {
-    device,
-    emissionPipeline,
-    lengthPipeline,
-    scanAddPipeline,
-    scanPipeline,
-    sizePipeline,
-  } = context;
+  const { device, emissionPipeline } = context;
   const storageAlignment = device.limits.minStorageBufferOffsetAlignment;
   const uniformAlignment = device.limits.minUniformBufferOffsetAlignment;
   const kinds = packWasmColumns(
@@ -406,48 +204,10 @@ async function emitPackedWasmPlanBatch(
     4,
     storageAlignment,
   );
-  const rangeStarts = packWasmColumns(
-    jobs.map((job) => job.lengthRangeStarts),
+  const atomByteOffsets = packWasmColumns(
+    jobs.map((job) => job.atomByteOffsets),
     4,
     storageAlignment,
-  );
-  const rangeCounts = packWasmColumns(
-    jobs.map((job) => job.lengthRangeCounts),
-    4,
-    storageAlignment,
-  );
-  const lengthAtomIndices = packWasmColumns(
-    jobs.map((job) => job.lengthAtomIndices),
-    4,
-    storageAlignment,
-  );
-  const sizes = packWasmColumns(
-    jobs.map((job) => new Uint32Array(job.plan.atoms.length)),
-    4,
-    storageAlignment,
-  );
-  const prefixes = packWasmColumns(
-    jobs.map((job) => new Uint32Array(job.plan.atoms.length)),
-    4,
-    storageAlignment,
-  );
-  const hierarchySums = ([0, 1] as const).map((bufferIndex) =>
-    packWasmColumns(
-      jobs.map((job) =>
-        new Uint32Array(job.scan.hierarchyWordCounts[bufferIndex])
-      ),
-      4,
-      storageAlignment,
-    )
-  );
-  const hierarchyPrefixes = ([0, 1] as const).map((bufferIndex) =>
-    packWasmColumns(
-      jobs.map((job) =>
-        new Uint32Array(job.scan.hierarchyWordCounts[bufferIndex])
-      ),
-      4,
-      storageAlignment,
-    )
   );
   const outputs = packWasmColumns(
     jobs.map((job) => new Uint32Array(job.outputWordCount)),
@@ -459,54 +219,8 @@ async function emitPackedWasmPlanBatch(
     4,
     uniformAlignment,
   );
-  const passParameterWords: Uint32Array[] = [];
-  const lengthParameterIndices = jobs.map((job) =>
-    job.lengthLevels.map((level) => {
-      passParameterWords.push(
-        new Uint32Array([level.count, level.start, 0, 0]),
-      );
-      return passParameterWords.length - 1;
-    })
-  );
-  const scanParameterIndices = jobs.map((job) =>
-    job.scan.levelCounts.map((count, levelIndex) => {
-      const hierarchyOffset = levelIndex === 0
-        ? 0
-        : job.scan.hierarchyOffsets[levelIndex - 1];
-      const hasParentLevel = levelIndex + 1 < job.scan.levelCounts.length;
-      passParameterWords.push(
-        new Uint32Array([
-          count,
-          hierarchyOffset,
-          hierarchyOffset,
-          hasParentLevel
-            ? job.scan.hierarchyOffsets[levelIndex]
-            : job.scan.scratchOffsets[levelIndex % 2],
-        ]),
-      );
-      return passParameterWords.length - 1;
-    })
-  );
-  const scanAddParameterIndices = jobs.map((job) =>
-    job.scan.levelCounts.slice(0, -1).map((count, childLevel) => {
-      passParameterWords.push(
-        new Uint32Array([
-          count,
-          childLevel === 0 ? 0 : job.scan.hierarchyOffsets[childLevel - 1],
-          job.scan.hierarchyOffsets[childLevel],
-          0,
-        ]),
-      );
-      return passParameterWords.length - 1;
-    })
-  );
-  const passParameters = packWasmColumns(
-    passParameterWords,
-    16,
-    uniformAlignment,
-  );
   const readbacks = packWasmColumns(
-    jobs.map((job) => new Uint32Array(1 + job.outputWordCount)),
+    jobs.map((job) => new Uint32Array(job.outputWordCount)),
     4,
     4,
   );
@@ -529,52 +243,11 @@ async function emitPackedWasmPlanBatch(
     highWords,
     GPUBufferUsage.STORAGE,
   );
-  const rangeStartBuffer = createPackedWasmBuffer(
+  const atomByteOffsetBuffer = createPackedWasmBuffer(
     device,
-    "Wasm batch length range starts",
-    rangeStarts,
+    "Wasm batch atom byte offsets",
+    atomByteOffsets,
     GPUBufferUsage.STORAGE,
-  );
-  const rangeCountBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch length range counts",
-    rangeCounts,
-    GPUBufferUsage.STORAGE,
-  );
-  const lengthAtomIndexBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch length atom indices",
-    lengthAtomIndices,
-    GPUBufferUsage.STORAGE,
-  );
-  const sizeBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch atom sizes",
-    sizes,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  );
-  const prefixBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch prefixes",
-    prefixes,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST |
-      GPUBufferUsage.COPY_SRC,
-  );
-  const hierarchySumBuffers = hierarchySums.map((column, index) =>
-    createPackedWasmBuffer(
-      device,
-      `Wasm batch scan hierarchy sums ${index}`,
-      column,
-      GPUBufferUsage.STORAGE,
-    )
-  );
-  const hierarchyPrefixBuffers = hierarchyPrefixes.map((column, index) =>
-    createPackedWasmBuffer(
-      device,
-      `Wasm batch scan hierarchy prefixes ${index}`,
-      column,
-      GPUBufferUsage.STORAGE,
-    )
   );
   const outputBuffer = createPackedWasmBuffer(
     device,
@@ -586,12 +259,6 @@ async function emitPackedWasmPlanBatch(
     device,
     "Wasm batch count parameters",
     countParameters,
-    GPUBufferUsage.UNIFORM,
-  );
-  const passParameterBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch pass parameters",
-    passParameters,
     GPUBufferUsage.UNIFORM,
   );
   const readbackBuffer = createCompilerGpuBuffer(
@@ -607,193 +274,14 @@ async function emitPackedWasmPlanBatch(
     kindBuffer,
     lowWordBuffer,
     highWordBuffer,
-    rangeStartBuffer,
-    rangeCountBuffer,
-    lengthAtomIndexBuffer,
-    sizeBuffer,
-    prefixBuffer,
-    ...hierarchySumBuffers,
-    ...hierarchyPrefixBuffers,
+    atomByteOffsetBuffer,
     outputBuffer,
     countParameterBuffer,
-    passParameterBuffer,
     readbackBuffer,
   ];
   let readbackMapped = false;
   try {
     const encoder = device.createCommandEncoder();
-    const sizePass = encoder.beginComputePass();
-    sizePass.setPipeline(sizePipeline);
-    for (const [index, job] of jobs.entries()) {
-      sizePass.setBindGroup(
-        0,
-        device.createBindGroup({
-          layout: sizePipeline.getBindGroupLayout(0),
-          entries: [
-            wasmBindGroupEntry(0, kindBuffer, kinds.regions[index]),
-            wasmBindGroupEntry(1, lowWordBuffer, lowWords.regions[index]),
-            wasmBindGroupEntry(2, highWordBuffer, highWords.regions[index]),
-            wasmBindGroupEntry(3, sizeBuffer, sizes.regions[index]),
-            wasmBindGroupEntry(
-              4,
-              countParameterBuffer,
-              countParameters.regions[index],
-            ),
-          ],
-        }),
-      );
-      dispatchCompilerGpuWorkgroups(
-        device,
-        sizePass,
-        `Wasm batch size calculation job ${index}`,
-        job.workgroupCount,
-      );
-    }
-    sizePass.end();
-
-    const lengthPass = encoder.beginComputePass();
-    lengthPass.setPipeline(lengthPipeline);
-    for (const [jobIndex, job] of jobs.entries()) {
-      for (const [levelIndex, level] of job.lengthLevels.entries()) {
-        const parameterIndex = lengthParameterIndices[jobIndex][levelIndex];
-        lengthPass.setBindGroup(
-          0,
-          device.createBindGroup({
-            layout: lengthPipeline.getBindGroupLayout(0),
-            entries: [
-              wasmBindGroupEntry(
-                0,
-                lengthAtomIndexBuffer,
-                lengthAtomIndices.regions[jobIndex],
-              ),
-              wasmBindGroupEntry(
-                1,
-                lowWordBuffer,
-                lowWords.regions[jobIndex],
-              ),
-              wasmBindGroupEntry(
-                2,
-                rangeStartBuffer,
-                rangeStarts.regions[jobIndex],
-              ),
-              wasmBindGroupEntry(
-                3,
-                rangeCountBuffer,
-                rangeCounts.regions[jobIndex],
-              ),
-              wasmBindGroupEntry(4, sizeBuffer, sizes.regions[jobIndex]),
-              wasmBindGroupEntry(
-                5,
-                passParameterBuffer,
-                passParameters.regions[parameterIndex],
-              ),
-            ],
-          }),
-        );
-        dispatchCompilerGpuWorkgroups(
-          device,
-          lengthPass,
-          `Wasm batch length job ${jobIndex} level ${level.dependencyLevel}`,
-          Math.ceil(level.count / wasmWorkgroupSize),
-        );
-      }
-    }
-    lengthPass.end();
-
-    const scanPass = encoder.beginComputePass();
-    scanPass.setPipeline(scanPipeline);
-    for (const [jobIndex, job] of jobs.entries()) {
-      for (const [levelIndex, count] of job.scan.levelCounts.entries()) {
-        const inputBuffer = levelIndex === 0
-          ? sizeBuffer
-          : hierarchySumBuffers[(levelIndex - 1) % 2];
-        const inputRegion = levelIndex === 0
-          ? sizes.regions[jobIndex]
-          : hierarchySums[(levelIndex - 1) % 2].regions[jobIndex];
-        const outputBuffer = levelIndex === 0
-          ? prefixBuffer
-          : hierarchyPrefixBuffers[(levelIndex - 1) % 2];
-        const outputRegion = levelIndex === 0
-          ? prefixes.regions[jobIndex]
-          : hierarchyPrefixes[(levelIndex - 1) % 2].regions[jobIndex];
-        const blockSumBufferIndex = levelIndex % 2;
-        const parameterIndex = scanParameterIndices[jobIndex][levelIndex];
-        scanPass.setBindGroup(
-          0,
-          device.createBindGroup({
-            layout: scanPipeline.getBindGroupLayout(0),
-            entries: [
-              wasmBindGroupEntry(0, inputBuffer, inputRegion),
-              wasmBindGroupEntry(1, outputBuffer, outputRegion),
-              wasmBindGroupEntry(
-                2,
-                hierarchySumBuffers[blockSumBufferIndex],
-                hierarchySums[blockSumBufferIndex].regions[jobIndex],
-              ),
-              wasmBindGroupEntry(
-                3,
-                passParameterBuffer,
-                passParameters.regions[parameterIndex],
-              ),
-            ],
-          }),
-        );
-        dispatchCompilerGpuWorkgroups(
-          device,
-          scanPass,
-          `Wasm batch scan job ${jobIndex} level ${levelIndex}`,
-          Math.ceil(count / wasmWorkgroupSize),
-        );
-      }
-    }
-    scanPass.end();
-
-    const scanAddPass = encoder.beginComputePass();
-    scanAddPass.setPipeline(scanAddPipeline);
-    for (const [jobIndex, job] of jobs.entries()) {
-      for (
-        let childLevel = job.scan.levelCounts.length - 2;
-        childLevel >= 0;
-        childLevel -= 1
-      ) {
-        const childCount = job.scan.levelCounts[childLevel];
-        const childBuffer = childLevel === 0
-          ? prefixBuffer
-          : hierarchyPrefixBuffers[(childLevel - 1) % 2];
-        const childRegion = childLevel === 0
-          ? prefixes.regions[jobIndex]
-          : hierarchyPrefixes[(childLevel - 1) % 2].regions[jobIndex];
-        const parentBufferIndex = childLevel % 2;
-        const parameterIndex = scanAddParameterIndices[jobIndex][childLevel];
-        scanAddPass.setBindGroup(
-          0,
-          device.createBindGroup({
-            layout: scanAddPipeline.getBindGroupLayout(0),
-            entries: [
-              wasmBindGroupEntry(0, childBuffer, childRegion),
-              wasmBindGroupEntry(
-                1,
-                hierarchyPrefixBuffers[parentBufferIndex],
-                hierarchyPrefixes[parentBufferIndex].regions[jobIndex],
-              ),
-              wasmBindGroupEntry(
-                2,
-                passParameterBuffer,
-                passParameters.regions[parameterIndex],
-              ),
-            ],
-          }),
-        );
-        dispatchCompilerGpuWorkgroups(
-          device,
-          scanAddPass,
-          `Wasm batch scan propagation job ${jobIndex} level ${childLevel}`,
-          Math.ceil(childCount / wasmWorkgroupSize),
-        );
-      }
-    }
-    scanAddPass.end();
-
     const emissionPass = encoder.beginComputePass();
     emissionPass.setPipeline(emissionPipeline);
     for (const [index, job] of jobs.entries()) {
@@ -805,11 +293,14 @@ async function emitPackedWasmPlanBatch(
             wasmBindGroupEntry(0, kindBuffer, kinds.regions[index]),
             wasmBindGroupEntry(1, lowWordBuffer, lowWords.regions[index]),
             wasmBindGroupEntry(2, highWordBuffer, highWords.regions[index]),
-            wasmBindGroupEntry(3, sizeBuffer, sizes.regions[index]),
-            wasmBindGroupEntry(4, prefixBuffer, prefixes.regions[index]),
-            wasmBindGroupEntry(5, outputBuffer, outputs.regions[index]),
             wasmBindGroupEntry(
-              6,
+              3,
+              atomByteOffsetBuffer,
+              atomByteOffsets.regions[index],
+            ),
+            wasmBindGroupEntry(4, outputBuffer, outputs.regions[index]),
+            wasmBindGroupEntry(
+              5,
               countParameterBuffer,
               countParameters.regions[index],
             ),
@@ -827,18 +318,10 @@ async function emitPackedWasmPlanBatch(
 
     for (const [index, job] of jobs.entries()) {
       encoder.copyBufferToBuffer(
-        prefixBuffer,
-        prefixes.regions[index].offset +
-          (job.plan.atoms.length - 1) * 4,
-        readbackBuffer,
-        readbacks.regions[index].offset,
-        4,
-      );
-      encoder.copyBufferToBuffer(
         outputBuffer,
         outputs.regions[index].offset,
         readbackBuffer,
-        readbacks.regions[index].offset + 4,
+        readbacks.regions[index].offset,
         job.outputWordCount * 4,
       );
     }
@@ -858,25 +341,19 @@ async function emitPackedWasmPlanBatch(
     const mapped = readbackBuffer.getMappedRange();
     return jobs.map((job, index) => {
       const readbackOffset = readbacks.regions[index].offset;
-      const byteCount = new Uint32Array(mapped, readbackOffset, 1)[0];
-      if (byteCount !== job.expectedByteCount) {
-        throw new Error(
-          `WebGPU Wasm batch job ${index} returned ${byteCount} bytes; CPU plan measure is ${job.expectedByteCount}`,
-        );
-      }
       return {
         status: "completed",
-        bytes: new Uint8Array(mapped, readbackOffset + 4, byteCount).slice(),
+        bytes: new Uint8Array(
+          mapped,
+          readbackOffset,
+          job.expectedByteCount,
+        ).slice(),
         atomCount: job.plan.atoms.length,
-        byteCount,
+        byteCount: job.expectedByteCount,
         outputBufferBytes: job.outputWordCount * 4,
-        lengthAtomCount: job.lengthAtomIndices.length,
-        lengthDispatchCount: job.lengthLevels.length,
-        lengthDispatchedInvocationCount: job.lengthDispatchedInvocationCount,
-        scanDispatchCount: job.scan.dispatchCount,
-        dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize * 2 +
-          job.lengthDispatchedInvocationCount +
-          job.scan.dispatchedInvocationCount,
+        lengthAtomCount: job.lengthAtomCount,
+        resolvedOffsetBytes: job.atomByteOffsets.byteLength,
+        dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize,
         submissionBatchSize: submission.submissionBatchSize,
         payloadBatchSize: jobs.length,
         queueWaitMilliseconds: submission.queueWaitMilliseconds,
@@ -890,82 +367,17 @@ async function emitPackedWasmPlanBatch(
 
 function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   const analysis = analyzeWasmBinaryPlan(plan);
-  const columns = atomColumns(plan.atoms);
-  const lengthAtomIndices: number[] = [];
-  const lengthRangeStarts: number[] = [];
-  const lengthRangeCounts: number[] = [];
-  const lengthLevels: {
-    dependencyLevel: number;
-    start: number;
-    count: number;
-  }[] = [];
-  for (const level of analysis.lengthLevels) {
-    const start = lengthAtomIndices.length;
-    for (const atom of level.atoms) {
-      lengthAtomIndices.push(atom.atomIndex);
-      lengthRangeStarts.push(atom.rangeStart);
-      lengthRangeCounts.push(atom.rangeCount);
-    }
-    lengthLevels.push({
-      dependencyLevel: level.dependencyLevel,
-      start,
-      count: level.atoms.length,
-    });
-  }
-  const levelCounts = [plan.atoms.length];
-  while (levelCounts.at(-1)! > wasmWorkgroupSize) {
-    levelCounts.push(
-      Math.ceil(levelCounts.at(-1)! / wasmWorkgroupSize),
-    );
-  }
-  const hierarchyOffsets: number[] = [];
-  const hierarchyWordCounts: [number, number] = [0, 0];
-  for (const [hierarchyIndex, count] of levelCounts.slice(1).entries()) {
-    const bufferIndex = hierarchyIndex % 2;
-    hierarchyOffsets.push(hierarchyWordCounts[bufferIndex]);
-    hierarchyWordCounts[bufferIndex] += count;
-  }
-  const scratchOffsets: [number, number] = [
-    hierarchyWordCounts[0],
-    hierarchyWordCounts[1],
-  ];
-  hierarchyWordCounts[0] += 1;
-  hierarchyWordCounts[1] += 1;
-  const upwardInvocationCount = levelCounts.reduce(
-    (total, count) =>
-      total + Math.ceil(count / wasmWorkgroupSize) * wasmWorkgroupSize,
-    0,
-  );
-  const downwardInvocationCount = levelCounts.slice(0, -1).reduce(
-    (total, count) =>
-      total + Math.ceil(count / wasmWorkgroupSize) * wasmWorkgroupSize,
-    0,
-  );
   return {
     plan,
-    columns,
+    columns: atomColumns(plan.atoms, analysis.atomByteOffsets),
     expectedByteCount: analysis.byteLength,
     outputWordCount: Math.ceil(analysis.byteLength / 4),
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
-    lengthAtomIndices: new Uint32Array(lengthAtomIndices),
-    lengthRangeStarts: new Uint32Array(lengthRangeStarts),
-    lengthRangeCounts: new Uint32Array(lengthRangeCounts),
-    lengthLevels,
-    lengthDispatchedInvocationCount: lengthLevels.reduce(
-      (total, level) =>
-        total +
-        Math.ceil(level.count / wasmWorkgroupSize) * wasmWorkgroupSize,
+    atomByteOffsets: analysis.atomByteOffsets,
+    lengthAtomCount: analysis.lengthLevels.reduce(
+      (count, level) => count + level.atoms.length,
       0,
     ),
-    scan: {
-      levelCounts,
-      hierarchyOffsets,
-      hierarchyWordCounts,
-      scratchOffsets,
-      dispatchCount: levelCounts.length * 2 - 1,
-      dispatchedInvocationCount: upwardInvocationCount +
-        downwardInvocationCount,
-    },
   };
 }
 
@@ -1039,49 +451,26 @@ async function emitWasmPlanWithGpu(
 ): Promise<GpuWasmEmissionResult> {
   const job = prepareWasmGpuJob(plan);
   const {
+    atomByteOffsets,
     columns,
     expectedByteCount,
-    lengthAtomIndices,
-    lengthDispatchedInvocationCount,
-    lengthLevels,
-    lengthRangeCounts,
-    lengthRangeStarts,
+    lengthAtomCount,
     outputWordCount,
-    scan,
     workgroupCount,
   } = job;
   const context = await requestGpuWasmContext();
   if (context.status === "unavailable") return context;
-  const {
-    device,
-    emissionPipeline,
-    lengthPipeline,
-    scanAddPipeline,
-    scanPipeline,
-    sizePipeline,
-  } = context;
+  const { device, emissionPipeline } = context;
   const atomBytes = Math.max(4, columns.kinds.byteLength);
-  const lengthAtomIndexBytes = Math.max(4, lengthAtomIndices.byteLength);
-  const lengthRangeBytes = Math.max(4, lengthRangeStarts.byteLength);
-  const hierarchyBytes = scan.hierarchyWordCounts.map((count) => count * 4);
   const outputBytes = outputWordCount * 4;
   const capacityRequests = [
     ["atom kinds", atomBytes, "storage"],
     ["atom low words", atomBytes, "storage"],
     ["atom high words", atomBytes, "storage"],
-    ["length range starts", lengthRangeBytes, "storage"],
-    ["length range counts", lengthRangeBytes, "storage"],
-    ["length atom indices", lengthAtomIndexBytes, "storage"],
-    ["atom sizes", atomBytes, "storage"],
-    ["prefixes", atomBytes, "storage"],
-    ["scan hierarchy sums 0", hierarchyBytes[0], "storage"],
-    ["scan hierarchy sums 1", hierarchyBytes[1], "storage"],
-    ["scan hierarchy prefixes 0", hierarchyBytes[0], "storage"],
-    ["scan hierarchy prefixes 1", hierarchyBytes[1], "storage"],
+    ["atom byte offsets", atomByteOffsets.byteLength, "storage"],
     ["packed output", outputBytes, "storage"],
     ["count parameters", 4, "uniform"],
-    ["pass parameters", 16, "uniform"],
-    ["readback", 4 + outputBytes, "copy"],
+    ["readback", outputBytes, "copy"],
   ] as const;
   for (const [label, byteLength, binding] of capacityRequests) {
     const reason = compilerGpuCapacityViolation(device.limits, {
@@ -1119,58 +508,11 @@ async function emitWasmPlanWithGpu(
     columns.highWords,
     GPUBufferUsage.STORAGE,
   );
-  const rangeStartBuffer = createBuffer(
+  const atomByteOffsetBuffer = createBuffer(
     device,
-    "Wasm length range starts",
-    lengthRangeStarts,
+    "Wasm atom byte offsets",
+    atomByteOffsets,
     GPUBufferUsage.STORAGE,
-  );
-  const rangeCountBuffer = createBuffer(
-    device,
-    "Wasm length range counts",
-    lengthRangeCounts,
-    GPUBufferUsage.STORAGE,
-  );
-  const lengthAtomIndexBuffer = createBuffer(
-    device,
-    "Wasm length atom indices",
-    lengthAtomIndices,
-    GPUBufferUsage.STORAGE,
-  );
-  const sizeBuffer = createCompilerGpuBuffer(
-    device,
-    "Wasm atom sizes",
-    {
-      size: atomBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-    },
-    "storage",
-  );
-  const prefixBuffer = createCompilerGpuBuffer(
-    device,
-    "Wasm prefixes",
-    {
-      size: atomBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST |
-        GPUBufferUsage.COPY_SRC,
-    },
-    "storage",
-  );
-  const hierarchySumBuffers = hierarchyBytes.map((size, index) =>
-    createCompilerGpuBuffer(
-      device,
-      `Wasm scan hierarchy sums ${index}`,
-      { size, usage: GPUBufferUsage.STORAGE },
-      "storage",
-    )
-  );
-  const hierarchyPrefixBuffers = hierarchyBytes.map((size, index) =>
-    createCompilerGpuBuffer(
-      device,
-      `Wasm scan hierarchy prefixes ${index}`,
-      { size, usage: GPUBufferUsage.STORAGE },
-      "storage",
-    )
   );
   const outputBuffer = createCompilerGpuBuffer(
     device,
@@ -1191,23 +533,16 @@ async function emitWasmPlanWithGpu(
     device,
     "Wasm readback",
     {
-      size: 4 + outputBytes,
+      size: outputBytes,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     },
     "copy",
   );
-  const transientParameterBuffers: GPUBuffer[] = [];
   const buffers = [
     kindBuffer,
     lowWordBuffer,
     highWordBuffer,
-    rangeStartBuffer,
-    rangeCountBuffer,
-    lengthAtomIndexBuffer,
-    sizeBuffer,
-    prefixBuffer,
-    ...hierarchySumBuffers,
-    ...hierarchyPrefixBuffers,
+    atomByteOffsetBuffer,
     outputBuffer,
     countParameterBuffer,
     readback,
@@ -1215,173 +550,15 @@ async function emitWasmPlanWithGpu(
   let readbackMapped = false;
   try {
     const encoder = device.createCommandEncoder();
-    const sizeBindGroup = device.createBindGroup({
-      layout: sizePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: kindBuffer } },
-        { binding: 1, resource: { buffer: lowWordBuffer } },
-        { binding: 2, resource: { buffer: highWordBuffer } },
-        { binding: 3, resource: { buffer: sizeBuffer } },
-        { binding: 4, resource: { buffer: countParameterBuffer } },
-      ],
-    });
-    const sizePass = encoder.beginComputePass();
-    sizePass.setPipeline(sizePipeline);
-    sizePass.setBindGroup(0, sizeBindGroup);
-    dispatchCompilerGpuWorkgroups(
-      device,
-      sizePass,
-      "Wasm size calculation",
-      workgroupCount,
-    );
-    sizePass.end();
-
-    for (const level of lengthLevels) {
-      const parameterBuffer = createBuffer(
-        device,
-        `Wasm length parameters ${level.dependencyLevel}`,
-        new Uint32Array([level.count, level.start, 0, 0]),
-        GPUBufferUsage.UNIFORM,
-      );
-      transientParameterBuffers.push(parameterBuffer);
-      const bindGroup = device.createBindGroup({
-        layout: lengthPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: lengthAtomIndexBuffer } },
-          { binding: 1, resource: { buffer: lowWordBuffer } },
-          { binding: 2, resource: { buffer: rangeStartBuffer } },
-          { binding: 3, resource: { buffer: rangeCountBuffer } },
-          { binding: 4, resource: { buffer: sizeBuffer } },
-          { binding: 5, resource: { buffer: parameterBuffer } },
-        ],
-      });
-      const pass = encoder.beginComputePass();
-      pass.setPipeline(lengthPipeline);
-      pass.setBindGroup(0, bindGroup);
-      dispatchCompilerGpuWorkgroups(
-        device,
-        pass,
-        `Wasm length level ${level.dependencyLevel}`,
-        Math.ceil(level.count / wasmWorkgroupSize),
-      );
-      pass.end();
-    }
-
-    const scanPass = encoder.beginComputePass();
-    scanPass.setPipeline(scanPipeline);
-    for (const [levelIndex, count] of scan.levelCounts.entries()) {
-      const hierarchyOffset = levelIndex === 0
-        ? 0
-        : scan.hierarchyOffsets[levelIndex - 1];
-      const hasParentLevel = levelIndex + 1 < scan.levelCounts.length;
-      const parameterBuffer = createBuffer(
-        device,
-        `Wasm scan parameters ${levelIndex}`,
-        new Uint32Array([
-          count,
-          hierarchyOffset,
-          hierarchyOffset,
-          hasParentLevel
-            ? scan.hierarchyOffsets[levelIndex]
-            : scan.scratchOffsets[levelIndex % 2],
-        ]),
-        GPUBufferUsage.UNIFORM,
-      );
-      transientParameterBuffers.push(parameterBuffer);
-      const bindGroup = device.createBindGroup({
-        layout: scanPipeline.getBindGroupLayout(0),
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: levelIndex === 0
-                ? sizeBuffer
-                : hierarchySumBuffers[(levelIndex - 1) % 2],
-            },
-          },
-          {
-            binding: 1,
-            resource: {
-              buffer: levelIndex === 0
-                ? prefixBuffer
-                : hierarchyPrefixBuffers[(levelIndex - 1) % 2],
-            },
-          },
-          {
-            binding: 2,
-            resource: { buffer: hierarchySumBuffers[levelIndex % 2] },
-          },
-          { binding: 3, resource: { buffer: parameterBuffer } },
-        ],
-      });
-      scanPass.setBindGroup(0, bindGroup);
-      dispatchCompilerGpuWorkgroups(
-        device,
-        scanPass,
-        `Wasm scan level ${levelIndex}`,
-        Math.ceil(count / wasmWorkgroupSize),
-      );
-    }
-    scanPass.end();
-
-    const scanAddPass = encoder.beginComputePass();
-    scanAddPass.setPipeline(scanAddPipeline);
-    for (
-      let childLevel = scan.levelCounts.length - 2;
-      childLevel >= 0;
-      childLevel -= 1
-    ) {
-      const childCount = scan.levelCounts[childLevel];
-      const parameterBuffer = createBuffer(
-        device,
-        `Wasm scan propagation parameters ${childLevel}`,
-        new Uint32Array([
-          childCount,
-          childLevel === 0 ? 0 : scan.hierarchyOffsets[childLevel - 1],
-          scan.hierarchyOffsets[childLevel],
-          0,
-        ]),
-        GPUBufferUsage.UNIFORM,
-      );
-      transientParameterBuffers.push(parameterBuffer);
-      const bindGroup = device.createBindGroup({
-        layout: scanAddPipeline.getBindGroupLayout(0),
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              buffer: childLevel === 0
-                ? prefixBuffer
-                : hierarchyPrefixBuffers[(childLevel - 1) % 2],
-            },
-          },
-          {
-            binding: 1,
-            resource: { buffer: hierarchyPrefixBuffers[childLevel % 2] },
-          },
-          { binding: 2, resource: { buffer: parameterBuffer } },
-        ],
-      });
-      scanAddPass.setBindGroup(0, bindGroup);
-      dispatchCompilerGpuWorkgroups(
-        device,
-        scanAddPass,
-        `Wasm scan propagation level ${childLevel}`,
-        Math.ceil(childCount / wasmWorkgroupSize),
-      );
-    }
-    scanAddPass.end();
-
     const emissionBindGroup = device.createBindGroup({
       layout: emissionPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: kindBuffer } },
         { binding: 1, resource: { buffer: lowWordBuffer } },
         { binding: 2, resource: { buffer: highWordBuffer } },
-        { binding: 3, resource: { buffer: sizeBuffer } },
-        { binding: 4, resource: { buffer: prefixBuffer } },
-        { binding: 5, resource: { buffer: outputBuffer } },
-        { binding: 6, resource: { buffer: countParameterBuffer } },
+        { binding: 3, resource: { buffer: atomByteOffsetBuffer } },
+        { binding: 4, resource: { buffer: outputBuffer } },
+        { binding: 5, resource: { buffer: countParameterBuffer } },
       ],
     });
     const emissionPass = encoder.beginComputePass();
@@ -1395,17 +572,10 @@ async function emitWasmPlanWithGpu(
     );
     emissionPass.end();
     encoder.copyBufferToBuffer(
-      prefixBuffer,
-      (plan.atoms.length - 1) * 4,
-      readback,
-      0,
-      4,
-    );
-    encoder.copyBufferToBuffer(
       outputBuffer,
       0,
       readback,
-      4,
+      0,
       outputWordCount * 4,
     );
     const submission = await submitCompilerGpuCommand(
@@ -1421,26 +591,16 @@ async function emitWasmPlanWithGpu(
     );
     readbackMapped = true;
     const mapped = readback.getMappedRange();
-    const byteCount = new Uint32Array(mapped, 0, 1)[0];
-    if (byteCount !== expectedByteCount) {
-      throw new Error(
-        `WebGPU Wasm emitter returned ${byteCount} bytes; CPU plan measure is ${expectedByteCount}`,
-      );
-    }
-    const bytes = new Uint8Array(mapped, 4, byteCount).slice();
+    const bytes = new Uint8Array(mapped, 0, expectedByteCount).slice();
     return {
       status: "completed",
       bytes,
       atomCount: plan.atoms.length,
-      byteCount,
+      byteCount: expectedByteCount,
       outputBufferBytes: outputWordCount * 4,
-      lengthAtomCount: lengthAtomIndices.length,
-      lengthDispatchCount: lengthLevels.length,
-      lengthDispatchedInvocationCount,
-      scanDispatchCount: scan.dispatchCount,
-      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize * 2 +
-        lengthDispatchedInvocationCount +
-        scan.dispatchedInvocationCount,
+      lengthAtomCount,
+      resolvedOffsetBytes: atomByteOffsets.byteLength,
+      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize,
       submissionBatchSize: submission.submissionBatchSize,
       payloadBatchSize: 1,
       queueWaitMilliseconds: submission.queueWaitMilliseconds,
@@ -1451,13 +611,14 @@ async function emitWasmPlanWithGpu(
     throw error;
   } finally {
     if (readbackMapped) readback.unmap();
-    for (const buffer of [...buffers, ...transientParameterBuffers]) {
-      buffer.destroy();
-    }
+    buffers.forEach((buffer) => buffer.destroy());
   }
 }
 
-function atomColumns(atoms: readonly WasmAtom[]): {
+function atomColumns(
+  atoms: readonly WasmAtom[],
+  atomByteOffsets: Uint32Array,
+): {
   readonly kinds: Uint32Array;
   readonly lowWords: Uint32Array;
   readonly highWords: Uint32Array;
@@ -1488,6 +649,8 @@ function atomColumns(atoms: readonly WasmAtom[]): {
       continue;
     }
     kinds[index] = atomLength;
+    lowWords[index] = atomByteOffsets[atom.rangeStart + atom.rangeCount] -
+      atomByteOffsets[atom.rangeStart];
   }
   return {
     kinds,
@@ -1506,20 +669,12 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
       requireCompilerGpuCapacity(device, {
         kind: "pipelineBindings",
         label: "Wasm emission",
-        storageBufferCount: 6,
+        storageBufferCount: 5,
         uniformBufferCount: 1,
       });
-      const modules = [
-        device.createShaderModule({ code: sizeShader }),
-        device.createShaderModule({ code: lengthShader }),
-        device.createShaderModule({ code: scanShader }),
-        device.createShaderModule({ code: emissionShader }),
-      ];
-      const compilationMessages = (await Promise.all(
-        modules.map((module) => module.getCompilationInfo()),
-      )).flatMap((info) => info.messages).filter((message) =>
-        message.type === "error"
-      );
+      const module = device.createShaderModule({ code: emissionShader });
+      const compilationMessages = (await module.getCompilationInfo()).messages
+        .filter((message) => message.type === "error");
       if (compilationMessages.length > 0) {
         throw new Error(
           `WebGPU Wasm emitter shader failed: ${
@@ -1527,36 +682,13 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
           }`,
         );
       }
-      const [
-        sizePipeline,
-        lengthPipeline,
-        scanPipeline,
-        scanAddPipeline,
-        emissionPipeline,
-      ] = await Promise.all(
-        [
-          [modules[0], "calculate_sizes"],
-          [modules[1], "calculate_lengths"],
-          [modules[2], "scan_blocks"],
-          [modules[2], "add_block_prefixes"],
-          [modules[3], "emit_atoms"],
-        ].map(([module, entryPoint]) =>
-          device.createComputePipelineAsync({
-            layout: "auto",
-            compute: {
-              module: module as GPUShaderModule,
-              entryPoint: entryPoint as string,
-            },
-          })
-        ),
-      );
+      const emissionPipeline = await device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module, entryPoint: "emit_atoms" },
+      });
       return {
         status: "available",
         device,
-        sizePipeline,
-        lengthPipeline,
-        scanPipeline,
-        scanAddPipeline,
         emissionPipeline,
       };
     } catch (error) {

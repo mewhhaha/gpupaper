@@ -1,4 +1,5 @@
 import {
+  analyzeWasmBinaryPlan,
   emitWasmPlanOnCpu,
   validateWasmBinaryPlan,
   wasmBinaryPlanByteLength,
@@ -75,6 +76,28 @@ Deno.test("Ducklang Wasm plan byte length equals emitted length", () => {
   const plan = buildModule(4).finishPlan();
 
   assertEquals(wasmBinaryPlanByteLength(plan), emitWasmPlanOnCpu(plan).length);
+});
+
+Deno.test("Ducklang Wasm analysis resolves exact atom byte boundaries", () => {
+  const plan = {
+    atoms: [
+      { kind: "byte" as const, value: 0xaa },
+      { kind: "unsigned" as const, value: 128 },
+      { kind: "signed32" as const, value: -1 },
+      {
+        kind: "length" as const,
+        rangeStart: 0,
+        rangeCount: 3,
+        dependencyLevel: 1,
+      },
+    ],
+    maximumDependencyLevel: 1,
+  };
+
+  const analysis = analyzeWasmBinaryPlan(plan);
+
+  assertEquals([...analysis.atomByteOffsets], [0, 1, 3, 4, 5]);
+  assertEquals(analysis.byteLength, 5);
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {

@@ -767,9 +767,9 @@ planning, ABI construction, and final validation. Consequently a faster kernel
 does not imply a faster compilation. `gpu_*_queue_wait`,
 `gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
 submission batch sizes, Core candidate/proposal/rewrite-lane counts, Wasm atom
-and length-frontier counts, Core candidate-descriptor and logical device-buffer
-bytes, length and scan dispatches, total Wasm scheduled lanes, and output-buffer
-bytes expose the terms that the current implementation can measure. Pipeline
+and length-atom counts, Core candidate-descriptor and logical device-buffer
+bytes, Wasm resolved-offset bytes and scheduled lanes, and output-buffer bytes
+expose the terms that the current implementation can measure. Pipeline
 initialization and capacity/packing are currently combined with their containing
 stage except where Core initialization is reported separately; this is a stated
 instrumentation limit.
@@ -1024,7 +1024,7 @@ structurally valid but semantically false certificate. A general optimization
 framework would require a preservation proof and certificate checker for every
 additional rule.
 
-### 7.4 Wasm count, scan, and write
+### 7.4 Wasm resolve and parallel write
 
 The binary plan is a nonempty source-ordered atom sequence:
 
@@ -1041,131 +1041,70 @@ level is strictly greater than every length atom in that range, so the relation
 is acyclic. CPU validation checks atom domains, ranges, levels, and the declared
 maximum level before GPU allocation.
 
-For `A` atoms and maximum length level `D`, emission performs:
-
-1. one full-array pass computing the encoded size of non-length atoms;
-2. one compacted dispatch for each nonempty length level, in increasing order;
-3. an inclusive prefix sum of all resolved sizes;
-4. one full-array pass writing each atom into its assigned byte interval.
-
-The validated host plan groups length records
-`(atom_id, range_start, range_count)` stably by dependency level. Let \(K_d\) be
-the number of length atoms at level \(d\), and let \(J=\{d\mid K_d>0\}\). A
-level dispatch schedules \(L(K_d)\) lanes and uses the compacted record to reach
-the atom's global size column. Induction on increasing \(d\) proves readiness:
-validation requires every length dependency of a level-\(d\) atom to have a
-strictly smaller level, and all lower nonempty levels have completed. Empty
-levels carry no dependency and require no dispatch. Stable ordering is not
-necessary for the size result, but makes the frontier and diagnostics
-deterministic.
-
-The logical record frontier takes \(12\sum_d K_d\) transfer bytes. It replaces
-dense atom-indexed dependency-level, range-start, and range-count columns
-totaling `12A` bytes. When the frontier is empty, WebGPU's nonzero binding
-requirement reserves one word for each of the three physical columns but
-transfers no semantic record. The scheduled length work changes from \(D L(A)\)
-lanes to:
+Validation also resolves the layout. For non-length atom \(i\), \(s_i\) is its
+exact LEB128 width. Length atoms are visited in increasing nonempty dependency
+level:
 
 ```text
-length_dispatches = |J|
-length_invocations = Σ[d in J] L(K_d)
-```
-
-Each active lane still sums its declared dependency range, so the non-padding
-arithmetic remains \(\sum_i range_count_i\). The compaction removes inactive
-atom tests; it does not change that intrinsic range work.
-
-The prefix implementation is a hierarchical inclusive scan with workgroup width
-\(W=64\). Define:
-
-```text
-n₀ = A
-nₗ₊₁ = ceil(nₗ / W)
-```
-
-and stop at level \(h-1\) where \(n_{h-1}\le W\). An upward dispatch computes an
-inclusive scan independently within each block and emits its block sum as the
-next level. The top level is therefore a complete prefix of all block sums. A
-downward dispatch for levels \(h-2,\ldots,0\) adds:
-
-```text
-parent_prefix[floor(i / W) - 1]
-```
-
-to each element outside the first block. The block-local invariant says that an
-upward result is the sum from the start of its block through its index. Assuming
-the parent is globally prefixed, the downward addition supplies exactly the sum
-of all preceding blocks. Downward induction therefore proves that level zero is
-the inclusive prefix of the atom sizes.
-
-Adjacent hierarchy levels alternate between two sum buffers and two prefix
-buffers. Consequently every dispatch binds its input read-only and its output
-read-write through distinct GPU buffers; the representation rules out WebGPU
-storage-usage aliasing. Dense offsets within each buffer are shader indices, not
-bind-group offsets, so they require no device-specific alignment padding.
-
-Let \(L(n)=W\lceil n/W\rceil\). The exact scheduled lane counts are:
-
-```text
-scan_dispatches = 2h - 1
-scan_invocations = Σ[l=0..h-1] L(nₗ) + Σ[l=0..h-2] L(nₗ)
-all_invocations = 2L(A) + length_invocations + scan_invocations
-```
-
-The block-local implementation performs six Hillis–Steele shared-memory steps.
-For a full workgroup this is \(\sum_{k=0}^{5}(64-2^k)=321\) additions. Upward
-work is therefore \(321\sum_l\lceil n_l/64\rceil\); downward work adds
-\(\sum_{l=0}^{h-2}(n_l-\min(n_l,64))\). Because the hierarchy is geometric,
-total scan work is \(\Theta(A)\), while its synchronization span is
-\(\Theta(h\log W)\). A Blelloch local scan would use fewer additions but twice
-as many shared-memory synchronization steps; selecting it requires latency
-measurements rather than asymptotics alone [17, 18].
-
-Let \(H=\sum_{l=1}^{h-1}n_l\). The scan stores one \(A\)-word result plus two
-copies of the hierarchy and two scratch words per copy:
-
-```text
-scan_storage_bytes = 4(A + 2(H + 2))
-```
-
-The previous global Hillis–Steele scan required two \(A\)-word prefix buffers,
-\(8A\) bytes, and \(\lceil\log_2 A\rceil\) full-width dispatches. The profile
-reports atom and length-frontier sizes, length and scan dispatches, their
-scheduled lanes, and the exact total scheduled invocation count.
-
-Each atom owns a disjoint byte interval from the prefix result. Adjacent atoms
-may share a `u32` output word, so writers use `atomicOr` into a zeroed buffer.
-Their shifted byte masks are disjoint; therefore the atomic operations commute
-and the final word equals the source-ordered byte concatenation independently of
-invocation order.
-
-Before allocation, the CPU evaluates encoded widths without emitting bytes. For
-non-length atoms, \(s_i\) is the exact LEB128 width of the atom value. Length
-atoms are visited in dependency-level order:
-
-```text
-s_i = unsigned_width(Σ[j in range(i)] s_j)
-B_exact = Σi s_i
-B_output = 4 ceil(B_exact / 4)
+s_i     = unsigned_width(Σ[j in range(i)] s_j)
+p_0     = 0
+p_{i+1} = p_i + s_i
+B       = p_A
 ```
 
 The plan validator has already proved that every referenced dependency has a
-lower level, so induction on ordered nonempty levels makes every \(s_j\)
-available. With \(K=\sum_dK_d\), grouping takes \(O(A)\), sorting the nonempty
-levels takes \(O(|J|\log\max(1,|J|))\), and width evaluation takes \(O(A+\sum_i
-range_count_i)\). Host storage is `A` bytes for widths plus \(O(K+|J|)\)
-frontier records. Iterating nonempty levels is essential: a valid sparse plan
-may declare a very large numeric level without requiring work proportional to
-that number. It is not CPU emission: no encoded byte or offset is constructed.
-The GPU independently executes its size, length, scan, and write passes, and the
-returned final prefix must equal \(B_\text{exact}\).
+lower level, so induction makes every \(s_j\) available. Every WebAssembly atom
+has positive width, hence:
 
-An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
-case analysis but conservative. Exact host sizing removes their slack without a
-device readback or an additional submission because the immutable atom DAG is
-already a host payload. The size column uses `4A` bytes and the hierarchical
-scan storage follows the formula above. Packed batches add device-required
-alignment between job regions but do not change per-job atom semantics.
+```text
+0 = p_0 < p_1 < ... < p_A = B <= 2^32 - 1
+```
+
+The resolved representation contains the \(A+1\) `u32` boundaries. For a length
+atom with range \([r,r+c)\), its encoded value is
+\(p_{r+c}-p_r\). Thus the same boundaries resolve both nested lengths and
+output placement. The GPU receives atom kinds, resolved low/high value words,
+and the boundary vector. Lane \(i\) owns exactly \([p_i,p_{i+1})\), encodes its
+atom there, and no sizing or scan kernel is required.
+
+Adjacent intervals may share a `u32` output word, so writers use `atomicOr` into
+a zeroed buffer. The byte masks of distinct intervals are disjoint; the atomic
+operations therefore commute. Per-atom correctness plus ordered disjoint
+intervals proves that the final buffer is the source-ordered concatenation.
+
+This division follows the trust boundary rather than a CPU/GPU preference.
+Exact output allocation already requires the host to validate the atom DAG and
+evaluate every \(s_i\). Recording each partial sum adds one \(O(A)\) store
+sequence to work that cannot be discarded. Recomputing sizes, length values, and
+prefixes on the GPU duplicated that resolved information. If a future pipeline
+constructs the atom DAG on-device and does not traverse it on the host, a device
+scan becomes justified again; under the present boundary it is redundant.
+
+Let \(W=64\) and \(L(n)=W\lceil n/W\rceil\). GPU work is now exactly one
+emission dispatch and \(L(A)\) scheduled lanes. The boundary vector transfers
+`4(A+1)` bytes. The pipeline uses five storage bindings—kind, low word, high
+word, boundaries, and output—and one count uniform. Output capacity is exactly
+\(4\lceil B/4\rceil\), and readback contains only that output.
+
+For comparison with the superseded hierarchy, let \(K\) be the number of length
+atoms, \(J\) its nonempty dependency levels, \(n_0=A\),
+\(n_{\ell+1}=\lceil n_\ell/W\rceil\), \(h\) the number of hierarchy levels, and
+\(H=\sum_{\ell=1}^{h-1}n_\ell\). Resolving before GPU execution removes these
+logical device bytes:
+
+```text
+4A                  atom-size column
++ 12K               length frontier
++ 8(H + 2)          alternating hierarchy sums and prefixes
++ 16(|J| + 2h - 1)  per-pass uniforms
+```
+
+The old inclusive-prefix readback word exactly offsets the new vector's one
+extra boundary word, so neither appears in the difference. Packed batches add
+device-required alignment between logical jobs; it does not change this per-job
+model. Host work is
+\(O(A+\sum_i\mathrm{rangeCount}_i+|J|\log\max(1,|J|))\), as it already was for
+exact capacity.
 
 The default CPU differential independently evaluates the length DAG, encodes
 LEB128 values, concatenates atoms, and compares every byte. Engine validation
@@ -2171,6 +2110,29 @@ logical device byte counts are executable profile fields. Generated CPU/GPU
 equality, the false-certificate regression, packed isolation, and the
 required-GPU gate are conformance evidence; deterministic byte counts do not
 establish a latency distribution.
+
+### 2026-07-31: Wasm layout is resolved once at the CPU trust boundary
+
+Exact output allocation already traversed the validated atom DAG, resolved every
+nested length, and summed every encoded width. The GPU nevertheless repeated
+size calculation, length evaluation, and a hierarchical prefix scan. Section
+7.4 now records every partial sum during the mandatory host traversal and sends
+the resulting \(A+1\) boundaries to one parallel emission kernel.
+
+The representation proof is \(p_{i+1}=p_i+s_i\): lane \(i\) owns
+\([p_i,p_{i+1})\), while a length range \([r,r+c)\) has byte value
+\(p_{r+c}-p_r\). The public analysis regression checks exact known boundaries;
+GPU/CPU differential tests cover nested and sparse dependency levels, packed
+jobs, signed LEB boundaries, and shared output words. Engine validation remains
+the final binary conformance check. The full 496-test gate and two deterministic
+compilations of every frozen target passed.
+
+Across the frozen applications, scheduled Wasm lanes fall from 10,176–823,552
+to 2,496–204,160, a 75.21–75.47% reduction. The change deletes three shader
+modules, four compute pipelines, all length and scan dispatches, size and
+hierarchy buffers, length-frontier buffers, and pass uniforms. Resolved-offset
+bytes and the single padded emission frontier are executable profile fields.
+These deterministic work reductions do not establish a latency distribution.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

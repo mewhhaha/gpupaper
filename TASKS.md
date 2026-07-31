@@ -998,6 +998,10 @@ Core receives no source handler or open effect row.
 - [x] Project each nonempty Core rewrite candidate to the exact 20-word matcher
       neighborhood. The GPU still decides the rule, while profiles prove
       descriptor and total device capacities and CPU certificates check output.
+- [x] Resolve validated Wasm atom widths and exclusive byte boundaries once at
+      the CPU trust boundary. One GPU emission frontier consumes those
+      boundaries; size, nested-length, and hierarchical-scan kernels are
+      deleted, with exact-offset and byte-differential regressions.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

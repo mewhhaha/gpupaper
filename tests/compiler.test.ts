@@ -987,8 +987,8 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   const lengthAtoms = plan.atoms.filter((atom) => atom.kind === "length");
   assertEquals(gpu.lengthAtomCount, lengthAtoms.length);
   assertEquals(
-    gpu.lengthDispatchCount,
-    new Set(lengthAtoms.map((atom) => atom.dependencyLevel)).size,
+    gpu.resolvedOffsetBytes,
+    (plan.atoms.length + 1) * 4,
   );
   assertEquals(
     WebAssembly.validate(
@@ -998,7 +998,7 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   );
 });
 
-Deno.test("WebGPU Wasm emission skips empty dependency levels", async () => {
+Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", async () => {
   const plan = {
     atoms: [
       { kind: "byte" as const, value: 0 },
@@ -1016,8 +1016,8 @@ Deno.test("WebGPU Wasm emission skips empty dependency levels", async () => {
 
   assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
   assertEquals(emitted.lengthAtomCount, 1);
-  assertEquals(emitted.lengthDispatchCount, 1);
-  assertEquals(emitted.lengthDispatchedInvocationCount, 64);
+  assertEquals(emitted.resolvedOffsetBytes, 12);
+  assertEquals(emitted.dispatchedInvocationCount, 64);
 });
 
 Deno.test("packed WebGPU Wasm emission is deterministic across shared words", async () => {
