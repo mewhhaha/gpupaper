@@ -4922,6 +4922,26 @@ engine and artifact validation. These are executable validations. The latency
 samples are release observations, not distribution estimates; the six-sample
 paired benchmark remains the performance evidence.
 
+### 2026-07-31: environment-candidate sorting is not the frontier
+
+Review 70 re-ranks the current Codex representative: specialization rewrite is
+64.079 ms, control-flow lowering 54.832, CPU Wasm planning/emission 55.112, and
+type inference 38.802. Specialization remains narrowly first.
+
+Each specialization request derives captured-environment identity by removing
+parameter symbols from the function's referenced-symbol set, sorting IDs, then
+filtering for values present in the current environment. The parameter removal
+and sort depend only on immutable function analysis, so hoisting a sorted
+candidate list into the analysis is semantically valid and preserves canonical
+key order.
+
+Fifteen direct Codex rewrite samples in hoisted/baseline/hoisted order measured
+median/MAD 66.411/1.931, 66.161/2.506, and 66.631/2.280 ms. Both hoisted
+medians are slightly slower, and every difference is below MAD. The
+implementation was removed. Candidate sorting is not the material cost at
+current referenced-set sizes; request-specific membership and value identity
+remain possible costs, but require their own work measurement.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

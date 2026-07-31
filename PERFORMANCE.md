@@ -494,6 +494,20 @@ samples were Editor 240.61/128.83 ms, Codex 673.86/477.54, grep 41.51/40.53,
 Tar 137.24/125.43, wav 34.41/33.48, and raytracer 38.88/39.13. Every CPU/GPU
 pair was byte-identical and engine-valid at the unchanged recorded Wasm sizes.
 
+Codex's next ranking is specialization rewrite 64.079 ms, control-flow lowering
+54.832, CPU Wasm planning/emission 55.112, and type inference 38.802. Hoisting
+the sorted captured-symbol candidate list into memoized function analysis was
+tested and rejected:
+
+| Sequence | Variant | Samples | Median | MAD |
+| -------: | ------- | ------: | -----: | --: |
+| A | hoisted | 15 | 66.411 ms | 1.931 ms |
+| B | per request | 15 | 66.161 ms | 2.506 ms |
+| A | hoisted | 15 | 66.631 ms | 2.280 ms |
+
+The valid hoist does not improve latency and was removed. Sorting the small
+candidate sets is not the current specialization frontier.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
