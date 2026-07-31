@@ -30,9 +30,9 @@ unmatched - 2
   assertEquals(result.proposals, expected.proposals);
   assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
-  assertEquals(result.rewriteCandidateCount, 3);
-  assertEquals(result.candidateDescriptorBytes, 240);
-  assertEquals(result.logicalDeviceBufferBytes, 292);
+  assertEquals(result.rewriteCandidateCount, 2);
+  assertEquals(result.candidateDescriptorBytes, 160);
+  assertEquals(result.logicalDeviceBufferBytes, 196);
   assertEquals(result.rewriteDispatchedInvocationCount, 64);
   assertEquals(columns(result.package), columns(expected.package));
 });

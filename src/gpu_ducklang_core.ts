@@ -1,6 +1,7 @@
 import {
   commitTrustedDucklangCoreRewrites,
   type DucklangCoreRewriteProposal,
+  proposeTrustedDucklangCoreRewrites,
 } from "./ducklang_core_rewrite.ts";
 import {
   type FlatDucklangCore,
@@ -553,52 +554,9 @@ function prepareCoreJob(input: CoreGpuInput): PreparedCoreJob {
     return { status: "invalid", reason: cpuValidation.reason };
   }
   const snapshot = cpuValidation.snapshot.package;
-  const rewriteCandidateOperationIds: number[] = [];
-  // This is the common structural head of every shader rule. A new rule must
-  // widen this necessary condition; exact constants remain a GPU decision.
-  for (
-    const [operationId, operationKind] of snapshot.operationKinds.entries()
-  ) {
-    if (operationKind !== FlatDucklangCoreKind.operation.scalarBinary) continue;
-    if (snapshot.operationOperandCounts[operationId] !== 2) continue;
-    if (snapshot.operationAttributeCounts[operationId] !== 1) continue;
-
-    const attributeId = snapshot.operationAttributeStarts[operationId];
-    if (
-      snapshot.attributeKinds[attributeId] !==
-        FlatDucklangCoreKind.attribute.unsigned
-    ) continue;
-    const operator = snapshot.attributeLowWords[attributeId];
-    if (
-      operator !== FlatDucklangCoreKind.binaryOperator.add &&
-      operator !== FlatDucklangCoreKind.binaryOperator.multiply
-    ) continue;
-
-    const typeId = snapshot.operationTypeIds[operationId];
-    if (snapshot.typeKinds[typeId] !== FlatDucklangCoreKind.type.scalar) {
-      continue;
-    }
-    const scalar = snapshot.typeAuxiliaries[typeId];
-    if (
-      scalar !== FlatDucklangCoreKind.scalar.i32 &&
-      scalar !== FlatDucklangCoreKind.scalar.i64
-    ) continue;
-
-    const operandStart = snapshot.operationOperandStarts[operationId];
-    const leftValueId = snapshot.operandValueIds[operandStart];
-    const rightValueId = snapshot.operandValueIds[operandStart + 1];
-    const leftIsConstant = snapshot.valueDefinitionKinds[leftValueId] ===
-        FlatDucklangCoreKind.valueDefinition.operation &&
-      snapshot.operationKinds[snapshot.valueDefinitionIds[leftValueId]] ===
-        FlatDucklangCoreKind.operation.constant;
-    const rightIsConstant = snapshot.valueDefinitionKinds[rightValueId] ===
-        FlatDucklangCoreKind.valueDefinition.operation &&
-      snapshot.operationKinds[snapshot.valueDefinitionIds[rightValueId]] ===
-        FlatDucklangCoreKind.operation.constant;
-    if (!leftIsConstant && !rightIsConstant) continue;
-
-    rewriteCandidateOperationIds.push(operationId);
-  }
+  const rewriteCandidateOperationIds = proposeTrustedDucklangCoreRewrites(
+    cpuValidation.snapshot,
+  ).map((proposal) => proposal.operationId);
   if (rewriteCandidateOperationIds.length === 0) {
     return { status: "identity", snapshot: cpuValidation.snapshot };
   }

@@ -1034,22 +1034,25 @@ at least one operand is defined by a constant operation
 ```
 
 The exact constant attribute and payload are deliberately absent from \(H\).
-Let \(O\) be the operation count and let \(C=\{o\mid H(S,o)\}\). By inspection
-of the two rule heads, \(M(S,o)\) defined implies \(H(S,o)\), so:
+Let \(O\) be the operation count, \(H_S=\{o\mid H(S,o)\}\), and let the exact
+frontier be \(C=\{o\in H_S\mid M(S,o)\text{ is defined}\}\). By inspection of
+the two rule heads:
 
 ```text
-{ M(S, o) | o in [0, O), M(S, o) defined }
-  =
-{ M(S, o) | o in C, M(S, o) defined }
+M(S, o) defined implies H(S, o)
+C = domain(M(S, ·))
 ```
 
 The host therefore sends the stable increasing IDs in \(C\) as the rewrite
-frontier. This is a pattern-head discrimination tree [21], not CPU rewrite
-matching: the CPU proves only a necessary condition and emits neither a rule ID
-nor a replacement. The GPU repeats the structural checks, compares the exact
-constant attribute and payload, and selects orientation and replacement. An
-empty frontier proves that `M` is undefined for every operation, so the pass
-returns the branded input with empty proposal and acceptance sets before
+frontier. The CPU implements \(H\) as a pattern-head discrimination tree [21],
+evaluates the complete matcher only under that head, and discards the resulting
+proposal payload after retaining the operation ID. The GPU independently
+recomputes the structural checks, exact constant payload, orientation, and
+replacement. Its proposal remains authoritative: CPU preclassification cannot
+cause a rewrite, while a faulty GPU omission can only forgo an optimization.
+
+An empty exact frontier proves that `M` is undefined for every operation, so the
+pass returns the branded input with empty proposal and acceptance sets before
 requesting a device. Packed execution partitions identity jobs from nonempty
 frontiers and preserves their logical result positions. For nonempty \(C\),
 scheduled lanes are \(64\lceil|C|/64\rceil\), replacing
@@ -1152,9 +1155,10 @@ M(S, o) = M_D(D(S, o))
 
 because these are exactly the fields read by `hasIntegerScalarResult` and
 `coreConstantEquals`; no other snapshot column affects either rule. The host
-gathers both operands and all fields after \(H\) succeeds. Projection does not
-decide a rewrite: exact constant attributes, payloads, orientation, and
-replacement remain GPU decisions.
+gathers both operands and all fields only after exact membership in \(C\) is
+proved. It discards its proposal, and the GPU recomputes the complete matcher.
+Thus host filtering decides whether useful work exists but not which
+transformation is committed.
 
 Each descriptor is 20 `u32` words: six operation words and two seven-word
 operand records. Position \(q\) corresponds to the stable candidate ID at
@@ -1182,9 +1186,20 @@ B_device_descriptor = 96C + 4
 The host formula contains the 80-byte descriptor and retained four-byte
 operation ID. The device formula adds four-byte rule and replacement outputs,
 their eight-byte readback, and one four-byte uniform per candidate batch.
-Gathering costs \(O(C)\) work after the \(O(O)\) frontier scan. Projection is
-preferable exactly when these formulas are smaller; the frozen targets satisfy
-that condition, but a rule domain approaching the complete graph may not.
+Gathering costs \(O(C)\) work after \(O(O)\) discrimination and exact matching.
+Projection is preferable exactly when these formulas are smaller; the frozen
+targets satisfy that condition, but a rule domain approaching the complete graph
+may not. Let \(T_M(O)\) be host matcher time and \(T_G(C)\) the complete GPU
+boundary including submission and readback. Exact filtering dominates the
+structural frontier when:
+
+```text
+T_M(O) + T_G(|C|) < T_G(|H_S|)
+```
+
+For \(C=\varnothing\), \(T_G(0)=0\). The measured Codex values are approximately
+0.15 ms for \(T_M\) and 25 ms for the eliminated physical GPU boundary, so the
+inequality holds by two orders of magnitude.
 
 The GPU returns proposal certificates containing rule, function, operation,
 result, replacement, and profit. A proposal `p` is admissible exactly when:
@@ -3816,6 +3831,42 @@ generated proposal equality, and the release gate are executable evidence.
 The 508-test required-GPU gate passed. Its paired byte-identical, engine-valid
 samples in milliseconds were Editor 270.61/175.51, Codex 684.59/510.98, grep
 69.97/68.66, Tar 146.07/127.98, wav 62.10/62.04, and raytracer 43.31/42.54.
+
+### 2026-07-31: Core dispatch uses an exact useful-work frontier
+
+The structural rule-head frontier left five frozen targets submitting a GPU
+command that returned no proposals. Section 7.3 now defines the physical
+frontier as the exact matcher domain. The host matcher is already the
+certificate oracle and CPU fallback; it retains only matching operation IDs and
+discards its proposal payload. The GPU independently recomputes each retained
+match, and only its checked proposals reach commit.
+
+This preserves GPU authority while applying the project's discard-before-
+parallelize rule. A host-empty exact frontier is a proof that no optimization
+exists, so it has no descriptor, adapter request, submission, readback, or GPU
+backend label. Tar's 24 matches still execute on the GPU; the other five frozen
+targets become Core identity jobs. The positive GPU regression now has two exact
+candidates rather than one additional known failure, while generated CPU/GPU
+proposal equality remains unchanged.
+
+An alternating 21-pair Codex required-GPU experiment against detached commit
+`e1a739f` changed median Core-pass time from 27.410 to 2.285 ms (-91.66%) and
+complete compilation from 466.411 to 442.888 ms (-5.04%). Physical Core GPU
+execution changes from 24.529 ms to exactly zero; initialization, transfer, and
+commit also become zero. The candidate frontier changes from 963 to zero and
+the backend from `gpu` to `identity`. Every observation emitted the same
+226,134-byte module.
+
+The 2.285-ms identity stage includes queueing and host exact classification; it
+is not GPU work. The observed 0.15-ms standalone CPU matcher and 24.529-ms GPU
+execution make the break-even decision unambiguous for this corpus. The design
+must be revisited if future rule matching becomes materially more expensive or
+batched GPU work amortizes its fixed boundary below host classification.
+
+The 508-test release gate passed with the exact frontier. Its paired
+byte-identical, engine-valid samples in milliseconds were Editor 255.92/140.90,
+Codex 679.85/487.44, grep 44.47/43.28, Tar 138.29/124.89, wav 37.67/36.10, and
+raytracer 40.77/39.68.
 
 ## References
 

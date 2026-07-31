@@ -1298,6 +1298,35 @@ compiler-owned jobs report `construction`, while direct raw GPU tests report
 The 508-test gate passed and compiled every target twice with byte-identical,
 engine-valid output; malformed raw Core still failed before device work.
 
+### Exact useful-work Core frontier
+
+The host now applies the complete, already-required certificate matcher before
+GPU preparation and retains only matching operation IDs. The GPU recomputes
+those matches independently; host proposals are discarded. Five frozen targets
+have zero matches and avoid the physical Core GPU boundary. Tar retains 24
+matches.
+
+An alternating 21-pair Codex required-GPU experiment after one unrecorded
+warmup compared the current tree with detached commit `e1a739f`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| GPU Core pass | 27.410 ms | 2.285 ms | -91.66% |
+| Complete compilation | 466.411 ms | 442.888 ms | -5.04% |
+| Core GPU execution | 24.529 ms | 0 ms | -100% |
+| GPU Wasm emission | 36.934 ms | 34.604 ms | -6.31% |
+| Candidate operations | 963 | 0 | -100% |
+
+Initialization, transfer, and commit also become exactly zero. The Wasm movement
+is outside the change and is not attributed. All observations emitted the same
+226,134-byte module. Codex's Core backend is now correctly `identity`; required
+GPU compilation still requires authoritative GPU Wasm emission. Tar remains the
+positive physical Core-GPU release case.
+
+The 508-test release gate passed under that contract. All six targets compiled
+twice to byte-identical, engine-valid Wasm; Tar reported `core=gpu`, the other
+five `core=identity`, and every target reported GPU Wasm emission.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and

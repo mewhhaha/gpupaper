@@ -61,7 +61,7 @@ function rewriteTrustedSnapshot(
   validationMilliseconds: number,
 ): DucklangCoreRewriteResult {
   const matchingStart = performance.now();
-  const proposals = proposeValidatedDucklangCoreRewrites(snapshot);
+  const proposals = proposeTrustedDucklangCoreRewritesFromSnapshot(snapshot);
   const matchingMilliseconds = performance.now() - matchingStart;
   const conflictResolutionStart = performance.now();
   const accepted = resolveValidatedDucklangCoreRewriteConflicts(
@@ -104,10 +104,16 @@ export function proposeDucklangCoreRewrites(
   snapshot: FlatDucklangCore,
 ): readonly DucklangCoreRewriteProposal[] {
   validateFlatDucklangCore(snapshot);
-  return proposeValidatedDucklangCoreRewrites(snapshot);
+  return proposeTrustedDucklangCoreRewritesFromSnapshot(snapshot);
 }
 
-function proposeValidatedDucklangCoreRewrites(
+export function proposeTrustedDucklangCoreRewrites(
+  trusted: TrustedFlatDucklangCore,
+): readonly DucklangCoreRewriteProposal[] {
+  return proposeTrustedDucklangCoreRewritesFromSnapshot(trusted.package);
+}
+
+function proposeTrustedDucklangCoreRewritesFromSnapshot(
   snapshot: FlatDucklangCore,
 ): readonly DucklangCoreRewriteProposal[] {
   const proposals: DucklangCoreRewriteProposal[] = [];
