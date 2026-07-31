@@ -1,10 +1,10 @@
 import { compileModuleSource } from "../src/compiler.ts";
 import { lowerDucklangCoreToFcgAndWasm } from "../src/ducklang_core_wasm.ts";
+import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "../src/wasm.ts";
 import {
   emitWasmPlanOnGpu,
   type GpuWasmLowWordLayout,
 } from "../src/gpu_wasm.ts";
-import type { WasmBinaryPlan } from "../src/wasm.ts";
 
 const targets = [
   target("editor", "editor/editor.duck", "editor/host.duck"),
@@ -16,6 +16,23 @@ const targets = [
 ] as const;
 const sampleCount = requestedSampleCount(Deno.args);
 const preparedTargets = await Promise.all(targets.map(prepareTarget));
+const cpuSampleCount = 101;
+const cpuSamples = new Map(
+  preparedTargets.map((prepared) => [prepared.name, [] as number[]]),
+);
+for (const prepared of preparedTargets) {
+  for (let warmup = 0; warmup < 10; warmup += 1) {
+    measureCpuEmission(prepared);
+  }
+}
+for (let sample = 0; sample < cpuSampleCount; sample += 1) {
+  const orderedTargets = sample % 2 === 0
+    ? preparedTargets
+    : [...preparedTargets].reverse();
+  for (const prepared of orderedTargets) {
+    cpuSamples.get(prepared.name)!.push(measureCpuEmission(prepared));
+  }
+}
 
 const measuredLayouts = ["dense", "ranked"] as const;
 for (const prepared of preparedTargets) {
@@ -65,6 +82,10 @@ console.log(JSON.stringify({
   warmupCountPerLayout: 1,
   targetOrder: "alternatingForwardReverse",
   layoutOrder: "alternatingDenseRanked",
+  cpuSampleCount,
+  cpuWarmupCountPerTarget: 10,
+  cpuTargetOrder: "alternatingForwardReverse",
+  cpuMeasuredBoundary: "planValidationThroughCpuByteEmission",
   measuredBoundary: "hostPlanAnalysisThroughMappedGpuReadbackAndByteCopy",
   targets: preparedTargets.map((prepared) => {
     const targetSamples = samples.get(prepared.name)!;
@@ -75,6 +96,12 @@ console.log(JSON.stringify({
       target: prepared.name,
       atomCount: prepared.plan.atoms.length,
       wasmBytes: prepared.expectedBytes.length,
+      cpuOracle: {
+        medianMilliseconds: median(cpuSamples.get(prepared.name)!),
+        p95Milliseconds: percentile(cpuSamples.get(prepared.name)!, 0.95),
+        minimumMilliseconds: Math.min(...cpuSamples.get(prepared.name)!),
+        maximumMilliseconds: Math.max(...cpuSamples.get(prepared.name)!),
+      },
       dense: reportLayout(targetSamples.dense, targetWork.dense!),
       ranked: reportLayout(targetSamples.ranked, targetWork.ranked!),
       rankedToDenseMedianRatio: rankedMedian / denseMedian,
@@ -146,6 +173,18 @@ async function measureEmission(
     byteRankBytes: emitted.byteRankBytes,
     maximumByteRank: emitted.maximumByteRank,
   };
+}
+
+function measureCpuEmission(prepared: PreparedTarget): number {
+  const start = performance.now();
+  const bytes = emitWasmPlanOnCpu(prepared.plan);
+  const milliseconds = performance.now() - start;
+  if (!equalBytes(bytes, prepared.expectedBytes)) {
+    throw new Error(
+      `${prepared.name} CPU Wasm benchmark disagrees with expected emission`,
+    );
+  }
+  return milliseconds;
 }
 
 function reportLayout(

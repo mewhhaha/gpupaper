@@ -674,6 +674,24 @@ Post-change dense/ranked medians were 27.92/27.88 ms for Editor and
 36.61/36.65 ms for Codex; no isolated latency improvement is resolved. The
 503-test required-GPU gate passed and compiled every frozen target twice.
 
+### CPU Wasm validation emits scalar encodings
+
+The independent CPU differential formerly visited every atom once for
+validation, once for scalar encoding, once for encoded-length reduction, and
+once for final byte copy, in addition to two independent \(D\)-range
+traversals. Encoding scalars during validated inspection and accumulating
+encoded length in the scalar and topological folds changes exact visits from
+\(4A+2D\) to \(2A+2D\).
+
+The frozen batch removes 520,896 atom visits. Direct range sizing remains
+independent of the adaptive GPU-boundary algorithm. The Wasm benchmark now
+reports this CPU oracle with 101 samples, ten warmups, alternating target order,
+and byte equality on every observation. Post-change medians in milliseconds
+were Editor 1.139, Codex 15.155, grep 0.170, Tar 1.059, wav 0.100, and
+raytracer 0.161. No latency change is claimed without a counterbalanced
+pre/post experiment. The 503-test required-GPU gate passed and compiled every
+frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

@@ -1317,8 +1317,16 @@ model. Host analysis work is
 chooses the smaller modeled representation.
 
 The default CPU differential independently evaluates the length DAG, encodes
-LEB128 values, concatenates atoms, and compares every byte. Engine validation
-then checks the selected module. With differential verification disabled, engine
+LEB128 values, concatenates atoms, and compares every byte. It deliberately
+retains direct range summation rather than sharing the adaptive GPU-boundary
+analysis. Scalar validation and encoding form one inspection product, and the
+same inspection accumulates scalar byte length; each topological length fold
+adds its encoding length. Addition is associative and every atom belongs to
+exactly one variant, so the accumulated total equals the sum formerly computed
+by a separate traversal. CPU-oracle atom/range visits fall from \(4A+2D\) to
+\(2A+2D\): validation/encoding and final copy each visit \(A\), while dependency
+validation and independent sizing each retain \(D\). Engine validation then
+checks the selected module. With differential verification disabled, engine
 validity does not prove semantic equality to the plan; that mode deliberately
 trades away the independent byte oracle.
 
@@ -3026,6 +3034,29 @@ latency claim is made. The required-GPU release gate passed 503 tests and
 compiled every frozen target twice. Its advisory samples in milliseconds were
 Editor 328.50/243.97, Codex 961.70/827.96, grep 129.25/123.81, Tar
 226.99/174.06, wav 110.53/112.98, and raytracer 94.62/92.01.
+
+### 2026-07-31: CPU Wasm validation produces its encoding
+
+The independent CPU oracle validated \(A\) atoms, revisited them to encode
+scalars, evaluated \(D\) length dependencies, revisited all \(A\) encodings to
+sum their sizes, and revisited them again to copy bytes. Validation and scalar
+encoding are a product fold, while scalar and topological length folds can
+accumulate the final size.
+
+Section 7.4 now derives the resulting \(4A+2D\) to \(2A+2D\) reduction. Across
+the frozen batch, 520,896 atom visits disappear. The direct \(D\)-range
+evaluation intentionally remains independent of adaptive GPU-boundary sizing,
+preserving the differential's value as an oracle. The permanent emitter
+benchmark now includes 101 CPU-oracle samples with ten warmups and alternating
+target order. Post-change medians in milliseconds were Editor 1.139, Codex
+15.155, grep 0.170, Tar 1.059, wav 0.100, and raytracer 0.161. A separately
+ordered pre-change sample is not a controlled pair, so no latency change is
+claimed. Focused tests pass; one Deno process reported all assertions passing
+before an exit-139 WebGPU shutdown. A clean rerun of the full required-GPU gate
+passed 503 tests and compiled every frozen target twice. Its advisory samples in
+milliseconds were Editor 335.64/236.97, Codex 973.23/969.82, grep
+138.68/130.72, Tar 238.84/190.68, wav 117.17/118.74, and raytracer
+99.02/139.86.
 
 ## References
 

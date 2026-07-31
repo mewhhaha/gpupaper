@@ -1043,6 +1043,9 @@ Core receives no source handler or open effect row.
 - [x] Select direct or sparse Wasm length sizing from an explicit cost model.
       The sparse path uses a scalar prefix and level-batched Fenwick updates;
       profiles expose both the direct dependency count and selected work.
+- [x] Fuse CPU-oracle scalar encoding into validated inspection and accumulate
+      output size during scalar and length folds. This removes two atom passes
+      without sharing the GPU boundary's adaptive length-sizing algorithm.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a
