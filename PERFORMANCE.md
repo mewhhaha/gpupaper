@@ -653,6 +653,12 @@ Editor lifts receive fresh IDs; other targets receive none. The counter was
 removed. Batched lifting needs lexical function-occurrence identity, not an
 old-symbol-only capture map.
 
+Duplicate-symbol renaming visits 127,326 Codex occurrences, exceeding the
+remaining 98,211 capture-argument visits; Editor visits 3,682 and other targets
+zero. Together the measured lifting categories perform 358,405 Codex
+visits/comparisons. Counters were removed. One occurrence-aware analysis and one
+combined rebuild is the next implementation gate.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

@@ -5543,6 +5543,39 @@ removed. Review 100 closes this series by measuring the rename traversal itself
 and recording the complete one-pass lifting primitive and next implementation
 gate.
 
+### 2026-07-31: rename traversal completes the one-pass lifting case
+
+Review 100 counts occurrences visited by `renameSymbolReferences` during
+lifting. Codex visits 127,326, 5.40 residual traversals and more than the 98,211
+remaining capture-argument visits. Editor visits 3,682; grep, Tar, wav, and
+raytracer visit zero because they have no duplicate lifted symbols.
+
+The measured Codex lifting work now includes 107,069 capture-discovery visits,
+98,211 post-fast-path argument-rewrite visits, 127,326 rename visits, 19,541
+direct-use visits, and 6,258 step comparisons. These categories can overlap in
+source objects but represent 358,405 explicit visits/comparisons. The desired
+primitive is a three-phase immutable transformation:
+
+1. Analyze one residual snapshot to assign lexical function-occurrence IDs,
+   symbol owners, direct-use status, and ordered capture summaries.
+2. Deterministically allocate all fresh symbols and construct occurrence-aware
+   old-binding-to-new-binding and capture maps.
+3. Rebuild each residual root once, removing lifted bindings, rewriting bound
+   references and calls with the planned symbol, and appending planned captures;
+   emit lifted functions into source-occurrence order.
+
+The correctness invariant is alpha-equivalence plus closure conversion: every
+reference resolves to the same lexical binding, every lifted function receives
+exactly its free non-module values, every direct call supplies those values in
+the same order, and no non-call use is converted without a closure. Work becomes
+\(O(V+F+C+A)\) and auxiliary storage \(O(S+F+C)\), versus the measured repeated
+traversals. CPU implementation comes before GPU execution; flat occurrence,
+owner, capture, and rewrite arrays later map naturally to scan/compact/gather.
+
+The rename counter was removed. This is a specified and measured next task, not
+an implemented claim. Review 95's empty-capture rule is the only production code
+retained from Reviews 74--100.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

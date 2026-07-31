@@ -1556,6 +1556,12 @@ resource cost, and corpus measurements.
 - [x] Measure duplicate lifted-symbol renaming. Establish that 274 of 403 Codex
       lifts need fresh IDs and require lexical function-occurrence identity in
       any batched lifting plan.
+- [x] Measure duplicate-symbol rename traversal and specify one-pass lifting.
+      Replace 127,326 Codex rename visits plus repeated capture/call scans with
+      occurrence planning and one immutable rebuild in the next implementation.
+- [ ] Implement occurrence-aware one-pass lifting from Reviews 89--100, with
+      alpha-equivalence, capture-order, direct-call, deterministic-binary, and
+      CPU/GPU differential validation before retiring the current transformer.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
