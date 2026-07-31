@@ -1519,6 +1519,9 @@ resource cost, and corpus measurements.
 - [x] Audit retained residual node-count cache evidence. Close accounting after
       99 Codex hits skip 32,243 descendants in 3.887 ms and redirect review to
       the 22.199 ms lifting stage.
+- [x] Measure lifted bindings and direct-function symbols. Identify Codex's 403
+      lifts in 22.926 ms and derive the current repeated-scan worst case before
+      instrumenting lifting traversals.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

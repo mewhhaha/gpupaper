@@ -591,6 +591,11 @@ shared-root cache hits and costs 3.887 ms in the representative profile.
 Function lifting costs 22.199 ms, 5.71× more. Accounting's coarse cache has the
 right domain and is closed; lifting becomes the next specialization substage.
 
+Temporary lifting counters show 403 Codex lifted bindings from 433 direct
+function symbols in 22.926 ms (56.89 microseconds/lift). Editor lifts 55 in
+1.630 ms; other targets lift at most 13. The counters were removed and the next
+frontier is repeated per-candidate lifting scans.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

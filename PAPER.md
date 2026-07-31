@@ -5302,6 +5302,26 @@ The retained evidence redirects the audit to lifting, now the second-largest
 specialization substage and 5.71 times accounting on the representative Codex
 sample.
 
+### 2026-07-31: Codex lifting is generated-function dominated
+
+Review 87 temporarily exposes lifted binding and direct-function counts. Codex
+lifts 403 bindings from a set of 433 direct function symbols in 22.926 ms, or
+56.89 microseconds per lifted binding. Editor lifts 55 of 194 in 1.630 ms; grep
+13 of 17 in 0.344 ms; Tar 6 of 10 in 1.285 ms; wav none of five; raytracer 9 of
+14 in 0.136 ms.
+
+The implementation discovers all direct functions in one traversal, but each
+eligible block binding can then trigger a scope scan for direct-only use, a
+capture scan, call-argument rewriting, recursive lifting, step filtering, and
+possibly symbol-reference renaming. For \(F\) lift candidates in a scope of
+\(V\) occurrences, the current worst case is \(O(FV)\), not \(O(V+F)\). Codex's
+403 lifts make that repeated-work term plausible; wav's zero lifts and 0.019 ms
+provide the opposite boundary.
+
+The counters were removed. The next review must count the actual nodes visited
+by direct-use and capture scans before changing algorithms; lifted-binding count
+alone does not identify which repeated traversal dominates.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
