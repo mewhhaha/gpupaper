@@ -618,6 +618,8 @@ Deno.test("comptime if does not evaluate its unselected branch", async () => {
   const gpu = await evaluateBytecodeOnGpu([program]);
   if (gpu.status === "unavailable") return;
   assertEquals(gpu.values, [{ kind: "integer", value: 42 }]);
+  assertEquals(gpu.stackCapacity, 2);
+  assertEquals(gpu.stackBufferBytes, 8);
 });
 
 Deno.test("comptime rejects malformed packed bytecode before GPU execution", async () => {

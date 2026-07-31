@@ -1128,6 +1128,19 @@ allocation, or dispatch. This is required for job isolation: the packed GPU
 representation stores starts but no end column, so safety follows from proving
 that all reachable program counters remain in the job's validated range.
 
+The same derivation supplies the exact batch stack height \(H_b = \max_j H_j\).
+For \(J\) jobs the GPU stack arena is:
+
+```text
+B_stack = 4 J H_b bytes,  1 <= H_b <= 64
+```
+
+The previous allocation used the admitted maximum unconditionally,
+\(B_\text{old}=256J\). Reusing the validated height adds no asymptotic work and
+cannot under-allocate because every instruction's incoming and outgoing depth is
+already part of the confinement judgment. The GPU result reports both \(H_b\)
+and \(B_\text{stack}\).
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -1857,6 +1870,17 @@ Section 7.5 now derives the exact pair-slot, allocation, pass, and lane bounds
 that 64 enforces and labels latency optimality unverified. Compiler behavior is
 unchanged; this review removes an unsupported empirical claim and specifies the
 experiment required to tune it.
+
+### 2026-07-31: validated stack height shrinks the comptime arena
+
+The GPU comptime evaluator previously reserved 64 i32 stack words per job after
+the validator had already derived a tighter maximum. Allocation now uses the
+Section 7.7 batch maximum and reports it. `examples/all.hs` contains one scalar
+job with derived height 2, reducing its stack buffer from 256 to 8 bytes
+(96.875%, 32×) while CPU and GPU both return 42. The regression also checks an
+8-byte arena for a branch-selective program whose dead arm reaches depth 2.
+These exact capacities establish memory reduction, not a measurable latency
+change for such a small job.
 
 ## References
 

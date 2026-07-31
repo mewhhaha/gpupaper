@@ -30,7 +30,14 @@ export type ComptimeBatchResult =
   | {
     readonly status: "completed";
     readonly values: readonly ComptimeValue[];
-    readonly backend: "cpu" | "gpu";
+    readonly backend: "cpu";
+  }
+  | {
+    readonly status: "completed";
+    readonly values: readonly ComptimeValue[];
+    readonly backend: "gpu";
+    readonly stackCapacity: number;
+    readonly stackBufferBytes: number;
   }
   | {
     readonly status: "unavailable";
@@ -456,7 +463,7 @@ export function evaluateBytecodeOnCpu(
 export async function evaluateBytecodeOnGpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
-): Promise<ComptimeBatchResult> {
+): Promise<Extract<ComptimeBatchResult, { readonly backend: "gpu" }>> {
   try {
     return await evaluateBytecodeWithGpu(programs, fuel);
   } catch (error) {
@@ -474,15 +481,21 @@ export async function evaluateBytecodeOnGpu(
 async function evaluateBytecodeWithGpu(
   programs: readonly BytecodeProgram[],
   fuel = 1024,
-): Promise<ComptimeBatchResult> {
+): Promise<Extract<ComptimeBatchResult, { readonly backend: "gpu" }>> {
   if (!Number.isSafeInteger(fuel) || fuel < 1 || fuel > maximumComptimeFuel) {
     throw new RangeError(
       `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
     );
   }
-  requireWellFormedBytecodePrograms(programs);
+  const maximumStackDepth = requireWellFormedBytecodePrograms(programs);
   if (programs.length === 0) {
-    return { status: "completed", values: [], backend: "gpu" };
+    return {
+      status: "completed",
+      values: [],
+      backend: "gpu",
+      stackCapacity: 0,
+      stackBufferBytes: 0,
+    };
   }
   const context = await requestComptimeGpuContext();
   if (context.status === "unavailable") {
@@ -501,7 +514,7 @@ async function evaluateBytecodeWithGpu(
     combinedOpcodes.push(...program.opcodes);
     combinedOperands.push(...program.operands);
   }
-  const stackCapacity = comptimeStackCapacity;
+  const stackCapacity = maximumStackDepth;
   const capacityRequests = [
     ["opcodes", Math.max(4, combinedOpcodes.length * 4), "storage"],
     ["operands", Math.max(4, combinedOperands.length * 4), "storage"],
@@ -689,7 +702,13 @@ async function evaluateBytecodeWithGpu(
           : { kind: "integer", value: values[index] },
       );
     }
-    return { status: "completed", values: completed, backend: "gpu" };
+    return {
+      status: "completed",
+      values: completed,
+      backend: "gpu",
+      stackCapacity,
+      stackBufferBytes: programs.length * stackCapacity * 4,
+    };
   } catch (error) {
     const reason = compilerGpuUnavailabilityReason(
       "comptime evaluation",
@@ -709,7 +728,8 @@ async function evaluateBytecodeWithGpu(
 
 function requireWellFormedBytecodePrograms(
   programs: readonly BytecodeProgram[],
-): void {
+): number {
+  let maximumStackDepth = 0;
   for (const [jobIndex, program] of programs.entries()) {
     if (program.opcodes.length !== program.operands.length) {
       throw new Error(
@@ -799,6 +819,7 @@ function requireWellFormedBytecodePrograms(
             `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} exceeded stack capacity ${comptimeStackCapacity}`,
           );
         }
+        maximumStackDepth = Math.max(maximumStackDepth, stackDepth + 1);
         reach(pc, pc + 1, stackDepth + 1);
         continue;
       }
@@ -834,6 +855,7 @@ function requireWellFormedBytecodePrograms(
       reach(pc, pc + 1, stackDepth - 1);
     }
   }
+  return maximumStackDepth;
 }
 
 export async function evaluateModuleComptime(

@@ -231,6 +231,15 @@ remaining 2.34–2.62× slack is the gap between type-maximum and actual LEB128
 widths. Eliminating it would require either a size readback/allocation barrier
 or GPU-side suballocation from the resolved prefix, so it is not free.
 
+### Scalar comptime stack capacity
+
+The bytecode validator derives stack depth at every instruction. GPU scalar
+comptime now allocates `4 × job_count × maximum_depth` bytes rather than the
+fixed `256 × job_count` bound and reports both the selected depth and byte
+count. `examples/all.hs` has one scalar job at depth 2: its stack arena is 8
+bytes rather than 256 bytes, a 96.875% reduction. Both evaluators return 42.
+This exact capacity result does not imply a latency improvement at one job.
+
 ## Incremental rebuild
 
 Each target and backend receives one explicit compilation session. The session
