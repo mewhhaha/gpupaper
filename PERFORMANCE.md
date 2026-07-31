@@ -659,6 +659,11 @@ zero. Together the measured lifting categories perform 358,405 Codex
 visits/comparisons. Counters were removed. One occurrence-aware analysis and one
 combined rebuild is the next implementation gate.
 
+The post-series required-GPU gate passes all 519 tests and emits unchanged
+byte-identical, engine-valid sizes of 24,460, 226,134, 3,911, 26,106, 2,520,
+and 3,864 bytes. Release timings are recorded in `PAPER.md` as boundary
+observations rather than benchmark distributions.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

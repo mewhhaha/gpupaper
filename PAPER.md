@@ -5576,6 +5576,15 @@ The rename counter was removed. This is a specified and measured next task, not
 an implemented claim. Review 95's empty-capture rule is the only production code
 retained from Reviews 74--100.
 
+The post-Review-100 `release:gpu` gate checked 133 formatted and 117 linted
+files, type-checked all source, test, and benchmark entry points, and passed all
+519 tests. Required GPU compilation produced independently CPU-matched,
+engine-valid artifacts for Editor, Codex, grep, Tar, wav, and raytracer at
+24,460, 226,134, 3,911, 26,106, 2,520, and 3,864 bytes. Cold/repeated release
+observations were 266.57/143.09, 751.13/550.51, 43.99/40.69,
+145.60/134.31, 34.59/32.96, and 39.70/38.29 ms. These two-point observations
+validate the release boundary but are not distribution estimates.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
