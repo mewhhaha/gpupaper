@@ -1143,6 +1143,10 @@ CPU/GPU disagreement, or return partially written output.
       constructor witness per union-find class. Enqueue injective child
       equalities when witnessed classes merge, prove the witness-star invariant,
       and pin one comparison per additional compatible constructor.
+- [x] Remove differential type solving from production compilation after
+      proving that its result has no semantic or backend consumer. Keep the
+      standalone conformance experiment and generated tests; required GPU builds
+      now spend device work only on compiler stages whose output is consumed.
 - [x] Admit algebraic rewrites only where the value type proves the required
       law. `x + 0` and `x * 1` are currently integer rules: bypassing an
       IEEE-754 operation can change signed-zero or NaN payload bits observable
@@ -1202,9 +1206,10 @@ CPU/GPU disagreement, or return partially written output.
       checks and full suite, rejects malformed source, then compiles all six
       applications twice in required differential mode. It checks the exact Wasm
       size, every GPU backend selection, byte identity, and a per-target timing
-      budget. The recorded RTX 4080 SUPER limits and five-sample authoritative
-      grep batches are in `PERFORMANCE.md`; no break-even was observed through
-      eight concurrent compilations.
+      budget. The recorded RTX 4080 SUPER limits and sixteen-sample
+      authoritative grep batches are in `PERFORMANCE.md`; after discarding
+      production type validation, no break-even was observed through sixteen
+      concurrent compilations and throughput GPU/CPU reached 1.015.
 - [x] Reconcile the README, compatibility matrix, live-error inventory, and
       performance report with the implemented pipeline. Remove stale
       proof-of-concept limits and claims contradicted by executable tests. The
@@ -1283,7 +1288,7 @@ contract. Each former boundary now has an executable completion proof:
 | Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                                                                                              |
 | Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, canonical open rows, lexical capability identities, deep one-shot resumptions, capture-sensitive control linearity, selective lowering, and exact host-row closure validate before flattening. |
 | ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.                                                                                |
-| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, stable suballocated type/Core/Wasm payload batches, generated differential checks, concurrent isolation, and the six-application release gate are implemented and measured.                  |
+| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, stable suballocated Core/Wasm payload batches, direct type-conformance and generated differential tests, concurrent isolation, and the six-application release gate are implemented and measured.              |
 
 Deliberate exclusions are part of the contract rather than live errors:
 asynchronous, scoped, and multi-shot effects await their own typed calculi, and

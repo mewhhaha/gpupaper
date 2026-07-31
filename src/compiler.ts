@@ -80,7 +80,6 @@ import {
 } from "./ducklang_types.ts";
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
-import { type GpuSolveResult, solveTypeEqualitiesOnGpu } from "./gpu_solver.ts";
 import {
   type GpuDucklangCoreResult,
   runDucklangCoreGpuPass,
@@ -109,7 +108,7 @@ export type CompilationOptions = {
 };
 
 export type CompilationBackends = {
-  readonly typeCheck: "cpu" | "cpu+gpu";
+  readonly typeCheck: "cpu";
   readonly comptime: "cpu" | "cpu+gpu";
   readonly coreRewrite: "cpu" | "gpu" | "notApplicable";
   readonly wasmEmission: "cpu" | "gpu";
@@ -126,7 +125,6 @@ export type CompilationTimings = {
   readonly resolutionMilliseconds: number;
   readonly macroMilliseconds: number;
   readonly initialTypeMilliseconds: number;
-  readonly gpuTypeMilliseconds: number;
   readonly comptimeMilliseconds: number;
   readonly finalTypeMilliseconds: number;
   readonly coreMilliseconds: number;
@@ -149,7 +147,6 @@ export type DucklangCompilationStageTimings = {
   readonly elaborationMilliseconds: number;
   readonly resolutionMilliseconds: number;
   readonly typeAnalysisMilliseconds: number;
-  readonly gpuTypeSolveMilliseconds: number;
   readonly preComptimeSpecializationMilliseconds: number;
   readonly comptimeMilliseconds: number;
   readonly postComptimeSpecializationMilliseconds: number;
@@ -199,11 +196,6 @@ export type DucklangCompilationTimingDetails = {
   readonly postSpecializationReachabilityMilliseconds: number;
   readonly postSpecializationAccountingMilliseconds: number;
   readonly gpuCoreInitializationMilliseconds: number;
-  readonly gpuTypeQueueWaitMilliseconds: number;
-  readonly gpuTypeFlattenMilliseconds: number;
-  readonly gpuTypeClosureMilliseconds: number;
-  readonly gpuTypeUnionMilliseconds: number;
-  readonly gpuTypeCycleCheckMilliseconds: number;
   readonly gpuCoreQueueWaitMilliseconds: number;
   readonly gpuWasmQueueWaitMilliseconds: number;
   readonly gpuCoreExecutionMilliseconds: number;
@@ -227,10 +219,6 @@ export type DucklangCompilationWork = {
   readonly semanticFingerprintReuseCount: number;
   readonly typedBindingCount: number;
   readonly typeEqualityCount: number;
-  readonly gpuTypeTermCount: number;
-  readonly gpuTypeClosedEqualityCount: number;
-  readonly gpuTypeConstructorComparisonCount: number;
-  readonly gpuTypeChildEqualityProposalCount: number;
   readonly effectRowMembershipCount: number;
   readonly capabilityOperandCount: number;
   readonly rootCapabilityCount: number;
@@ -278,8 +266,6 @@ export type DucklangCompilationWork = {
   readonly wasmBytes: number;
   readonly backendFunctionAnalysisCount: number;
   readonly backendFunctionReuseCount: number;
-  readonly gpuTypeSubmissionBatchSize: number;
-  readonly gpuTypePayloadBatchSize: number;
   readonly gpuCoreSubmissionBatchSize: number;
   readonly gpuCorePayloadBatchSize: number;
   readonly gpuWasmSubmissionBatchSize: number;
@@ -301,7 +287,6 @@ type SharedCompilationArtifact = {
   readonly flatFcg: FlatFcgPackage;
   readonly initialTypes: readonly string[];
   readonly finalTypes: readonly string[];
-  readonly gpuTypeResult: GpuSolveResult | undefined;
   readonly gpuWasmResult: GpuWasmEmissionResult | undefined;
   readonly comptimeCpuValues: readonly ComptimeValue[];
   readonly comptimeGpuResult: ComptimeBatchResult | undefined;
@@ -435,27 +420,6 @@ async function compileHaskellModuleSource(
   const initialInference = inferModule(macroExpansion.module);
   const initialTypeMilliseconds = performance.now() - initialTypeStart;
 
-  const gpuTypeStart = performance.now();
-  const gpuTypeResult = gpuMode === "off"
-    ? undefined
-    : await solveTypeEqualitiesOnGpu(initialInference.equalities, {
-      scheduling: options.gpuScheduling,
-    });
-  const gpuTypeMilliseconds = performance.now() - gpuTypeStart;
-  if (gpuTypeResult?.status === "constructorClash") {
-    throw new TypeError(
-      `${file}:${gpuTypeResult.sourceStart}: GPU solver found constructor clash ${gpuTypeResult.left} versus ${gpuTypeResult.right}`,
-    );
-  }
-  if (gpuTypeResult?.status === "infiniteType") {
-    throw new TypeError(
-      `${file}: GPU solver found infinite type class ${gpuTypeResult.representative}`,
-    );
-  }
-  if (gpuTypeResult?.status === "unavailable" && gpuMode === "required") {
-    throw new Error(gpuTypeResult.reason);
-  }
-
   const comptimeStart = performance.now();
   const interaction = evaluateModuleInteractionComptime(macroExpansion.module);
   const comptime = await evaluateModuleComptime(
@@ -506,7 +470,6 @@ async function compileHaskellModuleSource(
     finalTypes: finalInference.declarations.map((typed) =>
       `${typed.declaration.name.text} :: ${formatScheme(typed.scheme)}`
     ),
-    gpuTypeResult,
     gpuWasmResult,
     comptimeCpuValues: comptime.cpuValues,
     comptimeGpuResult: comptime.gpu,
@@ -517,7 +480,7 @@ async function compileHaskellModuleSource(
       wasmByteCount: macroExpansion.wasmByteCount,
     },
     backends: {
-      typeCheck: gpuTypeResult?.status === "solved" ? "cpu+gpu" : "cpu",
+      typeCheck: "cpu",
       comptime: comptime.gpu?.status === "completed" ? "cpu+gpu" : "cpu",
       coreRewrite: "notApplicable",
       wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
@@ -536,7 +499,6 @@ async function compileHaskellModuleSource(
       resolutionMilliseconds: 0,
       macroMilliseconds,
       initialTypeMilliseconds,
-      gpuTypeMilliseconds,
       comptimeMilliseconds,
       finalTypeMilliseconds,
       coreMilliseconds: 0,
@@ -590,7 +552,6 @@ type DucklangFrontendResult = {
   readonly module: TypedDucklangModule;
   readonly effectHir: TypedDucklangEffectModule;
   readonly initialTypes: readonly string[];
-  readonly gpuTypeResult: GpuSolveResult | undefined;
   readonly comptime: {
     readonly cpuValues: readonly ComptimeValue[];
     readonly gpu: ComptimeBatchResult | undefined;
@@ -616,7 +577,6 @@ type DucklangFrontendResult = {
     readonly elaborationMilliseconds: number;
     readonly resolutionMilliseconds: number;
     readonly initialTypeMilliseconds: number;
-    readonly gpuTypeMilliseconds: number;
     readonly comptimeMilliseconds: number;
   };
 };
@@ -896,7 +856,6 @@ async function elaborateDucklangModuleSource(
 ): Promise<DucklangFrontendResult> {
   const {
     expandedSource,
-    file,
     parsedResult,
     source,
     sourceExpansionMilliseconds,
@@ -1027,25 +986,6 @@ async function elaborateDucklangModuleSource(
     }`
   );
 
-  const gpuTypeStart = performance.now();
-  const gpuTypeResult = gpuMode === "off"
-    ? undefined
-    : await solveTypeEqualitiesOnGpu(initialInference.equalities);
-  const gpuTypeMilliseconds = performance.now() - gpuTypeStart;
-  if (gpuTypeResult?.status === "constructorClash") {
-    throw new TypeError(
-      `${file}:${gpuTypeResult.sourceStart}: GPU solver found constructor clash ${gpuTypeResult.left} versus ${gpuTypeResult.right}`,
-    );
-  }
-  if (gpuTypeResult?.status === "infiniteType") {
-    throw new TypeError(
-      `${file}: GPU solver found infinite type class ${gpuTypeResult.representative}`,
-    );
-  }
-  if (gpuTypeResult?.status === "unavailable" && gpuMode === "required") {
-    throw new Error(gpuTypeResult.reason);
-  }
-
   const preComptimeSpecializationStart = performance.now();
   const preComptimeSpecialization = specializeStaticDucklangClosures(
     initialInference,
@@ -1088,7 +1028,6 @@ async function elaborateDucklangModuleSource(
     module: specialized,
     effectHir,
     initialTypes,
-    gpuTypeResult,
     comptime,
     profile: {
       stages: {
@@ -1100,7 +1039,6 @@ async function elaborateDucklangModuleSource(
         elaborationMilliseconds,
         resolutionMilliseconds,
         typeAnalysisMilliseconds: initialTypeMilliseconds,
-        gpuTypeSolveMilliseconds: gpuMode === "off" ? 0 : gpuTypeMilliseconds,
         preComptimeSpecializationMilliseconds,
         comptimeMilliseconds,
         postComptimeSpecializationMilliseconds,
@@ -1164,21 +1102,6 @@ async function elaborateDucklangModuleSource(
         postSpecializationAccountingMilliseconds:
           postComptimeSpecialization?.timings.accountingMilliseconds ?? 0,
         gpuCoreInitializationMilliseconds: 0,
-        gpuTypeQueueWaitMilliseconds: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.queueWaitMilliseconds ?? 0
-          : 0,
-        gpuTypeFlattenMilliseconds: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.flattenMilliseconds
-          : 0,
-        gpuTypeClosureMilliseconds: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.closureMilliseconds
-          : 0,
-        gpuTypeUnionMilliseconds: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.unionMilliseconds
-          : 0,
-        gpuTypeCycleCheckMilliseconds: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.cycleCheckMilliseconds
-          : 0,
         gpuCoreQueueWaitMilliseconds: 0,
         gpuWasmQueueWaitMilliseconds: 0,
         gpuCoreExecutionMilliseconds: 0,
@@ -1206,18 +1129,6 @@ async function elaborateDucklangModuleSource(
         semanticFingerprintReuseCount: semanticFingerprintReused ? 1 : 0,
         typedBindingCount: initialInference.bindings.length,
         typeEqualityCount: initialInference.equalities.length,
-        gpuTypeTermCount: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.termCount
-          : 0,
-        gpuTypeClosedEqualityCount: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.equalityCount
-          : 0,
-        gpuTypeConstructorComparisonCount: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.constructorComparisonCount
-          : 0,
-        gpuTypeChildEqualityProposalCount: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.decompositionCount
-          : 0,
         effectRowMembershipCount: initialInference.bindings.reduce(
           (total, binding) =>
             total + binding.latentEffectRow.operations.length +
@@ -1301,12 +1212,6 @@ async function elaborateDucklangModuleSource(
         wasmBytes: 0,
         backendFunctionAnalysisCount: 0,
         backendFunctionReuseCount: 0,
-        gpuTypeSubmissionBatchSize: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.submissionBatchSize ?? 0
-          : 0,
-        gpuTypePayloadBatchSize: gpuTypeResult?.status === "solved"
-          ? gpuTypeResult.payloadBatchSize ?? 0
-          : 0,
         gpuCoreSubmissionBatchSize: 0,
         gpuCorePayloadBatchSize: 0,
         gpuWasmSubmissionBatchSize: 0,
@@ -1326,7 +1231,6 @@ async function elaborateDucklangModuleSource(
       elaborationMilliseconds,
       resolutionMilliseconds,
       initialTypeMilliseconds,
-      gpuTypeMilliseconds,
       comptimeMilliseconds,
     },
   };
@@ -1385,7 +1289,6 @@ async function compileDucklangModuleSource(
         elaborationMilliseconds: 0,
         resolutionMilliseconds: 0,
         typeAnalysisMilliseconds: 0,
-        gpuTypeSolveMilliseconds: 0,
         preComptimeSpecializationMilliseconds: 0,
         comptimeMilliseconds: 0,
         postComptimeSpecializationMilliseconds: 0,
@@ -1453,11 +1356,6 @@ async function compileDucklangModuleSource(
             postSpecializationReachabilityMilliseconds: 0,
             postSpecializationAccountingMilliseconds: 0,
             gpuCoreInitializationMilliseconds: 0,
-            gpuTypeQueueWaitMilliseconds: 0,
-            gpuTypeFlattenMilliseconds: 0,
-            gpuTypeClosureMilliseconds: 0,
-            gpuTypeUnionMilliseconds: 0,
-            gpuTypeCycleCheckMilliseconds: 0,
             gpuCoreQueueWaitMilliseconds: 0,
             gpuWasmQueueWaitMilliseconds: 0,
             gpuCoreExecutionMilliseconds: 0,
@@ -1486,12 +1384,6 @@ async function compileDucklangModuleSource(
               : 0,
             backendFunctionAnalysisCount: 0,
             backendFunctionReuseCount: 0,
-            gpuTypeTermCount: 0,
-            gpuTypeClosedEqualityCount: 0,
-            gpuTypeConstructorComparisonCount: 0,
-            gpuTypeChildEqualityProposalCount: 0,
-            gpuTypeSubmissionBatchSize: 0,
-            gpuTypePayloadBatchSize: 0,
             gpuCoreSubmissionBatchSize: 0,
             gpuCorePayloadBatchSize: 0,
             gpuWasmSubmissionBatchSize: 0,
@@ -1510,7 +1402,6 @@ async function compileDucklangModuleSource(
           elaborationMilliseconds: 0,
           resolutionMilliseconds: 0,
           initialTypeMilliseconds: 0,
-          gpuTypeMilliseconds: 0,
           comptimeMilliseconds: 0,
           coreMilliseconds: 0,
           flatCoreMilliseconds: 0,
@@ -1752,7 +1643,6 @@ async function compileDucklangModuleSource(
     profile,
     initialTypes: frontend.initialTypes,
     finalTypes: frontend.initialTypes,
-    gpuTypeResult: frontend.gpuTypeResult,
     gpuWasmResult,
     comptimeCpuValues: frontend.comptime.cpuValues,
     comptimeGpuResult: frontend.comptime.gpu,
@@ -1763,9 +1653,7 @@ async function compileDucklangModuleSource(
       wasmByteCount: 0,
     },
     backends: {
-      typeCheck: frontend.gpuTypeResult?.status === "solved"
-        ? "cpu+gpu"
-        : "cpu",
+      typeCheck: "cpu",
       comptime: frontend.comptime.gpu?.status === "completed"
         ? "cpu+gpu"
         : "cpu",

@@ -917,7 +917,7 @@ Deno.test("GPU-authoritative emission matches differential emission", async () =
   assertEquals([...authoritative.wasm], [...differential.wasm]);
   assertEquals(
     formatCompilationBackends(authoritative.backends),
-    "backends: type=cpu+gpu comptime=cpu+gpu core=notApplicable wasm=gpu verification=none",
+    "backends: type=cpu comptime=cpu+gpu core=notApplicable wasm=gpu verification=none",
   );
 });
 
@@ -933,6 +933,7 @@ Deno.test("Ducklang GPU-authoritative emission matches differential emission", a
 
   assertEquals(authoritative.gpuWasmResult?.status, "completed");
   assertEquals([...authoritative.wasm], [...differential.wasm]);
+  assertEquals(authoritative.backends.typeCheck, "cpu");
   assertEquals(authoritative.backends.coreRewrite, "gpu");
   assertEquals(authoritative.backends.wasmEmission, "gpu");
   assertEquals(authoritative.backends.wasmVerification, "none");

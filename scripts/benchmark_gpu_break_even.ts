@@ -55,12 +55,6 @@ for (const gpuScheduling of policies) {
       cpuMillisecondsPerCompilation: cpuMedianMilliseconds / batchSize,
       gpuMillisecondsPerCompilation: gpuMedianMilliseconds / batchSize,
       gpuToCpuRatio: gpuMedianMilliseconds / cpuMedianMilliseconds,
-      gpuTypeSubmissionBatchSize: median(
-        gpuSamples.map((sample) => sample.typeSubmissionBatchSize),
-      ),
-      gpuTypePayloadBatchSize: median(
-        gpuSamples.map((sample) => sample.typePayloadBatchSize),
-      ),
       gpuCoreSubmissionBatchSize: median(
         gpuSamples.map((sample) => sample.coreSubmissionBatchSize),
       ),
@@ -114,12 +108,6 @@ async function measureBatch(
   );
   return {
     milliseconds: performance.now() - start,
-    typeSubmissionBatchSize: Math.max(
-      ...compilations.map((compilation) => compilation.typeSubmissionBatchSize),
-    ),
-    typePayloadBatchSize: Math.max(
-      ...compilations.map((compilation) => compilation.typePayloadBatchSize),
-    ),
     coreSubmissionBatchSize: Math.max(
       ...compilations.map((compilation) => compilation.coreSubmissionBatchSize),
     ),
@@ -140,8 +128,6 @@ async function measureBatch(
 
 type BatchMeasurement = {
   readonly milliseconds: number;
-  readonly typeSubmissionBatchSize: number;
-  readonly typePayloadBatchSize: number;
   readonly coreSubmissionBatchSize: number;
   readonly corePayloadBatchSize: number;
   readonly wasmSubmissionBatchSize: number;
@@ -158,8 +144,6 @@ type BatchReport = {
   readonly cpuMillisecondsPerCompilation: number;
   readonly gpuMillisecondsPerCompilation: number;
   readonly gpuToCpuRatio: number;
-  readonly gpuTypeSubmissionBatchSize: number;
-  readonly gpuTypePayloadBatchSize: number;
   readonly gpuCoreSubmissionBatchSize: number;
   readonly gpuCorePayloadBatchSize: number;
   readonly gpuWasmSubmissionBatchSize: number;
@@ -171,8 +155,6 @@ async function compile(
   backend: "cpu" | "gpu",
   gpuScheduling: GpuSchedulingPolicy,
 ): Promise<{
-  readonly typeSubmissionBatchSize: number;
-  readonly typePayloadBatchSize: number;
   readonly coreSubmissionBatchSize: number;
   readonly corePayloadBatchSize: number;
   readonly wasmSubmissionBatchSize: number;
@@ -194,14 +176,11 @@ async function compile(
     throw new Error(`GPU break-even sample compiled ${artifact.language}`);
   }
   return {
-    typeSubmissionBatchSize: artifact.profile.work.gpuTypeSubmissionBatchSize,
-    typePayloadBatchSize: artifact.profile.work.gpuTypePayloadBatchSize,
     coreSubmissionBatchSize: artifact.profile.work.gpuCoreSubmissionBatchSize,
     corePayloadBatchSize: artifact.profile.work.gpuCorePayloadBatchSize,
     wasmSubmissionBatchSize: artifact.profile.work.gpuWasmSubmissionBatchSize,
     wasmPayloadBatchSize: artifact.profile.work.gpuWasmPayloadBatchSize,
     queueWaitMilliseconds:
-      artifact.profile.details.gpuTypeQueueWaitMilliseconds +
       artifact.profile.details.gpuCoreQueueWaitMilliseconds +
       artifact.profile.details.gpuWasmQueueWaitMilliseconds,
   };

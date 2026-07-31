@@ -20,18 +20,20 @@ emission; CPU mode does not initialize WebGPU.
 
 Every Ducklang artifact carries a `profile` with:
 
-- 23 non-overlapping top-level stages;
-- parser, elaboration, type-analysis, GPU type flatten/closure/union/cycle,
-  specialization, and GPU-Core sub-stage details;
+- 22 non-overlapping top-level stages;
+- parser, elaboration, type-analysis, specialization, and GPU-Core sub-stage
+  details;
 - total, accounted, and unattributed wall time;
 - work volume, cache reuse, GPU queue wait, and submission and payload batch
   sizes;
-- GPU type terms, closed equalities, constructor comparisons, and child-equation
-  proposals;
 - effect-row memberships, added capability operands, root capabilities,
   direct-state and CPS transformed regions and functions, handled performances,
   continuation captures, specialization retention, memo reuse, dirty-frontier
-  work, and residual functions exposed to GPU operation parallelism.
+work, and residual functions exposed to GPU operation parallelism.
+
+The standalone GPU type conformance result separately reports flattening,
+closure, union/readback, and cycle timings plus its exact term and equality work.
+Production compilation no longer invokes that experiment.
 
 Detail timings are children of their top-level stage and must not be added to
 the top-level total again. The measured unattributed remainder stayed below 0.13
@@ -621,6 +623,40 @@ useful timing resolution. Codex's enclosing GPU type stage fell from 193.46 to
 80.53 ms in the selected observations; the approximately 28–32 ms GPU
 submission/readback floor remains.
 
+Production compilation then removed the conformance call entirely because none
+of its output reached types, Core, or Wasm:
+
+| Target    | Removed logical bytes | Removed scheduled lanes | Previously observed stage |
+| --------- | --------------------: | ----------------------: | ------------------------: |
+| Editor    |                43,408 |                   5,504 |                  33.08 ms |
+| Codex     |               312,480 |                  39,168 |                  80.53 ms |
+| grep      |                16,064 |                   2,112 |                  34.02 ms |
+| tar       |               103,240 |                  12,928 |                  41.19 ms |
+| wav       |                 2,904 |                     448 |                  30.22 ms |
+| raytracer |                 3,024 |                     448 |                  30.91 ms |
+
+Each row also removes one command submission, one mapped readback, CPU
+flatten/closure/cycle work, and exact representative comparison. The byte and
+lane counts follow \(8(T+M)\) and
+\(64\lceil M/64\rceil+64\lceil T/64\rceil\) from Section 7.5. The timing column
+is the real pre-removal observation selected by the six-sample harness; it
+measures removed sequential work but is not a paired end-to-end speedup.
+
+The post-removal 499-test release gate compiled every target twice:
+
+| Target    | Required GPU sample 1 | Required GPU sample 2 |
+| --------- | --------------------: | --------------------: |
+| Editor    |             377.01 ms |             263.53 ms |
+| Codex     |               1.101 s |             919.52 ms |
+| grep      |             138.70 ms |             135.17 ms |
+| tar       |             203.80 ms |             208.31 ms |
+| wav       |             123.57 ms |             120.82 ms |
+| raytracer |             129.01 ms |             129.71 ms |
+
+Every pair emitted byte-identical Wasm and passed engine validation. Two release
+samples establish correctness and budget compliance, not a latency
+distribution.
+
 The earlier dense-branch removal left frozen production work unchanged because
 all targets already used certified CPU closure, one GPU union/compression
 submission, and sparse CPU cycle detection. Its deterministic reduction was
@@ -666,24 +702,24 @@ and layout environment are stable.
 ## Authoritative-GPU concurrency
 
 `benchmark:break-even` compiles dirty grep roots concurrently without a
-compilation session. Type unions, Core, and Wasm now queue before allocation.
-Core and Wasm suballocate one shared buffer set per payload batch; type unions
-use shared parent, equality, and readback buffers. Capacity overflow splits a
-batch in stable order.
+compilation session. Core and Wasm queue before allocation and suballocate one
+shared buffer set per payload batch. Capacity overflow splits a batch in stable
+order.
 
-| Jobs | CPU / job | Latency GPU / job | Throughput GPU / job | Throughput GPU / CPU | Type/Core/Wasm pack |
-| ---: | --------: | ----------------: | -------------------: | -------------------: | ------------------: |
-|    1 |  70.42 ms |         155.55 ms |            161.46 ms |                 2.36 |               1/1/1 |
-|    2 |  69.83 ms |         119.23 ms |            114.77 ms |                 1.70 |               2/2/2 |
-|    4 |  69.08 ms |          94.35 ms |             94.79 ms |                 1.26 |               4/4/4 |
-|    8 |  68.96 ms |          83.87 ms |             82.70 ms |                 1.22 |               7/7/7 |
-|   16 |  67.29 ms |          78.00 ms |             78.24 ms |                 1.16 |            16/16/16 |
+| Jobs | Latency CPU / job | Latency GPU / job | Throughput CPU / job | Throughput GPU / job | Throughput GPU / CPU | Throughput Core/Wasm pack |
+| ---: | ----------------: | ----------------: | -------------------: | -------------------: | -------------------: | ------------------------: |
+|    1 |         121.17 ms |         171.97 ms |            124.52 ms |            189.30 ms |                 1.520 |                       1/1 |
+|    2 |         110.12 ms |         138.64 ms |            111.50 ms |            138.43 ms |                 1.242 |                       2/2 |
+|    4 |         122.88 ms |         129.19 ms |            109.72 ms |            123.96 ms |                 1.130 |                       3/3 |
+|    8 |         103.28 ms |         119.32 ms |            108.68 ms |            111.67 ms |                 1.027 |                       5/5 |
+|   16 |         105.36 ms |         115.40 ms |            111.31 ms |            112.98 ms |                 1.015 |                       8/8 |
 
 Latency mode flushes on the next scheduler turn. Throughput mode waits for at
-most 2 ms, 16 jobs, or a capacity boundary. Compared with the previous eight-job
-96.58 ms GPU result, throughput mode reaches 82.70 ms per job, a 14.4%
-reduction. Single-job latency did not regress. No GPU break-even was observed
-through 16 dirty grep compilations.
+most 2 ms, 16 jobs, or a capacity boundary. After removing production type
+validation, throughput GPU/CPU falls from 1.520 at one job to 1.015 at sixteen;
+no break-even was observed. Absolute times are materially higher than the prior
+sweep for both CPU and GPU, so the ratio and exact pack sizes are more useful
+than cross-sweep latency subtraction.
 
 ## Peer boundaries
 

@@ -6,6 +6,7 @@ import {
   type GpuWasmVerification,
   runMain,
 } from "./compiler.ts";
+import { solveTypeEqualitiesOnGpu } from "./gpu_solver.ts";
 
 if (import.meta.main) await main(Deno.args);
 
@@ -168,7 +169,13 @@ async function main(arguments_: readonly string[]): Promise<void> {
   }
 
   const result = await runMain(artifact.wasm);
-  console.log(JSON.stringify(experimentReport(artifact, result), null, 2));
+  console.log(
+    JSON.stringify(
+      await experimentReport(artifact, result, gpuMode !== "off"),
+      null,
+      2,
+    ),
+  );
 }
 
 export async function compileCliInput(
@@ -191,11 +198,6 @@ export function formatCompilationBackends(
 
 function printTypes(artifact: CompilationArtifact): void {
   for (const type of artifact.finalTypes) console.log(type);
-  if (artifact.gpuTypeResult?.status === "unavailable") {
-    console.log(
-      `WebGPU type solver unavailable: ${artifact.gpuTypeResult.reason}`,
-    );
-  }
   if (artifact.comptimeGpuResult?.status === "unavailable") {
     console.log(
       `WebGPU comptime unavailable: ${artifact.comptimeGpuResult.reason}`,
@@ -203,10 +205,14 @@ function printTypes(artifact: CompilationArtifact): void {
   }
 }
 
-function experimentReport(
+async function experimentReport(
   artifact: CompilationArtifact,
   mainResult: number | bigint,
-): Record<string, unknown> {
+  runGpuTypeExperiment: boolean,
+): Promise<Record<string, unknown>> {
+  const gpuTypeResult = runGpuTypeExperiment
+    ? await solveTypeEqualitiesOnGpu(artifact.inferred.equalities)
+    : undefined;
   return {
     experimentA_cpuOracle: {
       types: artifact.finalTypes,
@@ -219,7 +225,7 @@ function experimentReport(
           `${binding.symbol.text}#${binding.symbol.id}`,
         ]),
     },
-    experimentB_webGpuEquality: artifact.gpuTypeResult ??
+    experimentB_webGpuEquality: gpuTypeResult ??
       { status: "disabled" },
     experimentC_comptime: {
       cpu: artifact.comptimeCpuValues,

@@ -108,8 +108,10 @@ implements the record and function-export shapes exercised by the corpus rather
 than a general separately compiled linker.
 
 The semantic frontend, ownership/effect analysis, type oracle, and ABI policy
-remain CPU responsibilities. GPU type solving and scalar compile-time evaluation
-are differential checks. Flat-Core rewrite matching is GPU-authoritative, and
-Wasm emission can be either GPU-authoritative or CPU-differential. This division
-is intentional: the GPU executes bulk compiler transformations, while
-source-language policy is settled before flat Core.
+remain CPU responsibilities. GPU type solving is a standalone conformance
+experiment rather than production compilation work; scalar compile-time
+evaluation remains a differential check. Flat-Core rewrite matching is
+GPU-authoritative, and Wasm emission can be either GPU-authoritative or
+CPU-differential. This division is intentional: the GPU executes bulk compiler
+transformations whose results are consumed, while source-language policy is
+settled before flat Core.

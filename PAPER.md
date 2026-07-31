@@ -1182,10 +1182,11 @@ then checks the selected module. With differential verification disabled, engine
 validity does not prove semantic equality to the plan; that mode deliberately
 trades away the independent byte oracle.
 
-### 7.5 Type equality as certified congruence closure
+### 7.5 Type equality as a certified conformance experiment
 
-The GPU type stage consumes first-order equality constraints over variables and
-constructor terms. Let \(E_0\) be the source equalities. The required
+The direct GPU type experiment consumes first-order equality constraints over
+variables and constructor terms. Production compilation does not invoke it. Let
+\(E_0\) be the source equalities. The required
 equivalence relation \(\equiv\) is the least relation satisfying:
 
 ```text
@@ -1203,7 +1204,7 @@ Martelli and Montanari.
 
 When \(E_0=\varnothing\), flattening discovers no term universe, so \(T=0\). The
 empty relation is the unique reflexive, symmetric, transitive congruence on the
-empty carrier, and its representative vector is empty. The type stage therefore
+empty carrier, and its representative vector is empty. The experiment therefore
 returns this result before requesting a device. It reports zero union rounds,
 decomposition equations, and physical submissions. This removes only GPU context
 acquisition and pipeline-device selection—the former path already returned
@@ -1234,10 +1235,8 @@ different redundant equation sets.
 Every accepted solve reports four non-overlapping internal timings—flattening,
 CPU closure, GPU union including its queue and readback, and sparse cycle
 checking—plus term count, closed-equality count, constructor comparisons, and
-child-equation proposals. Their sum is bounded by the enclosing GPU type stage;
-the remainder is orchestration and exact representative validation. A reused
-semantic artifact reports zero new type work rather than retaining the previous
-artifact's counts.
+child-equation proposals. Their sum is bounded by the direct solve's wall time;
+the remainder is orchestration and exact representative validation.
 
 CPU closure is an eager union-find worklist. Each equivalence class carries
 either no constructor witness or its lowest-ID constructor. Its invariant is:
@@ -1301,6 +1300,17 @@ determinism obligations. Removing the CPU closure additionally requires a
 GPU-produced derivation forest proving that every union follows from an input
 equality or equal-constructor child position, plus independently checkable clash
 and acyclicity certificates.
+
+The production boundary deliberately discards this experiment. CPU inference
+has already accepted or rejected the program and owns every type consumed by
+specialization and Core lowering. A successful GPU result was not used
+downstream; an unavailable result only introduced a second failure condition;
+and invalid source had already failed before device work. Therefore removing
+the call preserves accepted artifacts and language diagnostics while eliminating
+one sequential submission/readback. Required-GPU mode still requires the
+authoritative GPU compiler stages. The CLI `experiments` command and direct
+solver tests retain the differential evidence without charging ordinary
+compilation.
 
 ### 7.6 Scalar comptime integer semantics
 
@@ -2467,6 +2477,45 @@ confidence intervals; the exact work and certificate reductions are the
 deterministic evidence. The full required-GPU gate passed 499 tests and compiled
 all six frozen targets twice with byte-identical differential emission and
 engine validation.
+
+### 2026-07-31: production discards differential type validation
+
+The decomposed profile proved that GPU type validation was a sequential
+conformance experiment, not a payload transformation: CPU inference produced
+the only types consumed downstream, while the GPU result was stored solely for
+reporting. Production Haskell and Ducklang compilation now skip that call and
+report `type=cpu`. The CLI `experiments` command still invokes the direct solver,
+and all constructor, cycle, union, batching, and generated differential tests
+remain.
+
+For Editor, Codex, grep, tar, wav, and raytracer respectively, each compilation
+removes 5,504, 39,168, 2,112, 12,928, 448, and 448 scheduled lanes; 43,408,
+312,480, 16,064, 103,240, 2,904, and 3,024 logical buffer bytes; one command
+submission; one mapped readback; and the CPU certificate derivation. The last
+pre-removal observed stage durations were 33.08, 80.53, 34.02, 41.19, 30.22,
+and 30.91 ms. Those observations measure the discarded stage, not a paired
+end-to-end speedup.
+
+The semantic argument is noninterference: successful validation had no consumer,
+invalid source failed during prior CPU inference, and automatic unavailability
+already discarded the result. Required mode continues to require authoritative
+GPU Core rewriting, scalar comptime when present, and Wasm emission. Removing an
+unused validator cannot alter accepted Wasm; the release gate checks this
+directly.
+
+The post-removal sixteen-sample concurrent grep sweep reports throughput
+GPU/CPU ratios of 1.520, 1.242, 1.130, 1.027, and 1.015 at 1, 2, 4, 8, and 16
+jobs. No break-even is observed. Core/Wasm payload batches reach 1, 2, 3, 5,
+and 8 jobs at those sizes; type batches no longer exist. Absolute CPU and GPU
+times both rose materially from the preceding sweep, so cross-sweep latency
+subtraction is not used as evidence.
+
+The full gate passed 499 tests. Required-GPU differential samples were
+377.01/263.53 ms for Editor, 1,100.74/919.52 ms for Codex, 138.70/135.17 ms for
+grep, 203.80/208.31 ms for tar, 123.57/120.82 ms for wav, and 129.01/129.71 ms
+for raytracer. Every pair emitted byte-identical Wasm and passed engine
+validation. These pairs are release correctness evidence, not latency
+distributions.
 
 ## References
 

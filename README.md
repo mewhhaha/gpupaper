@@ -31,9 +31,11 @@ treated as a substitute for those obligations.
 The repository also retains the smaller Haskell-like Experiments A–F described
 in
 [GPU-Parallel Type Resolution and Compile-Time Execution](type-resolution-and-comptime.md).
-Those experiments and Ducklang share GPU type solving, scalar compile-time
-evaluation, and Wasm emission infrastructure, but Ducklang has its own frontend
-and semantic pipeline.
+Those experiments and Ducklang share scalar compile-time evaluation and Wasm
+emission infrastructure, but Ducklang has its own frontend and semantic
+pipeline. GPU type solving remains a direct conformance experiment; production
+compilation uses the already-authoritative CPU inference result and does not
+submit a redundant type-validation command.
 
 ## Run it
 

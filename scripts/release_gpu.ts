@@ -60,7 +60,7 @@ for (const target_ of targets) {
       );
     }
     if (
-      artifact.backends.typeCheck !== "cpu+gpu" ||
+      artifact.backends.typeCheck !== "cpu" ||
       artifact.backends.comptime !== "cpu+gpu" ||
       artifact.backends.coreRewrite !== "gpu" ||
       artifact.backends.wasmEmission !== "gpu" ||

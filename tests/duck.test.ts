@@ -1283,12 +1283,11 @@ return { .result = result }
   assertEquals(inflateFlatFcgPackage(artifact.flatFcg), artifact.fcg);
 });
 
-Deno.test("Ducklang type and comptime jobs reach the GPU differential passes", async () => {
+Deno.test("Ducklang comptime, Core, and Wasm jobs reach the GPU passes", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let answer = comptime 6 * 7\nanswer\n",
   );
-  assertEquals(artifact.gpuTypeResult === undefined, false);
   assertEquals(artifact.comptimeGpuResult === undefined, false);
   assertEquals(artifact.gpuCoreResult === undefined, false);
   assertEquals(artifact.gpuWasmResult === undefined, false);
