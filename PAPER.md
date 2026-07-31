@@ -772,6 +772,18 @@ measure. Pipeline initialization and capacity/packing are currently combined
 with their containing stage except where Core initialization is reported
 separately; this is a stated instrumentation limit.
 
+Comparative timing uses paired, counterbalanced observations: even samples run
+CPU then GPU and odd samples run GPU then CPU for the same workload, batch size,
+and scheduling policy. The sample count is even, so every CPU-first observation
+has a GPU-first counterpart; even-sample medians average the two central
+observations. This cancels a linear run-order trend within adjacent pairs. A
+reported stage breakdown is one observed profile nearest the scalar median
+total, not a vector of independently selected component medians. Thus
+`accounted + unattributed = total` and all stage percentages refer to a possible
+execution. Medians and nearest-rank p95 values remain descriptive statistics;
+without independent repetitions and uncertainty intervals they do not establish
+a general speedup.
+
 Executable evidence consists of capacity-boundary tests, device-loss recovery,
 physical-batch isolation tests, generated CPU/GPU differentials for type
 closure, Core rewrites and Wasm plans, and the six-target required-GPU release
@@ -1773,6 +1785,17 @@ apply the Section 7.7 forward-CFG and stack judgment first; the GPU path does so
 before requesting a device. A two-job regression proves that malformed job zero
 is rejected with its job, source, instruction, and target rather than reading
 job one's valid bytecode.
+
+### 2026-07-31: benchmark aggregation preserves real executions
+
+The break-even harness previously measured CPU before GPU in every pair, making
+backend indistinguishable from within-run order. It now uses complete,
+even-counted CPU-first and GPU-first pairs and the conventional midpoint median.
+The frontend harness previously assembled profiles from independent field
+medians; such a vector need not correspond to any execution or preserve
+accounting sums. It now reports the observed profile nearest median total while
+retaining the scalar median as the latency summary. No historical timing was
+rewritten; future measurements use the corrected design.
 
 ## References
 

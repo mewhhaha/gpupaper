@@ -26,8 +26,13 @@ for (const gpuScheduling of policies) {
     const cpuSamples: BatchMeasurement[] = [];
     const gpuSamples: BatchMeasurement[] = [];
     for (let sample = 0; sample < sampleCount; sample += 1) {
-      cpuSamples.push(await measureBatch(batchSize, "cpu", gpuScheduling));
-      gpuSamples.push(await measureBatch(batchSize, "gpu", gpuScheduling));
+      if (sample % 2 === 0) {
+        cpuSamples.push(await measureBatch(batchSize, "cpu", gpuScheduling));
+        gpuSamples.push(await measureBatch(batchSize, "gpu", gpuScheduling));
+      } else {
+        gpuSamples.push(await measureBatch(batchSize, "gpu", gpuScheduling));
+        cpuSamples.push(await measureBatch(batchSize, "cpu", gpuScheduling));
+      }
     }
     const cpuMedianMilliseconds = median(
       cpuSamples.map((sample) => sample.milliseconds),
@@ -90,6 +95,8 @@ console.log(JSON.stringify({
   sampleCount,
   gpuMode: "required",
   gpuWasmVerification: "none",
+  pairOrder: "alternatingCpuFirst",
+  pairCount: sampleCount / 2,
   policies: policyMeasurements,
 }));
 
@@ -202,7 +209,10 @@ async function compile(
 
 function median(values: readonly number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.floor(ordered.length / 2)];
+  const middle = ordered.length / 2;
+  return ordered.length % 2 === 0
+    ? (ordered[middle - 1] + ordered[middle]) / 2
+    : ordered[Math.floor(middle)];
 }
 
 function percentile(values: readonly number[], quantile: number): number {
@@ -214,11 +224,11 @@ function requestedSampleCount(arguments_: readonly string[]): number {
   const sampleArgument = arguments_.find((argument) =>
     argument.startsWith("--samples=")
   );
-  if (sampleArgument === undefined) return 15;
+  if (sampleArgument === undefined) return 16;
   const count = Number.parseInt(sampleArgument.slice("--samples=".length), 10);
-  if (!Number.isSafeInteger(count) || count < 1) {
+  if (!Number.isSafeInteger(count) || count < 2 || count % 2 !== 0) {
     throw new TypeError(
-      `--samples must be a positive integer; received ${sampleArgument}`,
+      `--samples must be a positive even integer of at least 2; received ${sampleArgument}`,
     );
   }
   return count;

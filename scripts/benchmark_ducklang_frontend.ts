@@ -269,7 +269,7 @@ async function measureCompilationMode(
     ),
     ...(completed.length === warm.length
       ? {
-        warmMedianProfile: medianCompilationProfile(
+        warmRepresentativeProfile: representativeCompilationProfile(
           completed.map((measurement) => measurement.profile),
         ),
         warmHotStages: hotStages(
@@ -284,23 +284,16 @@ async function measureCompilationMode(
   };
 }
 
-function medianCompilationProfile(
+function representativeCompilationProfile(
   samples: readonly DucklangCompilationProfile[],
 ): DucklangCompilationProfile {
-  return {
-    totalMilliseconds: median(
-      samples.map((sample) => sample.totalMilliseconds),
-    ),
-    accountedMilliseconds: median(
-      samples.map((sample) => sample.accountedMilliseconds),
-    ),
-    unattributedMilliseconds: median(
-      samples.map((sample) => sample.unattributedMilliseconds),
-    ),
-    stages: medianNumericRecord(samples.map((sample) => sample.stages)),
-    details: medianNumericRecord(samples.map((sample) => sample.details)),
-    work: medianNumericRecord(samples.map((sample) => sample.work)),
-  };
+  const medianTotal = median(samples.map((sample) => sample.totalMilliseconds));
+  return [...samples].sort((left, right) => {
+    const leftDistance = Math.abs(left.totalMilliseconds - medianTotal);
+    const rightDistance = Math.abs(right.totalMilliseconds - medianTotal);
+    return leftDistance - rightDistance ||
+      left.totalMilliseconds - right.totalMilliseconds;
+  })[0];
 }
 
 function hotStages(
@@ -310,7 +303,7 @@ function hotStages(
   readonly milliseconds: number;
   readonly percentageOfTotal: number;
 }[] {
-  const profile = medianCompilationProfile(samples);
+  const profile = representativeCompilationProfile(samples);
   return Object.entries(profile.stages)
     .map(([stage, milliseconds]) => ({
       stage: stage as keyof DucklangCompilationProfile["stages"],
@@ -321,16 +314,4 @@ function hotStages(
     }))
     .sort((left, right) => right.milliseconds - left.milliseconds)
     .slice(0, 8);
-}
-
-function medianNumericRecord<Record_ extends Readonly<Record<string, number>>>(
-  samples: readonly Record_[],
-): Record_ {
-  const keys = Object.keys(samples[0]) as (keyof Record_)[];
-  return Object.fromEntries(
-    keys.map((key) => [
-      key,
-      median(samples.map((sample) => sample[key] as number)),
-    ]),
-  ) as Record_;
 }
