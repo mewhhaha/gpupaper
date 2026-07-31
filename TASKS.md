@@ -1545,6 +1545,8 @@ resource cost, and corpus measurements.
 - [x] Skip capture-argument traversal for empty capture vectors. Retain the
       identity rule after focused tests and a directional 1.17--2.90 ms Codex
       lifting reduction in a 15-sample A/B/A comparison.
+- [x] Remeasure capture-argument traversal after the fast path. Confirm a 52.52%
+      Codex visit reduction and remove the temporary structural counter.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

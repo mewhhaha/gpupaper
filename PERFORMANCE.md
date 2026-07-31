@@ -633,6 +633,11 @@ median/MAD from neighboring baselines 23.684/0.718 and 21.961/0.980 ms to
 not a precise effect estimate, but the rule removes proven identity traversal
 with one post-analysis branch.
 
+Post-change instrumentation shows why: Codex capture-argument visits fall from
+206,835 to 98,211, a 52.52% reduction. Editor falls 41.09%, Tar 32.94%, and
+raytracer 53.19%. The temporary counter was removed; the production profile is
+unchanged.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

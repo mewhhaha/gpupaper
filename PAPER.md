@@ -5476,6 +5476,20 @@ The implementation does not solve the remaining 260 capturing Codex lifts or
 replace repeated capture discovery. Review 96 must remeasure traversal work
 after the retained rule before advancing to broader reconstruction changes.
 
+### 2026-07-31: empty-capture skipping removes half the traversal
+
+Review 96 reruns Review 93's temporary occurrence counter with the retained
+identity rule. Codex capture-argument visits fall from 206,835 to 98,211,
+removing 108,624 visits or 52.52%. Editor falls from 7,207 to 4,246 (41.09%),
+Tar from 11,841 to 7,941 (32.94%), raytracer from 846 to 396 (53.19%), and grep
+from 1,525 to 1,424 (6.62%). Wav remains zero.
+
+The removed share exceeds the 35.48% zero-capture function share because those
+functions occupy larger containing suffixes on average. This validates the
+cost model at the actual traversal boundary and explains the directional timing
+improvement. The counter was removed again; the retained implementation remains
+one branch and no profile surface.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
