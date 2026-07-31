@@ -1349,6 +1349,10 @@ resource cost, and corpus measurements.
       unique resolved symbol IDs.
 - [x] Rewrite only the selected arm of a static call-by-value conditional and
       test that an unreachable compile-time failure is not evaluated.
+- [x] Represent block-local specialization values with a stack-disciplined
+      active environment. Insert/prior-value rollback is equivalent to cloning
+      the visible map, including under source-body re-entry; profile the exact
+      avoided entries.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

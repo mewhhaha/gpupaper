@@ -239,6 +239,8 @@ export type DucklangCompilationWork = {
   readonly specializationCacheHitCount: number;
   readonly specializationDistinctFunctionAnalysisCount: number;
   readonly specializationRepeatedFunctionAnalysisCount: number;
+  readonly specializationRewrittenBlockCount: number;
+  readonly specializationAvoidedEnvironmentEntryCopyCount: number;
   readonly postSpecializationFrontierBindingCount: number;
   readonly postSpecializationFrontierNodeCount: number;
   readonly downstreamParallelFunctionCount: number;
@@ -1177,6 +1179,13 @@ async function elaborateDucklangModuleSource(
           preComptimeSpecialization.metrics.repeatedFunctionAnalysisCount +
           (postComptimeSpecialization?.metrics.repeatedFunctionAnalysisCount ??
             0),
+        specializationRewrittenBlockCount:
+          preComptimeSpecialization.metrics.rewrittenBlockCount +
+          (postComptimeSpecialization?.metrics.rewrittenBlockCount ?? 0),
+        specializationAvoidedEnvironmentEntryCopyCount:
+          preComptimeSpecialization.metrics.avoidedEnvironmentEntryCopyCount +
+          (postComptimeSpecialization?.metrics
+            .avoidedEnvironmentEntryCopyCount ?? 0),
         postSpecializationFrontierBindingCount:
           postComptimeSpecialization?.metrics.rewrittenBindingCount ?? 0,
         postSpecializationFrontierNodeCount:

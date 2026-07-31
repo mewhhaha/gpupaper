@@ -105,12 +105,12 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    |  98.09 ms | 153.37 ms |     24,460 |
-| Codex     | 513.01 ms | 587.65 ms |    226,134 |
-| grep      |  13.72 ms |  70.24 ms |      3,911 |
-| tar       |  66.26 ms | 122.54 ms |     26,106 |
-| wav       |   7.43 ms |  64.31 ms |      2,520 |
-| raytracer |  11.72 ms |  42.18 ms |      3,864 |
+| Editor    |  96.94 ms | 146.89 ms |     24,460 |
+| Codex     | 533.56 ms | 604.18 ms |    226,134 |
+| grep      |  14.24 ms |  69.82 ms |      3,911 |
+| tar       |  70.87 ms | 128.32 ms |     26,106 |
+| wav       |   9.10 ms |  63.07 ms |      2,520 |
+| raytracer |  12.45 ms |  43.44 ms |      3,864 |
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
@@ -137,7 +137,7 @@ at 299.96→297.30 ms. The deterministic work and code-size reductions are the
 supported performance claim.
 
 Single dirty compilations remain faster on CPU. On Editor the warm GPU path is
-1.56× the CPU time; on Codex it is 1.15×. The GPU stages are useful validation
+1.52× the CPU time; on Codex it is 1.13×. The GPU stages are useful validation
 and batching boundaries, but these measurements do not justify moving effect
 inference or handler lowering past the semantic CPU boundary.
 
@@ -275,6 +275,43 @@ ms lifting, 1.97 ms reachability, and 7.09 ms exact accounting. Rewriting now
 accounts for 71.27% of the stage and remains the next optimization target. The
 retention ledger itself costs 5.55% of the stage; disabling it would make
 measurements less informative and is not yet justified.
+
+### Scoped specialization environments
+
+Block rewriting formerly constructed `new Map(parentValues)` for every lexical
+block. Globally unique resolved symbol IDs permit a stack-disciplined
+insert/rewrite/restore environment with identical lookup results. Restoring
+prior entries also preserves nested re-entry of one source body. The profile
+now exposes the exact counterfactual constructor work:
+
+| Target    | Rewritten blocks | Avoided entry copies |
+| --------- | ---------------: | -------------------: |
+| Editor    |              827 |               57,311 |
+| Codex     |            6,828 |              412,890 |
+| grep      |               93 |                1,267 |
+| tar       |              480 |               22,293 |
+| wav       |               27 |                  210 |
+| raytracer |               47 |                  492 |
+
+The batch avoids 494,463 transient entry copies. An 11-sample Codex CPU
+comparison after one warmup used the current tree and a detached `d7357e7`
+worktree concurrently:
+
+| Measurement              | Map clone | Scoped map | Change |
+| ------------------------ | --------: | ---------: | -----: |
+| Pre-specialization       |   119.946 |    108.074 |  -9.90% |
+| Specialization rewrite   |    86.252 |     74.484 | -13.64% |
+| Function lifting         |    24.195 |     25.665 |  +6.08% |
+| Ledger accounting        |     6.621 |      7.409 | +11.91% |
+| Complete CPU compilation |   553.295 |    549.178 |  -0.74% |
+
+Times are milliseconds. Exact outputs and residual work were unchanged.
+Opposite movements in lifting and accounting limit the attribution to the
+rewrite and stage-local reductions. The following six-sample frontend run
+reported 6,828 blocks and 412,890 avoided copies in its representative Codex
+profile; its 533.56 ms CPU median illustrates the larger run-to-run variance.
+The 506-test required-GPU gate passed and compiled all six targets twice with
+byte-identical Wasm and engine validation.
 
 The required-GPU release gate then compiled every target twice with GPU type
 validation, authoritative Core rewriting, authoritative Wasm emission, CPU

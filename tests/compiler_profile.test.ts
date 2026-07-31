@@ -82,6 +82,31 @@ add(20, 22)
   }
 });
 
+Deno.test("Ducklang profile reports specialization environment work", async () => {
+  const artifact = await compileModuleSource(
+    "specialization_environment_profile.duck",
+    `let make = amount => {
+  let add = value => value + amount
+  add
+}
+let add = make 2
+add 40
+`,
+    { gpuMode: "off" },
+  );
+  const { work } = artifact.profile;
+  if (
+    work.specializationRewrittenBlockCount === 0 ||
+    work.specializationAvoidedEnvironmentEntryCopyCount === 0
+  ) {
+    throw new Error(
+      `profile omitted specialization environment work: ${
+        JSON.stringify(work)
+      }`,
+    );
+  }
+});
+
 Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",

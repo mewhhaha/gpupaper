@@ -586,6 +586,44 @@ specialization pushes an environment and removes it in a `finally` boundary.
 This eliminates one complete substituted tree and one traversal per accepted
 specialization request.
 
+Lexical block values use a separate scoped environment. Let \(E_0\) be the map
+of module and enclosing values at block entry, and let a block contain
+globally-unique resolved binders \(x_1,\ldots,x_k\). Its sequential environment
+transition is:
+
+```text
+v_j = R_E(j-1)(initializer_j)
+E_j = E_(j-1)[x_j ↦ v_j]
+result = R_Ek(block_result)
+leave(E_k) = E_0
+```
+
+The earlier implementation represented `E_j` by first copying every entry of
+\(E_0\) into a new `Map`. The selected implementation uses one active map,
+records the prior value for each \(x_j\), and restores those entries in reverse
+order in a `finally` boundary. Resolver IDs are globally unique across lexical
+binders, but nested specialization can re-enter the same source body and hence
+the same IDs; restoring prior values rather than unconditionally deleting them
+preserves this case. Induction on the block steps gives the same lookup result
+as the copied map: before step \(j\), both contain exactly \(E_{j-1}\).
+Stack-disciplined rollback then restores exactly \(E_0\), including on a thrown
+diagnostic and under re-entry.
+
+For blocks \(b\), visible environment sizes \(|E_b|\), and local binding counts
+\(k_b\), eager cloning performs:
+
+```text
+W_clone = Σb (|E_b| + k_b) map-entry writes
+W_scoped = Σb 2k_b map-entry writes
+```
+
+Both retain expected constant-time lookup. Eager cloning allocates
+\(\Theta(\sum_b |E_b|)\) transient entries; scoped rollback retains only the
+maximum active environment plus \(O(\sum_{\text{active }b} k_b)\) rollback IDs.
+The profile reports rewritten blocks and the counterfactual
+\(\sum_b|E_b|\) entries that the deleted constructor would have copied.
+Mutation is confined to compiler execution state; typed HIR remains immutable.
+
 Static conditionals follow the source evaluation context instead of a generic
 bottom-up map:
 
@@ -3402,6 +3440,32 @@ end-to-end changes are run noise outside the optimized stage. The required-GPU
 gate passed all 505 tests and compiled every target twice. Its advisory samples
 in milliseconds were Editor 332.50/195.31, Codex 894.57/679.17, grep
 73.22/75.66, Tar 137.88/140.06, wav 63.89/63.88, and raytracer 44.88/43.54.
+
+### 2026-07-31: specialization environments become scoped maps
+
+A 250-microsecond V8 CPU profile over four Codex compilations attributed
+311.00 ms total and 73.75 ms self time to block rewriting. Section 6.3 derives
+the scoped rollback environment from globally unique resolved IDs. Production
+now records prior entries, inserts locals into the active map, and restores the
+entries in reverse order in `finally` instead of cloning all visible entries at
+each block. Prior-value restoration admits nested re-entry of one source body.
+
+The deterministic ledger reports rewritten blocks/avoided entry copies of
+827/57,311 for Editor, 6,828/412,890 for Codex, 93/1,267 for grep, 480/22,293
+for Tar, 27/210 for wav, and 47/492 for raytracer. The frozen batch therefore
+avoids 494,463 counterfactual `Map` entry copies.
+
+Eleven warm CPU observations after one unrecorded warmup were run in parallel
+against a detached `d7357e7` worktree under the same Codex protocol.
+Specialization rewrite medians fell from 86.252 to 74.484 ms (13.64%) and the
+whole pre-comptime specialization stage from 119.946 to 108.074 ms (9.90%).
+Total compilation changed from 553.30 to 549.18 ms (0.74%); lifting and
+accounting moved in the opposite direction, so no larger end-to-end attribution
+is claimed. A public profile regression requires nonzero block and avoided-copy
+counts on a specializing nested closure. The required-GPU gate passed all 506
+tests and compiled every target twice. Its advisory samples in milliseconds
+were Editor 315.98/179.74, Codex 823.34/612.39, grep 72.44/68.78, Tar
+133.62/123.21, wav 63.45/61.68, and raytracer 44.11/40.61.
 
 ## References
 

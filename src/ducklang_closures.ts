@@ -25,6 +25,8 @@ export type DucklangSpecializationMetrics = {
   readonly specializationCacheHitCount: number;
   readonly distinctFunctionAnalysisCount: number;
   readonly repeatedFunctionAnalysisCount: number;
+  readonly rewrittenBlockCount: number;
+  readonly avoidedEnvironmentEntryCopyCount: number;
 };
 
 export type DucklangSpecializationResult = {
@@ -77,6 +79,8 @@ type SpecializationContext = {
   cacheHitCount: number;
   distinctFunctionAnalysisCount: number;
   repeatedFunctionAnalysisCount: number;
+  rewrittenBlockCount: number;
+  avoidedEnvironmentEntryCopyCount: number;
 };
 
 export function specializeStaticDucklangClosures(
@@ -170,6 +174,8 @@ export function specializeStaticDucklangClosures(
     cacheHitCount: 0,
     distinctFunctionAnalysisCount: 0,
     repeatedFunctionAnalysisCount: 0,
+    rewrittenBlockCount: 0,
+    avoidedEnvironmentEntryCopyCount: 0,
   };
   const frontierMilliseconds = performance.now() - frontierStart;
 
@@ -301,6 +307,9 @@ export function specializeStaticDucklangClosures(
     specializationCacheHitCount: specialization.cacheHitCount,
     distinctFunctionAnalysisCount: specialization.distinctFunctionAnalysisCount,
     repeatedFunctionAnalysisCount: specialization.repeatedFunctionAnalysisCount,
+    rewrittenBlockCount: specialization.rewrittenBlockCount,
+    avoidedEnvironmentEntryCopyCount:
+      specialization.avoidedEnvironmentEntryCopyCount,
   };
   const accountingMilliseconds = performance.now() - accountingStart;
 
@@ -660,7 +669,7 @@ function appendCallArguments(
 
 function rewriteExpression(
   expression: TypedDucklangExpression,
-  values: ReadonlyMap<number, TypedDucklangExpression>,
+  values: Map<number, TypedDucklangExpression>,
   specialization: SpecializationContext,
 ): TypedDucklangExpression {
   if (expression.kind === "reference") {
@@ -1298,29 +1307,50 @@ function referencesSymbol(
 
 function rewriteBlock(
   block: Extract<TypedDucklangExpression, { readonly kind: "block" }>,
-  outerValues: ReadonlyMap<number, TypedDucklangExpression>,
+  values: Map<number, TypedDucklangExpression>,
   specialization: SpecializationContext,
 ): TypedDucklangExpression {
-  const values = new Map(outerValues);
-  const steps = block.steps.map((step): TypedDucklangBlockStep => {
-    if (step.kind === "expression") {
-      return {
-        kind: "expression",
-        expression: rewriteExpression(
-          step.expression,
-          values,
-          specialization,
-        ),
+  specialization.rewrittenBlockCount += 1;
+  specialization.avoidedEnvironmentEntryCopyCount += values.size;
+  const previousValues: {
+    readonly symbolId: number;
+    readonly value: TypedDucklangExpression | undefined;
+  }[] = [];
+  let steps: readonly TypedDucklangBlockStep[];
+  let result: TypedDucklangExpression;
+  try {
+    steps = block.steps.map((step): TypedDucklangBlockStep => {
+      if (step.kind === "expression") {
+        return {
+          kind: "expression",
+          expression: rewriteExpression(
+            step.expression,
+            values,
+            specialization,
+          ),
+        };
+      }
+      const binding = {
+        ...step.binding,
+        value: rewriteExpression(step.binding.value, values, specialization),
       };
+      previousValues.push({
+        symbolId: binding.symbol.id,
+        value: values.get(binding.symbol.id),
+      });
+      values.set(binding.symbol.id, binding.value);
+      return { kind: "binding", binding };
+    });
+    result = rewriteExpression(block.result, values, specialization);
+  } finally {
+    for (const previous of previousValues.toReversed()) {
+      if (previous.value === undefined) {
+        values.delete(previous.symbolId);
+      } else {
+        values.set(previous.symbolId, previous.value);
+      }
     }
-    const binding = {
-      ...step.binding,
-      value: rewriteExpression(step.binding.value, values, specialization),
-    };
-    values.set(binding.symbol.id, binding.value);
-    return { kind: "binding", binding };
-  });
-  const result = rewriteExpression(block.result, values, specialization);
+  }
   const live = new Set<number>();
   collectReferences(result, live);
   const retained: TypedDucklangBlockStep[] = [];
@@ -1489,7 +1519,7 @@ function typeDescription(
 
 function foldStaticIntrinsic(
   expression: TypedDucklangExpression,
-  values: ReadonlyMap<number, TypedDucklangExpression>,
+  values: Map<number, TypedDucklangExpression>,
   specialization: SpecializationContext,
 ): TypedDucklangExpression | undefined {
   if (expression.kind !== "call") return undefined;
