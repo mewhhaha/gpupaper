@@ -799,6 +799,54 @@ Profiles enforce the boundary: an independent compilation reports zero
 semantic-context and semantic-fingerprint milliseconds and zero fingerprint
 reuse. A session compilation retains the existing identity and reuse evidence.
 
+### 6.5 Source-control lowering is a measured fixed point
+
+The current source-control pass applies a whole-module transformation \(L\),
+then searches the result for a remaining `loop`, `forRange`, or
+`forCollection`:
+
+```text
+M₀ = input
+Mᵢ₊₁ = L(Mᵢ)
+stop when search(Mᵢ₊₁) = none
+```
+
+An outer source loop prevents ordinary expression recursion into its body;
+lowering that loop can therefore expose a nested source loop for the following
+round. This explains the need for a fixed point rather than proving a particular
+round bound.
+
+For \(P\) transformations, \(N_i\) input nodes in round \(i\), and \(S_i\)
+objects visited by the following search, work is
+
+\[
+O\left(\sum_{i=0}^{P-1}(N_i+S_i)\right),
+\]
+
+with \(O(\sum_i N_i)\) total reconstructed allocation and
+\(O(\max_i N_i)\) live round storage when prior snapshots become unreachable.
+The implementation currently rejects after 32 rounds. No semantic theorem
+derives 32; a valid program with more than 32 successively exposed nested
+source-control layers is the counterexample. This is an admitted implementation
+restriction and must not be described as a language bound.
+
+The desired termination argument is a natural-number measure
+\(\mu(M)\), the count of residual source-control constructors, with the
+obligation
+
+\[
+\mu(M)>0 \Longrightarrow \mu(L(M))<\mu(M).
+\]
+
+If lowering returns the exact successor measure while it constructs \(L(M)\),
+then \(\mu=0\) replaces the separate terminal search and strict decrease
+replaces the numeric cap. That fused measure is an unverified design obligation,
+not current behavior.
+
+The executable profile currently exposes \(P\), first-pass transformation time,
+and accumulated later-pass transformation time. Their sum must be contained by
+the enclosing control-flow interval; the residual is search and orchestration.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4237,6 +4285,38 @@ interleaved across commits.
 The 514-test required-GPU release gate passed. Its byte-identical, engine-valid
 samples in milliseconds were Editor 271.99/148.69, Codex 785.39/547.92, grep
 43.09/46.37, Tar 160.52/135.64, wav 37.75/33.74, and raytracer 39.07/37.88.
+
+### 2026-07-31: source-control fixed-point work becomes observable
+
+The remaining Codex profile attributed roughly 74 ms to control-flow lowering,
+but the artifact did not expose whether this was one expensive traversal or
+many fixed-point rounds. Section 6.5 records the actual algorithm and the
+unproved 32-round restriction.
+
+Lowering now reports physical pass count and times its first and accumulated
+subsequent transformations without adding another traversal. Existing callers
+retain the module-only interface. The profile containment regression requires
+the enclosing stage to contain both transformation intervals, and a
+straight-line fixture pins one physical pass.
+
+The six-target CPU representative measured pass counts
+\([1,2,1,1,1,1]\). Enclosing/first/subsequent milliseconds were Editor
+2.673/1.294/0, Codex 73.905/17.055/41.762, grep 0.619/0.200/0, Tar
+2.066/0.212/0, wav 0.209/0.114/0, and raytracer 0.434/0.225/0. Subtraction
+leaves 1.379, 15.088, 0.419, 1.854, 0.095, and 0.208 ms respectively inside
+post-pass search and orchestration.
+
+These are empirical representative observations. The pass count is exact for
+each artifact. Codex's second pass must perform useful lowering because the
+first pass's search found residual source control and the second pass's search
+did not; timing alone does not identify which constructors dominate its
+41.762 ms transformation. A fused decreasing measure is the next derived
+algorithm, not an implemented claim.
+
+The unchanged 514-test required-GPU gate passed with samples Editor
+242.93/141.68 ms, Codex 691.27/517.66, grep 44.00/38.92, Tar 141.18/128.27,
+wav 33.18/32.09, and raytracer 38.56/35.74. All paired artifacts were
+byte-identical and engine-valid.
 
 ## References
 

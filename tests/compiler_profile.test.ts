@@ -56,6 +56,12 @@ add(20, 22)
     "type analysis",
   );
   assertContains(
+    details.controlFlowLoweringMilliseconds,
+    details.controlFlowFirstPassMilliseconds +
+      details.controlFlowSubsequentPassMilliseconds,
+    "control-flow lowering",
+  );
+  assertContains(
     stages.cpuCoreRewriteMilliseconds,
     details.cpuCoreValidationMilliseconds +
       details.cpuCoreMatchingMilliseconds +
@@ -107,6 +113,11 @@ Deno.test("independent compilation skips session identity work", async () => {
       `independent compilation performed session identity work: ${
         JSON.stringify({ stages, work })
       }`,
+    );
+  }
+  if (work.controlFlowLoweringPassCount !== 1) {
+    throw new Error(
+      `straight-line compilation used ${work.controlFlowLoweringPassCount} control-flow passes`,
     );
   }
 });

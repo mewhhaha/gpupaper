@@ -10,8 +10,22 @@ import {
 export function lowerDucklangControlFlow(
   module: DucklangModule,
 ): DucklangModule {
+  return lowerDucklangControlFlowWithMetrics(module).module;
+}
+
+export function lowerDucklangControlFlowWithMetrics(
+  module: DucklangModule,
+): {
+  readonly module: DucklangModule;
+  readonly passCount: number;
+  readonly firstPassMilliseconds: number;
+  readonly subsequentPassMilliseconds: number;
+} {
   let lowered = module;
+  let firstPassMilliseconds = 0;
+  let subsequentPassMilliseconds = 0;
   for (let iteration = 0; iteration < 32; iteration += 1) {
+    const passStart = performance.now();
     lowered = {
       ...lowered,
       statements: lowerStatements(lowered.statements),
@@ -23,8 +37,21 @@ export function lowerDucklangControlFlow(
         })),
       })),
     };
+    const passMilliseconds = performance.now() - passStart;
+    if (iteration === 0) {
+      firstPassMilliseconds = passMilliseconds;
+    } else {
+      subsequentPassMilliseconds += passMilliseconds;
+    }
     const remaining = firstSourceControlFlow(lowered);
-    if (remaining === undefined) return lowered;
+    if (remaining === undefined) {
+      return {
+        module: lowered,
+        passCount: iteration + 1,
+        firstPassMilliseconds,
+        subsequentPassMilliseconds,
+      };
+    }
     if (iteration === 31) {
       throw new TypeError(
         `${remaining.span.file}:${remaining.span.start}: Ducklang control-flow lowering did not converge for ${remaining.kind}`,

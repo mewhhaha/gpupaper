@@ -16,7 +16,7 @@ import {
 } from "./ducklang_abi.ts";
 import type { DucklangModule } from "./ducklang_ast.ts";
 import {
-  lowerDucklangControlFlow,
+  lowerDucklangControlFlowWithMetrics,
   requireConsistentDucklangLoopExits,
 } from "./ducklang_control_flow.ts";
 import { elaborateDucklangDerivations } from "./ducklang_derivations.ts";
@@ -177,6 +177,8 @@ export type DucklangCompilationTimingDetails = {
   readonly extensionElaborationMilliseconds: number;
   readonly staticLoopExpansionMilliseconds: number;
   readonly controlFlowLoweringMilliseconds: number;
+  readonly controlFlowFirstPassMilliseconds: number;
+  readonly controlFlowSubsequentPassMilliseconds: number;
   readonly typeInferenceMilliseconds: number;
   readonly typeReflectionMilliseconds: number;
   readonly preSpecializationDemandMilliseconds: number;
@@ -217,6 +219,7 @@ export type DucklangCompilationWork = {
   readonly trailingTriviaRevisionReuseCount: number;
   readonly syntaxAnalysisCount: number;
   readonly semanticFingerprintReuseCount: number;
+  readonly controlFlowLoweringPassCount: number;
   readonly typedBindingCount: number;
   readonly typeEqualityCount: number;
   readonly effectRowMembershipCount: number;
@@ -969,7 +972,10 @@ async function elaborateDucklangModuleSource(
     staticLoopExpansionStart;
 
   const controlFlowLoweringStart = performance.now();
-  const parsed = lowerDucklangControlFlow(withExpandedStaticLoops);
+  const controlFlowLowering = lowerDucklangControlFlowWithMetrics(
+    withExpandedStaticLoops,
+  );
+  const parsed = controlFlowLowering.module;
   const controlFlowLoweringMilliseconds = performance.now() -
     controlFlowLoweringStart;
 
@@ -1083,6 +1089,10 @@ async function elaborateDucklangModuleSource(
         extensionElaborationMilliseconds,
         staticLoopExpansionMilliseconds,
         controlFlowLoweringMilliseconds,
+        controlFlowFirstPassMilliseconds:
+          controlFlowLowering.firstPassMilliseconds,
+        controlFlowSubsequentPassMilliseconds:
+          controlFlowLowering.subsequentPassMilliseconds,
         typeInferenceMilliseconds,
         typeReflectionMilliseconds,
         preSpecializationDemandMilliseconds:
@@ -1139,6 +1149,7 @@ async function elaborateDucklangModuleSource(
           : 0,
         syntaxAnalysisCount: revisionReuse === "none" ? 1 : 0,
         semanticFingerprintReuseCount: semanticFingerprintReused ? 1 : 0,
+        controlFlowLoweringPassCount: controlFlowLowering.passCount,
         typedBindingCount: initialInference.bindings.length,
         typeEqualityCount: initialInference.equalities.length,
         effectRowMembershipCount: initialInference.bindings.reduce(
@@ -1379,6 +1390,8 @@ async function compileDucklangModuleSource(
             extensionElaborationMilliseconds: 0,
             staticLoopExpansionMilliseconds: 0,
             controlFlowLoweringMilliseconds: 0,
+            controlFlowFirstPassMilliseconds: 0,
+            controlFlowSubsequentPassMilliseconds: 0,
             typeInferenceMilliseconds: 0,
             typeReflectionMilliseconds: 0,
             preSpecializationDemandMilliseconds: 0,

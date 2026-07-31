@@ -177,6 +177,36 @@ The removed stage is exact; the end-to-end deltas are empirical and include
 run-order noise. In particular, they are not wholly attributed to the smaller
 measured stage.
 
+### Control-flow fixed-point decomposition
+
+Source loops are currently erased by repeated whole-module reconstruction,
+followed after every pass by a whole-module search for the first remaining
+source-control node. The implementation cap is 32 passes; this is a stated
+restriction, not a derived termination bound.
+
+Profiles now expose physical pass count plus first and subsequent transformation
+time. The enclosing control-flow interval also contains the post-pass searches
+and timing overhead:
+
+| Target | Passes | Enclosing stage | First transform | Later transforms | Search/orchestration residual |
+| ------ | -----: | --------------: | --------------: | ---------------: | ----------------------------: |
+| Editor | 1 | 2.673 ms | 1.294 ms | 0 | 1.379 ms |
+| Codex | 2 | 73.905 ms | 17.055 ms | 41.762 ms | 15.088 ms |
+| grep | 1 | 0.619 ms | 0.200 ms | 0 | 0.419 ms |
+| tar | 1 | 2.066 ms | 0.212 ms | 0 | 1.854 ms |
+| wav | 1 | 0.209 ms | 0.114 ms | 0 | 0.095 ms |
+| raytracer | 1 | 0.434 ms | 0.225 ms | 0 | 0.208 ms |
+
+These are representative CPU observations from the six-sample frontend
+protocol. Codex's second transformation is useful—it removes source control
+left beneath an outer loop—but rebuilding the expanded program makes it
+2.45 times the first transformation. For the other five, the terminal search
+proves that the single transformed output is source-control free and frequently
+costs more than transformation. The next candidate is a lowering result that
+carries an exact remaining-control measure, eliminating separate terminal
+searches and replacing the numeric cap with a decreasing measure. That
+algorithm is not yet implemented or proved.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
