@@ -27,6 +27,8 @@ integer_result
   assertEquals(result.proposals, expected.proposals);
   assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
+  assertEquals(result.rewriteCandidateCount, 3);
+  assertEquals(result.rewriteDispatchedInvocationCount, 64);
   assertEquals(columns(result.package), columns(expected.package));
   assertEquals(
     result.validationRecordCount > snapshot.operationKinds.length,
@@ -49,6 +51,20 @@ Deno.test("WebGPU and CPU both reject an out-of-range Core type", async () => {
   if (result.status === "invalid") {
     assertEquals(/operation type/.test(result.reason), true);
   }
+});
+
+Deno.test("WebGPU Core rewrite admits an empty candidate frontier", async () => {
+  const snapshot = await flat("42\n");
+
+  const result = await runDucklangCoreGpuPass(snapshot);
+
+  if (result.status === "unavailable") return;
+  if (result.status !== "completed") {
+    throw new Error(`GPU rejected accepted Core: ${result.reason}`);
+  }
+  assertEquals(result.rewriteCandidateCount, 0);
+  assertEquals(result.rewriteDispatchedInvocationCount, 0);
+  assertEquals(result.proposals, []);
 });
 
 async function flat(source: string) {

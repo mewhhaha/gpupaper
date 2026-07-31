@@ -876,6 +876,33 @@ The rules are restricted to `i32` and `i64`, whose Wasm arithmetic is modular.
 They are deliberately not applied to floating point: `x + 0` can change negative
 zero, and `x * 1` participates in NaN behavior.
 
+Let \(O\) be the operation count and let
+\(C=\{o\mid kind(o)=scalarBinary\}\). The partial matcher is undefined for
+every operation outside \(C\), so:
+
+```text
+{ M(S, o) | o in [0, O), M(S, o) defined }
+  =
+{ M(S, o) | o in C, M(S, o) defined }
+```
+
+The host therefore sends the stable increasing IDs in \(C\) as the rewrite
+frontier. This is scheduling classification, not CPU rewrite matching: operator,
+arity, attributes, result type, and constant operands remain GPU decisions. An
+empty frontier encodes no rewrite dispatch. For nonempty \(C\), scheduled lanes
+are \(64\lceil|C|/64\rceil\), replacing
+\(64\lceil O/64\rceil\).
+
+The rule buffer initially contains the candidate IDs. Lane \(q\) reads its
+operation ID and then replaces only slot \(q\) with its rule result; the
+replacement buffer has the same frontier width. This one-writer-per-slot
+invariant permits the input queue and rule output to share a buffer and keeps
+the shader at the device's eight-storage-binding limit. The rule/replacement
+columns and their copied readback payload each change from `8O` to `8|C|`
+bytes. Dense operations, operands, values, attributes, and types remain
+necessary because a candidate may reference arbitrary definitions; compacting
+them would require a closed-subgraph remapping, not another local filter.
+
 The GPU returns proposal certificates containing rule, function, operation,
 result, replacement, and profit. A proposal `p` is admissible exactly when:
 
@@ -1918,6 +1945,24 @@ a 99.11–99.86% reduction. Codex changes from 1,634,184 to 4,176 bytes. GPU wor
 and emitted bytes are unchanged. Generated and frozen CPU-byte differentials,
 packed emission, engine validation, and the full required-GPU gate are the
 executable evidence.
+
+### 2026-07-31: Core rewrites gain an opcode frontier
+
+The rewrite matcher previously scheduled and read back one lane for every Core
+operation even though its complete rule set is undefined outside
+`scalarBinary`. Section 7.3 proves that filtering on this outer discriminant
+cannot omit a proposal. The stable candidate queue reuses the rule-output buffer
+so the kernel stays within eight storage bindings; the empty-frontier regression
+proves that zero candidates encode zero rewrite dispatches.
+
+Frozen candidate frontiers contain 34–2,890 of 130–12,956 operations. Scheduled
+rewrite lanes fall by 50.00–85.71%, and rule/replacement payload falls by
+55.02–87.40%. Codex changes from 12,992 to 2,944 scheduled lanes and from
+103,648 to 23,120 payload bytes. Candidate counts, scheduled lanes, and proposal
+counts are executable profile fields. Generated CPU/GPU proposal equality,
+semantic certificate validation, empty-frontier behavior, packed isolation, and
+the full required-GPU gate are the executable evidence; no latency distribution
+is claimed.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

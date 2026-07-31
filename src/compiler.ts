@@ -255,6 +255,8 @@ export type DucklangCompilationWork = {
   readonly coreOperationCount: number;
   readonly flatCoreValueCount: number;
   readonly gpuValidationRecordCount: number;
+  readonly gpuRewriteCandidateCount: number;
+  readonly gpuRewriteDispatchedInvocationCount: number;
   readonly gpuRewriteProposalCount: number;
   readonly wasmAtomCount: number;
   readonly gpuWasmLengthAtomCount: number;
@@ -1250,6 +1252,8 @@ async function elaborateDucklangModuleSource(
         coreOperationCount: 0,
         flatCoreValueCount: 0,
         gpuValidationRecordCount: 0,
+        gpuRewriteCandidateCount: 0,
+        gpuRewriteDispatchedInvocationCount: 0,
         gpuRewriteProposalCount: 0,
         wasmAtomCount: 0,
         gpuWasmLengthAtomCount: 0,
@@ -1634,6 +1638,12 @@ async function compileDucklangModuleSource(
       flatCoreValueCount: flatCore.valueFunctionIds.length,
       gpuValidationRecordCount: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.validationRecordCount
+        : 0,
+      gpuRewriteCandidateCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.rewriteCandidateCount
+        : 0,
+      gpuRewriteDispatchedInvocationCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.rewriteDispatchedInvocationCount
         : 0,
       gpuRewriteProposalCount: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.proposals.length

@@ -326,6 +326,25 @@ from `8A + 4K` to `12K`:
 This removes transfer and storage only; dispatch and arithmetic counts are
 unchanged.
 
+### Compacted Core rewrite frontier
+
+The current rewrite rules can match only `scalarBinary` operations. Dispatching
+that stable opcode frontier gives:
+
+| Target    | Operations | Candidates | Old lanes | New lanes | Lane reduction | Old output bytes | New output bytes |
+| --------- | ---------: | ---------: | --------: | --------: | -------------: | ---------------: | ---------------: |
+| Editor    |      1,341 |        169 |     1,344 |       192 |         85.71% |           10,728 |            1,352 |
+| Codex     |     12,956 |      2,890 |    12,992 |     2,944 |         77.34% |          103,648 |           23,120 |
+| grep      |        166 |         34 |       192 |        64 |         66.67% |            1,328 |              272 |
+| tar       |      1,576 |        549 |     1,600 |       576 |         64.00% |           12,608 |            4,392 |
+| wav       |        130 |         43 |       192 |        64 |         66.67% |            1,040 |              344 |
+| raytracer |        229 |        103 |       256 |       128 |         50.00% |            1,832 |              824 |
+
+The output columns are also the readback payload. Candidate IDs initially occupy
+the rule column and are overwritten in place, so compaction adds no ninth
+storage binding. The dense Core snapshot inputs remain unchanged. These are
+deterministic profile counts, not latency samples.
+
 ### Scalar comptime stack capacity
 
 The bytecode validator derives stack depth at every instruction. GPU scalar

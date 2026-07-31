@@ -82,7 +82,7 @@ add(20, 22)
   }
 });
 
-Deno.test("GPU Wasm profile exposes hierarchical scan work", async () => {
+Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",
     "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
@@ -109,7 +109,14 @@ Deno.test("GPU Wasm profile exposes hierarchical scan work", async () => {
       2 +
     work.gpuWasmLengthDispatchedInvocationCount +
     scanInvocationCount;
+  const expectedCoreRewriteInvocations = work.gpuRewriteCandidateCount === 0
+    ? 0
+    : paddedInvocationCount(work.gpuRewriteCandidateCount);
   if (
+    work.gpuRewriteCandidateCount === 0 ||
+    work.gpuRewriteCandidateCount > work.coreOperationCount ||
+    work.gpuRewriteDispatchedInvocationCount !==
+      expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
     work.gpuWasmLengthDispatchCount === 0 ||
     work.gpuWasmLengthDispatchedInvocationCount <
@@ -123,7 +130,7 @@ Deno.test("GPU Wasm profile exposes hierarchical scan work", async () => {
     work.wasmOutputBufferBytes >= work.wasmBytes + 4
   ) {
     throw new Error(
-      `GPU Wasm profile omitted dispatch work: ${JSON.stringify(work)}`,
+      `GPU profile omitted compacted work: ${JSON.stringify(work)}`,
     );
   }
 });
