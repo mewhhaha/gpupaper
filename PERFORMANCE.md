@@ -776,6 +776,27 @@ measurements are consistent with the allocation model but are not a
 counterbalanced causal estimate. The 504-test required-GPU gate passed and
 compiled every frozen target twice.
 
+### Rejected multi-byte LEB memoization
+
+Three emission-local maps for unsigned, signed-32, and signed-64 values would
+have reduced 26,701 multi-byte encodings to 3,003 distinct encodings. Derived
+lengths shared the unsigned map; signed domains remained separate.
+
+| Target    | Encodings before | Encodings with maps | Avoided | CPU before | CPU with maps |
+| --------- | ---------------: | ------------------: | ------: | ---------: | ------------: |
+| Editor    |              629 |                 193 |     436 |   0.850 ms |      1.523 ms |
+| Codex     |           22,101 |               1,255 |  20,846 |   8.936 ms |     13.856 ms |
+| grep      |               19 |                   9 |      10 |   0.142 ms |      0.259 ms |
+| tar       |            3,892 |               1,515 |   2,377 |   0.856 ms |      1.658 ms |
+| wav       |               34 |                  19 |      15 |   0.088 ms |      0.161 ms |
+| raytracer |               26 |                  12 |      14 |   0.138 ms |      0.234 ms |
+
+The benchmark used the permanent 101-sample, ten-warmup, alternating-target
+CPU-oracle protocol and required byte equality on every observation. All six
+medians regressed by 55.05–93.82%, despite an 88.75% aggregate cache hit rate.
+Map lookup and insertion cost therefore exceeds the avoided encoding and
+short-array allocation cost on this runtime. The memoization was removed.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

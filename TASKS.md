@@ -1057,6 +1057,10 @@ Core receives no source handler or open effect row.
       atom.
 - [x] Reuse the private byte table for validated one-byte unsigned and signed
       LEB values while keeping exported mutable-array encoders fresh.
+- [x] Audit emission-local memoization of remaining multi-byte LEB encodings.
+      An 88.75% frozen-batch hit rate still regressed every CPU-oracle median by
+      55.05–93.82%, so retain fresh encodings and record the rejected cost model
+      and unsigned-128 counterexample.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -1354,6 +1354,34 @@ reuse it. Exported encoders continue to return fresh mutable arrays, preventing
 external mutation from entering compiler state. Values outside these subsets
 retain their ordinary variable-length encoders.
 
+Memoizing the remaining multi-byte encodings is extensionally sound but not
+automatically cheaper. Let \(N\) be their occurrence count in one emission,
+\(M\) the number of distinct values after keeping unsigned, signed-32, and
+signed-64 domains separate, \(c_e\) the encoding and allocation cost,
+\(c_l\) the cache lookup cost, \(c_i\) the insertion cost, and \(c_0\) the
+three-cache initialization cost. Fresh encoding costs
+
+```text
+C_fresh = N c_e
+C_memo  = N c_l + M(c_e + c_i) + c₀
+```
+
+so memoization is justified only when
+\((N-M)c_e>Nc_l+Mc_i+c_0\). The frozen plans have \(N=26{,}701\),
+\(M=3{,}003\), and an 88.75% hit rate, yet a direct experiment made every
+target slower. Short LEB arrays are cheap enough that JavaScript `Map` work
+dominates. The implementation therefore retains fresh multi-byte encodings.
+This is an empirical rejection of the cost inequality on the measured runtime,
+not a semantic objection to memoization.
+
+Unsigned table reuse is valid only on \(U_1\). An initially unguarded lookup
+exposed the counterexample \(128\): selecting table entry `[128]` is not the
+unsigned LEB encoding `[128, 1]`. The focused LEB and Wasm-validation tests
+caught the error before benchmarking. Signed and unsigned caches, if ever
+reconsidered under a different representation, must remain distinct because
+the same mathematical integer need not have the same signed and unsigned LEB
+encoding.
+
 ### 7.5 Type equality as a certified conformance experiment
 
 The direct GPU type experiment consumes first-order equality constraints over
@@ -3160,6 +3188,37 @@ every frozen target twice. Its advisory samples in milliseconds were Editor
 333.55/225.53, Codex
 906.47/807.11, grep 128.21/132.47, Tar 232.97/180.96, wav 115.42/109.62, and
 raytracer 93.73/89.05.
+
+### 2026-07-31: multi-byte LEB memoization is rejected
+
+An emission-local memoization experiment shared repeated multi-byte encodings
+through separate unsigned, signed-32, and signed-64 maps; derived length values
+shared the unsigned map. It would have reduced 26,701 dynamic encodings to
+3,003 distinct encodings over the frozen batch:
+
+| Target    | Fresh encodings | Distinct encodings | Avoided |
+| --------- | --------------: | -----------------: | ------: |
+| Editor    |             629 |                193 |     436 |
+| Codex     |          22,101 |              1,255 |  20,846 |
+| grep      |              19 |                  9 |      10 |
+| tar       |           3,892 |              1,515 |   2,377 |
+| wav       |              34 |                 19 |      15 |
+| raytracer |              26 |                 12 |      14 |
+
+Despite the 88.75% aggregate hit rate, the immediately consecutive
+identical-protocol CPU medians regressed on every target: Editor
+0.850→1.523 ms, Codex 8.936→13.856 ms, grep 0.142→0.259 ms, Tar
+0.856→1.658 ms, wav 0.088→0.161 ms, and raytracer 0.138→0.234 ms. The
+increases range from 55.05% to 93.82%. Section 7.4 now records the applicable
+cost inequality. The maps were removed rather than retaining a
+representation-level optimization contradicted by end-to-end evidence.
+
+The first implementation also generalized the 256-entry byte table without
+checking the one-byte unsigned domain. It encoded unsigned 128 as `[128]`
+instead of `[128, 1]`; five focused tests failed, including engine validation
+and a GPU differential. Adding the \(v<128\) guard made all 84 focused tests
+pass and allowed the performance experiment to measure the intended
+memoization. The rejected implementation left no production code change.
 
 ## References
 
