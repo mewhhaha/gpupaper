@@ -97,7 +97,9 @@ add 40
   const { work } = artifact.profile;
   if (
     work.specializationRewrittenBlockCount === 0 ||
-    work.specializationAvoidedEnvironmentEntryCopyCount === 0
+    work.specializationAvoidedEnvironmentEntryCopyCount === 0 ||
+    work.specializationNodeCountCacheHitCount === 0 ||
+    work.specializationNodeCountCacheHitNodeCount === 0
   ) {
     throw new Error(
       `profile omitted specialization environment work: ${

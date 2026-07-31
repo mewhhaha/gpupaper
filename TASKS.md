@@ -1353,6 +1353,9 @@ resource cost, and corpus measurements.
       active environment. Insert/prior-value rollback is equivalent to cloning
       the visible map, including under source-body re-entry; profile the exact
       avoided entries.
+- [x] Count each immutable specialization-ledger root once per pass. Reuse exact
+      identity-memoized DAG counts across input, demanded, rewritten, and
+      residual projections, and report avoided logical node visits.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

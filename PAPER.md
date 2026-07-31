@@ -531,6 +531,24 @@ node_retention = residual_nodes / input_nodes
 rewrite_amplification = residual_nodes / demanded_input_nodes
 ```
 
+Node counting is a pure fold over one immutable expression root that counts each
+object in that root's reachable DAG once. Input, demanded-input, rewritten-input,
+and residual metrics frequently project the same root:
+
+```text
+node_count(e) = |reachable_expression_objects(e)|
+```
+
+A pass-local weak identity map memoizes `node_count(e)`. Reusing a cached result
+is exact because typed expressions are immutable, and cache lifetime is one
+specialization pass. Distinct root objects remain distinct even when
+structurally equal; two ledger fields that include the same root still add its
+count independently, as before. Thus memoization changes observation work but
+not any reported count. If requested roots are \(e_1,\ldots,e_q\), work changes
+from \(O(\sum_i |e_i|)\) to \(O(\sum_{e\in unique(e_i)} |e| + q)\). The ledger
+reports cache hits and the sum of cached node counts, which is the exact number
+of repeated logical node visits avoided by this implementation.
+
 Every specialization pass also reports non-overlapping wall time for demand
 discovery, frontier construction, rewriting, function lifting, reachability, and
 exact ledger accounting. These measurements classify costs; they do not change
@@ -3466,6 +3484,29 @@ counts on a specializing nested closure. The required-GPU gate passed all 506
 tests and compiled every target twice. Its advisory samples in milliseconds
 were Editor 315.98/179.74, Codex 823.34/612.39, grep 72.44/68.78, Tar
 133.62/123.21, wav 63.45/61.68, and raytracer 44.11/40.61.
+
+### 2026-07-31: specialization ledger counts each immutable root once
+
+Section 6.3 defines node counting as a pure DAG fold and derives pass-local
+identity memoization. Production now computes each root count once, then
+projects input, demanded, rewritten, and residual totals from those exact
+counts. A public profile regression requires nonzero cache hits and avoided
+node visits.
+
+The frozen target profiles report cache hits/avoided logical node visits of
+330/14,038 for Editor, 99/32,243 for Codex, 18/1,416 for grep, 67/8,843 for
+Tar, 27/539 for wav, and 21/917 for raytracer. The batch removes 57,996 repeated
+logical node visits without changing any retention count.
+
+Twenty-one warm Codex CPU observations after one unrecorded warmup ran in
+parallel against detached commit `f8a263d`. Median ledger accounting fell from
+6.953 to 4.287 ms, a 38.35% reduction. The whole pre-specialization stage moved
+108.989→109.728 ms and is unresolved; total compilation moved
+555.87→548.51 ms but is not attributed because non-accounting stages varied.
+The required-GPU gate passed all 506 tests and compiled every target twice. Its
+advisory samples in milliseconds were Editor 312.93/193.50, Codex
+831.60/597.99, grep 71.69/68.78, Tar 129.31/124.40, wav 62.21/62.21, and
+raytracer 43.18/42.43.
 
 ## References
 

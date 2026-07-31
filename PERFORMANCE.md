@@ -105,12 +105,12 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    |  96.94 ms | 146.89 ms |     24,460 |
-| Codex     | 533.56 ms | 604.18 ms |    226,134 |
-| grep      |  14.24 ms |  69.82 ms |      3,911 |
-| tar       |  70.87 ms | 128.32 ms |     26,106 |
-| wav       |   9.10 ms |  63.07 ms |      2,520 |
-| raytracer |  12.45 ms |  43.44 ms |      3,864 |
+| Editor    |  99.19 ms | 152.19 ms |     24,460 |
+| Codex     | 499.64 ms | 569.61 ms |    226,134 |
+| grep      |  14.05 ms |  70.53 ms |      3,911 |
+| tar       |  66.21 ms | 121.05 ms |     26,106 |
+| wav       |   7.87 ms |  61.59 ms |      2,520 |
+| raytracer |  11.25 ms |  40.52 ms |      3,864 |
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
@@ -137,7 +137,7 @@ at 299.96→297.30 ms. The deterministic work and code-size reductions are the
 supported performance claim.
 
 Single dirty compilations remain faster on CPU. On Editor the warm GPU path is
-1.52× the CPU time; on Codex it is 1.13×. The GPU stages are useful validation
+1.53× the CPU time; on Codex it is 1.14×. The GPU stages are useful validation
 and batching boundaries, but these measurements do not justify moving effect
 inference or handler lowering past the semantic CPU boundary.
 
@@ -312,6 +312,40 @@ reported 6,828 blocks and 412,890 avoided copies in its representative Codex
 profile; its 533.56 ms CPU median illustrates the larger run-to-run variance.
 The 506-test required-GPU gate passed and compiled all six targets twice with
 byte-identical Wasm and engine validation.
+
+### Identity-memoized ledger counts
+
+The four specialization retention projections formerly traversed an immutable
+expression root once per projection. A pass-local weak identity map now computes
+the root's DAG node count once and reuses that scalar without merging distinct
+roots:
+
+| Target    | Count-cache hits | Avoided node visits |
+| --------- | ---------------: | ------------------: |
+| Editor    |              330 |              14,038 |
+| Codex     |               99 |              32,243 |
+| grep      |               18 |               1,416 |
+| tar       |               67 |               8,843 |
+| wav       |               27 |                 539 |
+| raytracer |               21 |                 917 |
+
+All reported retention totals remain identical; the batch avoids 57,996 logical
+node visits. Twenty-one warm Codex CPU samples after one warmup compared the
+current tree with detached commit `f8a263d` concurrently:
+
+| Measurement              | Recounted | Memoized | Change |
+| ------------------------ | --------: | -------: | -----: |
+| Ledger accounting        |     6.953 |    4.287 | -38.35% |
+| Pre-specialization       |   108.989 |  109.728 |  +0.68% |
+| Complete CPU compilation |   555.867 |  548.506 |  -1.32% |
+
+Times are milliseconds. Only the accounting-local reduction is attributed; the
+larger stages varied by more than the removed accounting work. The subsequent
+six-sample frontend run measured 99.19/152.19 ms CPU/GPU for Editor,
+499.64/569.61 for Codex, 14.05/70.53 for grep, 66.21/121.05 for Tar,
+7.87/61.59 for wav, and 11.25/40.52 for raytracer. The 506-test required-GPU
+gate passed and compiled all six targets twice with byte-identical Wasm and
+engine validation.
 
 The required-GPU release gate then compiled every target twice with GPU type
 validation, authoritative Core rewriting, authoritative Wasm emission, CPU

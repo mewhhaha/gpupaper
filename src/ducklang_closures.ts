@@ -27,6 +27,8 @@ export type DucklangSpecializationMetrics = {
   readonly repeatedFunctionAnalysisCount: number;
   readonly rewrittenBlockCount: number;
   readonly avoidedEnvironmentEntryCopyCount: number;
+  readonly nodeCountCacheHitCount: number;
+  readonly nodeCountCacheHitNodeCount: number;
 };
 
 export type DucklangSpecializationResult = {
@@ -279,29 +281,43 @@ export function specializeStaticDucklangClosures(
   const reachabilityMilliseconds = performance.now() - reachabilityStart;
 
   const accountingStart = performance.now();
+  const nodeCounts = new WeakMap<object, number>();
+  let nodeCountCacheHitCount = 0;
+  let nodeCountCacheHitNodeCount = 0;
+  const nodeCount = (expression: TypedDucklangExpression): number => {
+    const cached = nodeCounts.get(expression);
+    if (cached !== undefined) {
+      nodeCountCacheHitCount += 1;
+      nodeCountCacheHitNodeCount += cached;
+      return cached;
+    }
+    const count = countExpressionNodes(expression);
+    nodeCounts.set(expression, count);
+    return count;
+  };
   const metrics = {
     inputBindingCount: module.bindings.length,
     demandedBindingCount: demandedInputBindings.length,
     rewrittenBindingCount: rewrittenBindingSymbols.size,
     residualBindingCount: specializedModule.bindings.length,
     inputNodeCount: module.bindings.reduce(
-      (count, binding) => count + countExpressionNodes(binding.value),
-      countExpressionNodes(module.result),
+      (count, binding) => count + nodeCount(binding.value),
+      nodeCount(module.result),
     ),
     demandedInputNodeCount: demandedInputBindings.reduce(
-      (count, binding) => count + countExpressionNodes(binding.value),
-      countExpressionNodes(module.result),
+      (count, binding) => count + nodeCount(binding.value),
+      nodeCount(module.result),
     ),
     rewrittenInputNodeCount: demandedInputBindings.reduce(
       (count, binding) =>
         rewrittenBindingSymbols.has(binding.symbol.id)
-          ? count + countExpressionNodes(binding.value)
+          ? count + nodeCount(binding.value)
           : count,
-      rewriteResult ? countExpressionNodes(module.result) : 0,
+      rewriteResult ? nodeCount(module.result) : 0,
     ),
     residualNodeCount: specializedModule.bindings.reduce(
-      (count, binding) => count + countExpressionNodes(binding.value),
-      countExpressionNodes(specializedModule.result),
+      (count, binding) => count + nodeCount(binding.value),
+      nodeCount(specializedModule.result),
     ),
     distinctSpecializationKeyCount: specialization.requests.size,
     specializationCacheHitCount: specialization.cacheHitCount,
@@ -310,6 +326,8 @@ export function specializeStaticDucklangClosures(
     rewrittenBlockCount: specialization.rewrittenBlockCount,
     avoidedEnvironmentEntryCopyCount:
       specialization.avoidedEnvironmentEntryCopyCount,
+    nodeCountCacheHitCount,
+    nodeCountCacheHitNodeCount,
   };
   const accountingMilliseconds = performance.now() - accountingStart;
 
