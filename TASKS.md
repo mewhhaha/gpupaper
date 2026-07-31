@@ -1537,6 +1537,9 @@ resource cost, and corpus measurements.
 - [x] Measure pre-lift function nesting depth. Keep direct owner-stack capture
       propagation after bounding Codex at depth six and 2,508 insertion
       attempts, then remove the counter.
+- [x] Count capture-argument insertion traversal. Identify 206,835 Codex visits
+      and the empty-capture identity rule before attempting the larger one-pass
+      lifting redesign.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

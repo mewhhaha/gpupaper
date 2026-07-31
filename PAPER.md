@@ -5424,6 +5424,24 @@ counter was removed. A future corpus crossing a declared depth threshold can
 reopen the choice, but generalized deep-nesting machinery would currently be
 speculative complexity.
 
+### 2026-07-31: capture-argument insertion traverses 8.77 residuals
+
+Review 93 counts every occurrence visited by `appendCallArguments` during
+lifting. Codex visits 206,835 occurrences, 8.77 times the 23,594-node residual,
+1.93 times capture discovery, and 1.59 times specialization rewriting. Editor
+visits 7,207, grep 1,525, Tar 11,841, raytracer 846, and wav zero.
+
+For each accepted function, lifting applies capture insertion to its body and
+again to the remaining containing block. Repeating this after every removal
+creates a quadratic suffix-rewrite pattern in blocks with many generated
+functions. Moreover, the traversal currently runs when the capture-reference
+array is empty, although appending an empty argument vector is the identity by
+the list monoid law \(xs\mathbin{++}[]=xs\).
+
+The counters were removed. Zero-capture frequency must be measured next; if
+material, an early identity return is a semantics-preserving first reduction
+independent of the larger one-pass lifting redesign.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

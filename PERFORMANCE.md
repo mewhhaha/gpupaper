@@ -617,6 +617,11 @@ other target except Tar at three. Direct owner-stack propagation therefore has
 at most 2,508 Codex capture insertion attempts, versus 107,069 current scan
 visits. The depth counter was removed; no tree-query structure is warranted.
 
+Capture-argument insertion visits 206,835 Codex occurrences, 8.77 residual
+traversals and 1.93× capture discovery. Tar visits 11,841 for six lifts. This
+includes identity traversals for empty capture arrays; counters were removed and
+zero-capture frequency is the next decision boundary.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
