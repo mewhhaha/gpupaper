@@ -410,6 +410,19 @@ count. `examples/all.hs` has one scalar job at depth 2: its stack arena is 8
 bytes rather than 256 bytes, a 96.875% reduction. Both evaluators return 42.
 This exact capacity result does not imply a latency improvement at one job.
 
+### Empty type equality set
+
+An empty equality list contains no reachable term, so its least congruence and
+representative vector are uniquely empty. The solver now returns before adapter
+acquisition with zero terms, equations, union rounds, decompositions, and
+physical submissions. The logical batch queue remains observable.
+
+The regression does not skip when WebGPU is unavailable. The former path had
+already stopped before pipeline construction or buffer allocation, so the exact
+removed work is one device request/cache selection rather than a kernel or byte
+count. Frozen application type graphs are nonempty; no release timing change is
+claimed.
+
 ## Incremental rebuild
 
 Each target and backend receives one explicit compilation session. The session

@@ -367,6 +367,20 @@ Deno.test("duplicate macro declarations cannot silently replace each other", asy
   );
 });
 
+Deno.test("empty type equality set solves without WebGPU work", async () => {
+  const result = await solveTypeEqualitiesOnGpu([]);
+
+  if (result.status !== "solved") {
+    throw new Error(`empty type equality set returned ${result.status}`);
+  }
+  assertEquals(result.representatives, []);
+  assertEquals(result.termCount, 0);
+  assertEquals(result.equalityCount, 0);
+  assertEquals(result.unionRounds, 0);
+  assertEquals(result.decompositionCount, 0);
+  assertEquals(result.submissionBatchSize, 0);
+});
+
 Deno.test("WebGPU equality closure accepts compatible constructors", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };

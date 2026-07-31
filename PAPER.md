@@ -1153,6 +1153,16 @@ This is first-order syntactic unification with constructor disjointness,
 injectivity, and an occurs check, following the equation-solving model of
 Martelli and Montanari.
 
+When \(E_0=\varnothing\), flattening discovers no term universe, so \(T=0\). The
+empty relation is the unique reflexive, symmetric, transitive congruence on the
+empty carrier, and its representative vector is empty. The type stage therefore
+returns this result before requesting a device. It reports zero union rounds,
+decomposition equations, and physical submissions. This removes only GPU context
+acquisition and pipeline-device selection—the former path already returned
+before buffer allocation—and leaves the logical batch queue intact. No empirical
+break-even is needed because no GPU computation can distinguish the unique empty
+result.
+
 A compressed parent forest alone is not a certificate of this judgment. It can
 show that the reported relation is an equivalence, but cannot show minimality:
 the forest that places every term in one class is compressed and satisfies all
@@ -2090,6 +2100,19 @@ packing nonempty jobs and restores results in logical order. All frozen targets
 have nonempty frontiers, so this change has no claimed effect on their release
 samples. The full required-GPU gate passed 494 tests and compiled every frozen
 target twice with byte-identical CPU/GPU emission and engine validation.
+
+### 2026-07-31: an empty type equation set is solved before WebGPU
+
+The type solver previously requested a device before flattening an empty
+equation list and returning the unique empty congruence. Section 7.5 now makes
+that base case explicit. The boundary returns zero terms, equations, union
+rounds, decompositions, and submissions before adapter acquisition; the public
+batch queue still records its logical payload and queue wait.
+
+The regression has no unavailable branch, so it executes on runtimes without
+WebGPU. Nonempty type graphs are unchanged. The 495-test required-GPU gate and
+six frozen targets remain executable integration evidence; the empty case claims
+no effect on those nonempty workloads.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

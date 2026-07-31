@@ -297,6 +297,18 @@ export async function solveTypeEqualitiesOnGpu(
 async function solveTypeEqualitiesWithoutPayloadBatch(
   equalities: readonly EqualityConstraint[],
 ): Promise<GpuSolveResult> {
+  if (equalities.length === 0) {
+    return {
+      status: "solved",
+      representatives: [],
+      termCount: 0,
+      equalityCount: 0,
+      unionRounds: 0,
+      decompositionCount: 0,
+      submissionBatchSize: 0,
+      queueWaitMilliseconds: 0,
+    };
+  }
   const deviceRequest = await requestCompilerGpuDevice();
   if (deviceRequest.status === "unavailable") return deviceRequest;
   const device = deviceRequest.device;
@@ -340,16 +352,6 @@ async function solveTypeEqualitiesWithDevice(
   selectPipelineDevice(device);
   const flat = flattenEqualities(equalities);
   const cpuClosure = closeFlatConstraintsOnCpu(flat);
-  if (flat.terms.length === 0) {
-    return {
-      status: "solved",
-      representatives: [],
-      termCount: 0,
-      equalityCount: 0,
-      unionRounds: 0,
-      decompositionCount: 0,
-    };
-  }
   if (flat.terms.length > maximumQuadraticGpuTermCount) {
     return await solveLargeFlatConstraintsOnGpu(
       device,
