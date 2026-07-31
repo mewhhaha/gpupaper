@@ -29,11 +29,11 @@ Every Ducklang artifact carries a `profile` with:
 - effect-row memberships, added capability operands, root capabilities,
   direct-state and CPS transformed regions and functions, handled performances,
   continuation captures, specialization retention, memo reuse, dirty-frontier
-work, and residual functions exposed to GPU operation parallelism.
+  work, and residual functions exposed to GPU operation parallelism.
 
 The standalone GPU type conformance result separately reports flattening,
-closure, union/readback, and cycle timings plus its exact term and equality work.
-Production compilation no longer invokes that experiment.
+closure, union/readback, and cycle timings plus its exact term and equality
+work. Production compilation no longer invokes that experiment.
 
 Detail timings are children of their top-level stage and must not be added to
 the top-level total again. The measured unattributed remainder stayed below 0.13
@@ -55,9 +55,8 @@ retains every warm total and reports the paired differences
 `median(|d_i - median(d)|)`. The paired statistic removes additive noise shared
 by adjacent CPU/GPU observations; the raw samples expose stalls that a marginal
 median would hide. It does not estimate confidence or remove backend-specific
-noise.
-The break-even report retains the same raw and paired evidence for every batch
-size. A crossover is observed only when the paired median is non-positive.
+noise. The break-even report retains the same raw and paired evidence for every
+batch size. A crossover is observed only when the paired median is non-positive.
 Failure to observe one reports the maximum measured size, not a lower bound on
 an unknown crossover: no monotonicity property has been proved.
 
@@ -124,38 +123,37 @@ The current 2026-07-31 six-sample warm medians are:
 
 The corresponding paired GPU-minus-CPU measurements are:
 
-| Target    | Median difference | MAD | Dominant required-GPU stage |
-| --------- | ----------------: | --: | --------------------------- |
-| Editor    |          26.83 ms | 4.29 ms | Wasm emission, 29.76 ms |
-| Codex     |          49.08 ms | 7.78 ms | specialization, 96.25 ms |
-| grep      |          27.05 ms | 0.60 ms | Wasm emission, 27.21 ms |
-| tar       |          52.92 ms | 4.80 ms | Core pass, 34.49 ms |
-| wav       |          27.96 ms | 0.21 ms | Wasm emission, 28.31 ms |
-| raytracer |          27.33 ms | 1.50 ms | Wasm emission, 28.15 ms |
+| Target    | Median difference |     MAD | Dominant required-GPU stage |
+| --------- | ----------------: | ------: | --------------------------- |
+| Editor    |          26.83 ms | 4.29 ms | Wasm emission, 29.76 ms     |
+| Codex     |          49.08 ms | 7.78 ms | specialization, 96.25 ms    |
+| grep      |          27.05 ms | 0.60 ms | Wasm emission, 27.21 ms     |
+| tar       |          52.92 ms | 4.80 ms | Core pass, 34.49 ms         |
+| wav       |          27.96 ms | 0.21 ms | Wasm emission, 28.31 ms     |
+| raytracer |          27.33 ms | 1.50 ms | Wasm emission, 28.15 ms     |
 
 These are one six-observation run, not confidence intervals. Five targets have
 an exact Core identity frontier, so their required-GPU latency premium is close
-to the isolated 27 ms Wasm boundary. Tar alone has 24 physical Core rewrites
-and pays both a 34.49 ms Core pass and a 28.21 ms Wasm pass. Codex's marginal
-median difference is 44.45 ms, while its median paired difference is 49.08 ms;
-this 4.62 ms discrepancy is a concrete counterexample to treating a difference
-of marginal medians as the paired effect.
+to the isolated 27 ms Wasm boundary. Tar alone has 24 physical Core rewrites and
+pays both a 34.49 ms Core pass and a 28.21 ms Wasm pass. Codex's marginal median
+difference is 44.45 ms, while its median paired difference is 49.08 ms; this
+4.62 ms discrepancy is a concrete counterexample to treating a difference of
+marginal medians as the paired effect.
 
-An immediately preceding run reported a 352.97 ms Editor GPU median and a
-209.25 ms representative Wasm stage. The old output discarded the six
-observations, so that excursion cannot be classified as a queue stall, thermal
-event, or repeated backend cost. It is retained as an inconclusive failed
-measurement and is the reason raw observations are now part of the benchmark
-contract.
+An immediately preceding run reported a 352.97 ms Editor GPU median and a 209.25
+ms representative Wasm stage. The old output discarded the six observations, so
+that excursion cannot be classified as a queue stall, thermal event, or repeated
+backend cost. It is retained as an inconclusive failed measurement and is the
+reason raw observations are now part of the benchmark contract.
 
 ### Session identities stop at the session boundary
 
 From-scratch compilation previously normalized every parsed AST, encoded that
 normalized tree into a content identity, scanned the source's trailing semantic
 dependency, and hashed host-interface contents. Those values are read only by a
-`DucklangCompilationSession` cache. Independent compilation now performs
-exactly zero semantic-context and semantic-fingerprint work; session-backed
-exact, trailing-trivia, dependency, and backend-function reuse are unchanged.
+`DucklangCompilationSession` cache. Independent compilation now performs exactly
+zero semantic-context and semantic-fingerprint work; session-backed exact,
+trailing-trivia, dependency, and backend-function reuse are unchanged.
 
 For \(N\) syntax nodes, \(S\) source bytes, normalized identity length \(L\),
 and host bytes \(H\), the removed independent-compilation work is
@@ -164,14 +162,14 @@ analysis and changes no emitted byte.
 
 Consecutive six-sample runs against detached parent `eede66b` measured:
 
-| Target | CPU before→after | CPU change | GPU before→after | GPU change | Removed CPU context/fingerprint |
-| ------ | ---------------: | ---------: | ---------------: | ---------: | ------------------------------: |
-| Editor | 88.39→83.31 ms | -5.75% | 125.25→105.12 ms | -16.07% | 0.13/11.35 ms |
-| Codex | 456.54→433.90 ms | -4.96% | 489.60→477.77 ms | -2.42% | 0.17/1.68 ms |
-| grep | 14.49→11.65 ms | -19.59% | 42.22→40.27 ms | -4.61% | 0.13/0.90 ms |
-| tar | 69.62→65.89 ms | -5.36% | 124.37→122.68 ms | -1.36% | 0.16/2.20 ms |
-| wav | 7.62→5.58 ms | -26.80% | 34.25→32.91 ms | -3.92% | 0.00/0.83 ms |
-| raytracer | 11.74→9.21 ms | -21.55% | 39.06→37.91 ms | -2.96% | 0.00/1.32 ms |
+| Target    | CPU before→after | CPU change | GPU before→after | GPU change | Removed CPU context/fingerprint |
+| --------- | ---------------: | ---------: | ---------------: | ---------: | ------------------------------: |
+| Editor    |   88.39→83.31 ms |     -5.75% | 125.25→105.12 ms |    -16.07% |                   0.13/11.35 ms |
+| Codex     | 456.54→433.90 ms |     -4.96% | 489.60→477.77 ms |     -2.42% |                    0.17/1.68 ms |
+| grep      |   14.49→11.65 ms |    -19.59% |   42.22→40.27 ms |     -4.61% |                    0.13/0.90 ms |
+| tar       |   69.62→65.89 ms |     -5.36% | 124.37→122.68 ms |     -1.36% |                    0.16/2.20 ms |
+| wav       |     7.62→5.58 ms |    -26.80% |   34.25→32.91 ms |     -3.92% |                    0.00/0.83 ms |
+| raytracer |    11.74→9.21 ms |    -21.55% |   39.06→37.91 ms |     -2.96% |                    0.00/1.32 ms |
 
 The removed stage is exact; the end-to-end deltas are empirical and include
 run-order noise. In particular, they are not wholly attributed to the smaller
@@ -188,24 +186,24 @@ Profiles now expose physical pass count plus first and subsequent transformation
 time. The enclosing control-flow interval also contains the post-pass searches
 and timing overhead:
 
-| Target | Passes | Enclosing stage | First transform | Later transforms | Search/orchestration residual |
-| ------ | -----: | --------------: | --------------: | ---------------: | ----------------------------: |
-| Editor | 1 | 2.673 ms | 1.294 ms | 0 | 1.379 ms |
-| Codex | 2 | 73.905 ms | 17.055 ms | 41.762 ms | 15.088 ms |
-| grep | 1 | 0.619 ms | 0.200 ms | 0 | 0.419 ms |
-| tar | 1 | 2.066 ms | 0.212 ms | 0 | 1.854 ms |
-| wav | 1 | 0.209 ms | 0.114 ms | 0 | 0.095 ms |
-| raytracer | 1 | 0.434 ms | 0.225 ms | 0 | 0.208 ms |
+| Target    | Passes | Enclosing stage | First transform | Later transforms | Search/orchestration residual |
+| --------- | -----: | --------------: | --------------: | ---------------: | ----------------------------: |
+| Editor    |      1 |        2.673 ms |        1.294 ms |                0 |                      1.379 ms |
+| Codex     |      2 |       73.905 ms |       17.055 ms |        41.762 ms |                     15.088 ms |
+| grep      |      1 |        0.619 ms |        0.200 ms |                0 |                      0.419 ms |
+| tar       |      1 |        2.066 ms |        0.212 ms |                0 |                      1.854 ms |
+| wav       |      1 |        0.209 ms |        0.114 ms |                0 |                      0.095 ms |
+| raytracer |      1 |        0.434 ms |        0.225 ms |                0 |                      0.208 ms |
 
-These are representative CPU observations from the six-sample frontend
-protocol. Codex's second transformation is useful—it removes source control
-left beneath an outer loop—but rebuilding the expanded program makes it
-2.45 times the first transformation. For the other five, the terminal search
-proves that the single transformed output is source-control free and frequently
-costs more than transformation. The next candidate is a lowering result that
-carries an exact remaining-control measure, eliminating separate terminal
-searches and replacing the numeric cap with a decreasing measure. That
-algorithm is not yet implemented or proved.
+These are representative CPU observations from the six-sample frontend protocol.
+Codex's second transformation is useful—it removes source control left beneath
+an outer loop—but rebuilding the expanded program makes it 2.45 times the first
+transformation. For the other five, the terminal search proves that the single
+transformed output is source-control free and frequently costs more than
+transformation. The next candidate is a lowering result that carries an exact
+remaining-control measure, eliminating separate terminal searches and replacing
+the numeric cap with a decreasing measure. That algorithm is not yet implemented
+or proved.
 
 The first scan optimization replaces reflective traversal of every JavaScript
 object field with an exhaustive typed walk over Ducklang statements and
@@ -215,14 +213,14 @@ and fixed-point predicate are unchanged.
 
 Consecutive representative measurements before→after the typed search were:
 
-| Target | Control-flow stage | Reduction | CPU total | GPU total |
-| ------ | -----------------: | --------: | --------: | --------: |
-| Editor | 2.673→1.276 ms | 52.27% | 86.57→79.42 ms | 108.01→107.41 ms |
-| Codex | 73.905→57.031 ms | 22.83% | 446.66→396.69 ms | 466.61→434.39 ms |
-| grep | 0.619→0.200 ms | 67.68% | 12.26→10.60 ms | 39.30→38.33 ms |
-| tar | 2.066→0.292 ms | 85.86% | 59.85→57.46 ms | 117.90→112.82 ms |
-| wav | 0.209→0.130 ms | 37.75% | 5.71→5.14 ms | 33.51→32.93 ms |
-| raytracer | 0.434→0.260 ms | 40.00% | 9.00→8.50 ms | 37.23→37.02 ms |
+| Target    | Control-flow stage | Reduction |        CPU total |        GPU total |
+| --------- | -----------------: | --------: | ---------------: | ---------------: |
+| Editor    |     2.673→1.276 ms |    52.27% |   86.57→79.42 ms | 108.01→107.41 ms |
+| Codex     |   73.905→57.031 ms |    22.83% | 446.66→396.69 ms | 466.61→434.39 ms |
+| grep      |     0.619→0.200 ms |    67.68% |   12.26→10.60 ms |   39.30→38.33 ms |
+| tar       |     2.066→0.292 ms |    85.86% |   59.85→57.46 ms | 117.90→112.82 ms |
+| wav       |     0.209→0.130 ms |    37.75% |     5.71→5.14 ms |   33.51→32.93 ms |
+| raytracer |     0.434→0.260 ms |    40.00% |     9.00→8.50 ms |   37.23→37.02 ms |
 
 Pass counts remain exactly `[1, 2, 1, 1, 1, 1]`, so the faster search does not
 change fixed-point scheduling. All total medians moved downward, but only the
@@ -230,34 +228,33 @@ stage mechanism and unchanged pass counts are directly attributed.
 
 The termination audit then replaced the arbitrary 32-pass cap with a counted
 residual measure. Counting must finish the typed search instead of returning at
-the first residual constructor. The measured first-pass residual counts are
-zero for five targets and two for Codex; pass counts remain
-`[1, 2, 1, 1, 1, 1]`. Codex therefore satisfies the derived bound
-\(2\leq2+1\).
+the first residual constructor. The measured first-pass residual counts are zero
+for five targets and two for Codex; pass counts remain `[1, 2, 1, 1, 1, 1]`.
+Codex therefore satisfies the derived bound \(2\leq2+1\).
 
 The consecutive control-flow medians changed by +0.711 ms Editor, -1.011 Codex,
 -0.010 grep, +0.009 Tar, +0.051 wav, and +0.157 raytracer. This is a mixed
 performance result. The change is retained because it removes a non-semantic
 numeric rejection, proves termination by natural-number descent for supported
-programs, and diagnoses stagnation on the second non-decreasing observation.
-No speedup is claimed.
+programs, and diagnoses stagnation on the second non-decreasing observation. No
+speedup is claimed.
 
 The residual measure is further decomposed into ordinary, range, and
 collection-loop counts. The six frozen first-pass vectors are `(0,0,0)`,
-`(2,0,0)`, `(0,0,0)`, `(0,0,0)`, `(0,0,0)`, and `(0,0,0)` in target order.
-The components are gathered inside the existing complete residual traversal,
-must sum to the total, and add no syntax-sized allocation. Codex's second pass
-therefore lowers two exposed ordinary loops; neither `for` constructor is on
-the residual frontier. Contemporary CPU control-flow representatives were
-1.609, 57.521, 0.203, 0.382, 0.131, and 0.260 ms.
+`(2,0,0)`, `(0,0,0)`, `(0,0,0)`, `(0,0,0)`, and `(0,0,0)` in target order. The
+components are gathered inside the existing complete residual traversal, must
+sum to the total, and add no syntax-sized allocation. Codex's second pass
+therefore lowers two exposed ordinary loops; neither `for` constructor is on the
+residual frontier. Contemporary CPU control-flow representatives were 1.609,
+57.521, 0.203, 0.382, 0.131, and 0.260 ms.
 
 Residual occurrences are also quotiented by `(kind, file, start, end)`. Codex's
-two occurrences have one distinct provenance; temporary diagnostic
-inspection identifies the same `prelude_runtime.duck:1424..1632` loop twice.
-The other targets remain 0/0 occurrence/distinct. The expected set cost is
-\(O(r_1)\) work and \(O(d_1)\) storage—two insertions and one key for Codex.
-This initially suggested repeated linked-module work; the object-identity
-measurement below rejects that interpretation.
+two occurrences have one distinct provenance; temporary diagnostic inspection
+identifies the same `prelude_runtime.duck:1424..1632` loop twice. The other
+targets remain 0/0 occurrence/distinct. The expected set cost is \(O(r_1)\) work
+and \(O(d_1)\) storage—two insertions and one key for Codex. This initially
+suggested repeated linked-module work; the object-identity measurement below
+rejects that interpretation.
 
 An object-identity quotient rejects the repeated-instance interpretation:
 Codex's residual vector is `(occurrences, vertices, sources) = (2,1,1)`. Two
@@ -268,14 +265,14 @@ for context-sensitive control lowering.
 
 Review 54 initially measured complete first-pass search sharing as follows:
 
-| Target | Occurrences | Vertices | Redundant visits | Sharing factor |
-| ------ | ----------: | -------: | ---------------: | -------------: |
-| Editor | 3,528 | 3,188 | 340 | 1.11× |
-| Codex | 22,103 | 12,231 | 9,872 | 1.81× |
-| grep | 1,193 | 934 | 259 | 1.28× |
-| Tar | 6,083 | 1,375 | 4,708 | 4.42× |
-| wav | 317 | 317 | 0 | 1.00× |
-| raytracer | 578 | 578 | 0 | 1.00× |
+| Target    | Occurrences | Vertices | Redundant visits | Sharing factor |
+| --------- | ----------: | -------: | ---------------: | -------------: |
+| Editor    |       3,528 |    3,188 |              340 |          1.11× |
+| Codex     |      22,103 |   12,231 |            9,872 |          1.81× |
+| grep      |       1,193 |      934 |              259 |          1.28× |
+| Tar       |       6,083 |    1,375 |            4,708 |          4.42× |
+| wav       |         317 |      317 |                0 |          1.00× |
+| raytracer |         578 |      578 |                0 |          1.00× |
 
 The current search performs one switch per occurrence. A vertex-memoized DAG
 summary could bound structural work by \(O(V+E)\), but lookup and multiplicity
@@ -288,39 +285,39 @@ That table is therefore frontier-pruned, not complete. Full descent leaves five
 targets unchanged and corrects Codex to 22,177 occurrences, 12,248 vertices,
 9,929 redundant visits, and a 1.81× sharing factor. The additional 74
 occurrences and 17 vertices are the shared residual loop's body. Corrected
-control-flow representatives were 1.180, 60.108, 0.247, 0.369, 0.125, and
-0.597 ms. A nested-refutable-loop regression observes both residual
-constructors and rejects stagnation as `2→2`.
+control-flow representatives were 1.180, 60.108, 0.247, 0.369, 0.125, and 0.597
+ms. A nested-refutable-loop regression observes both residual constructors and
+rejects stagnation as `2→2`.
 
 An exact DAG aggregation was then tested and rejected. It reduced constructor
 switches from occurrences to vertices but added edge materialization,
 object-keyed maps, indegrees, and topological multiplicity propagation:
 
-| Target | Simple walk | DAG aggregation | Change |
-| ------ | ----------: | --------------: | -----: |
-| Editor | 1.180 ms | 2.095 ms | +77.5% |
-| Codex | 60.108 ms | 64.663 ms | +7.6% |
-| grep | 0.247 ms | 0.478 ms | +93.4% |
-| Tar | 0.369 ms | 0.717 ms | +94.4% |
-| wav | 0.125 ms | 0.224 ms | +79.0% |
-| raytracer | 0.597 ms | 0.430 ms | -27.9% |
+| Target    | Simple walk | DAG aggregation | Change |
+| --------- | ----------: | --------------: | -----: |
+| Editor    |    1.180 ms |        2.095 ms | +77.5% |
+| Codex     |   60.108 ms |       64.663 ms |  +7.6% |
+| grep      |    0.247 ms |        0.478 ms | +93.4% |
+| Tar       |    0.369 ms |        0.717 ms | +94.4% |
+| wav       |    0.125 ms |        0.224 ms | +79.0% |
+| raytracer |    0.597 ms |        0.430 ms | -27.9% |
 
 The isolated stage rejects the algorithm despite noisy whole-compiler totals
 moving down on four targets. The simple typed walk remains. DAG aggregation may
 be revisited after syntax uses compact integer IDs and dense adjacency arrays,
 which remove the dominant object-map constants.
 
-Weak identity sets plus scalar cardinalities were also tested and rejected.
-The A/B/A control-flow samples were:
+Weak identity sets plus scalar cardinalities were also tested and rejected. The
+A/B/A control-flow samples were:
 
-| Target | Weak A | Set B | Weak A |
-| ------ | -----: | ----: | -----: |
-| Editor | 1.794 ms | 2.087 ms | 2.571 ms |
-| Codex | 57.566 ms | 60.450 ms | 58.531 ms |
-| grep | 0.271 ms | 0.228 ms | 0.261 ms |
-| Tar | 0.404 ms | 0.372 ms | 0.420 ms |
-| wav | 0.130 ms | 0.123 ms | 0.127 ms |
-| raytracer | 0.241 ms | 0.289 ms | 0.245 ms |
+| Target    |    Weak A |     Set B |    Weak A |
+| --------- | --------: | --------: | --------: |
+| Editor    |  1.794 ms |  2.087 ms |  2.571 ms |
+| Codex     | 57.566 ms | 60.450 ms | 58.531 ms |
+| grep      |  0.271 ms |  0.228 ms |  0.261 ms |
+| Tar       |  0.404 ms |  0.372 ms |  0.420 ms |
+| wav       |  0.130 ms |  0.123 ms |  0.127 ms |
+| raytracer |  0.241 ms |  0.289 ms |  0.245 ms |
 
 The mechanism is target-dependent and reduces no live-memory bound because the
 module owns all nodes throughout the synchronous scan. Ordinary sets remain for
@@ -341,8 +338,7 @@ control-flow lowering 60.450, type inference 40.457, specialization lifting
 52.286 ms top-level stage. Specialization rewrite is the next review frontier.
 Its current work vector includes 703 distinct result keys, four result-cache
 hits, 884 distinct function analyses plus 630 analysis-cache hits, 6,828
-rewritten blocks, and
-412,890 already-avoided environment-entry copies.
+rewritten blocks, and 412,890 already-avoided environment-entry copies.
 
 The former “repeated function analysis” name was incorrect: its increment site
 is the WeakMap cache-hit branch, which skips analysis. Codex therefore has 884
@@ -350,32 +346,33 @@ scans and 630 avoided scans, a 41.61% hit share over 1,514 requests. The metric
 is now named `specializationFunctionAnalysisCacheHitCount`; a focused two-call
 higher-order program requires positive analysis reuse.
 
-The specialization-result key includes function identity, call-site span,
-static arguments, and captured environment. Temporary instrumentation counted
-the same key without call-site provenance:
+The specialization-result key includes function identity, call-site span, static
+arguments, and captured environment. Temporary instrumentation counted the same
+key without call-site provenance:
 
-| Target | Provenance keys | Semantic keys | Merge ceiling |
-| ------ | --------------: | ------------: | ------------: |
-| Editor | 47 | 46 | 2.13% |
-| Codex | 703 | 698 | 0.71% |
-| grep | 1 | 1 | 0% |
-| Tar/wav/raytracer | 0 | 0 | 0% |
+| Target            | Provenance keys | Semantic keys | Merge ceiling |
+| ----------------- | --------------: | ------------: | ------------: |
+| Editor            |              47 |            46 |         2.13% |
+| Codex             |             703 |           698 |         0.71% |
+| grep              |               1 |             1 |            0% |
+| Tar/wav/raytracer |               0 |             0 |            0% |
 
 Span elision is rejected: it offers negligible reuse and would substitute the
 first call site's source provenance without a separate relabeling proof. The
 temporary semantic-key instrumentation was removed. A retained pending-cycle
-counter gives exact Codex result-cache requests `(distinct, complete hit,
-pending) = (703,4,0)`, a 0.566% complete-hit rate; Editor is `(47,2,0)`, or
-4.082%.
+counter gives exact Codex result-cache requests
+`(distinct, complete hit,
+pending) = (703,4,0)`, a 0.566% complete-hit rate;
+Editor is `(47,2,0)`, or 4.082%.
 
 Final serialized expression identities were then memoized by immutable object
 identity. The cache observed 20 Editor hits and 223 Codex hits, but stage-direct
 Codex sampling rejected it:
 
-| Variant | Samples | Rewrite median | MAD | Range |
-| ------- | ------: | -------------: | --: | ----: |
-| WeakMap cache | 15 | 65.263 ms | 2.175 ms | 61.937–71.135 ms |
-| Baseline | 15 | 65.000 ms | 1.825 ms | 60.030–69.279 ms |
+| Variant       | Samples | Rewrite median |      MAD |            Range |
+| ------------- | ------: | -------------: | -------: | ---------------: |
+| WeakMap cache |      15 |      65.263 ms | 2.175 ms | 61.937–71.135 ms |
+| Baseline      |      15 |      65.000 ms | 1.825 ms | 60.030–69.279 ms |
 
 The +0.41% change is unresolved and the cache was removed. This review also
 changes measurement policy: a profile selected by proximity to total median is
@@ -385,70 +382,68 @@ and MAD.
 
 Temporary rewrite-entry instrumentation measured specialization amplification:
 
-| Target | Rewrite entries | Demanded nodes | Entries/node | Residual nodes |
-| ------ | --------------: | -------------: | -----------: | -------------: |
-| Editor | 6,718 | 4,150 | 1.62× | 2,845 |
-| Codex | 130,143 | 16,119 | 8.07× | 23,594 |
-| grep | 670 | 707 | 0.95× | 419 |
-| Tar | 3,499 | 4,411 | 0.79× | 3,220 |
-| wav | 269 | 269 | 1.00× | 215 |
-| raytracer | 458 | 458 | 1.00× | 433 |
+| Target    | Rewrite entries | Demanded nodes | Entries/node | Residual nodes |
+| --------- | --------------: | -------------: | -----------: | -------------: |
+| Editor    |           6,718 |          4,150 |        1.62× |          2,845 |
+| Codex     |         130,143 |         16,119 |        8.07× |         23,594 |
+| grep      |             670 |            707 |        0.95× |            419 |
+| Tar       |           3,499 |          4,411 |        0.79× |          3,220 |
+| wav       |             269 |            269 |        1.00× |            215 |
+| raytracer |             458 |            458 |        1.00× |            433 |
 
 Codex's 1.46× residual-size expansion is far smaller than its 8.07× rewrite
 amplification, so generated output size is not the whole cost. The hot-path
-counter was removed after measurement; its latency is not treated as a
-baseline.
+counter was removed after measurement; its latency is not treated as a baseline.
 
 Temporary substitution-depth instrumentation localizes that amplification:
 
-| Target | Total entries | Under substitution | Share | Max depth |
-| ------ | ------------: | -----------------: | ----: | --------: |
-| Editor | 6,718 | 1,881 | 28.00% | 2 |
-| Codex | 130,143 | 114,281 | 87.81% | 2 |
-| grep | 670 | 2 | 0.30% | 1 |
-| Tar | 3,499 | 0 | 0% | 0 |
-| wav | 269 | 0 | 0% | 0 |
-| raytracer | 458 | 0 | 0% | 0 |
+| Target    | Total entries | Under substitution |  Share | Max depth |
+| --------- | ------------: | -----------------: | -----: | --------: |
+| Editor    |         6,718 |              1,881 | 28.00% |         2 |
+| Codex     |       130,143 |            114,281 | 87.81% |         2 |
+| grep      |           670 |                  2 |  0.30% |         1 |
+| Tar       |         3,499 |                  0 |     0% |         0 |
+| wav       |           269 |                  0 |     0% |         0 |
+| raytracer |           458 |                  0 |     0% |         0 |
 
 Codex has only 15,862 ordinary entries, close to 16,119 demanded input nodes.
-Its excess is broad body specialization—162.56 substitution entries per
-distinct result key—not deep recursion. The hot counters were removed after
-measurement.
+Its excess is broad body specialization—162.56 substitution entries per distinct
+result key—not deep recursion. The hot counters were removed after measurement.
 
 Substitution lookup work is shallow despite broad specialization:
 
-| Target | Reference queries | Map probes | Hits | Extra depth probes |
-| ------ | ----------------: | ---------: | ---: | -----------------: |
-| Editor | 823 | 883 | 125 | 60 |
-| Codex | 31,660 | 31,669 | 2,705 | 9 |
-| grep | 1 | 1 | 1 | 0 |
-| Tar/wav/raytracer | 0 | 0 | 0 | 0 |
+| Target            | Reference queries | Map probes |  Hits | Extra depth probes |
+| ----------------- | ----------------: | ---------: | ----: | -----------------: |
+| Editor            |               823 |        883 |   125 |                 60 |
+| Codex             |            31,660 |     31,669 | 2,705 |                  9 |
+| grep              |                 1 |          1 |     1 |                  0 |
+| Tar/wav/raytracer |                 0 |          0 |     0 |                  0 |
 
 Flattening the environment stack could save only nine Codex reads while adding
-overlay updates and rollback for 703 requests. It is rejected. The 28,955
-Codex misses motivate measuring symbol scope before attempting a semantic
+overlay updates and rollback for 703 requests. It is rejected. The 28,955 Codex
+misses motivate measuring symbol scope before attempting a semantic
 non-parameter fast path.
 
 Resolver-proved scope partitions active-substitution queries:
 
-| Target | Module | Parameter | Local | Guaranteed misses |
-| ------ | -----: | --------: | ----: | ----------------: |
-| Editor | 107 | 417 | 299 | 406 (49.33%) |
-| Codex | 56 | 15,000 | 16,604 | 16,660 (52.62%) |
-| grep | 0 | 1 | 0 | 0 |
-| Tar/wav/raytracer | 0 | 0 | 0 | 0 |
+| Target            | Module | Parameter |  Local | Guaranteed misses |
+| ----------------- | -----: | --------: | -----: | ----------------: |
+| Editor            |    107 |       417 |    299 |      406 (49.33%) |
+| Codex             |     56 |    15,000 | 16,604 |   16,660 (52.62%) |
+| grep              |      0 |         1 |      0 |                 0 |
+| Tar/wav/raytracer |      0 |         0 |      0 |                 0 |
 
 Substitution maps contain only resolver parameter symbols. Module and local
-queries can therefore bypass map search by proof, not heuristic. Temporary
-scope counters were removed before implementing the guard.
+queries can therefore bypass map search by proof, not heuristic. Temporary scope
+counters were removed before implementing the guard.
 
 The resolver-scope guard is now implemented. Direct Codex rewrite sampling was:
 
-| Sequence | Variant | Samples | Median | MAD |
-| -------: | ------- | ------: | -----: | --: |
-| A | guarded | 15 | 72.626 ms | 4.050 ms |
-| B | unguarded | 15 | 79.616 ms | 8.113 ms |
-| A | guarded | 15 | 68.083 ms | 2.717 ms |
+| Sequence | Variant   | Samples |    Median |      MAD |
+| -------: | --------- | ------: | --------: | -------: |
+|        A | guarded   |      15 | 72.626 ms | 4.050 ms |
+|        B | unguarded |      15 | 79.616 ms | 8.113 ms |
+|        A | guarded   |      15 | 68.083 ms | 2.717 ms |
 
 Both guarded medians beat the intervening baseline, while their spread makes a
 precise percentage inappropriate. The exact work reduction is 16,660 Codex and
@@ -460,50 +455,49 @@ distinct reference. Non-references, unresolved references, one-edge aliases to
 values, and self-cycles terminate without that allocation. Direct Codex rewrite
 sampling was:
 
-| Sequence | Variant | Samples | Median | MAD |
-| -------: | ------- | ------: | -----: | --: |
-| A | lazy set | 15 | 66.819 ms | 1.244 ms |
-| B | eager set | 15 | 72.842 ms | 4.014 ms |
-| A | lazy set | 15 | 67.403 ms | 2.324 ms |
+| Sequence | Variant   | Samples |    Median |      MAD |
+| -------: | --------- | ------: | --------: | -------: |
+|        A | lazy set  |      15 | 66.819 ms | 1.244 ms |
+|        B | eager set |      15 | 72.842 ms | 4.014 ms |
+|        A | lazy set  |      15 | 67.403 ms | 2.324 ms |
 
-Both lazy medians beat the intervening baseline. The eleven-test
-specialization suite, including direct aliases and multi-scope captures, passes.
+Both lazy medians beat the intervening baseline. The eleven-test specialization
+suite, including direct aliases and multi-scope captures, passes.
 
 ### Specialization checkpoint after reviews 66–67
 
 Against the Review 57 baseline, the retained scope and lazy-alias fast paths
 move every specialization rewrite representative downward:
 
-| Target | Before | After | Change |
-| ------ | -----: | ----: | -----: |
-| Editor | 4.368 ms | 3.987 ms | -8.74% |
-| Codex | 68.594 ms | 64.079 ms | -6.58% |
-| grep | 0.305 ms | 0.262 ms | -13.92% |
-| Tar | 3.465 ms | 2.825 ms | -18.47% |
-| wav | 0.081 ms | 0.069 ms | -15.18% |
-| raytracer | 0.199 ms | 0.172 ms | -13.67% |
+| Target    |    Before |     After |  Change |
+| --------- | --------: | --------: | ------: |
+| Editor    |  4.368 ms |  3.987 ms |  -8.74% |
+| Codex     | 68.594 ms | 64.079 ms |  -6.58% |
+| grep      |  0.305 ms |  0.262 ms | -13.92% |
+| Tar       |  3.465 ms |  2.825 ms | -18.47% |
+| wav       |  0.081 ms |  0.069 ms | -15.18% |
+| raytracer |  0.199 ms |  0.172 ms | -13.67% |
 
-Current CPU/GPU medians are Editor 74.531/102.646 ms, Codex
-386.544/440.070, grep 11.045/39.530, Tar 57.620/113.605, wav
-5.262/33.287, and raytracer 8.507/36.811. Every paired GPU premium remains
-positive. Wasm sizes are unchanged at 24,460, 226,134, 3,911, 26,106, 2,520,
-and 3,864 bytes.
+Current CPU/GPU medians are Editor 74.531/102.646 ms, Codex 386.544/440.070,
+grep 11.045/39.530, Tar 57.620/113.605, wav 5.262/33.287, and raytracer
+8.507/36.811. Every paired GPU premium remains positive. Wasm sizes are
+unchanged at 24,460, 226,134, 3,911, 26,106, 2,520, and 3,864 bytes.
 
 The subsequent 519-test required-GPU release gate passed. Cold/repeated release
-samples were Editor 240.61/128.83 ms, Codex 673.86/477.54, grep 41.51/40.53,
-Tar 137.24/125.43, wav 34.41/33.48, and raytracer 38.88/39.13. Every CPU/GPU
-pair was byte-identical and engine-valid at the unchanged recorded Wasm sizes.
+samples were Editor 240.61/128.83 ms, Codex 673.86/477.54, grep 41.51/40.53, Tar
+137.24/125.43, wav 34.41/33.48, and raytracer 38.88/39.13. Every CPU/GPU pair
+was byte-identical and engine-valid at the unchanged recorded Wasm sizes.
 
 Codex's next ranking is specialization rewrite 64.079 ms, control-flow lowering
 54.832, CPU Wasm planning/emission 55.112, and type inference 38.802. Hoisting
 the sorted captured-symbol candidate list into memoized function analysis was
 tested and rejected:
 
-| Sequence | Variant | Samples | Median | MAD |
-| -------: | ------- | ------: | -----: | --: |
-| A | hoisted | 15 | 66.411 ms | 1.931 ms |
-| B | per request | 15 | 66.161 ms | 2.506 ms |
-| A | hoisted | 15 | 66.631 ms | 2.280 ms |
+| Sequence | Variant     | Samples |    Median |      MAD |
+| -------: | ----------- | ------: | --------: | -------: |
+|        A | hoisted     |      15 | 66.411 ms | 1.931 ms |
+|        B | per request |      15 | 66.161 ms | 2.506 ms |
+|        A | hoisted     |      15 | 66.631 ms | 2.280 ms |
 
 The valid hoist does not improve latency and was removed. Sorting the small
 candidate sets is not the current specialization frontier.
@@ -524,10 +518,17 @@ closed as the dominant rewrite frontier.
 
 Exclusive per-request rewrite instrumentation shows a heavy tail. Editor has
 1,881 substitution entries total and a 958-entry maximum (50.93%). Codex has
-114,281 total and a 32,184-entry maximum (28.16%). That Codex request is
-197.98× the naive 162.56-entry mean across 703 keys. Grep's sole request has two
+114,281 total and a 32,184-entry maximum (28.16%). That Codex request is 197.98×
+the naive 162.56-entry mean across 703 keys. Grep's sole request has two
 entries. Temporary counters were removed; uniform request optimization is not
 the right model.
+
+Thresholding that tail shows that Codex has seven requests of at least 1,024
+entries containing 90,688 entries (79.36% of exclusive request work). Four
+requests of at least 8,192 entries contain 82,234 (71.96%). Every other frozen
+target remains below 1,024; Editor's maximum is 958. The counters were removed.
+Any tail optimization must therefore beat its setup cost on at most seven
+requests rather than taxing all 703 keys.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
@@ -573,13 +574,13 @@ replaces that path's old entry. User modules and custom prelude directories
 remain compilation/session-scoped, bounding shared retention to 23 ASTs.
 
 | Target    | Bundled analyses before → after | Import resolution before → after | CPU median before → after | Reduction |
-| --------- | --------------------------------: | -------------------------------: | ------------------------: | --------: |
-| Editor    |                            4 → 0 |                  25.79 → 1.41 ms |        140.56 → 114.37 ms |    18.64% |
-| Codex     |                            9 → 0 |                160.90 → 24.53 ms |        648.89 → 514.93 ms |    20.64% |
-| grep      |                            3 → 0 |                   50.60 → 0.81 ms |          64.60 → 14.63 ms |    77.36% |
-| tar       |                            3 → 0 |                   51.00 → 0.74 ms |         116.08 → 68.12 ms |    41.32% |
-| wav       |                            2 → 0 |                   51.80 → 0.81 ms |           60.69 → 7.73 ms |    87.26% |
-| raytracer |                            2 → 0 |                   50.73 → 0.44 ms |          63.03 → 11.60 ms |    81.60% |
+| --------- | ------------------------------: | -------------------------------: | ------------------------: | --------: |
+| Editor    |                           4 → 0 |                  25.79 → 1.41 ms |        140.56 → 114.37 ms |    18.64% |
+| Codex     |                           9 → 0 |                160.90 → 24.53 ms |        648.89 → 514.93 ms |    20.64% |
+| grep      |                           3 → 0 |                  50.60 → 0.81 ms |          64.60 → 14.63 ms |    77.36% |
+| tar       |                           3 → 0 |                  51.00 → 0.74 ms |         116.08 → 68.12 ms |    41.32% |
+| wav       |                           2 → 0 |                  51.80 → 0.81 ms |           60.69 → 7.73 ms |    87.26% |
+| raytracer |                           2 → 0 |                  50.73 → 0.44 ms |          63.03 → 11.60 ms |    81.60% |
 
 Codex still performs two analyses for ordinary local modules; the table counts
 only the nine avoided bundled analyses. Across the batch, all 23 bundled
@@ -595,13 +596,13 @@ gate passed and compiled every frozen target twice.
 The old contextual scan requested a suffix and a trimmed prefix at every source
 position. Their combined logical extent is exactly \(n^2\) characters even if a
 particular JavaScript engine represents some substrings as views. The current
-scan dispatches anchored sticky patterns by their necessary first character,
-and computes dotted and record context only at `.` and `{`.
+scan dispatches anchored sticky patterns by their necessary first character, and
+computes dotted and record context only at `.` and `{`.
 
 Thirty-one warm Editor-root observations after one unrecorded warmup produced:
 
-| Syntax component          | Before |  After | Change |
-| ------------------------- | -----: | -----: | -----: |
+| Syntax component          | Before |  After |  Change |
+| ------------------------- | -----: | -----: | ------: |
 | Contextual classification | 18.476 |  4.670 | -74.73% |
 | Generated parser          |  6.901 |  6.917 |  +0.23% |
 | AST lowering              | 10.077 | 10.775 |  +6.93% |
@@ -610,16 +611,16 @@ Thirty-one warm Editor-root observations after one unrecorded warmup produced:
 Times are milliseconds. The AST movement is not attributed to the classifier;
 the runs were consecutive separate-worktree measurements rather than
 counterbalanced pairs. The executable contract is length and span preservation
-plus identical acceptance and output over every vendored and frozen source.
-The focused syntax, frozen-target, and corpus-contract suites passed 94 tests.
+plus identical acceptance and output over every vendored and frozen source. The
+focused syntax, frozen-target, and corpus-contract suites passed 94 tests.
 
 The subsequent six-sample alternating frontend benchmark changed CPU medians
 from 114.37 to 103.66 ms for Editor, 514.93 to 506.72 ms for Codex, 14.63 to
-13.26 ms for grep, 68.12 to 66.40 ms for Tar, 7.73 to 7.55 ms for wav, and
-11.60 to 11.37 ms for raytracer. The observed reductions range from 1.59% to
-9.36%; they are consistent with the isolated classifier result but are not a
-causal estimate. The required-GPU release gate passed 505 tests and compiled
-all six targets twice with byte-identical Wasm and engine validation.
+13.26 ms for grep, 68.12 to 66.40 ms for Tar, 7.73 to 7.55 ms for wav, and 11.60
+to 11.37 ms for raytracer. The observed reductions range from 1.59% to 9.36%;
+they are consistent with the isolated classifier result but are not a causal
+estimate. The required-GPU release gate passed 505 tests and compiled all six
+targets twice with byte-identical Wasm and engine validation.
 
 The next audit commuted arrow recognition's pure lexical and context predicates.
 For the Editor root, letter-headed positions \(H=14,945\), bare-context
@@ -627,19 +628,19 @@ candidates \(B=858\), lexical arrow spellings \(M=147\), and accepted
 intersections \(K=11\). Complete-prefix logical extent therefore falls from
 10,153,696 to 178,601 characters, or 98.24%.
 
-| Syntax component          | Lexical last | Lexical first | Change |
-| ------------------------- | -----------: | ------------: | -----: |
+| Syntax component          | Lexical last | Lexical first |  Change |
+| ------------------------- | -----------: | ------------: | ------: |
 | Contextual classification |        4.670 |         1.455 | -68.84% |
 | Generated parser          |        6.917 |         7.033 |  +1.68% |
 | AST lowering              |       10.775 |        12.202 | +13.24% |
 | Complete syntax stage     |       11.845 |         8.613 | -27.29% |
 
 These are 31 warm observations after one unrecorded warmup. Parser and AST
-movements are not attributed to the classifier. The subsequent full frontend
-run measured 98.09/153.37 ms CPU/GPU for Editor, 513.01/587.65 for Codex,
-13.72/70.24 for grep, 66.26/122.54 for Tar, 7.43/64.31 for wav, and
-11.72/42.18 for raytracer. Mixed changes outside Editor are run noise; the
-isolated classifier and exact discarded work support the optimization.
+movements are not attributed to the classifier. The subsequent full frontend run
+measured 98.09/153.37 ms CPU/GPU for Editor, 513.01/587.65 for Codex,
+13.72/70.24 for grep, 66.26/122.54 for Tar, 7.43/64.31 for wav, and 11.72/42.18
+for raytracer. Mixed changes outside Editor are run noise; the isolated
+classifier and exact discarded work support the optimization.
 
 ### Demand-specialization audit
 
@@ -698,8 +699,8 @@ measurements less informative and is not yet justified.
 Block rewriting formerly constructed `new Map(parentValues)` for every lexical
 block. Globally unique resolved symbol IDs permit a stack-disciplined
 insert/rewrite/restore environment with identical lookup results. Restoring
-prior entries also preserves nested re-entry of one source body. The profile
-now exposes the exact counterfactual constructor work:
+prior entries also preserves nested re-entry of one source body. The profile now
+exposes the exact counterfactual constructor work:
 
 | Target    | Rewritten blocks | Avoided entry copies |
 | --------- | ---------------: | -------------------: |
@@ -714,21 +715,21 @@ The batch avoids 494,463 transient entry copies. An 11-sample Codex CPU
 comparison after one warmup used the current tree and a detached `d7357e7`
 worktree concurrently:
 
-| Measurement              | Map clone | Scoped map | Change |
-| ------------------------ | --------: | ---------: | -----: |
+| Measurement              | Map clone | Scoped map |  Change |
+| ------------------------ | --------: | ---------: | ------: |
 | Pre-specialization       |   119.946 |    108.074 |  -9.90% |
 | Specialization rewrite   |    86.252 |     74.484 | -13.64% |
 | Function lifting         |    24.195 |     25.665 |  +6.08% |
 | Ledger accounting        |     6.621 |      7.409 | +11.91% |
 | Complete CPU compilation |   553.295 |    549.178 |  -0.74% |
 
-Times are milliseconds. Exact outputs and residual work were unchanged.
-Opposite movements in lifting and accounting limit the attribution to the
-rewrite and stage-local reductions. The following six-sample frontend run
-reported 6,828 blocks and 412,890 avoided copies in its representative Codex
-profile; its 533.56 ms CPU median illustrates the larger run-to-run variance.
-The 506-test required-GPU gate passed and compiled all six targets twice with
-byte-identical Wasm and engine validation.
+Times are milliseconds. Exact outputs and residual work were unchanged. Opposite
+movements in lifting and accounting limit the attribution to the rewrite and
+stage-local reductions. The following six-sample frontend run reported 6,828
+blocks and 412,890 avoided copies in its representative Codex profile; its
+533.56 ms CPU median illustrates the larger run-to-run variance. The 506-test
+required-GPU gate passed and compiled all six targets twice with byte-identical
+Wasm and engine validation.
 
 ### Identity-memoized ledger counts
 
@@ -750,8 +751,8 @@ All reported retention totals remain identical; the batch avoids 57,996 logical
 node visits. Twenty-one warm Codex CPU samples after one warmup compared the
 current tree with detached commit `f8a263d` concurrently:
 
-| Measurement              | Recounted | Memoized | Change |
-| ------------------------ | --------: | -------: | -----: |
+| Measurement              | Recounted | Memoized |  Change |
+| ------------------------ | --------: | -------: | ------: |
 | Ledger accounting        |     6.953 |    4.287 | -38.35% |
 | Pre-specialization       |   108.989 |  109.728 |  +0.68% |
 | Complete CPU compilation |   555.867 |  548.506 |  -1.32% |
@@ -759,10 +760,10 @@ current tree with detached commit `f8a263d` concurrently:
 Times are milliseconds. Only the accounting-local reduction is attributed; the
 larger stages varied by more than the removed accounting work. The subsequent
 six-sample frontend run measured 99.19/152.19 ms CPU/GPU for Editor,
-499.64/569.61 for Codex, 14.05/70.53 for grep, 66.21/121.05 for Tar,
-7.87/61.59 for wav, and 11.25/40.52 for raytracer. The 506-test required-GPU
-gate passed and compiled all six targets twice with byte-identical Wasm and
-engine validation.
+499.64/569.61 for Codex, 14.05/70.53 for grep, 66.21/121.05 for Tar, 7.87/61.59
+for wav, and 11.25/40.52 for raytracer. The 506-test required-GPU gate passed
+and compiled all six targets twice with byte-identical Wasm and engine
+validation.
 
 ### Rejected lazy child-list copying
 
@@ -774,9 +775,9 @@ path:
 
 | Measurement              | Native map | Lazy copy | Change |
 | ------------------------ | ---------: | --------: | -----: |
-| Specialization rewrite   |     72.666 |    75.320 |  +3.65% |
-| Function lifting         |     24.226 |    24.158 |  -0.28% |
-| Complete CPU compilation |    526.560 |   537.827 |  +2.14% |
+| Specialization rewrite   |     72.666 |    75.320 | +3.65% |
+| Function lifting         |     24.226 |    24.158 | -0.28% |
+| Complete CPU compilation |    526.560 |   537.827 | +2.14% |
 
 Times are 21-sample warm Codex medians after one unrecorded warmup. Current and
 detached-`7aed752` processes ran concurrently. The lazy implementation was
@@ -792,11 +793,11 @@ The first 21-sample Codex experiment ran that traversal for every block and
 regressed lifting from 24.481 to 38.141 ms (+55.80%). Adding the necessary
 `F > 0` block-head guard produced:
 
-| Measurement            | Per symbol | Product set | Change |
-| ---------------------- | ---------: | ----------: | -----: |
-| Function lifting       |     25.083 |      25.125 |  +0.17% |
-| Pre-specialization     |    108.547 |     108.660 |  +0.10% |
-| Complete compilation   |    551.843 |     566.955 |  +2.74% |
+| Measurement          | Per symbol | Product set | Change |
+| -------------------- | ---------: | ----------: | -----: |
+| Function lifting     |     25.083 |      25.125 | +0.17% |
+| Pre-specialization   |    108.547 |     108.660 | +0.10% |
+| Complete compilation |    551.843 |     566.955 | +2.74% |
 
 Times are 21-sample warm CPU medians after one warmup, with current and detached
 `3ae5dc2` processes run concurrently. The total movement is treated as noise;
@@ -1005,13 +1006,13 @@ larger modules retain direct u32 indexing.
 | raytracer |    16 |              15,408 → 7,704 |           32,740 → 25,036 |
 
 Across the frozen applications, resolved-offset input falls 1,041,816→929,108
-bytes (10.82%) and total atom input falls 2,213,848→2,101,140 bytes (5.09%).
-The narrow path adds lane-local shifts and masks but no pass, dispatch, binding,
-or synchronization. Boundary tests pin u16 selection at exactly 65,535 output
-bytes and u32 selection at 65,536. The post-change required-GPU release gate
-passed 500 tests and compiled all six frozen targets twice; its samples are
-recorded in the corresponding continuous-paper entry. They are correctness
-observations rather than a counterbalanced latency experiment.
+bytes (10.82%) and total atom input falls 2,213,848→2,101,140 bytes (5.09%). The
+narrow path adds lane-local shifts and masks but no pass, dispatch, binding, or
+synchronization. Boundary tests pin u16 selection at exactly 65,535 output bytes
+and u32 selection at 65,536. The post-change required-GPU release gate passed
+500 tests and compiled all six frozen targets twice; its samples are recorded in
+the corresponding continuous-paper entry. They are correctness observations
+rather than a counterbalanced latency experiment.
 
 ### Packed Wasm atom tags
 
@@ -1152,9 +1153,9 @@ share one word; otherwise they remain u32.
 | Target    | Maximum rank | Width | Rank bytes before → after | Atom input before → after |
 | --------- | -----------: | ----: | ------------------------: | ------------------------: |
 | Editor    |       13,892 |    16 |            11,964 → 5,984 |         125,784 → 119,804 |
-| Codex     |      115,794 |    32 |          102,052 → 102,052 |     1,489,512 → 1,489,512 |
+| Codex     |      115,794 |    32 |         102,052 → 102,052 |     1,489,512 → 1,489,512 |
 | grep      |        2,347 |    16 |               1,952 → 976 |           20,244 → 19,268 |
-| tar       |       12,473 |    16 |             11,104 → 5,552 |         117,996 → 112,444 |
+| tar       |       12,473 |    16 |            11,104 → 5,552 |         117,996 → 112,444 |
 | wav       |        1,490 |    16 |               1,240 → 620 |           12,868 → 12,248 |
 | raytracer |        2,410 |    16 |               1,928 → 964 |           19,728 → 18,764 |
 
@@ -1177,10 +1178,10 @@ Accumulating four disjoint byte masks locally changes its host stores:
 | wav       |      1,493 |                374 |          1,119 |
 | raytracer |      2,412 |                603 |          1,809 |
 
-Logical capacity, transfer, and GPU work are unchanged. Post-change
-ranked/dense emitter ratios were 0.9731–1.0071; no latency improvement is
-claimed. The exact grouped-byte writer passed the 501-test required-GPU gate
-and compiled every frozen target twice.
+Logical capacity, transfer, and GPU work are unchanged. Post-change ranked/dense
+emitter ratios were 0.9731–1.0071; no latency improvement is claimed. The exact
+grouped-byte writer passed the 501-test required-GPU gate and compiled every
+frozen target twice.
 
 ### Byte lanes omit their known end boundary
 
@@ -1198,11 +1199,11 @@ that operation below the byte return changes boundary reads from `2A` to
 | wav       |      1,493 |                 4,954 → 3,461 |    30.14% |
 | raytracer |      2,412 |                 7,702 → 5,290 |    31.32% |
 
-Capacity, transfer, scheduled lanes, and output are unchanged.
-The post-change dense/ranked medians were 27.87/28.01 ms for Editor and
-35.18/35.29 ms for Codex. No latency improvement is resolved at this boundary.
-The exact early-return shader passed the 501-test required-GPU gate and compiled
-every frozen target twice.
+Capacity, transfer, scheduled lanes, and output are unchanged. The post-change
+dense/ranked medians were 27.87/28.01 ms for Editor and 35.18/35.29 ms for
+Codex. No latency improvement is resolved at this boundary. The exact
+early-return shader passed the 501-test required-GPU gate and compiled every
+frozen target twice.
 
 ### Wasm statistics fuse into size analysis
 
@@ -1270,28 +1271,28 @@ Every frozen plan selects sparse sizing. The batch model falls from 511,136 to
 283,288 operations, a 44.58% reduction. Direct ties and small-range plans keep
 the old loop. The scalar prefix reuses the final offset vector; sparse-only
 logical storage is an \(8(K+1)\)-byte exact-integer tree. Stable length ranks
-remove the former \(K\)-entry position map.
-Post-change dense/ranked medians were 27.92/27.88 ms for Editor and
-36.61/36.65 ms for Codex; no isolated latency improvement is resolved. The
-503-test required-GPU gate passed and compiled every frozen target twice.
+remove the former \(K\)-entry position map. Post-change dense/ranked medians
+were 27.92/27.88 ms for Editor and 36.61/36.65 ms for Codex; no isolated latency
+improvement is resolved. The 503-test required-GPU gate passed and compiled
+every frozen target twice.
 
 ### CPU Wasm validation emits scalar encodings
 
 The independent CPU differential formerly visited every atom once for
 validation, once for scalar encoding, once for encoded-length reduction, and
-once for final byte copy, in addition to two independent \(D\)-range
-traversals. Encoding scalars during validated inspection and accumulating
-encoded length in the scalar and topological folds changes exact visits from
-\(4A+2D\) to \(2A+2D\).
+once for final byte copy, in addition to two independent \(D\)-range traversals.
+Encoding scalars during validated inspection and accumulating encoded length in
+the scalar and topological folds changes exact visits from \(4A+2D\) to
+\(2A+2D\).
 
 The frozen batch removes 520,896 atom visits. Direct range sizing remains
 independent of the adaptive GPU-boundary algorithm. The Wasm benchmark now
 reports this CPU oracle with 101 samples, ten warmups, alternating target order,
-and byte equality on every observation. Post-change medians in milliseconds
-were Editor 1.139, Codex 15.155, grep 0.170, Tar 1.059, wav 0.100, and
-raytracer 0.161. No latency change is claimed without a counterbalanced
-pre/post experiment. The 503-test required-GPU gate passed and compiled every
-frozen target twice.
+and byte equality on every observation. Post-change medians in milliseconds were
+Editor 1.139, Codex 15.155, grep 0.170, Tar 1.059, wav 0.100, and raytracer
+0.161. No latency change is claimed without a counterbalanced pre/post
+experiment. The 503-test required-GPU gate passed and compiled every frozen
+target twice.
 
 ### Validated scalars use validated-domain LEB encoders
 
@@ -1309,10 +1310,10 @@ from that trusted interior repeated the same predicate:
 
 The batch removes 111,472 checks. Public encoders and length-derived values
 remain checked; only inspected scalar atoms use the validated-domain body.
-Post-change CPU medians were 1.147 ms Editor, 14.801 Codex, 0.171 grep,
-1.016 Tar, 0.100 wav, and 0.158 raytracer. The identical preceding protocol
-shows no material latency change. The 503-test required-GPU gate passed and
-compiled every frozen target twice.
+Post-change CPU medians were 1.147 ms Editor, 14.801 Codex, 0.171 grep, 1.016
+Tar, 0.100 wav, and 0.158 raytracer. The identical preceding protocol shows no
+material latency change. The 503-test required-GPU gate passed and compiled
+every frozen target twice.
 
 ### Validated length levels imply resolved encodings
 
@@ -1330,10 +1331,10 @@ presence branch eliminates:
 | raytracer |                   7,282 |
 
 The batch removes 511,136 checks. A boundary regression rejects a same-level
-dependency before emission. Post-change CPU medians were 1.251 ms Editor,
-17.413 Codex, 0.198 grep, 1.120 Tar, 0.102 wav, and 0.163 raytracer; no latency
-change is resolved. The 504-test required-GPU gate passed and compiled every
-frozen target twice.
+dependency before emission. Post-change CPU medians were 1.251 ms Editor, 17.413
+Codex, 0.198 grep, 1.120 Tar, 0.102 wav, and 0.163 raytracer; no latency change
+is resolved. The 504-test required-GPU gate passed and compiled every frozen
+target twice.
 
 ### Canonical singleton byte encodings
 
@@ -1351,14 +1352,14 @@ CPU emission allocated one singleton array per byte atom. A private table of the
 
 The batch removes 148,419 dynamic allocations and adds 256 persistent arrays
 once, for 148,163 fewer allocations on the first batch. Post-change CPU medians
-were 1.077 ms Editor, 14.294 Codex, 0.169 grep, 0.969 Tar, 0.103 wav, and
-0.199 raytracer. The timing changes are mixed, so no latency claim is made. The
+were 1.077 ms Editor, 14.294 Codex, 0.169 grep, 0.969 Tar, 0.103 wav, and 0.199
+raytracer. The timing changes are mixed, so no latency claim is made. The
 504-test required-GPU gate passed and compiled every frozen target twice.
 
 ### Canonical one-byte LEB encodings
 
-Validated internal unsigned values 0–127 and signed values −64–63 reuse the
-same private byte table. Exported mutable-array encoders remain fresh. Additional
+Validated internal unsigned values 0–127 and signed values −64–63 reuse the same
+private byte table. Exported mutable-array encoders remain fresh. Additional
 per-emission allocations removed are:
 
 | Target    | Arrays removed |
@@ -1400,8 +1401,8 @@ short-array allocation cost on this runtime. The memoization was removed.
 
 ### CPU Wasm emission writes directly
 
-The retained array emitter stored one reference for every atom and allocated
-one array for every remaining multi-byte scalar or derived length. The direct
+The retained array emitter stored one reference for every atom and allocated one
+array for every remaining multi-byte scalar or derived length. The direct
 emitter instead validates widths into a `Uint8Array`, stores only the \(K\)
 derived payload widths, allocates the exact output, and writes each encoding at
 a rolling offset.
@@ -1419,12 +1420,12 @@ The frozen batch removes 260,448 reference entries, 26,701 dynamic encoding
 arrays, and the 256-entry persistent canonical table. Its replacement uses
 264,904 logical typed-array bytes plus the required output. Structural
 atom/range visits remain \(2A+2D\); the emitter writes each of the \(B\) output
-bytes once instead of constructing and then copying encoding arrays. Relative
-to the last retained array-emitter run under the same protocol, all medians
-fell by 19.22–36.24%. This comparison is consistent with the exact allocation
-model but is not a counterbalanced causal estimate. Every benchmark observation
-was byte-identical to the direct CPU oracle. The 504-test required-GPU gate
-passed and compiled every frozen target twice.
+bytes once instead of constructing and then copying encoding arrays. Relative to
+the last retained array-emitter run under the same protocol, all medians fell by
+19.22–36.24%. This comparison is consistent with the exact allocation model but
+is not a counterbalanced causal estimate. Every benchmark observation was
+byte-identical to the direct CPU oracle. The 504-test required-GPU gate passed
+and compiled every frozen target twice.
 
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
@@ -1432,12 +1433,12 @@ stores without changing capacity:
 
 | Target    | Offset stores before → after | Rank stores before → after | Stores removed |
 | --------- | ---------------------------: | -------------------------: | -------------: |
-| Editor    |              23,924 → 11,962 |             2,991 → 1,496 |         13,457 |
-| Codex     |                 zero-copy u32 |                direct u32 |              0 |
-| grep      |                3,898 → 1,949 |                 488 → 244 |          2,193 |
-| tar       |              22,202 → 11,101 |             2,776 → 1,388 |         12,489 |
-| wav       |                2,478 → 1,239 |                 310 → 155 |          1,394 |
-| raytracer |                3,852 → 1,926 |                 482 → 241 |          2,167 |
+| Editor    |              23,924 → 11,962 |              2,991 → 1,496 |         13,457 |
+| Codex     |                zero-copy u32 |                 direct u32 |              0 |
+| grep      |                3,898 → 1,949 |                  488 → 244 |          2,193 |
+| tar       |              22,202 → 11,101 |              2,776 → 1,388 |         12,489 |
+| wav       |                2,478 → 1,239 |                  310 → 155 |          1,394 |
+| raytracer |                3,852 → 1,926 |                  482 → 241 |          2,167 |
 
 These are exact construction-work counts. Transfer, GPU work, and output are
 unchanged. Post-change ranked/dense median ratios were 0.9974–1.0026 across the
@@ -1524,11 +1525,11 @@ unaffected.
 ### Candidate-local Core descriptors
 
 The current matcher reads a fixed projection of each candidate and at most two
-constant definitions. A 20-word descriptor now carries exactly those fields.
-The CPU frontier admits only the structural heads of the implemented integer
+constant definitions. A 20-word descriptor now carries exactly those fields. The
+CPU frontier admits only the structural heads of the implemented integer
 add-zero and multiply-one rules; the GPU still decides exact constant identity,
-orientation, and replacement. The CPU checks every resulting certificate
-against the complete immutable snapshot.
+orientation, and replacement. The CPU checks every resulting certificate against
+the complete immutable snapshot.
 
 For operations `O`, operands `E`, attributes `A`, values `V`, types `T`, and
 candidates `C`, logical device capacity changes from
@@ -1560,12 +1561,12 @@ the constant payload, emit a rule, or select a replacement.
 
 | Target    | Candidates before → after | Descriptor bytes before → after | Lanes before → after |
 | --------- | ------------------------: | ------------------------------: | -------------------: |
-| Editor    |                  169 → 15 |                   13,520 → 1,200 |             192 → 64 |
-| Codex     |               2,890 → 963 |                 231,200 → 77,040 |         2,944 → 1,024 |
-| grep      |                    34 → 3 |                      2,720 → 240 |              64 → 64 |
-| tar       |                 549 → 257 |                  43,920 → 20,560 |            576 → 320 |
-| wav       |                    43 → 4 |                      3,440 → 320 |              64 → 64 |
-| raytracer |                   103 → 0 |                        8,240 → 0 |              128 → 0 |
+| Editor    |                  169 → 15 |                  13,520 → 1,200 |             192 → 64 |
+| Codex     |               2,890 → 963 |                231,200 → 77,040 |        2,944 → 1,024 |
+| grep      |                    34 → 3 |                     2,720 → 240 |              64 → 64 |
+| tar       |                 549 → 257 |                 43,920 → 20,560 |            576 → 320 |
+| wav       |                    43 → 4 |                     3,440 → 320 |              64 → 64 |
+| raytracer |                   103 → 0 |                       8,240 → 0 |              128 → 0 |
 
 Tar retains its 24 proposals; the other five targets retain zero. The reduction
 therefore discards only failed matches and preserves optimized Core. Candidate
@@ -1587,24 +1588,23 @@ observable.
 An alternating 21-pair Codex CPU experiment after one unrecorded warmup compared
 the current tree with detached commit `d3def76`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| Core rewrite | 74.181 ms | 34.773 ms | -53.13% |
-| Complete compilation | 527.788 ms | 489.262 ms | -7.30% |
-| Core inflation | 34.185 ms | 35.473 ms | +3.77% |
+| Measurement          |     Before |      After |  Change |
+| -------------------- | ---------: | ---------: | ------: |
+| Core rewrite         |  74.181 ms |  34.773 ms | -53.13% |
+| Complete compilation | 527.788 ms | 489.262 ms |  -7.30% |
+| Core inflation       |  34.185 ms |  35.473 ms |  +3.77% |
 
-The exact current Codex counts are 12,956 operations, 963 structural
-candidates, zero proposals, and zero acceptances. The experiment isolates the
-CPU rewrite stage; GPU commit uses the same identity law but has not received a
-separate latency experiment. The unchanged inflation median is a negative
-control. Complete-compilation movement is consistent with the removed
-sequential work but remains advisory because paired invocation order does not
-remove process drift.
+The exact current Codex counts are 12,956 operations, 963 structural candidates,
+zero proposals, and zero acceptances. The experiment isolates the CPU rewrite
+stage; GPU commit uses the same identity law but has not received a separate
+latency experiment. The unchanged inflation median is a negative control.
+Complete-compilation movement is consistent with the removed sequential work but
+remains advisory because paired invocation order does not remove process drift.
 
-The 507-test required-GPU gate passed and compiled every target twice.
-Codex's two correctness samples were 841.02 and 589.22 ms; Editor's were
-300.63 and 182.64 ms. These are release observations, not an additional
-controlled latency comparison.
+The 507-test required-GPU gate passed and compiled every target twice. Codex's
+two correctness samples were 841.02 and 589.22 ms; Editor's were 300.63 and
+182.64 ms. These are release observations, not an additional controlled latency
+comparison.
 
 ### Structured Core round-trip witness
 
@@ -1617,12 +1617,12 @@ continues to inflate normally.
 An alternating 21-pair Codex CPU experiment after one unrecorded warmup compared
 the current tree with detached commit `2511932`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| Core inflation | 31.863 ms | 0 ms | -100% |
-| Complete compilation | 451.776 ms | 424.521 ms | -6.03% |
-| Core rewrite | 33.367 ms | 33.261 ms | -0.32% |
-| Wasm planning and CPU emission | 50.852 ms | 52.447 ms | +3.14% |
+| Measurement                    |     Before |      After | Change |
+| ------------------------------ | ---------: | ---------: | -----: |
+| Core inflation                 |  31.863 ms |       0 ms |  -100% |
+| Complete compilation           | 451.776 ms | 424.521 ms | -6.03% |
+| Core rewrite                   |  33.367 ms |  33.261 ms | -0.32% |
+| Wasm planning and CPU emission |  50.852 ms |  52.447 ms | +3.14% |
 
 All samples emitted the same 226,134-byte Codex module. The exact result is the
 zero inflation stage; end-to-end timing remains advisory. Five frozen targets
@@ -1640,14 +1640,14 @@ The CPU profile now separates flat input validation, rule matching, conflict
 resolution, and nonempty rebuild. The following are seven-sample warm medians
 after one unrecorded warmup:
 
-| Target | Rewrite | Input validation | Matching | Resolution | Rebuild | Accepted |
-| ------ | ------: | ---------------: | -------: | ---------: | ------: | -------: |
-| Editor | 3.857 ms | 3.835 ms | 0.024 ms | 0.002 ms | 0 | 0 |
-| Codex | 34.860 ms | 34.708 ms | 0.147 ms | 0.002 ms | 0 | 0 |
-| grep | 0.490 ms | 0.486 ms | 0.002 ms | 0.001 ms | 0 | 0 |
-| Tar | 10.059 ms | 4.993 ms | 0.028 ms | 0.019 ms | 4.825 ms | 24 |
-| wav | 0.332 ms | 0.327 ms | 0.003 ms | 0.001 ms | 0 | 0 |
-| raytracer | 0.525 ms | 0.516 ms | 0.007 ms | 0.001 ms | 0 | 0 |
+| Target    |   Rewrite | Input validation | Matching | Resolution |  Rebuild | Accepted |
+| --------- | --------: | ---------------: | -------: | ---------: | -------: | -------: |
+| Editor    |  3.857 ms |         3.835 ms | 0.024 ms |   0.002 ms |        0 |        0 |
+| Codex     | 34.860 ms |        34.708 ms | 0.147 ms |   0.002 ms |        0 |        0 |
+| grep      |  0.490 ms |         0.486 ms | 0.002 ms |   0.001 ms |        0 |        0 |
+| Tar       | 10.059 ms |         4.993 ms | 0.028 ms |   0.019 ms | 4.825 ms |       24 |
+| wav       |  0.332 ms |         0.327 ms | 0.003 ms |   0.001 ms |        0 |        0 |
+| raytracer |  0.525 ms |         0.516 ms | 0.007 ms |   0.001 ms |        0 |        0 |
 
 Codex validation is 99.56% of the rewrite median; matching is 0.42%. Tar proves
 that rebuild remains necessary when proposals are accepted. The data rejects
@@ -1666,13 +1666,13 @@ still require complete validation. An alternating 21-pair Codex CPU experiment
 after one unrecorded warmup compared the current tree with detached commit
 `79104b6`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| Core rewrite | 33.599 ms | 0.110 ms | -99.67% |
-| Complete compilation | 422.959 ms | 394.878 ms | -6.64% |
-| Flat Core construction | 34.893 ms | 35.300 ms | +1.17% |
-| Rule matching | 0.074 ms | 0.095 ms | +29.02% |
-| Wasm planning and CPU emission | 54.398 ms | 54.604 ms | +0.38% |
+| Measurement                    |     Before |      After |  Change |
+| ------------------------------ | ---------: | ---------: | ------: |
+| Core rewrite                   |  33.599 ms |   0.110 ms | -99.67% |
+| Complete compilation           | 422.959 ms | 394.878 ms |  -6.64% |
+| Flat Core construction         |  34.893 ms |  35.300 ms |  +1.17% |
+| Rule matching                  |   0.074 ms |   0.095 ms | +29.02% |
+| Wasm planning and CPU emission |  54.398 ms |  54.604 ms |  +0.38% |
 
 The matching delta is 0.021 ms and is not material. Every sample emitted the
 same 226,134-byte module. Seven-sample warm medians after the change report zero
@@ -1696,18 +1696,18 @@ on validation provenance. An alternating 21-pair Codex required-GPU experiment
 after one unrecorded warmup compared the current tree with detached commit
 `8076dff`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| GPU Core pass | 62.562 ms | 27.871 ms | -55.45% |
-| Complete compilation | 508.445 ms | 472.598 ms | -7.05% |
-| GPU execution | 25.026 ms | 25.070 ms | +0.18% |
-| Core transfer | 0.174 ms | 0.187 ms | +7.53% |
-| Core commit | 0.008 ms | 0.006 ms | -26.18% |
-| GPU Wasm emission | 36.321 ms | 37.065 ms | +2.05% |
+| Measurement          |     Before |      After |  Change |
+| -------------------- | ---------: | ---------: | ------: |
+| GPU Core pass        |  62.562 ms |  27.871 ms | -55.45% |
+| Complete compilation | 508.445 ms | 472.598 ms |  -7.05% |
+| GPU execution        |  25.026 ms |  25.070 ms |  +0.18% |
+| Core transfer        |   0.174 ms |   0.187 ms |  +7.53% |
+| Core commit          |   0.008 ms |   0.006 ms | -26.18% |
+| GPU Wasm emission    |  36.321 ms |  37.065 ms |  +2.05% |
 
 Transfer and commit changes are below 0.02 ms. The Core-pass reduction matches
-the removed 34.708-ms validation observed in the preceding decomposition.
-Stable GPU execution is a negative control; all observations emitted identical
+the removed 34.708-ms validation observed in the preceding decomposition. Stable
+GPU execution is a negative control; all observations emitted identical
 226,134-byte Wasm. Result provenance makes the trust path executable:
 compiler-owned jobs report `construction`, while direct raw GPU tests report
 `validation`.
@@ -1723,16 +1723,16 @@ those matches independently; host proposals are discarded. Five frozen targets
 have zero matches and avoid the physical Core GPU boundary. Tar retains 24
 matches.
 
-An alternating 21-pair Codex required-GPU experiment after one unrecorded
-warmup compared the current tree with detached commit `e1a739f`:
+An alternating 21-pair Codex required-GPU experiment after one unrecorded warmup
+compared the current tree with detached commit `e1a739f`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| GPU Core pass | 27.410 ms | 2.285 ms | -91.66% |
-| Complete compilation | 466.411 ms | 442.888 ms | -5.04% |
-| Core GPU execution | 24.529 ms | 0 ms | -100% |
-| GPU Wasm emission | 36.934 ms | 34.604 ms | -6.31% |
-| Candidate operations | 963 | 0 | -100% |
+| Measurement          |     Before |      After |  Change |
+| -------------------- | ---------: | ---------: | ------: |
+| GPU Core pass        |  27.410 ms |   2.285 ms | -91.66% |
+| Complete compilation | 466.411 ms | 442.888 ms |  -5.04% |
+| Core GPU execution   |  24.529 ms |       0 ms |   -100% |
+| GPU Wasm emission    |  36.934 ms |  34.604 ms |  -6.31% |
+| Candidate operations |        963 |          0 |   -100% |
 
 Initialization, transfer, and commit also become exactly zero. The Wasm movement
 is outside the change and is not attributed. All observations emitted the same
@@ -1748,14 +1748,14 @@ five `core=identity`, and every target reported GPU Wasm emission.
 
 Trusted compiler input now computes its exact frontier before queueing. Empty
 jobs return immediately; nonempty jobs carry prepared descriptors through the
-queue. An alternating 21-pair Codex required-GPU experiment after one
-unrecorded warmup compared the current tree with detached commit `f8bd93a`:
+queue. An alternating 21-pair Codex required-GPU experiment after one unrecorded
+warmup compared the current tree with detached commit `f8bd93a`:
 
-| Measurement | Before | After | Change |
-| ----------- | -----: | ----: | -----: |
-| GPU Core pass | 2.310 ms | 0.113 ms | -95.12% |
-| Complete compilation | 435.368 ms | 428.949 ms | -1.47% |
-| GPU Wasm emission | 36.794 ms | 36.745 ms | -0.13% |
+| Measurement          |     Before |      After |  Change |
+| -------------------- | ---------: | ---------: | ------: |
+| GPU Core pass        |   2.310 ms |   0.113 ms | -95.12% |
+| Complete compilation | 435.368 ms | 428.949 ms |  -1.47% |
+| GPU Wasm emission    |  36.794 ms |  36.745 ms |  -0.13% |
 
 All samples emitted identical 226,134-byte Wasm and retained `core=identity`.
 Only the 2.198-ms Core-stage reduction is isolated; the larger total movement
@@ -1772,14 +1772,14 @@ Core results now report logical queue batch size separately from physically
 packed payload size. Identity has a logical job but no packed payload,
 submission, dispatched lane, or downstream-parallel function:
 
-| Target | Backend | Functions | Downstream parallel | Logical batch | Physical payload | Submission |
-| ------ | ------- | --------: | ------------------: | ------------: | ---------------: | ---------: |
-| Editor | identity | 101 | 0 | 1 | 0 | 0 |
-| Codex | identity | 301 | 0 | 1 | 0 | 0 |
-| grep | identity | 12 | 0 | 1 | 0 | 0 |
-| Tar | gpu | 12 | 12 | 1 | 1 | 1 |
-| wav | identity | 6 | 0 | 1 | 0 | 0 |
-| raytracer | identity | 15 | 0 | 1 | 0 | 0 |
+| Target    | Backend  | Functions | Downstream parallel | Logical batch | Physical payload | Submission |
+| --------- | -------- | --------: | ------------------: | ------------: | ---------------: | ---------: |
+| Editor    | identity |       101 |                   0 |             1 |                0 |          0 |
+| Codex     | identity |       301 |                   0 |             1 |                0 |          0 |
+| grep      | identity |        12 |                   0 |             1 |                0 |          0 |
+| Tar       | gpu      |        12 |                  12 |             1 |                1 |          1 |
+| wav       | identity |         6 |                   0 |             1 |                0 |          0 |
+| raytracer | identity |        15 |                   0 |             1 |                0 |          0 |
 
 These are exact profile values, not timings. Direct raw throughput identity
 still reports logical batch size two and physical size zero. The concurrency
@@ -1791,11 +1791,11 @@ targets compiled twice to byte-identical, engine-valid Wasm.
 
 ### Rejected Core rule expansion
 
-The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and
-`x / 1 → x` for i32/i64; division by positive one neither divides by zero nor
-triggers signed overflow. An exact scan of the six frozen pre-rewrite snapshots
-found zero matches for all three rules in both CPU and required-GPU
-compilations. The only existing matches are Tar's 24 add-zero operations.
+The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and `x / 1 → x` for
+i32/i64; division by positive one neither divides by zero nor triggers signed
+overflow. An exact scan of the six frozen pre-rewrite snapshots found zero
+matches for all three rules in both CPU and required-GPU compilations. The only
+existing matches are Tar's 24 add-zero operations.
 
 Adding those rules now would widen the CPU rule head and WGSL branch set without
 removing one operation in the measured contract. They remain rejected until a
@@ -1866,14 +1866,14 @@ entered that branch:
 The first six-warm-sample run with the decomposed type profile selected these
 real observations nearest each target's median GPU total:
 
-| Target    | Flatten | CPU closure | GPU union | Cycle check | Constructor comparisons |
-| --------- | ------: | ----------: | --------: | ----------: | ----------------------: |
-| Editor    | 3.85 ms |     7.57 ms |  28.84 ms |     0.39 ms |                   4,176 |
-| Codex     | 24.78 ms |  131.60 ms |  31.74 ms |     2.04 ms |                  41,971 |
-| grep      | 1.29 ms |     1.67 ms |  28.22 ms |     0.18 ms |                   1,264 |
-| tar       | 12.59 ms |   24.85 ms |  30.30 ms |     0.48 ms |                  12,051 |
-| wav       | 0.21 ms |     0.15 ms |  29.30 ms |     0.02 ms |                      90 |
-| raytracer | 0.20 ms |     0.09 ms |  28.77 ms |     0.02 ms |                      36 |
+| Target    |  Flatten | CPU closure | GPU union | Cycle check | Constructor comparisons |
+| --------- | -------: | ----------: | --------: | ----------: | ----------------------: |
+| Editor    |  3.85 ms |     7.57 ms |  28.84 ms |     0.39 ms |                   4,176 |
+| Codex     | 24.78 ms |   131.60 ms |  31.74 ms |     2.04 ms |                  41,971 |
+| grep      |  1.29 ms |     1.67 ms |  28.22 ms |     0.18 ms |                   1,264 |
+| tar       | 12.59 ms |    24.85 ms |  30.30 ms |     0.48 ms |                  12,051 |
+| wav       |  0.21 ms |     0.15 ms |  29.30 ms |     0.02 ms |                      90 |
+| raytracer |  0.20 ms |     0.09 ms |  28.77 ms |     0.02 ms |                      36 |
 
 These are observed-run diagnostics, not independent field medians or a
 before/after experiment. They distinguish a roughly 29–32 ms submission/readback
@@ -1885,13 +1885,13 @@ An eager union-find constructor-witness worklist then replaced repeated global
 frontiers:
 
 | Target    | Comparisons before → after | Proposal reduction | Certificate reduction | CPU closure before → after |
-| --------- | -------------------------: | -----------------: | --------------------: | ------------------------: |
-| Editor    |                4,176 → 711 |             82.99% |                 3.07% |            7.57 → 1.39 ms |
-| Codex     |             41,971 → 5,276 |             87.43% |                 2.38% |         131.60 → 27.41 ms |
-| grep      |                1,264 → 266 |             78.96% |                 4.41% |            1.67 → 1.07 ms |
-| tar       |             12,051 → 1,738 |             85.58% |                 1.17% |           24.85 → 4.05 ms |
-| wav       |                    90 → 45 |             50.00% |                 0.00% |            0.15 → 0.09 ms |
-| raytracer |                    36 → 36 |              0.00% |                 0.00% |            0.09 → 0.11 ms |
+| --------- | -------------------------: | -----------------: | --------------------: | -------------------------: |
+| Editor    |                4,176 → 711 |             82.99% |                 3.07% |             7.57 → 1.39 ms |
+| Codex     |             41,971 → 5,276 |             87.43% |                 2.38% |          131.60 → 27.41 ms |
+| grep      |                1,264 → 266 |             78.96% |                 4.41% |             1.67 → 1.07 ms |
+| tar       |             12,051 → 1,738 |             85.58% |                 1.17% |            24.85 → 4.05 ms |
+| wav       |                    90 → 45 |             50.00% |                 0.00% |             0.15 → 0.09 ms |
+| raytracer |                    36 → 36 |              0.00% |                 0.00% |             0.09 → 0.11 ms |
 
 The two columns of timings come from separate six-warm-sample runs, so they are
 advisory rather than paired confidence intervals. Exact counts do not have that
@@ -1914,10 +1914,10 @@ of its output reached types, Core, or Wasm:
 
 Each row also removes one command submission, one mapped readback, CPU
 flatten/closure/cycle work, and exact representative comparison. The byte and
-lane counts follow \(8(T+M)\) and
-\(64\lceil M/64\rceil+64\lceil T/64\rceil\) from Section 7.5. The timing column
-is the real pre-removal observation selected by the six-sample harness; it
-measures removed sequential work but is not a paired end-to-end speedup.
+lane counts follow \(8(T+M)\) and \(64\lceil M/64\rceil+64\lceil T/64\rceil\)
+from Section 7.5. The timing column is the real pre-removal observation selected
+by the six-sample harness; it measures removed sequential work but is not a
+paired end-to-end speedup.
 
 The post-removal 499-test release gate compiled every target twice:
 
@@ -1931,14 +1931,13 @@ The post-removal 499-test release gate compiled every target twice:
 | raytracer |             129.01 ms |             129.71 ms |
 
 Every pair emitted byte-identical Wasm and passed engine validation. Two release
-samples establish correctness and budget compliance, not a latency
-distribution.
+samples establish correctness and budget compliance, not a latency distribution.
 
 The earlier dense-branch removal left frozen production work unchanged because
 all targets already used certified CPU closure, one GPU union/compression
 submission, and sparse CPU cycle detection. Its deterministic reduction was
-implementation surface—four shader pipelines and 955 source lines—and removal
-of an unused \(T^2/T^3\) resource hazard. Compatible, clashing, cyclic, deep,
+implementation surface—four shader pipelines and 955 source lines—and removal of
+an unused \(T^2/T^3\) resource hazard. Compatible, clashing, cyclic, deep,
 concurrent, and generated differential cases preserved their results through
 both changes. The post-worklist required-GPU gate passed 499 tests and compiled
 all six targets twice with byte-identical emission and engine validation.
@@ -1985,40 +1984,40 @@ batch. Capacity overflow splits a batch in stable order.
 
 | Jobs | Latency CPU/GPU total | Paired GPU−CPU median/MAD | Throughput CPU/GPU total | Paired GPU−CPU median/MAD | Latency/throughput Wasm payload |
 | ---: | --------------------: | ------------------------: | -----------------------: | ------------------------: | ------------------------------: |
-|    1 |       12.48/38.88 ms |           26.97/0.90 ms |        10.09/39.70 ms |           29.81/0.82 ms |                             1/1 |
-|    2 |       23.75/49.96 ms |           26.23/0.97 ms |        18.21/44.76 ms |           26.50/0.82 ms |                             2/2 |
-|    4 |       41.64/69.94 ms |           28.78/2.72 ms |        37.18/73.65 ms |           36.80/2.25 ms |                             4/3 |
-|    8 |      78.81/107.79 ms |           28.19/3.92 ms |       76.37/111.05 ms |           34.67/3.75 ms |                             8/4 |
-|   16 |     149.13/181.82 ms |           30.81/5.52 ms |      156.59/188.40 ms |           35.84/6.28 ms |                          16/9.5 |
-|   32 |     305.19/329.72 ms |          24.74/12.21 ms |      301.14/328.11 ms |          26.99/11.51 ms |                           16/16 |
-|   64 |     611.03/663.77 ms |          41.32/13.78 ms |      603.34/645.70 ms |           30.98/8.84 ms |                           16/16 |
+|    1 |        12.48/38.88 ms |             26.97/0.90 ms |           10.09/39.70 ms |             29.81/0.82 ms |                             1/1 |
+|    2 |        23.75/49.96 ms |             26.23/0.97 ms |           18.21/44.76 ms |             26.50/0.82 ms |                             2/2 |
+|    4 |        41.64/69.94 ms |             28.78/2.72 ms |           37.18/73.65 ms |             36.80/2.25 ms |                             4/3 |
+|    8 |       78.81/107.79 ms |             28.19/3.92 ms |          76.37/111.05 ms |             34.67/3.75 ms |                             8/4 |
+|   16 |      149.13/181.82 ms |             30.81/5.52 ms |         156.59/188.40 ms |             35.84/6.28 ms |                          16/9.5 |
+|   32 |      305.19/329.72 ms |            24.74/12.21 ms |         301.14/328.11 ms |            26.99/11.51 ms |                           16/16 |
+|   64 |      611.03/663.77 ms |            41.32/13.78 ms |         603.34/645.70 ms |             30.98/8.84 ms |                           16/16 |
 
 Times are 16-sample medians; paired columns use the retained adjacent
 observations. Latency mode flushes on the next scheduler turn. Throughput mode
 waits for at most 2 ms, 16 jobs, or a capacity boundary. Neither policy reaches
-break-even through the maximum measured size of 64. At 64 jobs, throughput
-costs 10.089 ms per GPU compilation versus 9.427 ms per CPU compilation, while
-the paired 30.975 ms premium amortizes to 0.484 ms/job. This is a bounded
-negative result. It does not imply that 64 is a lower bound on a crossover or
-that the latency difference is monotone. Physical Wasm packing saturates at the
-configured 16-job boundary, so a larger physical batch remains a separate
-policy experiment.
+break-even through the maximum measured size of 64. At 64 jobs, throughput costs
+10.089 ms per GPU compilation versus 9.427 ms per CPU compilation, while the
+paired 30.975 ms premium amortizes to 0.484 ms/job. This is a bounded negative
+result. It does not imply that 64 is a lower bound on a crossover or that the
+latency difference is monotone. Physical Wasm packing saturates at the
+configured 16-job boundary, so a larger physical batch remains a separate policy
+experiment.
 
 That experiment was run immediately afterward with the shared payload and
 submission cap changed from 16 to 64. For \(N\) simultaneously ready jobs, the
-idealized physical-batch count falls from \(\lceil N/16\rceil\) to
-\(\lceil N/64\rceil\), while atom work and logical payload bytes remain
-unchanged. Each removed physical batch can avoid nine buffer allocations, one
-map/readback boundary, and one packed command construction. The opposing costs
-are larger host columns and device buffers, alignment padding, and a longer
-single packing loop.
+idealized physical-batch count falls from \(\lceil N/16\rceil\) to \(\lceil
+N/64\rceil\), while atom work and logical payload bytes remain unchanged. Each
+removed physical batch can avoid nine buffer allocations, one map/readback
+boundary, and one packed command construction. The opposing costs are larger
+host columns and device buffers, alignment padding, and a longer single packing
+loop.
 
-| Policy | Jobs | Cap 16 paired median/MAD | Cap 64 paired median/MAD | Cap 16→64 physical payload |
-| ------ | ---: | -----------------------: | -----------------------: | -------------------------: |
-| latency | 32 | 24.74/12.21 ms | 40.80/19.94 ms | 16→32 |
-| latency | 64 | 41.32/13.78 ms | 36.43/21.91 ms | 16→64 |
-| throughput | 32 | 26.99/11.51 ms | 44.27/8.96 ms | 16→20.5 |
-| throughput | 64 | 30.98/8.84 ms | 35.61/15.12 ms | 16→34.5 |
+| Policy     | Jobs | Cap 16 paired median/MAD | Cap 64 paired median/MAD | Cap 16→64 physical payload |
+| ---------- | ---: | -----------------------: | -----------------------: | -------------------------: |
+| latency    |   32 |           24.74/12.21 ms |           40.80/19.94 ms |                      16→32 |
+| latency    |   64 |           41.32/13.78 ms |           36.43/21.91 ms |                      16→64 |
+| throughput |   32 |           26.99/11.51 ms |            44.27/8.96 ms |                    16→20.5 |
+| throughput |   64 |            30.98/8.84 ms |           35.61/15.12 ms |                    16→34.5 |
 
 The larger cap reached larger physical batches but did not produce a consistent
 latency improvement. At 32 jobs both policies regressed; at 64, throughput
@@ -2035,14 +2034,14 @@ policy.
 
 The current isolated emitter medians justify eliminating the default attempt:
 
-| Target | CPU emitter | Adaptive GPU emitter | GPU/CPU |
-| ------ | ----------: | -------------------: | ------: |
-| Editor | 0.412 ms | 28.008 ms | 67.93× |
-| Codex | 3.395 ms | 35.804 ms | 10.55× |
-| grep | 0.069 ms | 27.286 ms | 396.75× |
-| tar | 0.347 ms | 28.028 ms | 80.75× |
-| wav | 0.041 ms | 27.067 ms | 665.53× |
-| raytracer | 0.061 ms | 27.175 ms | 442.59× |
+| Target    | CPU emitter | Adaptive GPU emitter | GPU/CPU |
+| --------- | ----------: | -------------------: | ------: |
+| Editor    |    0.412 ms |            28.008 ms |  67.93× |
+| Codex     |    3.395 ms |            35.804 ms |  10.55× |
+| grep      |    0.069 ms |            27.286 ms | 396.75× |
+| tar       |    0.347 ms |            28.028 ms |  80.75× |
+| wav       |    0.041 ms |            27.067 ms | 665.53× |
+| raytracer |    0.061 ms |            27.175 ms | 442.59× |
 
 These 21-sample emitter measurements use already-constructed plans and do not
 predict another adapter. Together with the bounded negative 64-job experiment,
