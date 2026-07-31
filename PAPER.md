@@ -4980,6 +4980,25 @@ captured environments, and static-argument serialization as primary causes.
 The remaining specialization frontier is transformation of requested bodies,
 not construction of their cache keys.
 
+### 2026-07-31: specialization request work is heavy-tailed
+
+Review 73 temporarily attributes rewrite entries exclusively to the innermost
+active specialization request. Editor's completed requests contain 1,881
+entries total and its largest contains 958, or 50.93%. Codex contains 114,281
+entries total and its largest contains 32,184, or 28.16%. Grep's only request
+contains two entries.
+
+These maxima reject a uniform per-key work model: dividing Codex work by 703
+keys gives 162.56 entries/key, but one request costs 197.98 times that mean.
+Consequently, optimizing key lookup or scheduling every request equally cannot
+address the dominant request. The counter stack correctly attributes nested
+requests to the innermost request, so parent counts exclude child work.
+
+The hot counters were removed. The next measurement must quantify how many
+requests inhabit the heavy tail and how much work they cover before choosing
+between large-body memoization, request fusion, or a body-specific rewrite
+primitive.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

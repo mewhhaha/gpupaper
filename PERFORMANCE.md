@@ -522,6 +522,13 @@ and the other targets none. Codex key identity calls are only 1.09% of its
 130,143 rewrite entries. Temporary counters were removed; key construction is
 closed as the dominant rewrite frontier.
 
+Exclusive per-request rewrite instrumentation shows a heavy tail. Editor has
+1,881 substitution entries total and a 958-entry maximum (50.93%). Codex has
+114,281 total and a 32,184-entry maximum (28.16%). That Codex request is
+197.98× the naive 162.56-entry mean across 703 keys. Grep's sole request has two
+entries. Temporary counters were removed; uniform request optimization is not
+the right model.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
