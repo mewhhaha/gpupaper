@@ -1129,6 +1129,34 @@ three-bit tag packing is denser but makes some tags cross word boundaries or
 restricts each word to ten tags; the nibble representation trades at most one
 bit per tag for one-word, shift-and-mask random access.
 
+A deferred low-word alternative separates byte atoms from all other atoms. Let
+\(B\) be the byte-atom count and \(N=A-B\). Constant-time random access would
+need a packed byte stream, a dense non-byte stream, and an exclusive byte rank
+for each eight-tag word:
+
+```text
+L_ranked(A, B) =
+    4 ceil(B / 4)
+  + 4(A - B)
+  + 4 ceil(A / 8)
+```
+
+It beats the current `4A` low-word column exactly when:
+
+```text
+B - ceil(B / 4) > ceil(A / 8)
+```
+
+asymptotically \(B>A/6\). Every frozen target satisfies that capacity condition,
+but lookup requires two additional storage bindings and the count of preceding
+byte tags within the current eight-tag word—up to seven comparisons in every
+emission lane. The predicted total-input saving is only 13.94–16.21% on the
+frozen plans. Because this trades certain extra lane work for capacity after the
+emitter has already become a single pass, it remains an unimplemented hypothesis
+pending counterbalanced latency evidence. A rank-free sparse pair frontier would
+require binary search in most lanes and is strictly less attractive for the
+observed 56.19–62.63% byte density.
+
 For comparison with the superseded hierarchy, let \(K\) be the number of length
 atoms, \(J\) its nonempty dependency levels, \(n_0=A\), \(n_{\ell+1}=\lceil
 n_\ell/W\rceil\), \(h\) the number of hierarchy levels, and
@@ -2205,6 +2233,20 @@ byte to independent CPU emission. On the frozen \(S=0\) plans, editor removes
 32%. Signed-64 count, high-word bytes, and total atom-input bytes are executable
 profile fields. The full 498-test and six-target release gate passed. This is a
 deterministic capacity result, not a latency claim.
+
+### 2026-07-31: ranked low-word compression remains deferred
+
+The remaining dense low-word column admits a rank/select representation: byte
+values pack four per word, other values remain one word each, and one exclusive
+byte rank is stored per eight atom tags. The exact break-even is \(B-\lceil
+B/4\rceil>\lceil A/8\rceil\); all frozen targets satisfy it.
+
+Derived savings are 3,236–245,336 bytes, or 13.94–16.21% of current atom input.
+Unlike nibble tags or the empty signed-64 frontier, this representation adds two
+bindings and up to seven tag comparisons to every emission lane. No
+implementation or speedup is claimed. The alternative is recorded as a
+performance hypothesis whose next admissible evidence is a counterbalanced
+dense-versus-ranked kernel benchmark, not another capacity calculation.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

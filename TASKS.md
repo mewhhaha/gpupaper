@@ -1008,6 +1008,9 @@ Core receives no source handler or open effect row.
 - [x] Represent signed-64 high words by the smaller of a dense column and a
       sorted sparse frontier. The `min(4A, 8S)` rule has dense and sparse
       byte-differential regressions and executable capacity metrics.
+- [x] Derive ranked low-word compression and defer it at the measured boundary.
+      It saves 13.94–16.21% of atom input but adds two bindings and up to seven
+      tag comparisons per lane; implementation requires latency evidence.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

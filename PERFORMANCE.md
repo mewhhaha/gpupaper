@@ -414,6 +414,28 @@ reserves the four-byte WebGPU binding minimum. Sparse and dense signed-64
 regressions compare extrema byte-for-byte with CPU emission. No dispatch is
 added.
 
+### Deferred ranked low words
+
+Packing byte values while retaining random access requires a packed byte stream,
+a non-byte stream, and one exclusive byte rank per eight atom tags. Its exact
+logical size is `4 ceil(B / 4) + 4(A - B) + 4 ceil(A / 8)`, versus the current
+`4A` low-word column.
+
+| Target    | Byte atoms | Dense low bytes | Ranked low bytes | Bytes saved | Total-input reduction |
+| --------- | ---------: | --------------: | ---------------: | ----------: | --------------------: |
+| Editor    |     13,895 |          95,692 |           65,972 |      29,720 |                14.62% |
+| Codex     |    115,797 |         816,396 |          571,060 |     245,336 |                14.14% |
+| grep      |      2,348 |          15,588 |           10,496 |       5,092 |                15.37% |
+| tar       |     12,474 |          88,804 |           62,488 |      26,316 |                13.94% |
+| wav       |      1,493 |           9,908 |            6,672 |       3,236 |                15.37% |
+| raytracer |      2,412 |          15,404 |           10,096 |       5,308 |                16.21% |
+
+The capacity condition is satisfied, but lookup adds two storage bindings and up
+to seven within-word tag comparisons in every emission lane. This alternative is
+not implemented. A counterbalanced kernel benchmark must show that the
+13.94–16.21% total-input reduction pays for the certain extra work before it can
+replace the dense column.
+
 ### Compacted Core rewrite frontier
 
 The current rewrite rules can match only `scalarBinary` operations. Dispatching
