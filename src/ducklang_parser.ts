@@ -774,6 +774,25 @@ function normalizeExpressionStatementBoundaries(
 function classifyContextualTokens(source: string): string {
   const classified = source.split("");
   classifyMultilineArrowParameters(source, classified);
+  const patterns = {
+    lineArrayOpen: /[\r\n][ \t]*\[/y,
+    dottedShorthand: /\.[A-Za-z][A-Za-z0-9_]*(?=[ \t\r\n]*(?:,|\}))/y,
+    trailingArrayClose: /,[ \t\r\n]*\]/y,
+    trailingShapeClose: /,[ \t\r\n]*\}/y,
+    caretOperator: /\^{2,}/y,
+    handlerKeyword: /handler(?=[ \t]+[A-Z])/y,
+    floatLiteral: /([0-9])([0-9]*\.[0-9]+f(?:32|64))\b/y,
+    hexadecimalLiteral: /0[xX][0-9A-Fa-f]+\b/y,
+    discardedArrow: /_[ \t]*=>/y,
+    singleArrowParameter: /([A-Za-z][A-Za-z0-9_]*)([ \t]*)=>/y,
+    recordShape: /\{[ \t\r\n]*\./y,
+    shorthandRecord:
+      /\{[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*(?:[ \t\r\n]*,[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*)+[ \t\r\n]*\}/y,
+  };
+  const matchAt = (pattern: RegExp, index: number): RegExpExecArray | null => {
+    pattern.lastIndex = index;
+    return pattern.exec(source);
+  };
   let quote: '"' | "'" | undefined;
   let escaped = false;
   let lineComment = false;
@@ -815,7 +834,7 @@ function classifyContextualTokens(source: string): string {
       (character === "\n" || character === "\r") &&
       delimiters.at(-1) === "("
     ) {
-      const arrayStart = source.slice(index).match(/^[\r\n][ \t]*\[/);
+      const arrayStart = matchAt(patterns.lineArrayOpen, index);
       if (arrayStart !== null) {
         for (
           let whitespace = index;
@@ -827,121 +846,148 @@ function classifyContextualTokens(source: string): string {
       }
     }
 
-    const remaining = source.slice(index);
-    let precedingDottedField = index - 1;
-    while (
-      precedingDottedField >= 0 &&
-      /[ \t\r\n]/.test(source[precedingDottedField])
-    ) {
-      precedingDottedField -= 1;
-    }
-    const dottedShorthand = source[precedingDottedField] === "{" ||
-        source[precedingDottedField] === ","
-      ? remaining.match(
-        /^\.[A-Za-z][A-Za-z0-9_]*(?=[ \t\r\n]*(?:,|\}))/,
-      )
-      : null;
-    if (dottedShorthand !== null) {
-      classified[index] = " ";
-      index += dottedShorthand[0].length - 1;
-      continue;
-    }
-    const trailingArrayClose = remaining.match(/^,[ \t\r\n]*\]/);
-    if (trailingArrayClose !== null) {
-      classified[index] = "\\";
-      classified[index + trailingArrayClose[0].length - 1] = "A";
-      index += trailingArrayClose[0].length - 1;
-      continue;
-    }
-    const trailingShapeClose = remaining.match(/^,[ \t\r\n]*\}/);
-    if (trailingShapeClose !== null) {
-      classified[index] = "\\";
-      index += trailingShapeClose[0].length - 1;
-      continue;
-    }
-    const caretOperator = remaining.match(/^\^{2,}/);
-    if (caretOperator !== null) {
-      classified[index] = "\\";
-      classified[index + caretOperator[0].length - 1] = "C";
-      index += caretOperator[0].length - 1;
-      continue;
-    }
-    const handlerKeyword = remaining.match(/^handler(?=[ \t]+[A-Z])/);
-    if (handlerKeyword !== null) {
-      classified[index] = "\\";
-      classified[index + handlerKeyword[0].length - 1] = "K";
-      index += handlerKeyword[0].length - 1;
-      continue;
-    }
-    const floatLiteral = remaining.match(
-      /^([0-9])([0-9]*\.[0-9]+f(?:32|64))\b/,
-    );
-    if (floatLiteral !== null) {
-      const decimalPoint = index + floatLiteral[0].indexOf(".");
-      classified[index] = "\\";
-      classified[decimalPoint] = String.fromCharCode(
-        "k".charCodeAt(0) + Number.parseInt(floatLiteral[1], 10),
-      );
-      index += floatLiteral[0].length - 1;
-      continue;
-    }
-    const hexadecimalLiteral = remaining.match(/^0[xX][0-9A-Fa-f]+\b/);
-    if (hexadecimalLiteral !== null) {
-      classified[index] = "\\";
-      classified[index + 1] = "H";
-      index += hexadecimalLiteral[0].length - 1;
-      continue;
-    }
-    const discardedArrow = canStartBareArrowFunction(source, index)
-      ? remaining.match(/^_[ \t]*=>/)
-      : null;
-    if (discardedArrow !== null) {
-      classified[index] = "\\";
-      classified[index + 1] = "D";
-      for (
-        let padding = index + 2;
-        padding < index + discardedArrow[0].length;
-        padding += 1
+    if (character === ".") {
+      let precedingDottedField = index - 1;
+      while (
+        precedingDottedField >= 0 &&
+        /[ \t\r\n]/.test(source[precedingDottedField])
       ) {
-        classified[padding] = "~";
+        precedingDottedField -= 1;
       }
-      index += discardedArrow[0].length - 1;
-      continue;
+      const dottedShorthand = source[precedingDottedField] === "{" ||
+          source[precedingDottedField] === ","
+        ? matchAt(patterns.dottedShorthand, index)
+        : null;
+      if (dottedShorthand !== null) {
+        classified[index] = " ";
+        index += dottedShorthand[0].length - 1;
+        continue;
+      }
     }
-    const singleArrowParameter = canStartSingleArrowFunction(source, index)
-      ? remaining.match(/^([A-Za-z][A-Za-z0-9_]*)([ \t]*)=>/)
-      : null;
-    if (singleArrowParameter !== null) {
-      classified[index] = "\\";
-      classified[index + singleArrowParameter[0].length - 1] =
-        singleArrowParameter[1][0];
-      index += singleArrowParameter[0].length - 1;
-      continue;
+    if (character === ",") {
+      const trailingArrayClose = matchAt(patterns.trailingArrayClose, index);
+      if (trailingArrayClose !== null) {
+        classified[index] = "\\";
+        classified[index + trailingArrayClose[0].length - 1] = "A";
+        index += trailingArrayClose[0].length - 1;
+        continue;
+      }
+      const trailingShapeClose = matchAt(patterns.trailingShapeClose, index);
+      if (trailingShapeClose !== null) {
+        classified[index] = "\\";
+        index += trailingShapeClose[0].length - 1;
+        continue;
+      }
     }
-    const precedingSource = source.slice(0, index).trimEnd();
-    const recordExpressionContext = precedingSource.length === 0 ||
-      precedingSource.endsWith(":+") ||
-      precedingSource.endsWith("<&") ||
-      precedingSource.endsWith(";") ||
-      precedingSource.endsWith("}");
-    const recordShape = recordExpressionContext
-      ? remaining.match(/^\{[ \t\r\n]*\./)
-      : null;
-    if (recordShape !== null) {
-      classified[index] = "\\";
-      classified[index + recordShape[0].length - 1] = "R";
-      index += recordShape[0].length - 1;
-      continue;
+    if (character === "^") {
+      const caretOperator = matchAt(patterns.caretOperator, index);
+      if (caretOperator !== null) {
+        classified[index] = "\\";
+        classified[index + caretOperator[0].length - 1] = "C";
+        index += caretOperator[0].length - 1;
+        continue;
+      }
     }
-    const shorthandRecord = recordExpressionContext
-      ? remaining.match(
-        /^\{[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*(?:[ \t\r\n]*,[ \t\r\n]*[A-Za-z][A-Za-z0-9_]*)+[ \t\r\n]*\}/,
-      )
-      : null;
-    if (shorthandRecord !== null) {
-      classified[index] = "\\";
-      classified[index + shorthandRecord[0].length - 1] = "S";
-      index += shorthandRecord[0].length - 1;
+    if (character === "h") {
+      const handlerKeyword = matchAt(patterns.handlerKeyword, index);
+      if (handlerKeyword !== null) {
+        classified[index] = "\\";
+        classified[index + handlerKeyword[0].length - 1] = "K";
+        index += handlerKeyword[0].length - 1;
+        continue;
+      }
+    }
+    if (/[0-9]/.test(character)) {
+      const floatLiteral = matchAt(patterns.floatLiteral, index);
+      if (floatLiteral !== null) {
+        const decimalPoint = index + floatLiteral[0].indexOf(".");
+        classified[index] = "\\";
+        classified[decimalPoint] = String.fromCharCode(
+          "k".charCodeAt(0) + Number.parseInt(floatLiteral[1], 10),
+        );
+        index += floatLiteral[0].length - 1;
+        continue;
+      }
+      const hexadecimalLiteral = matchAt(
+        patterns.hexadecimalLiteral,
+        index,
+      );
+      if (hexadecimalLiteral !== null) {
+        classified[index] = "\\";
+        classified[index + 1] = "H";
+        index += hexadecimalLiteral[0].length - 1;
+        continue;
+      }
+    }
+    if (
+      character === "_" &&
+      canStartBareArrowFunction(source, index)
+    ) {
+      const discardedArrow = matchAt(patterns.discardedArrow, index);
+      if (discardedArrow !== null) {
+        classified[index] = "\\";
+        classified[index + 1] = "D";
+        for (
+          let padding = index + 2;
+          padding < index + discardedArrow[0].length;
+          padding += 1
+        ) {
+          classified[padding] = "~";
+        }
+        index += discardedArrow[0].length - 1;
+        continue;
+      }
+    }
+    if (
+      /[A-Za-z]/.test(character) &&
+      canStartSingleArrowFunction(source, index)
+    ) {
+      const singleArrowParameter = matchAt(
+        patterns.singleArrowParameter,
+        index,
+      );
+      if (singleArrowParameter !== null) {
+        classified[index] = "\\";
+        classified[index + singleArrowParameter[0].length - 1] =
+          singleArrowParameter[1][0];
+        index += singleArrowParameter[0].length - 1;
+        continue;
+      }
+    }
+    if (character === "{") {
+      let precedingRecord = index - 1;
+      while (
+        precedingRecord >= 0 &&
+        /[ \t\r\n]/.test(source[precedingRecord])
+      ) {
+        precedingRecord -= 1;
+      }
+      const precedingCharacter = source[precedingRecord];
+      const precedingPair = precedingRecord < 1
+        ? ""
+        : source.slice(precedingRecord - 1, precedingRecord + 1);
+      const recordExpressionContext = precedingRecord < 0 ||
+        precedingPair === ":+" ||
+        precedingPair === "<&" ||
+        precedingCharacter === ";" ||
+        precedingCharacter === "}";
+      const recordShape = recordExpressionContext
+        ? matchAt(patterns.recordShape, index)
+        : null;
+      if (recordShape !== null) {
+        classified[index] = "\\";
+        classified[index + recordShape[0].length - 1] = "R";
+        index += recordShape[0].length - 1;
+        continue;
+      }
+      const shorthandRecord = recordExpressionContext
+        ? matchAt(patterns.shorthandRecord, index)
+        : null;
+      if (shorthandRecord !== null) {
+        classified[index] = "\\";
+        classified[index + shorthandRecord[0].length - 1] = "S";
+        index += shorthandRecord[0].length - 1;
+      }
     }
   }
   return classified.join("");

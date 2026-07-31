@@ -105,12 +105,12 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    | 114.37 ms | 173.73 ms |     24,460 |
-| Codex     | 514.93 ms | 605.79 ms |    226,134 |
-| grep      |  14.63 ms |  70.56 ms |      3,911 |
-| tar       |  68.12 ms | 122.80 ms |     26,106 |
-| wav       |   7.73 ms |  63.49 ms |      2,520 |
-| raytracer |  11.60 ms |  41.75 ms |      3,864 |
+| Editor    | 103.66 ms | 164.34 ms |     24,460 |
+| Codex     | 506.72 ms | 582.58 ms |    226,134 |
+| grep      |  13.26 ms |  67.41 ms |      3,911 |
+| tar       |  66.40 ms | 120.86 ms |     26,106 |
+| wav       |   7.55 ms |  61.79 ms |      2,520 |
+| raytracer |  11.37 ms |  40.75 ms |      3,864 |
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
@@ -137,7 +137,7 @@ at 299.96→297.30 ms. The deterministic work and code-size reductions are the
 supported performance claim.
 
 Single dirty compilations remain faster on CPU. On Editor the warm GPU path is
-1.52× the CPU time; on Codex it is 1.18×. The GPU stages are useful validation
+1.59× the CPU time; on Codex it is 1.15×. The GPU stages are useful validation
 and batching boundaries, but these measurements do not justify moving effect
 inference or handler lowering past the semantic CPU boundary.
 
@@ -172,6 +172,37 @@ are consistent with the exact analysis counts but are not a counterbalanced
 causal experiment. A no-session regression requires zero second-compilation
 analysis, positive reuse, and byte-identical Wasm. The 505-test required-GPU
 gate passed and compiled every frozen target twice.
+
+### Contextual-classifier substring audit
+
+The old contextual scan requested a suffix and a trimmed prefix at every source
+position. Their combined logical extent is exactly \(n^2\) characters even if a
+particular JavaScript engine represents some substrings as views. The current
+scan dispatches anchored sticky patterns by their necessary first character,
+and computes dotted and record context only at `.` and `{`.
+
+Thirty-one warm Editor-root observations after one unrecorded warmup produced:
+
+| Syntax component          | Before |  After | Change |
+| ------------------------- | -----: | -----: | -----: |
+| Contextual classification | 18.476 |  4.670 | -74.73% |
+| Generated parser          |  6.901 |  6.917 |  +0.23% |
+| AST lowering              | 10.077 | 10.775 |  +6.93% |
+| Complete syntax stage     | 25.349 | 11.845 | -53.27% |
+
+Times are milliseconds. The AST movement is not attributed to the classifier;
+the runs were consecutive separate-worktree measurements rather than
+counterbalanced pairs. The executable contract is length and span preservation
+plus identical acceptance and output over every vendored and frozen source.
+The focused syntax, frozen-target, and corpus-contract suites passed 94 tests.
+
+The subsequent six-sample alternating frontend benchmark changed CPU medians
+from 114.37 to 103.66 ms for Editor, 514.93 to 506.72 ms for Codex, 14.63 to
+13.26 ms for grep, 68.12 to 66.40 ms for Tar, 7.73 to 7.55 ms for wav, and
+11.60 to 11.37 ms for raytracer. The observed reductions range from 1.59% to
+9.36%; they are consistent with the isolated classifier result but are not a
+causal estimate. The required-GPU release gate passed 505 tests and compiled
+all six targets twice with byte-identical Wasm and engine validation.
 
 ### Demand-specialization audit
 

@@ -278,6 +278,10 @@ source-language special case to bypass an unfinished earlier phase.
       literal magnitude.
 - [x] Add a syntax test covering every vendored prelude and selected
       application.
+- [x] Make contextual classification inspect token-head candidates without
+      constructing unconditional source prefixes and suffixes. Preserve source
+      length and spans, dispatch only by necessary first characters, and retain
+      the quote, escape, comment, and delimiter state machine.
 
 Exit criterion: every recorded target reaches semantic analysis, so no remaining
 target is hidden behind a syntax error.

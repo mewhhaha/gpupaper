@@ -1692,6 +1692,50 @@ hashes its source, preserving change detection. Retained memory is
 \(O(\sum_{p=1}^{U}|AST_p|)\) with \(U\le23\); the cache does not retain
 elaboration, types, specialization state, or artifacts across compilations.
 
+Contextual classification is a length-preserving transduction from source
+characters to parser characters. Its state is the current quote and escape
+state, line-comment membership, and delimiter stack. Outside quoted and
+commented regions, a contextual rewrite at position \(i\) is selected by an
+anchored pattern whose first character is necessary for that pattern. The
+classifier therefore dispatches comma rewrites only at `,`, caret rewrites only
+at `^`, numeric rewrites only at a digit, arrow rewrites only at `_` or an ASCII
+letter, and record rewrites only at `{`. Every accepted rewrite replaces
+characters in the same interval and never changes its length, so all parser
+source spans remain source spans.
+
+The previous implementation requested both `source.slice(i)` and
+`source.slice(0, i).trimEnd()` at every one of \(n\) scan positions. Regardless
+of whether a JavaScript engine copies or views those substrings, their logical
+extent was:
+
+```text
+Σ(i = 0 .. n - 1) (n - i) + Σ(i = 0 .. n - 1) i = n² characters
+```
+
+For the 25,256-character Editor root this is 637,865,536 logically requested
+characters. The current implementation keeps one source string and one
+length-\(n\) character array. Sticky regular expressions are matched at the
+current index, so classification no longer constructs an unconditional prefix
+or suffix. The base state scan is \(O(n)\). Its conservative total bound is
+\(O(n + Q + \sum_a L_a)\), where \(Q\) is text inspected by contextual
+candidate patterns and \(L_a\) is the backward context inspected for each
+possible single-parameter arrow. Accepted candidates advance past their entire
+interval. This is not yet a proof of worst-case linear time: adversarial failed
+record candidates or many arrow-like identifiers can make the residual terms
+superlinear.
+
+Record-context recognition is derived from the old predicate rather than
+approximated. After skipping whitespace backwards from `{`, the prefix is empty
+or ends in exactly one of `:+`, `<&`, `;`, or `}`. Checking the previous
+non-whitespace character and its preceding pair is therefore equivalent to
+constructing and trimming the complete prefix. Pattern priority is unchanged,
+and a head dispatch may skip a pattern only when its anchored first character
+cannot match. Patterns are local to one classifier invocation because sticky
+regular expressions mutate `lastIndex`; sharing them would introduce reentrant
+state. A whole-source regular-expression replacement was rejected because it
+would rewrite apparent syntax inside strings and comments and would lose the
+delimiter state needed by newline array classification.
+
 The frozen applications measured on 2026-07-31 contain sparse effect metadata
 and only one locally handled region:
 
@@ -3280,6 +3324,33 @@ counterbalanced causal estimate. The required-GPU gate passed 505 tests and
 compiled every frozen target twice. Its advisory samples in milliseconds were
 Editor 402.79/228.33, Codex 1016.46/699.71, grep 72.24/74.98, Tar
 140.71/133.29, wav 63.75/62.70, and raytracer 45.44/43.87.
+
+### 2026-07-31: contextual classification stops slicing every position
+
+Section 9 specifies the contextual classifier as a length-preserving state
+transduction and derives its candidate dispatch. The production scan now uses
+sticky current-index patterns and only examines backward dotted-field and
+record context when the current character can begin those forms. It preserves
+the old pattern order and the exact record-prefix predicate.
+
+In 31 warm observations of the 25,256-character Editor root after one unrecorded
+warmup, contextual classification fell from 18.476 to 4.670 ms and complete
+syntax work fell from 25.349 to 11.845 ms. Generated parser execution was
+unchanged at 6.901 versus 6.917 ms; AST lowering changed from 10.077 to
+10.775 ms and is treated as run noise. These are consecutive measurements from
+separate worktrees under one protocol, not a counterbalanced causal estimate.
+The deterministic claim is removal of the two unconditional substring families
+whose logical extent was \(n^2\).
+
+The six-sample alternating frontend protocol then measured CPU medians of
+103.66, 506.72, 13.26, 66.40, 7.55, and 11.37 ms for Editor, Codex, grep, Tar,
+wav, and raytracer. Relative to the immediately preceding run, these are
+reductions of 9.36%, 1.59%, 9.35%, 2.52%, 2.26%, and 1.98%. The complete
+vendored/frozen syntax and corpus-contract suite passed 94 tests before the
+release gate. The required-GPU gate passed all 505 tests and compiled every
+frozen target twice. Its advisory samples in milliseconds were Editor
+305.95/184.75, Codex 815.87/609.12, grep 69.84/70.94, Tar 137.94/123.68, wav
+62.89/61.86, and raytracer 45.85/40.59.
 
 ## References
 
