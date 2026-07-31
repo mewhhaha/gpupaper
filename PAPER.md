@@ -899,6 +899,21 @@ Codex has \((r_1,u_1,d_1)=(2,1,1)\): two traversal occurrences reach one shared
 AST vertex from one source loop. The termination measure remains \(r_i\), since
 the lowering currently maps occurrences rather than preserving DAG identity.
 
+For the complete syntax search, let \(O_i\) be visited occurrences and \(V_i\)
+unique AST vertices. The current search costs \(O(O_i)\) switch work. Its
+instrumentation performs one expected-constant identity-set operation per
+occurrence and retains \(O(V_i)\) references. A DAG summary memoized per vertex
+could instead cost \(O(V_i+E_i)\), followed by constant-time reuse at every
+shared incoming path. The measurable redundant-visit fraction is
+
+\[
+\rho_i = 1 - V_i/O_i.
+\]
+
+This is an opportunity bound, not a predicted speedup: memo lookup, edge
+aggregation, and occurrence multiplicities remain, and the transformation is
+context-sensitive even where the search is not.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4491,6 +4506,27 @@ context-sensitive operations—visible bindings, expected result types, and loop
 continuations—so global memoization by object alone would be unsound. The next
 review must derive the smallest context key or locate a context-free subtree
 boundary before sharing transformed output.
+
+### 2026-07-31: complete syntax sharing is measured
+
+Review 54 extends the first-pass report from residual targets to the entire
+post-transformation syntax DAG. The frozen occurrence/vertex pairs are Editor
+3,528/3,188, Codex 22,103/12,231, grep 1,193/934, Tar 6,083/1,375, wav
+317/317, and raytracer 578/578. The respective redundant occurrence counts are
+340, 9,872, 259, 4,708, zero, and zero; the corresponding sharing factors
+\(O_1/V_1\) are 1.11, 1.81, 1.28, 4.42, 1.00, and 1.00.
+
+Codex and Tar therefore justify investigating a vertex-memoized search; wav and
+raytracer are counterexamples to any universal benefit. An executable invariant
+requires \(V_1\leq O_1\), and the frozen Codex case requires strict inequality
+so the shared-DAG path remains covered. Exact corpus counts are empirical and
+may change with legitimate frontend output.
+
+The same instrumented run measured CPU control-flow representatives of 1.312,
+56.944, 0.237, 0.414, 0.191, and 0.373 ms, with CPU total medians of 81.344,
+435.759, 11.526, 65.554, 5.779, and 9.584 ms. The identity set is itself new
+work, so these are baselines for the next algorithm rather than an improvement
+claim.
 
 ## References
 

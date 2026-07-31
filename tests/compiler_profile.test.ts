@@ -89,6 +89,14 @@ add(20, 22)
   ) {
     throw new Error(`profile omitted compiler work: ${JSON.stringify(work)}`);
   }
+  if (
+    work.controlFlowFirstPassSearchVertexCount >
+      work.controlFlowFirstPassSearchOccurrenceCount
+  ) {
+    throw new Error(
+      `straight-line search has ${work.controlFlowFirstPassSearchVertexCount} vertices for ${work.controlFlowFirstPassSearchOccurrenceCount} occurrences`,
+    );
+  }
   if (work.wasmBytes !== artifact.wasm.byteLength) {
     throw new Error(
       `profile counted ${work.wasmBytes} Wasm bytes; artifact has ${artifact.wasm.byteLength}`,
@@ -166,6 +174,8 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
     controlFlowFirstPassResidualDistinctNodeCount,
     controlFlowFirstPassResidualLoopCount,
     controlFlowFirstPassResidualRangeCount,
+    controlFlowFirstPassSearchOccurrenceCount,
+    controlFlowFirstPassSearchVertexCount,
     controlFlowLoweringPassCount,
   } = artifact.profile.work;
 
@@ -186,6 +196,22 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
   ) {
     throw new Error(
       `Codex has ${controlFlowFirstPassResidualDistinctSourceCount} distinct residual sources for ${controlFlowFirstPassResidualCount} physical nodes`,
+    );
+  }
+  if (
+    controlFlowFirstPassSearchVertexCount >
+      controlFlowFirstPassSearchOccurrenceCount
+  ) {
+    throw new Error(
+      `Codex search has ${controlFlowFirstPassSearchVertexCount} vertices for ${controlFlowFirstPassSearchOccurrenceCount} occurrences`,
+    );
+  }
+  if (
+    controlFlowFirstPassSearchVertexCount ===
+      controlFlowFirstPassSearchOccurrenceCount
+  ) {
+    throw new Error(
+      `Codex control-flow search did not exercise shared syntax: ${controlFlowFirstPassSearchVertexCount} vertices`,
     );
   }
   if (

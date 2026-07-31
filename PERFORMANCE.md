@@ -254,7 +254,7 @@ the residual frontier. Contemporary CPU control-flow representatives were
 Residual occurrences are also quotiented by `(kind, file, start, end)`. Codex's
 two occurrences have one distinct provenance; temporary diagnostic
 inspection identifies the same `prelude_runtime.duck:1424..1632` loop twice.
-The other targets remain 0/0 physical/distinct. The expected set cost is
+The other targets remain 0/0 occurrence/distinct. The expected set cost is
 \(O(r_1)\) work and \(O(d_1)\) storage—two insertions and one key for Codex.
 This initially suggested repeated linked-module work; the object-identity
 measurement below rejects that interpretation.
@@ -265,6 +265,23 @@ syntax paths reach one shared immutable AST object. The additional identity set
 costs expected \(O(r_1)\) work and \(O(u_1)\) storage. It supplies the boundary
 for a possible memoized homomorphism; object-only memoization is not yet valid
 for context-sensitive control lowering.
+
+Complete first-pass search sharing is now measured:
+
+| Target | Occurrences | Vertices | Redundant visits | Sharing factor |
+| ------ | ----------: | -------: | ---------------: | -------------: |
+| Editor | 3,528 | 3,188 | 340 | 1.11× |
+| Codex | 22,103 | 12,231 | 9,872 | 1.81× |
+| grep | 1,193 | 934 | 259 | 1.28× |
+| Tar | 6,083 | 1,375 | 4,708 | 4.42× |
+| wav | 317 | 317 | 0 | 1.00× |
+| raytracer | 578 | 578 | 0 | 1.00× |
+
+The current search performs one switch per occurrence. A vertex-memoized DAG
+summary could bound structural work by \(O(V+E)\), but lookup and multiplicity
+aggregation remain. Instrumented control-flow representatives were 1.312,
+56.944, 0.237, 0.414, 0.191, and 0.373 ms. These are the next baseline, not a
+speedup claim.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

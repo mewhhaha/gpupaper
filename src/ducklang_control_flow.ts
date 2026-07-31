@@ -24,6 +24,8 @@ export function lowerDucklangControlFlowWithMetrics(
   readonly firstPassResidualCollectionCount: number;
   readonly firstPassResidualDistinctSourceCount: number;
   readonly firstPassResidualDistinctNodeCount: number;
+  readonly firstPassSearchOccurrenceCount: number;
+  readonly firstPassSearchVertexCount: number;
   readonly firstPassMilliseconds: number;
   readonly subsequentPassMilliseconds: number;
 } {
@@ -35,6 +37,8 @@ export function lowerDucklangControlFlowWithMetrics(
   let firstPassResidualCollectionCount = 0;
   let firstPassResidualDistinctSourceCount = 0;
   let firstPassResidualDistinctNodeCount = 0;
+  let firstPassSearchOccurrenceCount = 0;
+  let firstPassSearchVertexCount = 0;
   let firstPassMilliseconds = 0;
   let subsequentPassMilliseconds = 0;
   let previousResidualControlCount: number | undefined;
@@ -66,6 +70,8 @@ export function lowerDucklangControlFlowWithMetrics(
       firstPassResidualCollectionCount = residual.collectionCount;
       firstPassResidualDistinctSourceCount = residual.distinctSourceCount;
       firstPassResidualDistinctNodeCount = residual.distinctNodeCount;
+      firstPassSearchOccurrenceCount = residual.syntaxOccurrenceCount;
+      firstPassSearchVertexCount = residual.syntaxVertexCount;
     }
     if (residual.first === undefined) {
       return {
@@ -77,6 +83,8 @@ export function lowerDucklangControlFlowWithMetrics(
         firstPassResidualCollectionCount,
         firstPassResidualDistinctSourceCount,
         firstPassResidualDistinctNodeCount,
+        firstPassSearchOccurrenceCount,
+        firstPassSearchVertexCount,
         firstPassMilliseconds,
         subsequentPassMilliseconds,
       };
@@ -102,6 +110,8 @@ function sourceControlFlowSummary(
   readonly collectionCount: number;
   readonly distinctSourceCount: number;
   readonly distinctNodeCount: number;
+  readonly syntaxOccurrenceCount: number;
+  readonly syntaxVertexCount: number;
   readonly first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -121,6 +131,8 @@ function sourceControlFlowSummary(
   let collectionCount = 0;
   const distinctSources = new Set<string>();
   const distinctNodes = new Set<DucklangExpression | DucklangStatement>();
+  const syntaxNodes = new Set<DucklangExpression | DucklangStatement>();
+  let syntaxOccurrenceCount = 0;
   let first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -129,6 +141,8 @@ function sourceControlFlowSummary(
     | undefined;
   while (pending.length > 0) {
     const current = pending.pop()!;
+    syntaxOccurrenceCount += 1;
+    syntaxNodes.add(current);
     switch (current.kind) {
       case "loop":
         distinctNodes.add(current);
@@ -273,6 +287,8 @@ function sourceControlFlowSummary(
     collectionCount,
     distinctSourceCount: distinctSources.size,
     distinctNodeCount: distinctNodes.size,
+    syntaxOccurrenceCount,
+    syntaxVertexCount: syntaxNodes.size,
     first,
   };
 }

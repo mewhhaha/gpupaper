@@ -1420,6 +1420,9 @@ resource cost, and corpus measurements.
 - [x] Separate residual occurrence paths from AST object identity. Reject the
       duplicate-instance hypothesis with Codex's `(2,1,1)`
       occurrence/vertex/source vector and bound safe memoization by context.
+- [x] Measure complete first-pass syntax occurrences and unique AST vertices.
+      Quantify sharing per target and derive the vertex-memoized search
+      opportunity without assuming a universal benefit.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
