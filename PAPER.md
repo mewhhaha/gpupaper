@@ -1053,6 +1053,32 @@ execute one interpreter invocation each. Jobs in the same workgroup that choose
 different branches may diverge, so the saving depends on branch coherence, but
 dead-branch arithmetic is no longer performed under any schedule.
 
+### 7.7 Scalar bytecode validation
+
+A packed comptime job is admitted to either evaluator only if a forward
+data-flow judgment assigns one stack depth to every instruction:
+
+```text
+constant : h -> h + 1
+binary   : h -> h - 1, requiring h >= 2
+jump_if  : h -> h - 1 on both successors, requiring h >= 1
+jump     : h -> h
+halt     : 1 -> completed
+```
+
+Opcode and operand columns have equal nonzero length. Constants are i32 values;
+other arithmetic operands are canonical zero. Every jump remains strictly
+forward and inside its logical job, every join receives the same depth, every
+instruction is reachable, depth never exceeds 64, and the sole halt is the final
+instruction. These conditions make the control-flow graph acyclic and ensure
+every path either reaches that halt or exhausts the explicit fuel bound.
+
+For \(I\) instructions and \(B\) branch edges, validation takes \(O(I + B)\)
+work and \(O(I)\) stack-depth memory. It runs before device request, packing,
+allocation, or dispatch. This is required for job isolation: the packed GPU
+representation stores starts but no end column, so safety follows from proving
+that all reachable program counters remain in the job's validated range.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -1087,6 +1113,8 @@ The implementation must establish:
     the same value or trap as its residual Wasm `i32` operation.
 15. **Branch noninterference**: an unselected comptime branch contributes
     neither a value, a trap, nor executed arithmetic.
+16. **Bytecode confinement**: every comptime program counter and stack access
+    remains inside its validated logical job.
 
 ## 9. Cost model
 
@@ -1735,6 +1763,16 @@ This also removes all arithmetic from the unselected branch. Static bytecode
 size is unchanged up to two control instructions, while dynamic work changes
 from the sum of both branch sizes to the selected branch size plus two. No
 speedup is claimed without a branch-coherence distribution.
+
+### 2026-07-31: comptime bytecode becomes a trusted boundary
+
+The exported evaluators previously assumed their opcode arrays came from the
+compiler. A malformed job without a halt could advance into the next job after
+packing because the GPU stores job starts but not ends. Both evaluators now
+apply the Section 7.7 forward-CFG and stack judgment first; the GPU path does so
+before requesting a device. A two-job regression proves that malformed job zero
+is rejected with its job, source, instruction, and target rather than reading
+job one's valid bytecode.
 
 ## References
 

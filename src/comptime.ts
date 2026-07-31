@@ -99,6 +99,21 @@ const opcode = {
 
 const comptimeStackCapacity = 64;
 const maximumComptimeFuel = 1_000_000;
+const binaryOpcodes = new Set<number>([
+  opcode.add,
+  opcode.subtract,
+  opcode.multiply,
+  opcode.equal,
+  opcode.divide,
+  opcode.remainder,
+  opcode.lessThan,
+  opcode.greaterThan,
+  opcode.and,
+  opcode.notEqual,
+  opcode.lessThanOrEqual,
+  opcode.greaterThanOrEqual,
+  opcode.or,
+]);
 type ComptimeGpuContextRequest =
   | {
     readonly status: "available";
@@ -311,6 +326,7 @@ export function evaluateBytecodeOnCpu(
       `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
     );
   }
+  requireWellFormedBytecodePrograms(programs);
   const values: ComptimeValue[] = programs.map((program): ComptimeValue => {
     const stack: number[] = [];
     let pc = 0;
@@ -437,6 +453,7 @@ async function evaluateBytecodeWithGpu(
       `comptime fuel must be an integer from 1 through ${maximumComptimeFuel}; received ${fuel}`,
     );
   }
+  requireWellFormedBytecodePrograms(programs);
   if (programs.length === 0) {
     return { status: "completed", values: [], backend: "gpu" };
   }
@@ -660,6 +677,135 @@ async function evaluateBytecodeWithGpu(
     if (readbackMapped) readback.unmap();
     for (const buffer of [...buffers, readback]) buffer.destroy();
     releaseEvaluation();
+  }
+}
+
+function requireWellFormedBytecodePrograms(
+  programs: readonly BytecodeProgram[],
+): void {
+  for (const [jobIndex, program] of programs.entries()) {
+    if (program.opcodes.length !== program.operands.length) {
+      throw new Error(
+        `comptime job ${jobIndex} at ${program.sourceStart} has ${program.opcodes.length} opcodes but ${program.operands.length} operands`,
+      );
+    }
+    if (program.opcodes.length === 0) {
+      throw new Error(
+        `comptime job ${jobIndex} at ${program.sourceStart} has no instructions`,
+      );
+    }
+    if (program.resultKind !== "integer" && program.resultKind !== "boolean") {
+      throw new Error(
+        `comptime job ${jobIndex} at ${program.sourceStart} has unknown result kind ${
+          String(program.resultKind)
+        }`,
+      );
+    }
+
+    const stackDepths: (number | undefined)[] = Array(
+      program.opcodes.length,
+    );
+    stackDepths[0] = 0;
+    const reach = (
+      source: number,
+      target: number,
+      stackDepth: number,
+    ): void => {
+      if (
+        !Number.isSafeInteger(target) || target <= source ||
+        target >= program.opcodes.length
+      ) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${source} transfers to ${target}, outside its forward instruction range`,
+        );
+      }
+      const previousDepth = stackDepths[target];
+      if (previousDepth === undefined) {
+        stackDepths[target] = stackDepth;
+        return;
+      }
+      if (previousDepth !== stackDepth) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${target} joins stack depths ${previousDepth} and ${stackDepth}`,
+        );
+      }
+    };
+
+    for (let pc = 0; pc < program.opcodes.length; pc += 1) {
+      const stackDepth = stackDepths[pc];
+      if (stackDepth === undefined) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} is unreachable`,
+        );
+      }
+      const operation = program.opcodes[pc];
+      const operand = program.operands[pc];
+      if (operation === opcode.halt) {
+        if (operand !== 0) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} halt instruction ${pc} has unexpected operand ${operand}`,
+          );
+        }
+        if (pc !== program.opcodes.length - 1) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} halts at instruction ${pc} before its final instruction`,
+          );
+        }
+        if (stackDepth !== 1) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} halts with stack depth ${stackDepth}`,
+          );
+        }
+        continue;
+      }
+      if (operation === opcode.constant) {
+        if (
+          !Number.isSafeInteger(operand) || operand < -2_147_483_648 ||
+          operand > 2_147_483_647
+        ) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} has non-i32 constant ${operand}`,
+          );
+        }
+        if (stackDepth === comptimeStackCapacity) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} exceeded stack capacity ${comptimeStackCapacity}`,
+          );
+        }
+        reach(pc, pc + 1, stackDepth + 1);
+        continue;
+      }
+      if (operation === opcode.jumpIfFalse) {
+        if (stackDepth < 1) {
+          throw new Error(
+            `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} underflows its stack`,
+          );
+        }
+        reach(pc, pc + 1, stackDepth - 1);
+        reach(pc, operand, stackDepth - 1);
+        continue;
+      }
+      if (operation === opcode.jump) {
+        reach(pc, operand, stackDepth);
+        continue;
+      }
+      if (!binaryOpcodes.has(operation)) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} has unknown opcode ${operation}`,
+        );
+      }
+      if (operand !== 0) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} has unexpected operand ${operand}`,
+        );
+      }
+      if (stackDepth < 2) {
+        throw new Error(
+          `comptime job ${jobIndex} at ${program.sourceStart} instruction ${pc} underflows its stack`,
+        );
+      }
+      reach(pc, pc + 1, stackDepth - 1);
+    }
   }
 }
 

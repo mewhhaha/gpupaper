@@ -620,6 +620,30 @@ Deno.test("comptime if does not evaluate its unselected branch", async () => {
   assertEquals(gpu.values, [{ kind: "integer", value: 42 }]);
 });
 
+Deno.test("comptime rejects malformed packed bytecode before GPU execution", async () => {
+  const malformed = {
+    opcodes: [1],
+    operands: [7],
+    resultKind: "integer",
+    sourceStart: 19,
+  } as const;
+  const valid = {
+    opcodes: [1, 0],
+    operands: [42, 0],
+    resultKind: "integer",
+    sourceStart: 23,
+  } as const;
+
+  assertThrows(
+    () => evaluateBytecodeOnCpu([malformed, valid]),
+    /comptime job 0 at 19 instruction 0 transfers to 1, outside its forward instruction range/,
+  );
+  await assertRejects(
+    () => evaluateBytecodeOnGpu([malformed, valid]),
+    /comptime job 0 at 19 instruction 0 transfers to 1, outside its forward instruction range/,
+  );
+});
+
 Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {
   let sourceExpression = "1";
   for (let depth = 1; depth < 65; depth += 1) {
