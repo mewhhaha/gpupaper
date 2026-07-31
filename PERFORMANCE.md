@@ -602,15 +602,33 @@ floor from corpus-dependent CPU closure. In particular, Codex closure is now a
 measured optimization target; changing GPU dispatch cannot remove its 131.60 ms
 sample.
 
-Thus the frozen production work is unchanged: it already used certified CPU
-closure, one GPU union/compression submission, and sparse CPU cycle detection.
-The deterministic reduction is implementation surface—four shader pipelines and
-955 source lines—and removal of an unused \(T^2/T^3\) resource hazard. A small
-closure regression now also requires one union round, while compatible,
-clashing, cyclic, deep, concurrent, and generated differential cases preserve
-their results. No latency reduction is claimed without a counterbalanced
-measurement of affected small graphs. The full 498-test and six-target
-required-GPU release gate passed.
+An eager union-find constructor-witness worklist then replaced repeated global
+frontiers:
+
+| Target    | Comparisons before → after | Proposal reduction | Certificate reduction | CPU closure before → after |
+| --------- | -------------------------: | -----------------: | --------------------: | ------------------------: |
+| Editor    |                4,176 → 711 |             82.99% |                 3.07% |            7.57 → 1.39 ms |
+| Codex     |             41,971 → 5,276 |             87.43% |                 2.38% |         131.60 → 27.41 ms |
+| grep      |                1,264 → 266 |             78.96% |                 4.41% |            1.67 → 1.07 ms |
+| tar       |             12,051 → 1,738 |             85.58% |                 1.17% |           24.85 → 4.05 ms |
+| wav       |                    90 → 45 |             50.00% |                 0.00% |            0.15 → 0.09 ms |
+| raytracer |                    36 → 36 |              0.00% |                 0.00% |            0.09 → 0.11 ms |
+
+The two columns of timings come from separate six-warm-sample runs, so they are
+advisory rather than paired confidence intervals. Exact counts do not have that
+qualification. Raytracer performed identical work and moved by 0.019 ms, below a
+useful timing resolution. Codex's enclosing GPU type stage fell from 193.46 to
+80.53 ms in the selected observations; the approximately 28–32 ms GPU
+submission/readback floor remains.
+
+The earlier dense-branch removal left frozen production work unchanged because
+all targets already used certified CPU closure, one GPU union/compression
+submission, and sparse CPU cycle detection. Its deterministic reduction was
+implementation surface—four shader pipelines and 955 source lines—and removal
+of an unused \(T^2/T^3\) resource hazard. Compatible, clashing, cyclic, deep,
+concurrent, and generated differential cases preserved their results through
+both changes. The post-worklist required-GPU gate passed 499 tests and compiled
+all six targets twice with byte-identical emission and engine validation.
 
 ## Incremental rebuild
 

@@ -444,6 +444,28 @@ Deno.test("GPU-validated closure generates constructor child equalities", async 
   assertEquals(result.unionRounds, 1);
 });
 
+Deno.test("GPU-validated closure compares each constructor witness once", async () => {
+  const classVariable: Type = { kind: "variable", id: 0 };
+  const list = (id: number): Type => ({
+    kind: "constructor",
+    name: "List",
+    arguments: [{ kind: "variable", id }],
+  });
+  const result = await solveTypeEqualitiesOnGpu([
+    { left: classVariable, right: list(1), span: testSpan },
+    { left: classVariable, right: list(2), span: testSpan },
+    { left: classVariable, right: list(3), span: testSpan },
+  ]);
+  if (result.status === "unavailable") return;
+  if (result.status !== "solved") {
+    throw new Error(`expected solved witness star; received ${result.status}`);
+  }
+
+  assertEquals(result.equalityCount, 5);
+  assertEquals(result.constructorComparisonCount, 2);
+  assertEquals(result.decompositionCount, 2);
+});
+
 Deno.test("WebGPU type graphs share repeated constructor terms", async () => {
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
   const list: Type = {
@@ -481,7 +503,17 @@ Deno.test("WebGPU equality closure reports constructor clashes", async () => {
     span: testSpan,
   }]);
   if (result.status === "unavailable") return;
-  assertEquals(result.status, "constructorClash");
+  if (result.status !== "constructorClash") {
+    throw new Error(`expected constructor clash; received ${result.status}`);
+  }
+  assertEquals(
+    {
+      left: result.left,
+      right: result.right,
+      sourceStart: result.sourceStart,
+    },
+    { left: "Int", right: "Bool", sourceStart: testSpan.start },
+  );
 });
 
 Deno.test("GPU-validated closure rejects cyclic quotient graphs", async () => {

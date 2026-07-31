@@ -67,15 +67,6 @@ type FlatConstraintClosure =
     readonly sourceStart: number;
   };
 
-type ConstructorDecomposition = {
-  readonly clash: readonly [number, number] | undefined;
-  readonly comparisonCount: number;
-  readonly equalities: readonly {
-    readonly equality: [number, number];
-    readonly constructors: readonly [number, number];
-  }[];
-};
-
 type UnionPipelines = {
   readonly union: GPUComputePipeline;
   readonly compression: GPUComputePipeline;
@@ -397,6 +388,9 @@ function closeFlatConstraintsOnCpu(
   const seenEqualities = new Set(allEqualities.map(equalityKey));
   const parents = flat.terms.map((_, index) => index);
   const classSourceStarts = flat.terms.map(() => Number.MAX_SAFE_INTEGER);
+  const classConstructors = flat.terms.map((term, index) =>
+    term.kind === "constructor" ? index : undefined
+  );
   const find = (term: number): number => {
     let root = term;
     while (parents[root] !== root) root = parents[root];
@@ -408,10 +402,15 @@ function closeFlatConstraintsOnCpu(
     }
     return root;
   };
-  const union = (
-    [left, right]: readonly [number, number],
-    sourceStart: number,
-  ): void => {
+  let decompositionCount = 0;
+  let constructorComparisonCount = 0;
+  for (
+    let equalityIndex = 0;
+    equalityIndex < allEqualities.length;
+    equalityIndex += 1
+  ) {
+    const [left, right] = allEqualities[equalityIndex];
+    const sourceStart = allSourceStarts[equalityIndex];
     const leftRoot = find(left);
     const rightRoot = find(right);
     if (leftRoot === rightRoot) {
@@ -419,59 +418,58 @@ function closeFlatConstraintsOnCpu(
         classSourceStarts[leftRoot],
         sourceStart,
       );
-      return;
+      continue;
     }
+
     const lower = Math.min(leftRoot, rightRoot);
     const higher = Math.max(leftRoot, rightRoot);
+    const lowerConstructor = classConstructors[lower];
+    const higherConstructor = classConstructors[higher];
     parents[higher] = lower;
     classSourceStarts[lower] = Math.min(
       classSourceStarts[leftRoot],
       classSourceStarts[rightRoot],
       sourceStart,
     );
-  };
-  for (const [equalityIndex, equality] of allEqualities.entries()) {
-    union(equality, allSourceStarts[equalityIndex]);
-  }
 
-  let decompositionCount = 0;
-  let constructorComparisonCount = 0;
-  while (true) {
-    const representatives = parents.map((_, index) => find(index));
-    const decomposition = decomposeConstructorsByRepresentative(
-      flat.terms,
-      representatives,
-    );
-    constructorComparisonCount += decomposition.comparisonCount;
-    decompositionCount += decomposition.equalities.length;
-    if (decomposition.clash !== undefined) {
-      const [leftIndex, rightIndex] = decomposition.clash;
+    if (lowerConstructor === undefined) {
+      classConstructors[lower] = higherConstructor;
+      continue;
+    }
+    if (higherConstructor === undefined) continue;
+
+    const firstConstructor = Math.min(lowerConstructor, higherConstructor);
+    const secondConstructor = Math.max(lowerConstructor, higherConstructor);
+    const first = flat.terms[firstConstructor];
+    const second = flat.terms[secondConstructor];
+    constructorComparisonCount += 1;
+    if (
+      first.label !== second.label ||
+      first.children.length !== second.children.length
+    ) {
       return {
         status: "constructorClash",
-        left: flat.terms[leftIndex].label,
-        right: flat.terms[rightIndex].label,
-        sourceStart: classSourceStarts[find(leftIndex)] ===
-            Number.MAX_SAFE_INTEGER
+        left: first.label,
+        right: second.label,
+        sourceStart: classSourceStarts[lower] === Number.MAX_SAFE_INTEGER
           ? 0
-          : classSourceStarts[find(leftIndex)],
+          : classSourceStarts[lower],
       };
     }
-    let added = false;
-    for (const generated of decomposition.equalities) {
-      const key = equalityKey(generated.equality);
+
+    classConstructors[lower] = firstConstructor;
+    for (const [childIndex, child] of first.children.entries()) {
+      decompositionCount += 1;
+      const generated: [number, number] = [
+        child,
+        second.children[childIndex],
+      ];
+      const key = equalityKey(generated);
       if (seenEqualities.has(key)) continue;
       seenEqualities.add(key);
-      const generatedSource =
-        classSourceStarts[find(generated.constructors[0])] ===
-            Number.MAX_SAFE_INTEGER
-          ? 0
-          : classSourceStarts[find(generated.constructors[0])];
-      allSourceStarts.push(generatedSource);
-      allEqualities.push(generated.equality);
-      union(generated.equality, generatedSource);
-      added = true;
+      allEqualities.push(generated);
+      allSourceStarts.push(classSourceStarts[lower]);
     }
-    if (!added) break;
   }
 
   return {
@@ -500,43 +498,6 @@ function requireRepresentativeAgreement(
       }`,
     );
   }
-}
-
-function decomposeConstructorsByRepresentative(
-  terms: readonly FlatTerm[],
-  representatives: readonly number[],
-): ConstructorDecomposition {
-  const constructorByRepresentative = new Map<number, number>();
-  const equalities: ConstructorDecomposition["equalities"][number][] = [];
-  let comparisonCount = 0;
-  for (const [termIndex, term] of terms.entries()) {
-    if (term.kind !== "constructor") continue;
-    const representative = representatives[termIndex];
-    const previousIndex = constructorByRepresentative.get(representative);
-    if (previousIndex === undefined) {
-      constructorByRepresentative.set(representative, termIndex);
-      continue;
-    }
-    comparisonCount += 1;
-    const previous = terms[previousIndex];
-    if (
-      previous.label !== term.label ||
-      previous.children.length !== term.children.length
-    ) {
-      return {
-        clash: [previousIndex, termIndex],
-        comparisonCount,
-        equalities: [],
-      };
-    }
-    for (const [childIndex, child] of term.children.entries()) {
-      equalities.push({
-        equality: [previous.children[childIndex], child],
-        constructors: [previousIndex, termIndex],
-      });
-    }
-  }
-  return { clash: undefined, comparisonCount, equalities };
 }
 
 type PackedTypeSolverColumn = {

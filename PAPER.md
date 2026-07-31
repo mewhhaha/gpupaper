@@ -1239,12 +1239,33 @@ the remainder is orchestration and exact representative validation. A reused
 semantic artifact reports zero new type work rather than retaining the previous
 artifact's counts.
 
-For \(T\) flat terms, \(E\) source equalities, \(K\) distinct equalities added
-by constructor injectivity, \(M=E+K\), and \(F\) nonempty closure frontiers, the
-CPU closure uses \(O(T+M)\) memory and
-\(O(F(T+K)+M\alpha(T))\) work in the current implementation, with the coarse
-bound \(F\leq K+1\). Sparse quotient-cycle detection takes \(O(T+D)\) work and
-memory for \(D\) distinct constructor-child edges. The GPU validation uses:
+CPU closure is an eager union-find worklist. Each equivalence class carries
+either no constructor witness or its lowest-ID constructor. Its invariant is:
+
+1. the witness belongs to the class;
+2. every constructor already merged into the class has the witness's label and
+   arity;
+3. for every such constructor, corresponding witness-child equalities have been
+   processed or occur later in the worklist.
+
+Merging classes with zero or one witness preserves the invariant directly.
+Merging two witnessed classes either proves a clash or appends corresponding
+child equalities and retains the lower-ID witness. The two old witness stars plus
+these new edges form one star, proving the inductive step. Each successful union
+reduces the class count; equality-pair deduplication and finite constructor arity
+therefore establish termination. At the fixed point, the partition contains
+\(E_0\), is constructor-injective, and adds only injectivity consequences, so it
+is exactly the least constructor congruence.
+
+For \(T\) flat terms, \(E\) source equalities, \(P\) child-equality proposals,
+\(K\leq P\) distinct child equalities added to the certificate, and \(M=E+K\),
+the worklist uses \(O(T+M)\) memory and
+\(O((T+E+P)\alpha(T))\) work under word-sized equality keys. It performs at most
+\(T-1\) constructor-witness comparisons. The prior frontier algorithm repeatedly
+scanned all terms and re-emitted the complete witness star, costing
+\(O(F(T+P)+(E+K)\alpha(T))\) for \(F\) nonempty frontiers. Sparse quotient-cycle
+detection takes \(O(T+D)\) work and memory for \(D\) distinct
+constructor-child edges. The GPU validation uses:
 
 ```text
 logical device bytes = 4T parents + 8M equalities + 4T readback
@@ -2417,6 +2438,35 @@ causal speedup claim. They identify CPU closure and the constant
 submission/readback floor as separate optimization problems.
 The full required-GPU gate passed 498 tests and compiled every frozen target
 twice with byte-identical differential emission and engine validation.
+
+### 2026-07-31: constructor closure becomes an eager witness worklist
+
+The measured CPU closure still rebuilt every representative and complete
+constructor star until no new child equality appeared. Section 7.5 replaces
+that global frontier with one constructor witness per union-find class. A class
+merge compares two witnesses at most once, appends their child equations in
+field order, and retains the lower-ID witness. A three-constructor regression
+pins the resulting two-edge star, two comparisons, and two child proposals.
+
+Deterministic work falls as follows:
+
+| Target    | Comparisons before/after | Proposals before/after | Closed equalities before/after |
+| --------- | -----------------------: | ---------------------: | -----------------------------: |
+| Editor    |              4,176 / 711 |          8,035 / 1,367 |                  3,838 / 3,720 |
+| Codex     |           41,971 / 5,276 |       83,484 / 10,494 |                28,138 / 27,467 |
+| grep      |              1,264 / 266 |            2,528 / 532 |                  1,292 / 1,235 |
+| tar       |           12,051 / 1,738 |         24,102 / 3,476 |                  9,174 / 9,067 |
+| wav       |                  90 / 45 |               180 / 90 |                        264 / 264 |
+| raytracer |                  36 / 36 |                72 / 72 |                        292 / 292 |
+
+Observed CPU closure changed from 7.57 to 1.39 ms on Editor, 131.60 to 27.41 ms
+on Codex, 1.67 to 1.07 ms on grep, 24.85 to 4.05 ms on tar, and 0.15 to 0.09 ms
+on wav. Raytracer moved from 0.09 to 0.11 ms with identical work, below a useful
+timing resolution. These are separate six-sample benchmark runs, not paired
+confidence intervals; the exact work and certificate reductions are the
+deterministic evidence. The full required-GPU gate passed 499 tests and compiled
+all six frozen targets twice with byte-identical differential emission and
+engine validation.
 
 ## References
 

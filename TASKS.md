@@ -1139,6 +1139,10 @@ CPU/GPU disagreement, or return partially written output.
       quotient-cycle checking. Report terms, closed equalities, constructor
       comparisons, and child-equation proposals, reset them on semantic reuse,
       and assert their accounting relationships in the compilation profile.
+- [x] Replace repeated whole-term constructor frontiers with one lowest-ID
+      constructor witness per union-find class. Enqueue injective child
+      equalities when witnessed classes merge, prove the witness-star invariant,
+      and pin one comparison per additional compatible constructor.
 - [x] Admit algebraic rewrites only where the value type proves the required
       law. `x + 0` and `x * 1` are currently integer rules: bypassing an
       IEEE-754 operation can change signed-zero or NaN payload bits observable
