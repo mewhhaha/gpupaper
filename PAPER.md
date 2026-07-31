@@ -1027,6 +1027,24 @@ speedup. Removing the CPU oracle would require a GPU-produced derivation forest
 proving that every union follows from an input equality or equal-constructor
 child position, plus independently checkable clash and acyclicity certificates.
 
+The 64-term switch is a resource policy, not a measured break-even. For one
+small-path constructor frontier, let \(C\) be maximum constructor arity, \(Q =
+T^2\), and \(L = 64\lceil Q/64\rceil\). Pair counts and two scan columns use
+\(12Q\) bytes; equality and parent output columns reserve
+\(12\min(1{,}048{,}576, QC)\) bytes. Count, scan, and emit schedule:
+
+```text
+pair_passes = 2 + ceil(log₂ Q)
+pair_invocations = L × pair_passes
+```
+
+At \(T=64\), \(Q=4{,}096\), so one frontier schedules 14 pair passes and 57,344
+lanes. Since all child terms are included in \(T\), \(C \leq 63\), giving a
+worst-case quadratic allocation below 3.2 MiB before linear metadata. These
+bounds explain the conservative cutoff but do not show that 64 minimizes wall
+time. A threshold change requires a counterbalanced sweep of neighboring graph
+sizes and constructor shapes.
+
 ### 7.6 Scalar comptime integer semantics
 
 The admitted scalar fragment has two kinds, `i32` and `bool`. Lowering derives a
@@ -1830,6 +1848,15 @@ out-of-range constants. Lowering now derives the Section 7.6 kind at every node
 and rejects those three counterexamples with source evidence before bytecode
 exists. This duplicates a linear check at an explicit public trust boundary; it
 does not replace general source inference.
+
+### 2026-07-31: the type-solver cutoff is demoted from measurement to policy
+
+The GPU solver comment claimed graphs above 64 terms were measured faster on the
+linear CPU-closure path, but no retained experiment supported that crossover.
+Section 7.5 now derives the exact pair-slot, allocation, pass, and lane bounds
+that 64 enforces and labels latency optimality unverified. Compiler behavior is
+unchanged; this review removes an unsupported empirical claim and specifies the
+experiment required to tune it.
 
 ## References
 

@@ -103,8 +103,8 @@ type UnionGpuOutput = {
 };
 
 const maximumDecomposedEqualityCount = 1_048_576;
-// Constructor pairing allocates and scans n² slots. Above 64 terms, measured
-// compiler graphs are faster through linear grouping followed by GPU union.
+// This policy bounds one pair frontier to 4,096 slots. It is a conservative
+// resource ceiling, not an empirically established latency crossover.
 const maximumQuadraticGpuTermCount = 64;
 
 const unionShader = `
