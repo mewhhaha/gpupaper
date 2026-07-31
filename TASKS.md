@@ -1372,6 +1372,9 @@ resource cost, and corpus measurements.
 - [x] Decompose CPU Core rewrite into validation, matching, conflict resolution,
       and rebuild intervals. The profile containment invariant and frozen
       measurements identify validation—not matching—as the remaining cost.
+- [x] Give flat Core an explicit smart-constructor trust derivation. Internal
+      CPU rewrite consumes construction provenance without reinflation; raw
+      packages retain full validation and malformed-package rejection.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -96,11 +96,12 @@ Deno.test("Core identity reuses its structured round-trip witness", async () => 
     "let left = 20\nlet right = 22\nleft + right\n",
     { gpuMode: "off" },
   );
-  const { stages, work } = artifact.profile;
+  const { details, stages, work } = artifact.profile;
 
   if (
     work.coreRewriteProposalCount !== 0 ||
     work.coreRewriteAcceptedCount !== 0 ||
+    details.cpuCoreValidationMilliseconds !== 0 ||
     stages.coreInflationMilliseconds !== 0
   ) {
     throw new Error(

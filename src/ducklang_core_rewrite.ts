@@ -1,7 +1,7 @@
 import {
   type FlatDucklangCore,
   FlatDucklangCoreKind,
-  type ValidatedFlatDucklangCore,
+  type TrustedFlatDucklangCore,
   validateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 
@@ -47,6 +47,19 @@ export function rewriteFlatDucklangCore(
   const validationStart = performance.now();
   validateFlatDucklangCore(snapshot);
   const validationMilliseconds = performance.now() - validationStart;
+  return rewriteTrustedSnapshot(snapshot, validationMilliseconds);
+}
+
+export function rewriteTrustedFlatDucklangCore(
+  trusted: TrustedFlatDucklangCore,
+): DucklangCoreRewriteResult {
+  return rewriteTrustedSnapshot(trusted.package, 0);
+}
+
+function rewriteTrustedSnapshot(
+  snapshot: FlatDucklangCore,
+  validationMilliseconds: number,
+): DucklangCoreRewriteResult {
   const matchingStart = performance.now();
   const proposals = proposeValidatedDucklangCoreRewrites(snapshot);
   const matchingMilliseconds = performance.now() - matchingStart;
@@ -71,7 +84,7 @@ export function rewriteFlatDucklangCore(
     };
   }
   const rebuildStart = performance.now();
-  const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  const rewritten = rebuildTrustedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rewritten);
   const rebuildMilliseconds = performance.now() - rebuildStart;
   return {
@@ -211,27 +224,27 @@ export function rebuildFlatDucklangCore(
 ): FlatDucklangCore {
   validateFlatDucklangCore(snapshot);
   if (accepted.length === 0) return snapshot;
-  const rebuilt = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  const rebuilt = rebuildTrustedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rebuilt);
   return rebuilt;
 }
 
-export function commitValidatedDucklangCoreRewrites(
-  validated: ValidatedFlatDucklangCore,
+export function commitTrustedDucklangCoreRewrites(
+  trusted: TrustedFlatDucklangCore,
   proposals: readonly DucklangCoreRewriteProposal[],
 ): DucklangCoreRewriteCommit {
-  const snapshot = validated.package;
+  const snapshot = trusted.package;
   const accepted = resolveValidatedDucklangCoreRewriteConflicts(
     snapshot,
     proposals,
   );
   if (accepted.length === 0) return { package: snapshot, accepted };
-  const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
+  const rewritten = rebuildTrustedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rewritten);
   return { package: rewritten, accepted };
 }
 
-function rebuildValidatedFlatDucklangCore(
+function rebuildTrustedFlatDucklangCore(
   snapshot: FlatDucklangCore,
   accepted: readonly DucklangCoreRewriteProposal[],
 ): FlatDucklangCore {

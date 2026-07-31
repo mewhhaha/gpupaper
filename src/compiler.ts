@@ -30,10 +30,10 @@ import {
   type DucklangCoreModule,
   lowerDucklangToCore,
 } from "./ducklang_core.ts";
-import { rewriteFlatDucklangCore } from "./ducklang_core_rewrite.ts";
+import { rewriteTrustedFlatDucklangCore } from "./ducklang_core_rewrite.ts";
 import {
   type FlatDucklangCore,
-  flattenDucklangCore,
+  flattenTrustedDucklangCore,
   inflateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 import {
@@ -1457,7 +1457,8 @@ async function compileDucklangModuleSource(
   const effectClosed = closeDucklangEffectBoundary(specialized, core);
   const coreMilliseconds = performance.now() - coreStart;
   const flatCoreStart = performance.now();
-  const flatCore = flattenDucklangCore(core);
+  const trustedFlatCore = flattenTrustedDucklangCore(core);
+  const flatCore = trustedFlatCore.package;
   const flatCoreMilliseconds = performance.now() - flatCoreStart;
 
   const gpuCorePassStart = performance.now();
@@ -1489,7 +1490,7 @@ async function compileDucklangModuleSource(
     optimizedFlatCore = gpuCoreResult.package;
   } else {
     const coreRewriteStart = performance.now();
-    const coreRewrite = rewriteFlatDucklangCore(flatCore);
+    const coreRewrite = rewriteTrustedFlatDucklangCore(trustedFlatCore);
     optimizedFlatCore = coreRewrite.package;
     cpuCoreRewriteProposalCount = coreRewrite.proposals.length;
     cpuCoreRewriteAcceptedCount = coreRewrite.accepted.length;

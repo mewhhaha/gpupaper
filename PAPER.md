@@ -960,8 +960,36 @@ Core graph. It also avoids source-provenance, type, layout, block, operation,
 and value reconstruction. The exact saved byte count is engine-dependent
 because the structured graph uses JavaScript objects and arrays, so the
 implementation reports the inflation stage as exactly zero work rather than
-claiming a portable allocation formula. This does not remove flat-package
-validation or rewrite matching.
+claiming a portable allocation formula. This does not remove rewrite matching.
+
+Flat trust has two derivations:
+
+```text
+valid_flat(P)
+──────────────────────── validate
+trusted(P, validation)
+
+valid_core(M)    P = flatten(M)
+──────────────────────────────── construct
+trusted(P, construction)
+```
+
+The second is the standard smart-constructor rule for an abstract data type.
+Flattening first validates \(M\), assigns every table range and ID from the
+validated graph, and returns a wrapper carrying construction provenance. The
+wrapper's brand is private to the flat-Core module, so ordinary typed callers
+cannot manufacture this judgment. Arbitrary packages, including low-level GPU
+API inputs, can earn trust only through complete flat validation.
+
+The construction rule is conditional on the representation-preservation lemma
+for `flatten`; a defect in that implementation could violate it just as a defect
+in any trusted compiler pass could violate its postcondition. Deterministic
+column tests, representative round trips, generated Core differentials, full
+semantic execution, and independent validation of constructed packages are
+executable evidence, not a machine-checked proof. This boundary therefore trusts
+one small constructor rather than treating every internal value as valid. A raw
+typed-array mutation loses the provenance argument and must re-enter through
+validation.
 
 Let `U(P)` be the multiset of `Uint32Array` columns and `S(P)` the string-byte
 column. The exact payload storage occupied by the flat package, excluding
@@ -1041,13 +1069,13 @@ unnecessary, not an execution backend. This distinction prevents zero-work jobs
 from inflating GPU coverage.
 
 Validation is a trust-boundary operation rather than a property that becomes
-stronger by repetition. `validateFlatDucklangCore` either rejects the untrusted
-input before a device is requested or returns a branded snapshot held read-only
-by this stage. The GPU therefore receives only branded input and does not
-re-encode those invariants as validation records. This is safe under the
-boundary model because the GPU can neither commit a mutation nor manufacture
-trusted Core: it can only return a proposal that must satisfy the independent
-matcher equation below.
+stronger by repetition. `validateFlatDucklangCore` either rejects an untrusted
+input or returns a validation-provenance snapshot held read-only by this stage.
+The compiler's CPU path instead receives construction provenance from Section
+7.2. The public GPU boundary still validates raw input before device work. The
+GPU does not re-encode those invariants as validation records because it can
+neither commit a mutation nor manufacture trusted Core: it can only return a
+proposal that must satisfy the independent matcher equation below.
 
 The theorem assumes exclusive read ownership of the flat package from validation
 through commit. Compiler orchestration satisfies this condition because it
@@ -1063,9 +1091,9 @@ property of typed arrays.
 Let \(R\) be the former number of four-word validation records. Removing the
 duplicate pass eliminates exactly \(16R\) record bytes, its error and parameter
 buffers, and \(64\lceil R/64\rceil\) scheduled lanes. It also removes the
-eight-byte validation prefix from nonempty rewrite readback. CPU validation
-remains \(O(B_{\mathrm{flat}})\); this change removes repeated device work but
-does not change asymptotic host validation.
+eight-byte validation prefix from nonempty rewrite readback. Validation of a raw
+package remains \(O(B_{\mathrm{flat}})\); construction provenance removes it
+only from the internal CPU producer-consumer edge.
 
 The discriminant scan costs \(O(O)\) work and is already required to construct
 the frontier. Classifying the prepared job as the disjoint union
@@ -3717,6 +3745,37 @@ The 508-test required-GPU gate passed with the decomposed profile. Its paired
 correctness samples in milliseconds were Editor 286.78/173.54, Codex
 743.25/523.55, grep 72.04/67.27, Tar 136.11/129.56, wav 62.60/60.85, and
 raytracer 43.84/40.63.
+
+### 2026-07-31: flat Core gains construction provenance
+
+The decomposed profile showed that complete re-inflation validation dominated
+CPU rewrite even though the flat package was produced immediately beforehand
+from validated structured Core. Section 7.2 now gives flat trust two explicit
+derivations: validation for arbitrary packages and construction for the output
+of the module-private smart constructor. The wrapper records which derivation
+was used; CPU rewrite accepts either trusted form, while its raw public entry
+still validates.
+
+This change does not assert that all typed arrays are valid. It narrows trust to
+one validated structured input and one deterministic flattening implementation,
+under exclusive ownership. The malformed raw-package tests continue through
+full validation. A construction/validation provenance regression, round trips,
+generated differentials, deterministic columns, semantic execution, and the
+release gate are executable evidence for the constructor lemma.
+
+In an alternating 21-pair Codex CPU experiment against detached commit
+`79104b6`, median Core rewrite changed from 33.599 to 0.110 ms (-99.67%) and
+complete compilation from 422.959 to 394.878 ms (-6.64%). Flat construction was
+stable at 34.893 versus 35.300 ms, rule matching at 0.074 versus 0.095 ms, and
+Wasm planning at 54.398 versus 54.604 ms. Every observation emitted the same
+226,134-byte module. Seven-sample frozen medians report exactly zero input
+validation for every CPU target; Tar still spends 6.505 ms rebuilding and
+validating its successor after 24 accepted rewrites.
+
+The 508-test required-GPU gate passed after the trust split. Its paired
+byte-identical, engine-valid samples in milliseconds were Editor 287.80/172.28,
+Codex 769.42/525.35, grep 71.03/69.57, Tar 138.07/130.93, wav 63.31/61.89, and
+raytracer 43.20/40.97.
 
 ## References
 

@@ -115,11 +115,12 @@ export type FlatDucklangCore = {
   readonly typeLayoutIds: Uint32Array;
 };
 
-const validatedFlatDucklangCore = Symbol("validatedFlatDucklangCore");
+const trustedFlatDucklangCore = Symbol("trustedFlatDucklangCore");
 
-export type ValidatedFlatDucklangCore = {
+export type TrustedFlatDucklangCore = {
   readonly package: FlatDucklangCore;
-  readonly [validatedFlatDucklangCore]: true;
+  readonly provenance: "construction" | "validation";
+  readonly [trustedFlatDucklangCore]: true;
 };
 
 const absent = 0xffff_ffff;
@@ -587,6 +588,16 @@ export function flattenDucklangCore(
   };
 }
 
+export function flattenTrustedDucklangCore(
+  module: DucklangCoreModule,
+): TrustedFlatDucklangCore {
+  return {
+    package: flattenDucklangCore(module),
+    provenance: "construction",
+    [trustedFlatDucklangCore]: true,
+  };
+}
+
 export function inflateFlatDucklangCore(
   package_: FlatDucklangCore,
 ): DucklangCoreModule {
@@ -599,11 +610,12 @@ export function inflateFlatDucklangCore(
 
 export function validateFlatDucklangCore(
   package_: FlatDucklangCore,
-): ValidatedFlatDucklangCore {
+): TrustedFlatDucklangCore {
   inflateFlatDucklangCore(package_);
   return {
     package: package_,
-    [validatedFlatDucklangCore]: true,
+    provenance: "validation",
+    [trustedFlatDucklangCore]: true,
   };
 }
 

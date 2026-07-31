@@ -1241,6 +1241,37 @@ or a cheaper validator preserving the same invariants.
 The 508-test required-GPU gate passed with all profile containment checks and
 compiled each frozen target twice with byte-identical, engine-valid output.
 
+### Construction-provenance flat Core
+
+Internal CPU compilation now carries an unforgeable construction-provenance
+wrapper from validated structured Core into rewrite. Arbitrary flat packages
+still require complete validation. An alternating 21-pair Codex CPU experiment
+after one unrecorded warmup compared the current tree with detached commit
+`79104b6`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| Core rewrite | 33.599 ms | 0.110 ms | -99.67% |
+| Complete compilation | 422.959 ms | 394.878 ms | -6.64% |
+| Flat Core construction | 34.893 ms | 35.300 ms | +1.17% |
+| Rule matching | 0.074 ms | 0.095 ms | +29.02% |
+| Wasm planning and CPU emission | 54.398 ms | 54.604 ms | +0.38% |
+
+The matching delta is 0.021 ms and is not material. Every sample emitted the
+same 226,134-byte module. Seven-sample warm medians after the change report zero
+input-validation time for all six CPU targets. Editor, Codex, grep, wav, and
+raytracer then spend 0.004–0.159 ms in the complete rewrite stage. Tar accepts
+24 proposals and spends 6.505 of its 6.579 ms rewrite median rebuilding and
+validating the changed package.
+
+This experiment covers only the internal CPU edge. The public GPU API still
+validates its raw package; a later review must carry construction provenance
+through GPU batching before claiming that cost there.
+
+The 508-test required-GPU gate passed; raw GPU validation and malformed-package
+rejection remained active, and all six targets compiled twice to byte-identical,
+engine-valid Wasm.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and

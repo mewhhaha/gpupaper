@@ -1,5 +1,5 @@
 import {
-  commitValidatedDucklangCoreRewrites,
+  commitTrustedDucklangCoreRewrites,
   proposeDucklangCoreRewrites,
   rebuildFlatDucklangCore,
   resolveDucklangCoreRewriteConflicts,
@@ -83,7 +83,7 @@ left + right
   assertEquals(rewritten.package === snapshot, true);
   assertEquals(rebuildFlatDucklangCore(snapshot, []) === snapshot, true);
   assertEquals(
-    commitValidatedDucklangCoreRewrites(
+    commitTrustedDucklangCoreRewrites(
       validateFlatDucklangCore(snapshot),
       [],
     ).package === snapshot,

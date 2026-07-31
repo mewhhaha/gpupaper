@@ -1,11 +1,11 @@
 import {
-  commitValidatedDucklangCoreRewrites,
+  commitTrustedDucklangCoreRewrites,
   type DucklangCoreRewriteProposal,
 } from "./ducklang_core_rewrite.ts";
 import {
   type FlatDucklangCore,
   FlatDucklangCoreKind,
-  type ValidatedFlatDucklangCore,
+  type TrustedFlatDucklangCore,
   validateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 import {
@@ -199,7 +199,7 @@ export async function runDucklangCoreGpuPass(
 type CoreCpuValidation =
   | {
     readonly status: "valid";
-    readonly snapshot: ValidatedFlatDucklangCore;
+    readonly snapshot: TrustedFlatDucklangCore;
   }
   | { readonly status: "invalid"; readonly reason: string };
 
@@ -210,11 +210,11 @@ type PreparedCoreJob =
   }
   | {
     readonly status: "identity";
-    readonly snapshot: ValidatedFlatDucklangCore;
+    readonly snapshot: TrustedFlatDucklangCore;
   }
   | {
     readonly status: "rewrite";
-    readonly snapshot: ValidatedFlatDucklangCore;
+    readonly snapshot: TrustedFlatDucklangCore;
     readonly candidateDescriptors: Uint32Array;
     readonly rewriteCandidateOperationIds: Uint32Array;
   };
@@ -478,7 +478,7 @@ async function runPackedDucklangCoreGpuBatch(
         replacementWords,
       );
       const commitStart = performance.now();
-      const committed = commitValidatedDucklangCoreRewrites(
+      const committed = commitTrustedDucklangCoreRewrites(
         job.snapshot,
         proposals,
       );
@@ -890,7 +890,7 @@ async function runDucklangCoreWithGpu(
       replacementWords,
     );
     const commitStart = performance.now();
-    const committed = commitValidatedDucklangCoreRewrites(
+    const committed = commitTrustedDucklangCoreRewrites(
       validatedSnapshot,
       gpuProposals,
     );
@@ -928,7 +928,7 @@ async function runDucklangCoreWithGpu(
 }
 
 function completeEmptyCoreRewriteFrontier(
-  snapshot: ValidatedFlatDucklangCore,
+  snapshot: TrustedFlatDucklangCore,
 ): GpuDucklangCoreResult {
   return {
     status: "completed",
