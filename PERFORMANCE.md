@@ -347,6 +347,24 @@ six-sample frontend run measured 99.19/152.19 ms CPU/GPU for Editor,
 gate passed and compiled all six targets twice with byte-identical Wasm and
 engine validation.
 
+### Rejected lazy child-list copying
+
+The immutable rewriter currently maps every expression list and then scans for
+pointer identity. An experimental copy-on-first-change loop avoided allocating
+the mapped list when every child was unchanged. It preserved artifacts and
+parent sharing, but its per-element interpreted branch lost to V8's native array
+path:
+
+| Measurement              | Native map | Lazy copy | Change |
+| ------------------------ | ---------: | --------: | -----: |
+| Specialization rewrite   |     72.666 |    75.320 |  +3.65% |
+| Function lifting         |     24.226 |    24.158 |  -0.28% |
+| Complete CPU compilation |    526.560 |   537.827 |  +2.14% |
+
+Times are 21-sample warm Codex medians after one unrecorded warmup. Current and
+detached-`7aed752` processes ran concurrently. The lazy implementation was
+removed; no production latency or allocation claim survives this audit.
+
 The required-GPU release gate then compiled every target twice with GPU type
 validation, authoritative Core rewriting, authoritative Wasm emission, CPU
 differential comparison, engine validation, and byte determinism:

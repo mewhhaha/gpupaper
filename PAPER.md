@@ -679,6 +679,23 @@ scheduling visit. That implementation contradicted the immutable snapshot model:
 observation was secretly construction. The direct visitor is the selected
 primitive and is checked exhaustively against every typed expression variant.
 
+Child arrays still need an implementation choice. Native `map` followed by an
+identity scan allocates one transient array even when every child is unchanged.
+A copy-on-first-change loop can avoid that array, but adds a branch per child and
+copies the unchanged prefix when a later child changes. For list length \(n\)
+and first changed index \(p\), the lazy alternative is selected only if:
+
+```text
+A_array(n) + n(C_map + C_identity)
+  > n(C_loop + C_branch) + changed × p C_copy
+```
+
+This inequality depends on the JavaScript engine. A 21-sample Codex experiment
+falsified it on the measured V8: specialization rewriting regressed 3.65% and
+complete compilation 2.14%. The lazy loop was removed. Native `map` plus
+identity scan remains the selected transient representation; immutable parent
+sharing is still preserved.
+
 Pointer preservation is semantically inert because typed expressions are
 immutable: replacing an unchanged reconstructed node by the original node
 preserves every field and child by constructor extensionality. It is
@@ -3507,6 +3524,21 @@ The required-GPU gate passed all 506 tests and compiled every target twice. Its
 advisory samples in milliseconds were Editor 312.93/193.50, Codex
 831.60/597.99, grep 71.69/68.78, Tar 129.31/124.40, wav 62.21/62.21, and
 raytracer 43.18/42.43.
+
+### 2026-07-31: lazy child-list copying is rejected
+
+The shared expression rewriter was changed experimentally from native `map`
+plus an identity scan to a copy-on-first-change loop. The alternative preserves
+the same immutable parent and child identities and avoids a transient list when
+no child changes, but introduces an interpreted branch at every list element.
+Section 6.3 records the engine-dependent break-even inequality.
+
+Twenty-one warm Codex CPU observations after one unrecorded warmup ran in
+parallel against detached commit `7aed752`. Median specialization rewrite time
+regressed from 72.666 to 75.320 ms (3.65%), while function lifting was unchanged
+at 24.226 versus 24.158 ms. Complete compilation regressed from 526.56 to
+537.83 ms (2.14%). The production code was restored; this review changes only
+the recorded rejected alternative.
 
 ## References
 

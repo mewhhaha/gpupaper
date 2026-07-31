@@ -1356,6 +1356,9 @@ resource cost, and corpus measurements.
 - [x] Count each immutable specialization-ledger root once per pass. Reuse exact
       identity-memoized DAG counts across input, demanded, rewritten, and
       residual projections, and report avoided logical node visits.
+- [x] Audit copy-on-first-change child lists. Twenty-one-sample Codex medians
+      regressed rewrite by 3.65% and total CPU time by 2.14%; retain native
+      `map` plus identity scan and record the rejected cost inequality.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
