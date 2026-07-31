@@ -4769,6 +4769,29 @@ substitution environment from ordinary top-level rewriting, which tests the
 hypothesis that repeated partial-evaluation expansion—not generic traversal—is
 Codex-specific.
 
+### 2026-07-31: substitution breadth explains Codex amplification
+
+Review 63 temporarily partitions rewrite entries by whether the substitution
+environment stack is nonempty. Codex has 114,281 substitution entries out of
+130,143 total, or 87.81%. Editor has 1,881/6,718 = 28.00%, grep has 2/670 =
+0.30%, and Tar, wav, and raytracer have none. Codex's 15,862 ordinary entries
+are close to its 16,119 demanded input nodes; nearly all excess work is inside
+specialized bodies.
+
+Maximum substitution depth is two for Editor and Codex, one for grep, and zero
+otherwise. The counterexample rejects deep recursive nesting as the cause.
+Codex instead performs broad specialization: its 114,281 substitution entries
+average 162.56 per distinct result key. This average does not imply equal body
+sizes or independent jobs, but it identifies request breadth as the dominant
+work domain.
+
+The hot counters were removed after measurement. The next sound optimization
+must preserve the ordered substitution stack and pending-cycle semantics while
+discarding or sharing work across equivalent request bodies. Parallel execution
+is admissible only after dependencies through captured environments and nested
+requests form an explicit acyclic frontier; the shallow stack alone is not a
+proof of independence.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

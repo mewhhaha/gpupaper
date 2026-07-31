@@ -399,6 +399,22 @@ amplification, so generated output size is not the whole cost. The hot-path
 counter was removed after measurement; its latency is not treated as a
 baseline.
 
+Temporary substitution-depth instrumentation localizes that amplification:
+
+| Target | Total entries | Under substitution | Share | Max depth |
+| ------ | ------------: | -----------------: | ----: | --------: |
+| Editor | 6,718 | 1,881 | 28.00% | 2 |
+| Codex | 130,143 | 114,281 | 87.81% | 2 |
+| grep | 670 | 2 | 0.30% | 1 |
+| Tar | 3,499 | 0 | 0% | 0 |
+| wav | 269 | 0 | 0% | 0 |
+| raytracer | 458 | 0 | 0% | 0 |
+
+Codex has only 15,862 ordinary entries, close to 16,119 demanded input nodes.
+Its excess is broad body specialization—162.56 substitution entries per
+distinct result key—not deep recursion. The hot counters were removed after
+measurement.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

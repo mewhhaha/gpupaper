@@ -1447,6 +1447,9 @@ resource cost, and corpus measurements.
 - [x] Measure recursive specialization rewrite entries without retaining a
       hot-path counter. Identify Codex's 8.07× rewrite amplification and show
       that its 1.46× residual-size growth does not explain the work alone.
+- [x] Partition rewrite entries by substitution activity and maximum depth.
+      Identify Codex's 87.81% shallow breadth, reject deep recursion as the
+      cause, and state the dependency proof needed before parallel scheduling.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
