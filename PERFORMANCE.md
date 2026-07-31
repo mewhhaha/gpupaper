@@ -648,6 +648,11 @@ occurrences (0.90% output density); Tar changes 68 in 7,941. Counters were
 removed. A single batched symbol-to-captures traversal is the derived primitive,
 subject to duplicate-symbol renaming first.
 
+Duplicate renaming is common: 274 of 403 Codex lifts (67.99%) and 28 of 55
+Editor lifts receive fresh IDs; other targets receive none. The counter was
+removed. Batched lifting needs lexical function-occurrence identity, not an
+old-symbol-only capture map.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

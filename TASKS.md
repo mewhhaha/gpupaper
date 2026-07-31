@@ -1553,6 +1553,9 @@ resource cost, and corpus measurements.
 - [x] Measure remaining capture-insertion output density. Derive one batched
       symbol-to-captures rewrite after observing only 886 updates in 98,211
       Codex visits, with duplicate renaming as an explicit prerequisite.
+- [x] Measure duplicate lifted-symbol renaming. Establish that 274 of 403 Codex
+      lifts need fresh IDs and require lexical function-occurrence identity in
+      any batched lifting plan.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

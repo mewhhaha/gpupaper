@@ -5523,6 +5523,26 @@ deterministic duplicate-symbol renaming; applying a map keyed only by a symbol
 before resolving duplicate occurrences would conflate distinct lifted
 functions.
 
+### 2026-07-31: duplicate lifted symbols are the common Codex case
+
+Review 99 counts accepted functions whose original symbol was already lifted
+and therefore receives a fresh ID. Codex renames 274 of 403 lifts, 67.99%, and
+Editor renames 28 of 55. Grep, Tar, wav, and raytracer rename none.
+
+The duplicate arises when specialization shares or reproduces a generated
+binding whose resolver symbol remains the same across occurrences. A batched map
+from old symbol ID directly to captures would conflate these occurrences and
+route calls to the wrong lifted function. Planning must first assign each
+function-binding occurrence a deterministic new ID and associate call
+occurrences with that lexical binding occurrence; only then can capture operands
+be appended in one traversal.
+
+Thus occurrence identity is normative for lifting even though symbol identity
+remains normative for source name resolution. The temporary counter was
+removed. Review 100 closes this series by measuring the rename traversal itself
+and recording the complete one-pass lifting primitive and next implementation
+gate.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
