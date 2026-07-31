@@ -1405,6 +1405,9 @@ resource cost, and corpus measurements.
 - [x] Expose source-control fixed-point pass count and first/subsequent
       transformation time. Record the unproved 32-pass restriction, decreasing
       measure obligation, and six-target physical-pass frontier.
+- [x] Replace reflective source-control search with an exhaustive typed syntax
+      walk. Preserve physical pass counts and record the six-target scan and
+      whole-compiler reductions.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

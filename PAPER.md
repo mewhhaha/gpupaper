@@ -816,6 +816,24 @@ lowering that loop can therefore expose a nested source loop for the following
 round. This explains the need for a fixed point rather than proving a particular
 round bound.
 
+The search predicate is an exhaustive typed walk over the source AST:
+
+\[
+\operatorname{remaining}(M)
+\iff \exists n\in\operatorname{syntax}(M).\;
+\operatorname{kind}(n)\in\{\texttt{loop},\texttt{forRange},
+\texttt{forCollection}\}.
+\]
+
+The earlier reflective walk traversed every enumerable JavaScript field,
+including spans, names, and type metadata. The typed walk enumerates every
+statement and expression constructor and follows exactly its syntax-bearing
+children. Structural induction on those constructors establishes predicate
+equivalence: a target constructor returns immediately; otherwise the induction
+hypothesis applies to every and only syntax child. Metadata is excluded by its
+static type and cannot contain a `DucklangExpression` or `DucklangStatement`.
+An exhaustive `never` branch makes a future unhandled constructor a type error.
+
 For \(P\) transformations, \(N_i\) input nodes in round \(i\), and \(S_i\)
 objects visited by the following search, work is
 
@@ -825,6 +843,9 @@ O\left(\sum_{i=0}^{P-1}(N_i+S_i)\right),
 
 with \(O(\sum_i N_i)\) total reconstructed allocation and
 \(O(\max_i N_i)\) live round storage when prior snapshots become unreachable.
+Typed search changes \(S_i\) from the complete enumerable object graph to the
+source-syntax graph and removes one `Object.values` allocation per inspected
+object; it does not change the asymptotic bound or pass schedule.
 The implementation currently rejects after 32 rounds. No semantic theorem
 derives 32; a valid program with more than 32 successively exposed nested
 source-control layers is the counterexample. This is an admitted implementation
@@ -4317,6 +4338,38 @@ The unchanged 514-test required-GPU gate passed with samples Editor
 242.93/141.68 ms, Codex 691.27/517.66, grep 44.00/38.92, Tar 141.18/128.27,
 wav 33.18/32.09, and raytracer 38.56/35.74. All paired artifacts were
 byte-identical and engine-valid.
+
+### 2026-07-31: source-control search follows typed syntax only
+
+The fixed-point search used `Object.values` recursively over the complete
+runtime object graph. It therefore inspected and allocated child arrays for
+spans, names, declared types, and other metadata that cannot contain the three
+source-control constructors. Section 6.5 replaces that reflection with one
+exhaustive switch over the `DucklangStatement | DucklangExpression` sum.
+
+Every syntax-bearing field is pushed explicitly. Leaf and declaration-only
+constructors stop, and an exhaustive `never` branch turns AST extension without
+scanner extension into a type error. This is executable support for the
+structural-induction argument. Loop semantics, transformations, fixed-point
+passes, and the 32-pass restriction are unchanged.
+
+Consecutive CPU control-flow representative milliseconds changed from
+2.673→1.276 Editor, 73.905→57.031 Codex, 0.619→0.200 grep, 2.066→0.292 Tar,
+0.209→0.130 wav, and 0.434→0.260 raytracer. Pass counts remained
+\([1,2,1,1,1,1]\). CPU total medians changed respectively
+86.569→79.418, 446.661→396.694, 12.256→10.600, 59.854→57.457,
+5.711→5.136, and 9.001→8.502 ms. Required-GPU medians also moved downward
+in every case.
+
+Predicate equivalence and pass-count preservation are executable/structural
+evidence; timing is empirical. The end-to-end changes are not wholly attributed
+because the before and after compiler runs were consecutive rather than
+interleaved.
+
+The 514-test required-GPU gate passed after the typed search. Its byte-identical,
+engine-valid samples in milliseconds were Editor 267.58/151.45, Codex
+775.22/576.47, grep 44.68/40.95, Tar 151.32/131.86, wav 34.86/34.18, and
+raytracer 39.86/37.84.
 
 ## References
 

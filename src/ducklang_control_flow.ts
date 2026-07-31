@@ -67,21 +67,133 @@ function firstSourceControlFlow(
   readonly kind: "loop" | "forRange" | "forCollection";
   readonly span: DucklangExpression["span"];
 } | undefined {
-  const pending: unknown[] = [module.statements, module.extensions];
+  const pending: (DucklangExpression | DucklangStatement)[] = [
+    ...module.statements,
+    ...module.extensions.flatMap((extension) =>
+      extension.methods.map((method) => method.value)
+    ),
+  ];
   while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === null || typeof current !== "object") continue;
-    const node = current as Record<string, unknown>;
-    if (
-      node.kind === "loop" || node.kind === "forRange" ||
-      node.kind === "forCollection"
-    ) {
-      return node as {
-        readonly kind: "loop" | "forRange" | "forCollection";
-        readonly span: DucklangExpression["span"];
-      };
+    const current = pending.pop()!;
+    switch (current.kind) {
+      case "loop":
+      case "forRange":
+      case "forCollection":
+        return current;
+      case "binding":
+      case "assignment":
+      case "productBinding":
+      case "recordBinding":
+        pending.push(current.value);
+        break;
+      case "unionBinding":
+        pending.push(current.value, current.alternative);
+        break;
+      case "recursiveGroup":
+        pending.push(...current.bindings.map((binding) => binding.value));
+        break;
+      case "typePattern":
+        pending.push(current.target);
+        break;
+      case "break":
+        if (current.value !== undefined) pending.push(current.value);
+        break;
+      case "return":
+      case "expression":
+        pending.push(current.expression);
+        break;
+      case "hostCall":
+      case "recursiveCall":
+        pending.push(...current.arguments);
+        break;
+      case "effectHandler":
+        pending.push(...current.fields.map((field) => field.value));
+        break;
+      case "handle":
+        pending.push(current.body, current.handler);
+        break;
+      case "optionDo":
+        pending.push(current.option);
+        break;
+      case "unionCase":
+        pending.push(current.value);
+        break;
+      case "product":
+        pending.push(...current.values);
+        break;
+      case "field":
+        pending.push(current.product);
+        break;
+      case "recordUpdate":
+        pending.push(
+          current.product,
+          ...current.fields.map((field) => field.value),
+        );
+        break;
+      case "record":
+        pending.push(...current.fields.map((field) => field.value));
+        break;
+      case "function":
+      case "scratch":
+        pending.push(current.body);
+        break;
+      case "call":
+        pending.push(current.callee, ...current.arguments);
+        break;
+      case "index":
+        pending.push(current.collection, current.index);
+        break;
+      case "indexUpdate":
+        pending.push(current.product, current.index, current.value);
+        break;
+      case "binary":
+        pending.push(current.left, current.right);
+        break;
+      case "unary":
+        pending.push(current.operand);
+        break;
+      case "if":
+        pending.push(current.condition, current.consequence);
+        if (current.alternative !== undefined) {
+          pending.push(current.alternative);
+        }
+        break;
+      case "ifUnion":
+        pending.push(current.value, current.consequence);
+        if (current.alternative !== undefined) {
+          pending.push(current.alternative);
+        }
+        break;
+      case "block":
+        pending.push(...current.statements);
+        break;
+      case "comptime":
+        pending.push(current.expression);
+        break;
+      case "effectDeclaration":
+      case "initDeclaration":
+      case "structType":
+      case "unionType":
+      case "typeAlias":
+      case "import":
+      case "continue":
+      case "integer":
+      case "integer64":
+      case "float32":
+      case "float64":
+      case "boolean":
+      case "unit":
+      case "string":
+      case "moduleImport":
+      case "reference":
+        break;
+      default: {
+        const unhandled: never = current;
+        throw new Error(
+          `unhandled Ducklang syntax ${JSON.stringify(unhandled)}`,
+        );
+      }
     }
-    pending.push(...Object.values(node));
   }
   return undefined;
 }
