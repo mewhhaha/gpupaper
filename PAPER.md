@@ -1236,8 +1236,10 @@ B_atom_input = L(A, Q, M) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 
 The host already counts signed-64 atoms before choosing their high-word
 representation; byte counting is fused into that pass. Rank construction and
-packing remain \(O(A)\). Ranked GPU lookup now has four constant shifts, three
-ORs, three masks/complements, and one population count rather than zero to seven
+packing remain \(O(A)\). Four adjacent packed bytes are accumulated before one
+physical-word store, reducing byte-stream stores from \(Q\) to
+\(\lceil Q/4\rceil\). Ranked GPU lookup now has four constant shifts, three ORs,
+three masks/complements, and one population count rather than zero to seven
 data-dependent tag comparisons. Rank lookup adds one shift and mask on the
 16-bit path. Its two adjacent ranks are likewise assembled before one physical
 word store. Five frozen targets use 16-bit ranks; Codex uses 32. Relative to
@@ -2879,6 +2881,23 @@ ratios are 0.9974–1.0026, detecting no material latency change. The required-G
 gate passed 501 tests. Paired target samples in milliseconds were Editor
 333.60/232.86, Codex 931.34/781.89, grep 132.36/128.21, Tar 196.53/178.44,
 wav 110.98/109.15, and raytracer 98.65/91.83.
+
+### 2026-07-31: packed bytes commit once per physical word
+
+The ranked byte stream was the last packed host column still using one
+read/modify/write per logical value. Its four byte masks are pairwise disjoint,
+so Section 7.4 now accumulates one scalar and assigns it when the group is full
+or the stream ends.
+
+Frozen byte-stream stores fall from 1,493–115,797 to 374–28,950, removing
+1,119–86,847 derived stores. Capacity, transfer, bindings, GPU work, and output
+are unchanged. The exhaustive 256 tag masks include every possible packed-byte
+tail position, while the CPU/GPU differential checks the values. Post-change
+ranked/dense median ratios were 0.9731–1.0071; the fixed-cost boundary again
+hides any small host effect, so no latency improvement is claimed. Required-GPU
+gate passed 501 tests. Paired target samples in milliseconds were Editor
+334.96/230.85, Codex 971.32/805.07, grep 130.73/130.47, Tar 192.80/180.05,
+wav 114.29/114.13, and raytracer 94.42/93.19.
 
 ## References
 

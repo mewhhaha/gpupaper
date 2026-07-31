@@ -1028,6 +1028,9 @@ Core receives no source handler or open effect row.
       physical word. Pairwise-disjoint half-word masks reduce host stores to the
       exact physical word count instead of read/modify/writing once per logical
       value.
+- [x] Accumulate four packed byte values before assigning their low-word entry.
+      Disjoint byte masks reduce host byte-stream stores from `Q` to
+      `ceil(Q / 4)` while preserving the ranked lookup proof.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -564,6 +564,23 @@ pin maximum ranks 65,535 and 65,536 to 16 and 32 bits respectively. The exact
 representation passed the 501-test required-GPU gate and compiled every frozen
 target twice.
 
+The packed byte stream initially performed one read/modify/write per byte atom.
+Accumulating four disjoint byte masks locally changes its host stores:
+
+| Target    | Byte atoms | Packed-word stores | Stores removed |
+| --------- | ---------: | -----------------: | -------------: |
+| Editor    |     13,895 |              3,474 |         10,421 |
+| Codex     |    115,797 |             28,950 |         86,847 |
+| grep      |      2,348 |                587 |          1,761 |
+| tar       |     12,474 |              3,119 |          9,355 |
+| wav       |      1,493 |                374 |          1,119 |
+| raytracer |      2,412 |                603 |          1,809 |
+
+Logical capacity, transfer, and GPU work are unchanged. Post-change
+ranked/dense emitter ratios were 0.9731–1.0071; no latency improvement is
+claimed. The exact grouped-byte writer passed the 501-test required-GPU gate
+and compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

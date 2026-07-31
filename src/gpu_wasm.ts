@@ -899,6 +899,7 @@ function atomColumns(
   let signed64Index = 0;
   let kindWord = 0;
   let byteRankWord = 0;
+  let packedByteWord = 0;
   for (const [index, atom] of atoms.entries()) {
     if (lowWordLayout === "ranked" && (index & 7) === 0) {
       const rankIndex = index >> 3;
@@ -947,7 +948,11 @@ function atomColumns(
     if (lowWordLayout === "dense") {
       primaryLowWords[index] = lowWord;
     } else if (atom.kind === "byte") {
-      primaryLowWords[byteIndex >> 2] |= lowWord << ((byteIndex & 3) << 3);
+      packedByteWord |= lowWord << ((byteIndex & 3) << 3);
+      if ((byteIndex & 3) === 3 || byteIndex + 1 === byteAtomCount) {
+        primaryLowWords[byteIndex >> 2] = packedByteWord;
+        packedByteWord = 0;
+      }
       byteIndex += 1;
     } else {
       nonByteLowWords[nonByteIndex] = lowWord;
