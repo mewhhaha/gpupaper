@@ -1516,6 +1516,9 @@ resource cost, and corpus measurements.
 - [x] Count lexical environment installs and restores. Close the boundary after
       Codex performs only 13,992 proportional mutations across 6,828 blocks,
       then remove the counter.
+- [x] Audit retained residual node-count cache evidence. Close accounting after
+      99 Codex hits skip 32,243 descendants in 3.887 ms and redirect review to
+      the 22.199 ms lifting stage.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

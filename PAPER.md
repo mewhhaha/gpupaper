@@ -5282,6 +5282,26 @@ A persistent environment would instead allocate at least one path node per
 install and increase lookup depth. These counts close lexical restoration as a
 primary specialization frontier. The temporary counter was removed.
 
+### 2026-07-31: residual accounting already exploits structural sharing
+
+Review 86 uses retained metrics. Codex's node-count cache hits 99 shared roots
+whose cached subtrees contain 32,243 occurrence nodes, exceeding the final
+23,594-node residual occurrence count. Editor skips 14,038 nodes through 330
+hits; Tar skips 8,843 through 67. The representative Codex accounting stage is
+3.887 ms, versus 64.079 ms rewriting and 22.199 ms function lifting.
+
+The cache is outside the recursive transformation hot path and performs one
+weak lookup per residual root traversal, where each hit can skip hundreds of
+descendants. This is the favorable inverse of Review 80's cache domain. Its
+observable result is only a metric count, and object identity is sufficient
+because immutable sharing makes equal objects equal subtrees. No semantic key
+or cross-request reuse is required.
+
+Accounting is therefore functioning as intended and is not the next frontier.
+The retained evidence redirects the audit to lifting, now the second-largest
+specialization substage and 5.71 times accounting on the representative Codex
+sample.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

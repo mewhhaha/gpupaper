@@ -586,6 +586,11 @@ has 1,406 and the remaining targets at most 772. The counter was removed;
 restoration work is proportional to introduced bindings and is not the broad
 rewrite frontier.
 
+Residual node accounting skips 32,243 Codex descendant occurrences through 99
+shared-root cache hits and costs 3.887 ms in the representative profile.
+Function lifting costs 22.199 ms, 5.71× more. Accounting's coarse cache has the
+right domain and is closed; lifting becomes the next specialization substage.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
