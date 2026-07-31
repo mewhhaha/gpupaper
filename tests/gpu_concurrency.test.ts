@@ -34,6 +34,16 @@ keep(41)
     ...validCore,
     operationTypeIds,
   });
+  const invalidCore = await invalidCoreJob;
+  assertEquals(invalidCore.status, "invalid");
+
+  const validCoreJobs = Array.from(
+    { length: 4 },
+    () =>
+      runDucklangCoreGpuPass(validCore, {
+        scheduling: "throughput",
+      }),
+  );
 
   const concurrentCompilations = Array.from(
     { length: 8 },
@@ -41,29 +51,27 @@ keep(41)
       index % 2 === 0
         ? compileModuleSource(`concurrent_${index}.duck`, duckSource, {
           gpuMode: "required",
+          gpuScheduling: "throughput",
         })
         : compileModuleSource(`concurrent_${index}.hs`, haskellSource, {
           gpuMode: "required",
+          gpuScheduling: "throughput",
         }),
   );
-  const [invalidCore, ...artifacts] = await Promise.all([
-    invalidCoreJob,
-    ...concurrentCompilations,
+  const [coreResults, artifacts] = await Promise.all([
+    Promise.all(validCoreJobs),
+    Promise.all(concurrentCompilations),
   ]);
 
-  assertEquals(invalidCore.status, "invalid");
   for (const [index, artifact] of artifacts.entries()) {
     const expected = index % 2 === 0 ? duckBaseline.wasm : haskellBaseline.wasm;
     assertEquals([...artifact.wasm], [...expected]);
     assertEquals(artifact.gpuWasmResult?.status, "completed");
   }
-  const duckArtifacts = artifacts.filter((artifact) =>
-    artifact.language === "ducklang"
-  );
   if (
     Math.max(
-      ...duckArtifacts.map((artifact) =>
-        artifact.profile.work.gpuCorePayloadBatchSize
+      ...coreResults.map((result) =>
+        result.status === "completed" ? result.physicalPayloadBatchSize : 0
       ),
     ) < 2
   ) {
@@ -71,6 +79,9 @@ keep(41)
       "concurrent Ducklang Core payloads were not packed together",
     );
   }
+  const duckArtifacts = artifacts.filter((artifact) =>
+    artifact.language === "ducklang"
+  );
   if (
     Math.max(
       ...duckArtifacts.map((artifact) =>

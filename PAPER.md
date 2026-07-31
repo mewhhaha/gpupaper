@@ -752,9 +752,10 @@ ordered.
 The production GPU kernel is operation-parallel, not one-worker-per-function.
 Every residual function contributes independent operation records to the same
 flat package. `downstreamParallelFunctionCount` therefore counts functions
-represented in a completed GPU package; it is zero on the CPU path. CPU workers
-were not introduced because cloning the pointer-rich Core into `P` workers would
-add `O(P × Core_bytes)` memory before any measured benefit.
+represented in a physically submitted GPU rewrite package; it is zero on CPU
+and Core-identity paths. CPU workers were not introduced because cloning the
+pointer-rich Core into `P` workers would add `O(P × Core_bytes)` memory before
+any measured benefit.
 
 ## 7. Effect closure and the GPU boundary
 
@@ -1100,6 +1101,14 @@ continues to enter the queue before validation so its throughput-batch
 observability remains explicit. This asymmetry follows the trust boundary:
 internal construction provenance permits eager pure classification, while raw
 input first belongs to the defensive scheduling boundary.
+
+Batch accounting separates three cardinalities. \(L\) is the number of logical
+jobs observed together by the queue, \(P\) the number of nonidentity payloads
+packed into a Core command, and \(S\) the device scheduler's command-submission
+batch size. In general \(0\leq P\leq L\). An identity result may have \(L>0\)
+but must have \(P=S=0\); a physical rewrite has \(P>0\), nonzero dispatched
+lanes, and backend `gpu`. The profile exposes all three rather than overloading
+one `payloadBatchSize` field.
 
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects an untrusted
@@ -3908,6 +3917,32 @@ their logical batching contract.
 The 508-test release gate passed. Its paired byte-identical, engine-valid
 samples in milliseconds were Editor 263.72/146.35, Codex 790.83/540.59, grep
 42.72/43.72, Tar 149.74/131.27, wav 35.52/34.73, and raytracer 41.43/40.59.
+
+### 2026-07-31: Core batch accounting becomes physical
+
+After exact identity moved before scheduling, completed identity results still
+reported one payload and every residual function as downstream parallel work.
+Those fields conflated logical queue membership with physical execution.
+Section 7.3 now distinguishes logical batch size, packed physical payload size,
+and command submission batch size. `downstreamParallelFunctionCount` is nonzero
+only for backend `gpu`.
+
+Exact required-GPU profiles now report logical/physical/submission cardinalities
+of 1/0/0 and zero downstream functions for Editor, Codex, grep, wav, and
+raytracer. Tar reports 1/1/1, 12 downstream functions, and 24 candidates. A new
+profile regression pins the identity case; direct raw throughput tests retain
+logical batch size two with physical size zero.
+
+The concurrency regression was also made non-flaky and theoretically aligned.
+It first observes malformed raw Core rejection, then separately submits four
+real add-zero jobs under throughput scheduling and requires physical packing.
+Concurrent compiler jobs independently require packed Wasm output and
+byte-identical artifacts. Identity work is no longer used as evidence of
+physical parallelism.
+
+The 509-test release gate passed. Its paired byte-identical, engine-valid
+samples in milliseconds were Editor 255.03/137.79, Codex 678.63/480.74, grep
+41.96/41.33, Tar 138.67/127.84, wav 35.06/34.24, and raytracer 42.73/38.03.
 
 ## References
 

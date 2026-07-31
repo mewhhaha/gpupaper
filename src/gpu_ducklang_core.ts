@@ -40,7 +40,8 @@ export type GpuDucklangCoreResult =
     readonly transferMilliseconds: number;
     readonly commitMilliseconds: number;
     readonly submissionBatchSize: number;
-    readonly payloadBatchSize: number;
+    readonly logicalBatchSize: number;
+    readonly physicalPayloadBatchSize: number;
     readonly queueWaitMilliseconds: number;
   }
   | {
@@ -226,7 +227,7 @@ async function enqueueDucklangCoreGpuPass(
     return batch.output.status === "completed"
       ? {
         ...batch.output,
-        payloadBatchSize: batch.payloadBatchSize,
+        logicalBatchSize: batch.payloadBatchSize,
         queueWaitMilliseconds: batch.queueWaitMilliseconds +
           batch.output.queueWaitMilliseconds,
       }
@@ -546,7 +547,8 @@ async function runPackedDucklangCoreGpuBatch(
         transferMilliseconds,
         commitMilliseconds: performance.now() - commitStart,
         submissionBatchSize: submission.submissionBatchSize,
-        payloadBatchSize: gpuJobs.length,
+        logicalBatchSize: gpuJobs.length,
+        physicalPayloadBatchSize: gpuJobs.length,
         queueWaitMilliseconds: submission.queueWaitMilliseconds,
       };
     });
@@ -938,7 +940,8 @@ async function runDucklangCoreWithGpu(
       transferMilliseconds,
       commitMilliseconds,
       submissionBatchSize: submission.submissionBatchSize,
-      payloadBatchSize: 1,
+      logicalBatchSize: 1,
+      physicalPayloadBatchSize: 1,
       queueWaitMilliseconds: submission.queueWaitMilliseconds,
     };
   } catch (error) {
@@ -973,7 +976,8 @@ function completeEmptyCoreRewriteFrontier(
     transferMilliseconds: 0,
     commitMilliseconds: 0,
     submissionBatchSize: 0,
-    payloadBatchSize: 1,
+    logicalBatchSize: 1,
+    physicalPayloadBatchSize: 0,
     queueWaitMilliseconds: 0,
   };
 }

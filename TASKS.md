@@ -1384,6 +1384,9 @@ resource cost, and corpus measurements.
 - [x] Prepare trusted Core before GPU scheduling. Return exact-frontier identity
       immediately and carry nonempty descriptors through batching and capacity
       splits without recomputation.
+- [x] Separate Core logical batch size, physically packed payload size, and
+      command submission size. Identity reports no physical payload or
+      downstream parallel functions; concurrency uses real rewrite work.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -283,6 +283,7 @@ export type DucklangCompilationWork = {
   readonly backendFunctionAnalysisCount: number;
   readonly backendFunctionReuseCount: number;
   readonly gpuCoreSubmissionBatchSize: number;
+  readonly gpuCoreLogicalBatchSize: number;
   readonly gpuCorePayloadBatchSize: number;
   readonly gpuWasmSubmissionBatchSize: number;
   readonly gpuWasmPayloadBatchSize: number;
@@ -1242,6 +1243,7 @@ async function elaborateDucklangModuleSource(
         backendFunctionAnalysisCount: 0,
         backendFunctionReuseCount: 0,
         gpuCoreSubmissionBatchSize: 0,
+        gpuCoreLogicalBatchSize: 0,
         gpuCorePayloadBatchSize: 0,
         gpuWasmSubmissionBatchSize: 0,
         gpuWasmPayloadBatchSize: 0,
@@ -1418,6 +1420,7 @@ async function compileDucklangModuleSource(
             backendFunctionAnalysisCount: 0,
             backendFunctionReuseCount: 0,
             gpuCoreSubmissionBatchSize: 0,
+            gpuCoreLogicalBatchSize: 0,
             gpuCorePayloadBatchSize: 0,
             gpuWasmSubmissionBatchSize: 0,
             gpuWasmPayloadBatchSize: 0,
@@ -1623,7 +1626,8 @@ async function compileDucklangModuleSource(
           ),
         0,
       ),
-      downstreamParallelFunctionCount: gpuCoreResult?.status === "completed"
+      downstreamParallelFunctionCount: gpuCoreResult?.status === "completed" &&
+          gpuCoreResult.backend === "gpu"
         ? core.functions.length
         : 0,
       flatCoreValueCount: flatCore.valueFunctionIds.length,
@@ -1711,8 +1715,11 @@ async function compileDucklangModuleSource(
       gpuCoreSubmissionBatchSize: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.submissionBatchSize
         : 0,
+      gpuCoreLogicalBatchSize: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.logicalBatchSize
+        : 0,
       gpuCorePayloadBatchSize: gpuCoreResult?.status === "completed"
-        ? gpuCoreResult.payloadBatchSize
+        ? gpuCoreResult.physicalPayloadBatchSize
         : 0,
       gpuWasmSubmissionBatchSize: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.submissionBatchSize

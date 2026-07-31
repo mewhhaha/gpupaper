@@ -34,6 +34,8 @@ unmatched - 2
   assertEquals(result.candidateDescriptorBytes, 160);
   assertEquals(result.logicalDeviceBufferBytes, 196);
   assertEquals(result.rewriteDispatchedInvocationCount, 64);
+  assertEquals(result.logicalBatchSize, 1);
+  assertEquals(result.physicalPayloadBatchSize, 1);
   assertEquals(columns(result.package), columns(expected.package));
 });
 
@@ -77,6 +79,8 @@ Deno.test("empty Core rewrite frontier completes without WebGPU work", async () 
   assertEquals(result.transferMilliseconds, 0);
   assertEquals(result.commitMilliseconds, 0);
   assertEquals(result.submissionBatchSize, 0);
+  assertEquals(result.logicalBatchSize, 1);
+  assertEquals(result.physicalPayloadBatchSize, 0);
 });
 
 Deno.test("throughput batch discards every empty Core rewrite frontier", async () => {
@@ -93,7 +97,8 @@ Deno.test("throughput batch discards every empty Core rewrite frontier", async (
       throw new Error(`Core identity batch failed: ${result.reason}`);
     }
     assertEquals(result.backend, "identity");
-    assertEquals(result.payloadBatchSize, 2);
+    assertEquals(result.logicalBatchSize, 2);
+    assertEquals(result.physicalPayloadBatchSize, 0);
     assertEquals(result.submissionBatchSize, 0);
     assertEquals(result.gpuMilliseconds, 0);
   }

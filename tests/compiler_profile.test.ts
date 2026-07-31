@@ -112,6 +112,27 @@ Deno.test("Core identity reuses its structured round-trip witness", async () => 
   }
 });
 
+Deno.test("GPU Core identity reports no physical parallel work", async () => {
+  const artifact = await compileModuleSource(
+    "gpu_core_identity_profile.duck",
+    "let left = 20\nlet right = 22\nleft + right\n",
+    { gpuMode: "required" },
+  );
+  const { work } = artifact.profile;
+
+  if (
+    artifact.backends.coreRewrite !== "identity" ||
+    work.downstreamParallelFunctionCount !== 0 ||
+    work.gpuCoreLogicalBatchSize !== 1 ||
+    work.gpuCorePayloadBatchSize !== 0 ||
+    work.gpuCoreSubmissionBatchSize !== 0
+  ) {
+    throw new Error(
+      `Core identity reported physical GPU work: ${JSON.stringify(work)}`,
+    );
+  }
+});
+
 Deno.test("Ducklang profile reports specialization environment work", async () => {
   const artifact = await compileModuleSource(
     "specialization_environment_profile.duck",

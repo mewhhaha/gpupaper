@@ -1349,6 +1349,29 @@ logical throughput batching and pre-device validation.
 The 508-test release gate passed, including physical Core concurrency on
 nonempty prepared jobs and all six byte-identical GPU Wasm pairs.
 
+### Physical Core batch accounting
+
+Core results now report logical queue batch size separately from physically
+packed payload size. Identity has a logical job but no packed payload,
+submission, dispatched lane, or downstream-parallel function:
+
+| Target | Backend | Functions | Downstream parallel | Logical batch | Physical payload | Submission |
+| ------ | ------- | --------: | ------------------: | ------------: | ---------------: | ---------: |
+| Editor | identity | 101 | 0 | 1 | 0 | 0 |
+| Codex | identity | 301 | 0 | 1 | 0 | 0 |
+| grep | identity | 12 | 0 | 1 | 0 | 0 |
+| Tar | gpu | 12 | 12 | 1 | 1 | 1 |
+| wav | identity | 6 | 0 | 1 | 0 | 0 |
+| raytracer | identity | 15 | 0 | 1 | 0 | 0 |
+
+These are exact profile values, not timings. Direct raw throughput identity
+still reports logical batch size two and physical size zero. The concurrency
+test uses four actual add-zero jobs to require physical Core packing after an
+independently observed malformed-job rejection.
+
+The 509-test release gate passed with these accounting invariants and all six
+targets compiled twice to byte-identical, engine-valid Wasm.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and
