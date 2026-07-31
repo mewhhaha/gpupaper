@@ -379,6 +379,29 @@ Deno.test("WebGPU equality closure accepts compatible constructors", async () =>
   assertEquals(result.status, "solved");
 });
 
+Deno.test("WebGPU equality closure preserves unrelated type classes", async () => {
+  const integer: Type = { kind: "constructor", name: "Int", arguments: [] };
+  const boolean: Type = { kind: "constructor", name: "Bool", arguments: [] };
+  const result = await solveTypeEqualitiesOnGpu([
+    {
+      left: { kind: "variable", id: 0 },
+      right: integer,
+      span: testSpan,
+    },
+    {
+      left: { kind: "variable", id: 1 },
+      right: boolean,
+      span: testSpan,
+    },
+  ]);
+  if (result.status === "unavailable") return;
+  if (result.status !== "solved") {
+    throw new Error(`expected solved partition; received ${result.status}`);
+  }
+
+  assertEquals(result.representatives[0] !== result.representatives[2], true);
+});
+
 Deno.test("WebGPU constructor decomposition generates child equalities", async () => {
   const variable: Type = { kind: "variable", id: 0 };
   const integer: Type = { kind: "constructor", name: "Int", arguments: [] };

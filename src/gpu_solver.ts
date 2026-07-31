@@ -47,6 +47,20 @@ type FlatConstraints = {
   readonly sourceStarts: readonly number[];
 };
 
+type FlatConstraintClosure =
+  | {
+    readonly status: "completed";
+    readonly representatives: readonly number[];
+    readonly equalities: readonly [number, number][];
+    readonly decompositionCount: number;
+  }
+  | {
+    readonly status: "constructorClash";
+    readonly left: string;
+    readonly right: string;
+    readonly sourceStart: number;
+  };
+
 type ConstructorDecomposition =
   | {
     readonly status: "completed";
@@ -325,6 +339,7 @@ async function solveTypeEqualitiesWithDevice(
 ): Promise<GpuSolveResult> {
   selectPipelineDevice(device);
   const flat = flattenEqualities(equalities);
+  const cpuClosure = closeFlatConstraintsOnCpu(flat);
   if (flat.terms.length === 0) {
     return {
       status: "solved",
@@ -339,6 +354,7 @@ async function solveTypeEqualitiesWithDevice(
     return await solveLargeFlatConstraintsOnGpu(
       device,
       flat,
+      cpuClosure,
       scheduling,
       submissions,
     );
@@ -375,7 +391,7 @@ async function solveTypeEqualitiesWithDevice(
       const [leftIndex, rightIndex] = decomposition.clash;
       const left = flat.terms[leftIndex];
       const right = flat.terms[rightIndex];
-      return {
+      const result: GpuSolveResult = {
         status: "constructorClash",
         left: left.label,
         right: right.label,
@@ -385,6 +401,8 @@ async function solveTypeEqualitiesWithDevice(
           allSourceStarts,
         ),
       };
+      requireGpuTypeSolveAgreement(flat, cpuClosure, result);
+      return result;
     }
     let added = false;
     for (const generated of decomposition.equalities) {
@@ -412,9 +430,14 @@ async function solveTypeEqualitiesWithDevice(
     submissions,
   );
   if (infiniteRepresentative !== undefined) {
-    return { status: "infiniteType", representative: infiniteRepresentative };
+    const result: GpuSolveResult = {
+      status: "infiniteType",
+      representative: infiniteRepresentative,
+    };
+    requireGpuTypeSolveAgreement(flat, cpuClosure, result);
+    return result;
   }
-  return {
+  const result: GpuSolveResult = {
     status: "solved",
     representatives,
     termCount: flat.terms.length,
@@ -422,6 +445,8 @@ async function solveTypeEqualitiesWithDevice(
     unionRounds,
     decompositionCount,
   };
+  requireGpuTypeSolveAgreement(flat, cpuClosure, result);
+  return result;
 }
 
 export async function unionPairsOnGpu(
@@ -520,9 +545,42 @@ function flattenEqualities(
 async function solveLargeFlatConstraintsOnGpu(
   device: GPUDevice,
   flat: FlatConstraints,
+  cpuClosure: FlatConstraintClosure,
   scheduling: CompilerGpuSchedulingPolicy,
   submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<GpuSolveResult> {
+  if (cpuClosure.status === "constructorClash") return cpuClosure;
+  const gpuUnion = await unionOnGpu(
+    device,
+    flat.terms.map((_, index) => index),
+    cpuClosure.equalities,
+    scheduling,
+    submissions,
+  );
+  requireRepresentativeAgreement(
+    cpuClosure.representatives,
+    gpuUnion.representatives,
+  );
+  const infiniteRepresentative = findInfiniteTypeInRepresentativeGraph(
+    flat.terms,
+    gpuUnion.representatives,
+  );
+  if (infiniteRepresentative !== undefined) {
+    return { status: "infiniteType", representative: infiniteRepresentative };
+  }
+  return {
+    status: "solved",
+    representatives: gpuUnion.representatives,
+    termCount: flat.terms.length,
+    equalityCount: cpuClosure.equalities.length,
+    unionRounds: gpuUnion.rounds,
+    decompositionCount: cpuClosure.decompositionCount,
+  };
+}
+
+function closeFlatConstraintsOnCpu(
+  flat: FlatConstraints,
+): FlatConstraintClosure {
   const allEqualities = [...flat.equalities];
   const allSourceStarts = [...flat.sourceStarts];
   const seenEqualities = new Set(allEqualities.map(equalityKey));
@@ -603,45 +661,89 @@ async function solveLargeFlatConstraintsOnGpu(
     if (!added) break;
   }
 
-  const expectedRepresentatives = parents.map((_, index) => find(index));
-  const gpuUnion = await unionOnGpu(
-    device,
-    flat.terms.map((_, index) => index),
-    allEqualities,
-    scheduling,
-    submissions,
-  );
-  for (
-    let termIndex = 0;
-    termIndex < expectedRepresentatives.length;
-    termIndex += 1
-  ) {
+  return {
+    status: "completed",
+    representatives: parents.map((_, index) => find(index)),
+    equalities: allEqualities,
+    decompositionCount,
+  };
+}
+
+function requireGpuTypeSolveAgreement(
+  flat: FlatConstraints,
+  cpuClosure: FlatConstraintClosure,
+  gpuResult: Exclude<GpuSolveResult, { readonly status: "unavailable" }>,
+): void {
+  if (cpuClosure.status === "constructorClash") {
     if (
-      gpuUnion.representatives[termIndex] !==
-        expectedRepresentatives[termIndex]
-    ) {
-      throw new Error(
-        `WebGPU union representative mismatch at term ${termIndex}: expected ${
-          expectedRepresentatives[termIndex]
-        }, received ${gpuUnion.representatives[termIndex]}`,
-      );
-    }
+      gpuResult.status === "constructorClash" &&
+      gpuResult.left === cpuClosure.left &&
+      gpuResult.right === cpuClosure.right &&
+      gpuResult.sourceStart === cpuClosure.sourceStart
+    ) return;
+    throw new Error(
+      `CPU and WebGPU type solvers disagree: CPU found constructor clash ${cpuClosure.left} versus ${cpuClosure.right} at ${cpuClosure.sourceStart}; GPU returned ${
+        describeGpuSolveResult(gpuResult)
+      }`,
+    );
   }
   const infiniteRepresentative = findInfiniteTypeInRepresentativeGraph(
     flat.terms,
-    gpuUnion.representatives,
+    cpuClosure.representatives,
   );
   if (infiniteRepresentative !== undefined) {
-    return { status: "infiniteType", representative: infiniteRepresentative };
+    if (
+      gpuResult.status === "infiniteType" &&
+      gpuResult.representative === infiniteRepresentative
+    ) return;
+    throw new Error(
+      `CPU and WebGPU type solvers disagree: CPU found infinite type class ${infiniteRepresentative}; GPU returned ${
+        describeGpuSolveResult(gpuResult)
+      }`,
+    );
   }
-  return {
-    status: "solved",
-    representatives: gpuUnion.representatives,
-    termCount: flat.terms.length,
-    equalityCount: allEqualities.length,
-    unionRounds: gpuUnion.rounds,
-    decompositionCount,
-  };
+  if (gpuResult.status !== "solved") {
+    throw new Error(
+      `CPU and WebGPU type solvers disagree: CPU solved ${flat.terms.length} terms; GPU returned ${
+        describeGpuSolveResult(gpuResult)
+      }`,
+    );
+  }
+  requireRepresentativeAgreement(
+    cpuClosure.representatives,
+    gpuResult.representatives,
+  );
+}
+
+function requireRepresentativeAgreement(
+  expected: readonly number[],
+  received: readonly number[],
+): void {
+  if (received.length !== expected.length) {
+    throw new Error(
+      `CPU and WebGPU type solvers disagree on term count: CPU returned ${expected.length} representatives; GPU returned ${received.length}`,
+    );
+  }
+  for (const [termIndex, expectedRepresentative] of expected.entries()) {
+    if (received[termIndex] === expectedRepresentative) continue;
+    throw new Error(
+      `CPU and WebGPU type solvers disagree at term ${termIndex}: CPU representative ${expectedRepresentative}; GPU representative ${
+        received[termIndex]
+      }`,
+    );
+  }
+}
+
+function describeGpuSolveResult(
+  result: Exclude<GpuSolveResult, { readonly status: "unavailable" }>,
+): string {
+  if (result.status === "solved") {
+    return `solved ${result.termCount} terms`;
+  }
+  if (result.status === "infiniteType") {
+    return `infinite type class ${result.representative}`;
+  }
+  return `constructor clash ${result.left} versus ${result.right} at ${result.sourceStart}`;
 }
 
 function decomposeConstructorsByRepresentative(
