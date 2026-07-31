@@ -42,6 +42,13 @@ export function rewriteFlatDucklangCore(
     snapshot,
     proposals,
   );
+  if (accepted.length === 0) {
+    return {
+      package: snapshot,
+      proposals,
+      accepted,
+    };
+  }
   const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rewritten);
   return {
@@ -174,6 +181,7 @@ export function rebuildFlatDucklangCore(
   accepted: readonly DucklangCoreRewriteProposal[],
 ): FlatDucklangCore {
   validateFlatDucklangCore(snapshot);
+  if (accepted.length === 0) return snapshot;
   const rebuilt = rebuildValidatedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rebuilt);
   return rebuilt;
@@ -188,6 +196,7 @@ export function commitValidatedDucklangCoreRewrites(
     snapshot,
     proposals,
   );
+  if (accepted.length === 0) return { package: snapshot, accepted };
   const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rewritten);
   return { package: rewritten, accepted };

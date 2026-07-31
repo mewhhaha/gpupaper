@@ -1157,6 +1157,38 @@ plus a structurally admitted non-identity constant that the GPU rejects.
 Raytracer now reports `core=identity`, zero Core submissions, and zero Core GPU
 time instead of claiming a GPU backend for the host-proved empty frontier.
 
+### Empty accepted Core rewrite batch
+
+A nonempty structural frontier does not imply that a rewrite exists. Editor,
+Codex, grep, wav, and raytracer currently accept zero proposals; only Tar
+accepts its 24 add-zero proposals. The former CPU and GPU commit paths still
+rebuilt and revalidated a complete flat package for those empty accepted sets.
+They now return the already-validated snapshot by identity. The profile reports
+backend-neutral proposal and acceptance counts so this boundary remains
+observable.
+
+An alternating 21-pair Codex CPU experiment after one unrecorded warmup compared
+the current tree with detached commit `d3def76`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| Core rewrite | 74.181 ms | 34.773 ms | -53.13% |
+| Complete compilation | 527.788 ms | 489.262 ms | -7.30% |
+| Core inflation | 34.185 ms | 35.473 ms | +3.77% |
+
+The exact current Codex counts are 12,956 operations, 963 structural
+candidates, zero proposals, and zero acceptances. The experiment isolates the
+CPU rewrite stage; GPU commit uses the same identity law but has not received a
+separate latency experiment. The unchanged inflation median is a negative
+control. Complete-compilation movement is consistent with the removed
+sequential work but remains advisory because paired invocation order does not
+remove process drift.
+
+The 507-test required-GPU gate passed and compiled every target twice.
+Codex's two correctness samples were 841.02 and 589.22 ms; Editor's were
+300.63 and 182.64 ms. These are release observations, not an additional
+controlled latency comparison.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and

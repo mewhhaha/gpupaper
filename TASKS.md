@@ -1362,6 +1362,10 @@ resource cost, and corpus measurements.
 - [x] Audit product direct-call classification during closure lifting. An
       unguarded scan regressed lifting by 55.80%; a necessary block-head guard
       reached parity but no gain, so retain per-symbol early-exit scans.
+- [x] Define empty accepted Core rewrite batches as the identity transformation.
+      CPU and validated GPU commit preserve the input object, backend-neutral
+      profiles expose proposal and acceptance counts, and a 21-pair Codex
+      experiment isolates the removed rebuild and second validation.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

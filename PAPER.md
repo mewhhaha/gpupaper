@@ -1132,13 +1132,42 @@ changes performance only; it cannot introduce an unproved rewrite.
 
 Accepted proposals are ordered by descending profit and then stable function,
 operation, result, and rule IDs. At most one proposal claims an operation.
-Rebuild removes claimed operations, resolves replacement chains with cycle
-detection, remaps every use, retains source order, and validates the complete
-new snapshot. The original snapshot is immutable.
+Let \(A\) be the resulting accepted sequence. Batch application is defined by:
+
+```text
+commit(S, A) =
+  S             when A is empty
+  rebuild(S, A) otherwise
+```
+
+The first case is not an optimization heuristic. Rebuild is the ordered
+application of accepted substitutions and deletions, so its empty fold is the
+identity transformation. Since `S` was validated before proposal matching and
+the identity case constructs no package, every invariant of `S` is preserved
+without a second validation. The public rebuild boundary still validates
+untrusted input before applying this law. Returning the same object is sound
+under the exclusive read-ownership contract above; it would not be sound if a
+caller could concurrently mutate the shared typed arrays.
+
+For nonempty \(A\), rebuild removes claimed operations, resolves replacement
+chains with cycle detection, remaps every use, retains source order, and
+validates the complete new snapshot. The original snapshot is immutable.
+
+With \(O\) operations and \(V\) values, the former empty-batch path allocated at
+least \(B_{\mathrm{flat}}+5O+8V\) typed-array bytes: a complete new package,
+one-byte removal marks, two value-ID tables, and one operation-ID table. It also
+constructed transient JavaScript number arrays, visited the package during
+rebuild, and validated the duplicate package. The identity case removes all of
+that work. Initial validation and proposal matching remain
+\(O(B_{\mathrm{flat}}+O)\), so an empty accepted set does not imply an empty
+matcher frontier or a zero-cost pass.
 
 Executable evidence checks CPU/GPU proposal equality, immutable rebuild,
 multi-step replacement, floating-point exclusion, and rejection of a
-structurally valid but semantically false certificate. A general optimization
+structurally valid but semantically false certificate. A separate regression
+requires object identity when no proposal is accepted. Backend-neutral profile
+counts expose proposals and acceptances, preventing a nonempty structural
+frontier from being mistaken for useful rewrite work. A general optimization
 framework would require a preservation proof and certificate checker for every
 additional rule.
 
@@ -3570,6 +3599,35 @@ restored lifting to 25.125 ms versus a concurrent detached-`3ae5dc2` median of
 25.083 ms (+0.17%). Pre-specialization was likewise unresolved at
 108.660 versus 108.547 ms. The production implementation was restored; current
 corpus fan-out does not justify the product set.
+
+### 2026-07-31: empty accepted Core batches preserve identity
+
+The structural Core frontier is only a necessary rule-head filter. Five frozen
+targets have nonempty or independently classified frontiers but accept no
+rewrite, yet both CPU rewrite and validated GPU commit rebuilt and revalidated
+the complete flat package. Section 7.3 now defines batch application as an
+empty fold: `commit(S, []) = S`. This is a semantic identity, not a
+corpus-specific shortcut.
+
+The implementation returns the already-validated snapshot object after proposal
+checking and conflict resolution find no acceptance. This removes at least
+\(B_{\mathrm{flat}}+5O+8V\) typed-array allocation and the duplicate-package
+validation while preserving initial validation and matcher work. A regression
+checks reference identity, and backend-neutral profile fields report proposal
+and acceptance counts.
+
+In an alternating 21-pair Codex CPU experiment against detached commit
+`d3def76`, median Core rewrite time changed from 74.181 to 34.773 ms (-53.13%)
+and complete compilation from 527.788 to 489.262 ms (-7.30%). Core inflation,
+which is outside the change, moved from 34.185 to 35.473 ms. Codex has 12,956
+operations, 963 GPU structural candidates, and exactly zero proposals and
+acceptances. The stage result is empirical evidence for the removed work; the
+identity law and zero acceptance count are executable properties.
+
+The required-GPU gate passed all 507 tests and compiled every frozen target
+twice with byte-identical CPU/GPU emission and engine validation. Its advisory
+samples in milliseconds were Editor 300.63/182.64, Codex 841.02/589.22, grep
+72.53/69.16, Tar 139.02/134.32, wav 63.49/63.24, and raytracer 44.92/41.65.
 
 ## References
 

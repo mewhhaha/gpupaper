@@ -250,6 +250,8 @@ export type DucklangCompilationWork = {
   readonly coreBlockCount: number;
   readonly coreOperationCount: number;
   readonly flatCoreValueCount: number;
+  readonly coreRewriteProposalCount: number;
+  readonly coreRewriteAcceptedCount: number;
   readonly gpuRewriteCandidateCount: number;
   readonly gpuRewriteCandidateDescriptorBytes: number;
   readonly gpuCoreLogicalDeviceBufferBytes: number;
@@ -1203,6 +1205,8 @@ async function elaborateDucklangModuleSource(
         coreBlockCount: 0,
         coreOperationCount: 0,
         flatCoreValueCount: 0,
+        coreRewriteProposalCount: 0,
+        coreRewriteAcceptedCount: 0,
         gpuRewriteCandidateCount: 0,
         gpuRewriteCandidateDescriptorBytes: 0,
         gpuCoreLogicalDeviceBufferBytes: 0,
@@ -1463,11 +1467,16 @@ async function compileDucklangModuleSource(
   }
   let optimizedFlatCore: FlatDucklangCore;
   let cpuCoreRewriteMilliseconds = 0;
+  let cpuCoreRewriteProposalCount = 0;
+  let cpuCoreRewriteAcceptedCount = 0;
   if (gpuCoreResult?.status === "completed") {
     optimizedFlatCore = gpuCoreResult.package;
   } else {
     const coreRewriteStart = performance.now();
-    optimizedFlatCore = rewriteFlatDucklangCore(flatCore).package;
+    const coreRewrite = rewriteFlatDucklangCore(flatCore);
+    optimizedFlatCore = coreRewrite.package;
+    cpuCoreRewriteProposalCount = coreRewrite.proposals.length;
+    cpuCoreRewriteAcceptedCount = coreRewrite.accepted.length;
     cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
   }
 
@@ -1588,6 +1597,12 @@ async function compileDucklangModuleSource(
         ? core.functions.length
         : 0,
       flatCoreValueCount: flatCore.valueFunctionIds.length,
+      coreRewriteProposalCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.proposals.length
+        : cpuCoreRewriteProposalCount,
+      coreRewriteAcceptedCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.accepted.length
+        : cpuCoreRewriteAcceptedCount,
       gpuRewriteCandidateCount: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.rewriteCandidateCount
         : 0,

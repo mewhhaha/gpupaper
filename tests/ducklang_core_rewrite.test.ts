@@ -1,5 +1,7 @@
 import {
+  commitValidatedDucklangCoreRewrites,
   proposeDucklangCoreRewrites,
+  rebuildFlatDucklangCore,
   resolveDucklangCoreRewriteConflicts,
   rewriteFlatDucklangCore,
 } from "../src/ducklang_core_rewrite.ts";
@@ -7,6 +9,7 @@ import { lowerDucklangToCore } from "../src/ducklang_core.ts";
 import {
   flattenDucklangCore,
   inflateFlatDucklangCore,
+  validateFlatDucklangCore,
 } from "../src/flat_ducklang_core.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
@@ -63,6 +66,29 @@ sum * one
   const proposals = proposeDucklangCoreRewrites(snapshot);
 
   assertEquals(proposals, []);
+});
+
+Deno.test("Core rewrite without an accepted proposal preserves snapshot identity", async () => {
+  const snapshot = await flat(
+    `let left = 20
+let right = 22
+left + right
+`,
+  );
+
+  const rewritten = rewriteFlatDucklangCore(snapshot);
+
+  assertEquals(rewritten.proposals, []);
+  assertEquals(rewritten.accepted, []);
+  assertEquals(rewritten.package === snapshot, true);
+  assertEquals(rebuildFlatDucklangCore(snapshot, []) === snapshot, true);
+  assertEquals(
+    commitValidatedDucklangCoreRewrites(
+      validateFlatDucklangCore(snapshot),
+      [],
+    ).package === snapshot,
+    true,
+  );
 });
 
 Deno.test("Core commit rejects a structurally valid false rewrite", async () => {
