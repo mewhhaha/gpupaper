@@ -85,7 +85,7 @@ add(20, 22)
 Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",
-    "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
+    "let add = (value: I32) => value + 0\nadd(42)\n",
     {
       gpuMode: "required",
       gpuWasmVerification: "differential",

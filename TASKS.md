@@ -1130,6 +1130,11 @@ CPU/GPU disagreement, or return partially written output.
 - [x] Make GPU Core rewrite proposals authoritative, resolve them in stable
       order, compact the flat package directly, and validate the rebuilt
       snapshot before lowering.
+- [x] Derive the Core candidate frontier from the common structural head of the
+      admitted rules. CPU discrimination checks only necessary representation
+      facts; the GPU still decides constant identity, orientation, and
+      replacement. Frozen candidates fall from 3,788 to 1,242 without removing
+      a possible match.
 - [x] Hash-cons repeated type constructors before solving, derive the least
       constructor congruence on the CPU, validate its complete equality
       certificate with one GPU union/compression submission, and pack four

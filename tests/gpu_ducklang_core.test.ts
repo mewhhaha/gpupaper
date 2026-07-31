@@ -11,9 +11,10 @@ Deno.test("WebGPU proposes the same Core rewrites as the CPU", async () => {
     `let value = 21
 let first = value + 0
 let integer_result = first * 1
+let unmatched = integer_result + 2
 let float_value = 2.0f32
 let float_result = float_value * 1.0f32
-integer_result
+unmatched - 2
 `,
   );
   const expected = rewriteFlatDucklangCore(snapshot);

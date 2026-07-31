@@ -879,8 +879,19 @@ The rules are restricted to `i32` and `i64`, whose Wasm arithmetic is modular.
 They are deliberately not applied to floating point: `x + 0` can change negative
 zero, and `x * 1` participates in NaN behavior.
 
-Let \(O\) be the operation count and let \(C=\{o\mid kind(o)=scalarBinary\}\).
-The partial matcher is undefined for every operation outside \(C\), so:
+Let \(H(S,o)\) be the structural head shared by every rule:
+
+```text
+kind(o) = scalarBinary
+arity(o) = 2
+operator(o) in {add, multiply}
+result(o) in {i32, i64}
+at least one operand is defined by a constant operation
+```
+
+The exact constant attribute and payload are deliberately absent from \(H\).
+Let \(O\) be the operation count and let \(C=\{o\mid H(S,o)\}\). By inspection
+of the two rule heads, \(M(S,o)\) defined implies \(H(S,o)\), so:
 
 ```text
 { M(S, o) | o in [0, O), M(S, o) defined }
@@ -889,13 +900,16 @@ The partial matcher is undefined for every operation outside \(C\), so:
 ```
 
 The host therefore sends the stable increasing IDs in \(C\) as the rewrite
-frontier. This is scheduling classification, not CPU rewrite matching: operator,
-arity, attributes, result type, and constant operands remain GPU decisions. An
+frontier. This is a pattern-head discrimination tree [21], not CPU rewrite
+matching: the CPU proves only a necessary condition and emits neither a rule ID
+nor a replacement. The GPU repeats the structural checks, compares the exact
+constant attribute and payload, and selects orientation and replacement. An
 empty frontier proves that `M` is undefined for every operation, so the pass
 returns the branded input with empty proposal and acceptance sets before
 requesting a device. Packed execution partitions identity jobs from nonempty
 frontiers and preserves their logical result positions. For nonempty \(C\),
-scheduled lanes are \(64\lceil|C|/64\rceil\), replacing \(64\lceil O/64\rceil\).
+scheduled lanes are \(64\lceil|C|/64\rceil\), replacing
+\(64\lceil O/64\rceil\).
 
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects the untrusted
@@ -966,9 +980,9 @@ M(S, o) = M_D(D(S, o))
 
 because these are exactly the fields read by `hasIntegerScalarResult` and
 `coreConstantEquals`; no other snapshot column affects either rule. The host
-gathers both operands and all fields regardless of operator or constant value,
-so projection does not decide a rewrite. Operator selection, integer-type
-selection, and both constant comparisons remain GPU decisions.
+gathers both operands and all fields after \(H\) succeeds. Projection does not
+decide a rewrite: exact constant attributes, payloads, orientation, and
+replacement remain GPU decisions.
 
 Each descriptor is 20 `u32` words: six operation words and two seven-word
 operand records. Position \(q\) corresponds to the stable candidate ID at
@@ -2567,6 +2581,33 @@ wav, and 146.31/148.17 ms for raytracer. Every pair emitted byte-identical Wasm
 and passed engine validation. As above, these are correctness and budget
 observations rather than a latency distribution.
 
+### 2026-07-31: Core candidates follow the rewrite rule heads
+
+The stable Core frontier previously admitted every `scalarBinary` operation
+although the rule set contains only integer add-zero and multiply-one. Section
+7.3 now compiles their common structural head into the CPU frontier. Completeness
+is the direct implication \(M(S,o)\downarrow\Rightarrow H(S,o)\): every omitted
+operation makes at least one necessary rule premise false. The CPU produces no
+rule or replacement; exact constant payload matching and proposal construction
+remain on the GPU, followed by independent CPU certificate validation.
+
+Frozen candidate counts change from 169, 2,890, 34, 549, 43, and 103 to 15,
+963, 3, 257, 4, and 0. Descriptor bytes fall from 303,040 to 99,360
+(67.21%), while padded lanes fall from 3,968 to 1,536 (61.29%). Tar retains
+its 24 proposals and the other five targets retain zero, establishing that the
+filter removes only failed matches. A focused regression includes two positive
+identities, one structurally admitted non-identity constant rejected by the GPU,
+and a floating-point identity excluded by the head. These exact work counts and
+CPU/GPU proposal equality are executable validations; latency remains
+unmeasured.
+
+The full gate passed 499 tests and compiled every frozen target twice with
+byte-identical CPU/GPU emission and engine validation. Its samples were
+966.91/757.85 ms for Editor, 2,989.80/3,037.06 ms for Codex,
+344.93/347.40 ms for grep, 697.60/548.34 ms for tar, 316.84/355.19 ms for
+wav, and 239.35/366.22 ms for raytracer. They establish conformance under the
+observed heavy system load and are not used as performance evidence.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -2619,3 +2660,5 @@ observations rather than a latency distribution.
     <https://doi.org/10.1137/0201010>
 20. Mark Weiser. “Program Slicing.” ICSE 1981.
     <https://doi.org/10.1145/800078.802557>
+21. Luc Maranget. “Compiling Pattern Matching to Good Decision Trees.” ML
+    2008. <https://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf>

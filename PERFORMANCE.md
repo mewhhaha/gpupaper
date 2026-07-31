@@ -519,9 +519,11 @@ unaffected.
 ### Candidate-local Core descriptors
 
 The current matcher reads a fixed projection of each candidate and at most two
-constant definitions. A 20-word descriptor now carries exactly those fields. The
-GPU still decides operator, scalar type, and constant identity; the CPU still
-checks every resulting certificate against the complete immutable snapshot.
+constant definitions. A 20-word descriptor now carries exactly those fields.
+The CPU frontier admits only the structural heads of the implemented integer
+add-zero and multiply-one rules; the GPU still decides exact constant identity,
+orientation, and replacement. The CPU checks every resulting certificate
+against the complete immutable snapshot.
 
 For operations `O`, operands `E`, attributes `A`, values `V`, types `T`, and
 candidates `C`, logical device capacity changes from
@@ -542,6 +544,28 @@ Storage bindings fall from eight to three. Profile invariants require exactly
 frontier. Packed alignment is additional physical capacity. These are
 deterministic capacity measurements; latency still requires a counterbalanced
 benchmark.
+
+### Rule-head Core frontier
+
+The former `scalarBinary` frontier was wider than the actual rule domain.
+Filtering by the shared structural rule head—binary arity, add/multiply
+operator, integer result, and the existence of a constant operand—is complete
+because every successful rule match has those properties. It does not inspect
+the constant payload, emit a rule, or select a replacement.
+
+| Target    | Candidates before → after | Descriptor bytes before → after | Lanes before → after |
+| --------- | ------------------------: | ------------------------------: | -------------------: |
+| Editor    |                  169 → 15 |                   13,520 → 1,200 |             192 → 64 |
+| Codex     |               2,890 → 963 |                 231,200 → 77,040 |         2,944 → 1,024 |
+| grep      |                    34 → 3 |                      2,720 → 240 |              64 → 64 |
+| tar       |                 549 → 257 |                  43,920 → 20,560 |            576 → 320 |
+| wav       |                    43 → 4 |                      3,440 → 320 |              64 → 64 |
+| raytracer |                   103 → 0 |                        8,240 → 0 |              128 → 0 |
+
+Tar retains its 24 proposals; the other five targets retain zero. The reduction
+therefore discards only failed matches and preserves optimized Core. Candidate
+order remains source order, and direct rewrite tests retain two positive matches
+plus a structurally admitted non-identity constant that the GPU rejects.
 
 ### Scalar comptime stack capacity
 
