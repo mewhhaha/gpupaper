@@ -411,7 +411,7 @@ function liftGeneratedFunctions(
     const appendCaptures = (
       candidate: TypedDucklangExpression,
     ): TypedDucklangExpression =>
-      appendCallArguments(
+      captureReferences.length === 0 ? candidate : appendCallArguments(
         candidate,
         functionSymbol.id,
         captureReferences,

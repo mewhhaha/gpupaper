@@ -5456,6 +5456,26 @@ temporary counters were removed. Review 95 implements this rule and must retain
 it only if focused semantics, deterministic binaries, and A/B/A lifting timing
 agree.
 
+### 2026-07-31: empty capture insertion now returns immediately
+
+Review 95 implements the empty-vector identity rule at the `appendCaptures`
+boundary. Capturing functions retain the existing traversal unchanged;
+zero-capture functions return the candidate object directly. All 11 focused
+specialization tests pass, including nested captures, two-level capture
+propagation, direct-only lifting, and mixed scope identities.
+
+Fifteen direct Codex samples in baseline/fast-path/baseline order measured
+pre-specialization lifting median/MAD 23.684/0.718, 20.788/1.934, and
+21.961/0.980 ms. The fast path is 2.896 and 1.173 ms below its neighboring
+baselines. The second difference overlaps the candidate MAD, so this is a
+directional improvement rather than a precise effect estimate. It is retained
+because it removes two proven identity traversals for 143 functions, preserves
+object sharing, and adds only one branch after captures are already known.
+
+The implementation does not solve the remaining 260 capturing Codex lifts or
+replace repeated capture discovery. Review 96 must remeasure traversal work
+after the retained rule before advancing to broader reconstruction changes.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

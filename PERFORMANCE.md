@@ -627,6 +627,12 @@ Editor, and 6 of 9 for raytracer. Each currently triggers two identity
 capture-argument traversals. Counters were removed; the empty-vector identity
 fast path is the next measured implementation.
 
+The retained empty-capture identity rule reduces 15-sample Codex lifting
+median/MAD from neighboring baselines 23.684/0.718 and 21.961/0.980 ms to
+20.788/1.934 ms. All 11 specialization tests pass. The signal is directional,
+not a precise effect estimate, but the rule removes proven identity traversal
+with one post-analysis branch.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

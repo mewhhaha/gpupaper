@@ -1542,6 +1542,9 @@ resource cost, and corpus measurements.
       lifting redesign.
 - [x] Count zero-capture lifts. Establish a 143-of-403 Codex target for the
       empty-vector identity rule, then remove the counters before implementation.
+- [x] Skip capture-argument traversal for empty capture vectors. Retain the
+      identity rule after focused tests and a directional 1.17--2.90 ms Codex
+      lifting reduction in a 15-sample A/B/A comparison.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
