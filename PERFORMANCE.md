@@ -515,6 +515,13 @@ at least 677/703 keys with an empty captured environment. The counters were
 removed, and captured-environment sorting/serialization is closed as a
 negligible frontier for this corpus.
 
+Static-argument identity is likewise bounded. Editor has 83 arguments across 47
+keys, maximum arity three, and 155 recursive identity calls. Codex has 1,357
+arguments across 703 keys, maximum seven, and 1,416 identity calls. Grep has two
+and the other targets none. Codex key identity calls are only 1.09% of its
+130,143 rewrite entries. Temporary counters were removed; key construction is
+closed as the dominant rewrite frontier.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

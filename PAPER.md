@@ -4961,6 +4961,25 @@ rewrite entries remain the two request-domain costs. Any environment
 optimization must wait for a corpus whose measured key arity crosses a stated
 break-even point.
 
+### 2026-07-31: specialization key construction is closed
+
+Review 72 temporarily counts static arguments entering result keys, maximum
+argument arity, and every recursive expression-identity call. Editor has 83
+arguments across 47 keys, maximum three, and 155 identity calls. Codex has
+1,357 arguments across 703 keys, maximum seven, and 1,416 identity calls. Grep
+has two arguments and two calls; the other targets have none.
+
+Codex therefore averages 1.93 static arguments per key. Recursive structural
+identity adds only 59 calls beyond the 1,357 top-level arguments; this includes
+the 26 captured-environment entries measured in Review 71. All key identity
+work is only 1.09% of the 130,143 rewrite entries measured in Review 62.
+
+The hot counters were removed. Together Reviews 60, 61, 64, 70, 71, and 72
+close call-site spans, final-identity caching, stack depth, candidate sorting,
+captured environments, and static-argument serialization as primary causes.
+The remaining specialization frontier is transformation of requested bodies,
+not construction of their cache keys.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
