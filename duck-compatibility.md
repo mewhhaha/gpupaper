@@ -109,9 +109,10 @@ than a general separately compiled linker.
 
 The semantic frontend, ownership/effect analysis, type oracle, and ABI policy
 remain CPU responsibilities. GPU type solving is a standalone conformance
-experiment rather than production compilation work; scalar compile-time
-evaluation remains a differential check. Flat-Core rewrite matching is
-GPU-authoritative, and Wasm emission can be either GPU-authoritative or
-CPU-differential. This division is intentional: the GPU executes bulk compiler
-transformations whose results are consumed, while source-language policy is
-settled before flat Core.
+experiment rather than production compilation work; GPU scalar bytecode
+evaluation is likewise confined to direct differential tests. Production
+compile-time normalization retains an independent CPU scalar check against the
+general constant evaluator. Flat-Core rewrite matching is GPU-authoritative, and
+Wasm emission can be either GPU-authoritative or CPU-differential. This division
+is intentional: the GPU executes bulk compiler transformations whose results are
+consumed, while source-language policy is settled before flat Core.

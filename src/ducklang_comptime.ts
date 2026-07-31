@@ -1,9 +1,7 @@
 import {
   compileScalarComptimeExpression,
-  type ComptimeBatchResult,
   type ComptimeValue,
   evaluateBytecodeOnCpu,
-  evaluateBytecodeOnGpu,
   type ScalarComptimeExpression,
 } from "./comptime.ts";
 import {
@@ -18,13 +16,11 @@ import type {
 } from "./ducklang_types.ts";
 import type { Type } from "./types.ts";
 
-export async function evaluateDucklangComptime(
+export function evaluateDucklangComptime(
   module: TypedDucklangModule,
-  runGpu: boolean,
-): Promise<{
+): {
   readonly module: TypedDucklangModule;
   readonly cpuValues: readonly ComptimeValue[];
-  readonly gpu: ComptimeBatchResult | undefined;
   readonly changedBindingSymbols: ReadonlySet<number>;
   readonly resultChanged: boolean;
   readonly metrics: {
@@ -34,7 +30,7 @@ export async function evaluateDucklangComptime(
     readonly deferredExpressionCount: number;
     readonly changedBindingCount: number;
   };
-}> {
+} {
   const expressions: TypedDucklangExpression[] = [];
   const functionExpressions = new Set<TypedDucklangExpression>();
   const deferredExpressions = new Set<TypedDucklangExpression>();
@@ -84,18 +80,8 @@ export async function evaluateDucklangComptime(
     compileScalarComptimeExpression(expression)
   );
   const cpu = evaluateBytecodeOnCpu(programs);
-  const gpu = runGpu ? await evaluateBytecodeOnGpu(programs) : undefined;
   if (cpu.status !== "completed") {
     throw new Error("Ducklang CPU comptime evaluator did not complete");
-  }
-  if (gpu?.status === "completed") {
-    for (let index = 0; index < cpu.values.length; index += 1) {
-      if (
-        JSON.stringify(cpu.values[index]) !== JSON.stringify(gpu.values[index])
-      ) {
-        throw new Error(`Ducklang CPU/GPU comptime mismatch at job ${index}`);
-      }
-    }
   }
   for (const [scalarIndex, candidate] of scalarExpressions.entries()) {
     const constValue = constValues[candidate.index];
@@ -141,7 +127,6 @@ export async function evaluateDucklangComptime(
   return {
     module: comptimeModule,
     cpuValues: cpu.values,
-    gpu,
     changedBindingSymbols,
     resultChanged,
     metrics: {

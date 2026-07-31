@@ -33,9 +33,9 @@ in
 [GPU-Parallel Type Resolution and Compile-Time Execution](type-resolution-and-comptime.md).
 Those experiments and Ducklang share scalar compile-time evaluation and Wasm
 emission infrastructure, but Ducklang has its own frontend and semantic
-pipeline. GPU type solving remains a direct conformance experiment; production
-compilation uses the already-authoritative CPU inference result and does not
-submit a redundant type-validation command.
+pipeline. GPU type solving and scalar bytecode evaluation remain direct
+conformance experiments. Production compilation uses the authoritative CPU
+results and does not submit either redundant validation command.
 
 ## Run it
 
@@ -157,8 +157,8 @@ Duck source
   -> canonical module graph and compile-time modules
   -> derivations, handlers, protocols, extensions, and static specialization
   -> scope resolution, ownership/effect analysis, and typed IR
-  -> CPU type semantics + GPU equality verification
-  -> compile-time normalization + GPU scalar verification
+  -> CPU type semantics
+  -> compile-time normalization + independent CPU scalar verification
   -> closure conversion and structured control-flow lowering
   -> immutable typed SSA Core
   -> validated structure-of-arrays flat Core
@@ -219,8 +219,9 @@ standalone Wasm runtime. Generated parser artifacts are checked in.
 - Managed `Text`, `Bytes`, aggregates, and closures use opaque runtime handles.
   GPU kernels compile the payload; they do not execute its buffer operations.
 - The semantic frontend, ownership/effect policy, type oracle, and host-ABI
-  policy run on the CPU. GPU stages handle equality closure, scalar compile-time
-  batches, flat-Core rewrite matching, and Wasm binary emission.
+  policy run on the CPU. Production GPU stages handle flat-Core rewrite matching
+  and Wasm binary emission. Type equality and scalar bytecode retain direct GPU
+  conformance experiments outside ordinary compilation.
 - The separate Haskell-like frontend remains eager and rank-1. It is an
   experiment, not a GHC-compatible implementation.
 

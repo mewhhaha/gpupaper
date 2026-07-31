@@ -917,7 +917,7 @@ Deno.test("GPU-authoritative emission matches differential emission", async () =
   assertEquals([...authoritative.wasm], [...differential.wasm]);
   assertEquals(
     formatCompilationBackends(authoritative.backends),
-    "backends: type=cpu comptime=cpu+gpu core=notApplicable wasm=gpu verification=none",
+    "backends: type=cpu comptime=cpu core=notApplicable wasm=gpu verification=none",
   );
 });
 

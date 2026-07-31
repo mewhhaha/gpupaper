@@ -1,9 +1,5 @@
 import { contentIdentity } from "./content_identity.ts";
-import {
-  type ComptimeBatchResult,
-  type ComptimeValue,
-  evaluateModuleComptime,
-} from "./comptime.ts";
+import { type ComptimeValue, evaluateModuleComptime } from "./comptime.ts";
 import {
   parseDucklangTextLiterals,
   validateDucklangManagedArtifact,
@@ -109,7 +105,7 @@ export type CompilationOptions = {
 
 export type CompilationBackends = {
   readonly typeCheck: "cpu";
-  readonly comptime: "cpu" | "cpu+gpu";
+  readonly comptime: "cpu";
   readonly coreRewrite: "cpu" | "gpu" | "notApplicable";
   readonly wasmEmission: "cpu" | "gpu";
   readonly wasmVerification: "none" | "cpuDifferential";
@@ -289,7 +285,6 @@ type SharedCompilationArtifact = {
   readonly finalTypes: readonly string[];
   readonly gpuWasmResult: GpuWasmEmissionResult | undefined;
   readonly comptimeCpuValues: readonly ComptimeValue[];
-  readonly comptimeGpuResult: ComptimeBatchResult | undefined;
   readonly interactionResults: readonly InteractionResult[];
   readonly macros: Omit<MacroExpansionReport, "module">;
   readonly backends: CompilationBackends;
@@ -422,13 +417,7 @@ async function compileHaskellModuleSource(
 
   const comptimeStart = performance.now();
   const interaction = evaluateModuleInteractionComptime(macroExpansion.module);
-  const comptime = await evaluateModuleComptime(
-    interaction.module,
-    gpuMode !== "off",
-  );
-  if (comptime.gpu?.status === "unavailable" && gpuMode === "required") {
-    throw new Error(comptime.gpu.reason);
-  }
+  const comptime = evaluateModuleComptime(interaction.module);
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
   const finalTypeStart = performance.now();
@@ -472,7 +461,6 @@ async function compileHaskellModuleSource(
     ),
     gpuWasmResult,
     comptimeCpuValues: comptime.cpuValues,
-    comptimeGpuResult: comptime.gpu,
     interactionResults: interaction.results,
     macros: {
       invocationCount: macroExpansion.invocationCount,
@@ -481,7 +469,7 @@ async function compileHaskellModuleSource(
     },
     backends: {
       typeCheck: "cpu",
-      comptime: comptime.gpu?.status === "completed" ? "cpu+gpu" : "cpu",
+      comptime: "cpu",
       coreRewrite: "notApplicable",
       wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
       wasmVerification: gpuWasmResult?.status === "completed" &&
@@ -554,7 +542,6 @@ type DucklangFrontendResult = {
   readonly initialTypes: readonly string[];
   readonly comptime: {
     readonly cpuValues: readonly ComptimeValue[];
-    readonly gpu: ComptimeBatchResult | undefined;
     readonly metrics: {
       readonly expressionCount: number;
       readonly functionExpressionCount: number;
@@ -865,7 +852,6 @@ async function elaborateDucklangModuleSource(
     semanticFingerprintReused,
     revisionReuse,
   } = prepared;
-  const gpuMode = options.gpuMode ?? "auto";
   const parsedSource = parsedResult.module;
 
   const elaborationStart = performance.now();
@@ -995,13 +981,7 @@ async function elaborateDucklangModuleSource(
     preComptimeSpecializationStart;
 
   const comptimeStart = performance.now();
-  const comptime = await evaluateDucklangComptime(
-    staticallySpecialized,
-    gpuMode !== "off",
-  );
-  if (comptime.gpu?.status === "unavailable" && gpuMode === "required") {
-    throw new Error(comptime.gpu.reason);
-  }
+  const comptime = evaluateDucklangComptime(staticallySpecialized);
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
   const comptimeChanged = comptime.changedBindingSymbols.size > 0 ||
@@ -1645,7 +1625,6 @@ async function compileDucklangModuleSource(
     finalTypes: frontend.initialTypes,
     gpuWasmResult,
     comptimeCpuValues: frontend.comptime.cpuValues,
-    comptimeGpuResult: frontend.comptime.gpu,
     interactionResults: [],
     macros: {
       invocationCount: 0,
@@ -1654,9 +1633,7 @@ async function compileDucklangModuleSource(
     },
     backends: {
       typeCheck: "cpu",
-      comptime: frontend.comptime.gpu?.status === "completed"
-        ? "cpu+gpu"
-        : "cpu",
+      comptime: "cpu",
       coreRewrite: gpuCoreResult?.status === "completed" ? "gpu" : "cpu",
       wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
       wasmVerification: gpuWasmResult?.status === "completed" &&

@@ -858,16 +858,12 @@ function requireWellFormedBytecodePrograms(
   return maximumStackDepth;
 }
 
-export async function evaluateModuleComptime(
+export function evaluateModuleComptime(
   module: Module,
-  runGpu: boolean,
-): Promise<
-  {
-    readonly module: Module;
-    readonly cpuValues: readonly ComptimeValue[];
-    readonly gpu: ComptimeBatchResult | undefined;
-  }
-> {
+): {
+  readonly module: Module;
+  readonly cpuValues: readonly ComptimeValue[];
+} {
   const expressions: Expression[] = [];
   for (const declaration of module.declarations) {
     if (declaration.kind === "value") {
@@ -876,16 +872,8 @@ export async function evaluateModuleComptime(
   }
   const programs = expressions.map(compileComptimeExpression);
   const cpu = evaluateBytecodeOnCpu(programs);
-  const gpu = runGpu ? await evaluateBytecodeOnGpu(programs) : undefined;
   if (cpu.status !== "completed") {
     throw new Error("CPU comptime evaluator did not complete");
-  }
-  if (gpu?.status === "completed") {
-    for (let index = 0; index < cpu.values.length; index += 1) {
-      if (
-        JSON.stringify(cpu.values[index]) !== JSON.stringify(gpu.values[index])
-      ) throw new Error(`CPU/GPU comptime mismatch at job ${index}`);
-    }
   }
   let valueIndex = 0;
   const declarations = module.declarations.map((declaration) => {
@@ -897,7 +885,7 @@ export async function evaluateModuleComptime(
     );
     return { ...declaration, expression } satisfies ValueDeclaration;
   });
-  return { module: { ...module, declarations }, cpuValues: cpu.values, gpu };
+  return { module: { ...module, declarations }, cpuValues: cpu.values };
 }
 
 function collectBytecodeComptime(

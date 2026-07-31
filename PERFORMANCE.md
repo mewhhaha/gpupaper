@@ -545,12 +545,30 @@ benchmark.
 
 ### Scalar comptime stack capacity
 
-The bytecode validator derives stack depth at every instruction. GPU scalar
-comptime now allocates `4 × job_count × maximum_depth` bytes rather than the
-fixed `256 × job_count` bound and reports both the selected depth and byte
-count. `examples/all.hs` has one scalar job at depth 2: its stack arena is 8
-bytes rather than 256 bytes, a 96.875% reduction. Both evaluators return 42.
-This exact capacity result does not imply a latency improvement at one job.
+The standalone GPU bytecode conformance evaluator derives stack depth at every
+instruction and allocates `4 × job_count × maximum_depth` bytes rather than the
+fixed `256 × job_count` bound. `examples/all.hs` has one scalar job at depth 2:
+its stack arena is 8 bytes rather than 256 bytes, a 96.875% reduction. Both
+evaluators return 42. Production compilation no longer invokes this differential
+evaluator, so this remains a conformance-capacity result rather than a release
+latency claim.
+
+### Production scalar comptime boundary
+
+Only Editor among the six frozen applications presented scalar bytecode to the
+GPU validation path: four jobs. Codex, grep, tar, wav, and raytracer presented
+zero and returned through the evaluator's identity case before device
+acquisition. The GPU values were reported but never consumed by specialization,
+Core lowering, or emission. Production compilation now retains the CPU scalar
+bytecode comparison against the general constant evaluator and discards the GPU
+replay. Editor therefore removes one submission and one mapped readback; the
+other five targets remove no physical GPU work.
+
+A five-sample post-change run observed comptime-stage medians of 2.85, 10.81,
+0.27, 0.56, 0.04, and 0.08 ms for Editor, Codex, grep, tar, wav, and raytracer.
+This enclosing stage includes general constant evaluation and replacement, and
+the samples are unpaired and noisy; they are not evidence for a causal latency
+delta. The exact evidence is the removed dependency and physical operations.
 
 ### Empty type equality set
 

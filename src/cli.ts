@@ -198,11 +198,6 @@ export function formatCompilationBackends(
 
 function printTypes(artifact: CompilationArtifact): void {
   for (const type of artifact.finalTypes) console.log(type);
-  if (artifact.comptimeGpuResult?.status === "unavailable") {
-    console.log(
-      `WebGPU comptime unavailable: ${artifact.comptimeGpuResult.reason}`,
-    );
-  }
 }
 
 async function experimentReport(
@@ -229,7 +224,7 @@ async function experimentReport(
       { status: "disabled" },
     experimentC_comptime: {
       cpu: artifact.comptimeCpuValues,
-      gpu: artifact.comptimeGpuResult ?? { status: "disabled" },
+      gpu: { status: "disabled" },
     },
     experimentD_wasmMacros: artifact.macros,
     experimentE_interactionCalculus: artifact.interactionResults.map((

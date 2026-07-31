@@ -729,13 +729,14 @@ classification itself is this compiler's policy. The public policies are:
 | `auto`     | execute the corresponding CPU stage     | fail compilation     |
 | `required` | fail compilation with the device reason | fail compilation     |
 
-Authority is stage-specific. Type equality and scalar comptime always retain a
-CPU semantic oracle; a completed GPU result adds differential evidence. Core
-input is CPU-validated, the GPU authoritatively selects rewrite proposals, and
-the CPU validates and deterministically commits those proposals. Wasm bytes are
-GPU-authoritative when GPU emission completes. The default additionally emits
-CPU bytes and requires byte-for-byte equality; `gpuWasmVerification: "none"`
-omits that oracle but still performs engine and managed-artifact validation.
+Authority is stage-specific. Type equality and scalar comptime use CPU semantics
+in production; direct GPU invocations add differential evidence without entering
+the compilation dependency graph. Core input is CPU-validated, the GPU
+authoritatively selects rewrite proposals, and the CPU validates and
+deterministically commits those proposals. Wasm bytes are GPU-authoritative when
+GPU emission completes. The default additionally emits CPU bytes and requires
+byte-for-byte equality; `gpuWasmVerification: "none"` omits that oracle but
+still performs engine and managed-artifact validation.
 
 Batching changes scheduling, not meaning. A payload belongs to exactly one
 logical job, offsets are assigned in enqueue order, and every returned slice is
@@ -1347,11 +1348,11 @@ rem_s(x, y)      = x - y × trunc(x / y) otherwise
 ```
 
 These are the WebAssembly integer-operation rules that the residual runtime
-uses. The CPU evaluator checks both division traps before arithmetic. The GPU
-kernel assigns explicit failure statuses before evaluating the corresponding
-WGSL expression, so shader-language overflow behavior cannot silently define
-source comptime behavior. Comparisons and Boolean results are canonicalized to
-zero or one.
+uses. The production CPU evaluator checks both division traps before arithmetic.
+The standalone GPU conformance kernel assigns explicit failure statuses before
+evaluating the corresponding WGSL expression, so a differential test cannot
+silently substitute shader-language overflow behavior for source comptime
+behavior. Comparisons and Boolean results are canonicalized to zero or one.
 
 Conditionals are branch-selective:
 
@@ -2499,9 +2500,8 @@ end-to-end speedup.
 The semantic argument is noninterference: successful validation had no consumer,
 invalid source failed during prior CPU inference, and automatic unavailability
 already discarded the result. Required mode continues to require authoritative
-GPU Core rewriting, scalar comptime when present, and Wasm emission. Removing an
-unused validator cannot alter accepted Wasm; the release gate checks this
-directly.
+GPU Core rewriting and Wasm emission. Removing an unused validator cannot alter
+accepted Wasm; the release gate checks this directly.
 
 The post-removal sixteen-sample concurrent grep sweep reports throughput
 GPU/CPU ratios of 1.520, 1.242, 1.130, 1.027, and 1.015 at 1, 2, 4, 8, and 16
@@ -2516,6 +2516,56 @@ grep, 203.80/208.31 ms for tar, 123.57/120.82 ms for wav, and 129.01/129.71 ms
 for raytracer. Every pair emitted byte-identical Wasm and passed engine
 validation. These pairs are release correctness evidence, not latency
 distributions.
+
+### 2026-07-31: production discards differential scalar GPU evaluation
+
+Let \(E(e)\) be the general immutable constant semantics, \(B(e)\) scalar
+bytecode lowering, \(S(B(e))\) the CPU bytecode semantics, and \(G(B(e))\) its
+GPU implementation. Production Ducklang already required \(E(e)=S(B(e))\) for
+every scalar comptime expression and replaced the source with \(E(e)\). The
+additional condition \(S(B(e))=G(B(e))\) controlled only an error/report field:
+
+```text
+old(e) = if E(e) = S(B(e)) = G(B(e)) then lower(replace(e, E(e)))
+new(e) = if E(e) = S(B(e))           then lower(replace(e, E(e)))
+```
+
+There is no path from the GPU value to replacement, specialization, Core, or
+Wasm. Under the tested implementation-conformance obligation \(S(p)=G(p)\) for
+admitted bytecode \(p\), the two partial functions therefore have equal
+successful artifacts. Removing \(G\) changes implementation availability and the
+location of differential bug detection, not the specified source semantics.
+Direct fixed and generated CPU/GPU bytecode tests retain that evidence. This is
+a backward slice from the emitted artifact in the sense of Weiser: the GPU
+replay is outside the artifact's dependency slice [20].
+
+For \(J>0\) jobs, \(I\) packed instructions, and validated maximum stack height
+\(H\), the discarded GPU allocation is
+
+```text
+B_gpu = 8I + 20J + 4JH + 16 bytes
+```
+
+for opcode/operand columns, starts, results, statuses, stacks, parameters, and
+readback. It also removes one command submission, \(J\) interpreter invocations,
+at most the explicit per-job fuel in executed bytecode steps, and one mapped
+readback. For \(J=0\), the implementation was already the identity before device
+acquisition, so the removed physical work is zero.
+
+Only Editor has a nonempty scalar batch in the six frozen applications: four
+jobs. The other five report zero scalar jobs. A post-change five-sample run
+observed enclosing comptime-stage medians of 2.85, 10.81, 0.27, 0.56, 0.04, and
+0.08 ms for Editor through raytracer. Those stages include constant evaluation
+and replacement and the observations are neither paired nor stable enough for a
+latency claim. The proved dependency removal and exact work formula are the
+supported result.
+
+The full gate passed 499 tests. Required-GPU differential samples were
+484.95/337.59 ms for Editor, 1,497.87/1,234.20 ms for Codex,
+138.70/161.44 ms for grep, 260.31/263.73 ms for tar, 146.13/145.65 ms for
+wav, and 146.31/148.17 ms for raytracer. Every pair emitted byte-identical Wasm
+and passed engine validation. As above, these are correctness and budget
+observations rather than a latency distribution.
 
 ## References
 
@@ -2567,3 +2617,5 @@ distributions.
 19. Robert Tarjan. “Depth-First Search and Linear Graph Algorithms.” SIAM
     Journal on Computing 1(2), 1972.
     <https://doi.org/10.1137/0201010>
+20. Mark Weiser. “Program Slicing.” ICSE 1981.
+    <https://doi.org/10.1145/800078.802557>

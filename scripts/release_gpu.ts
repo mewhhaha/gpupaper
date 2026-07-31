@@ -61,7 +61,7 @@ for (const target_ of targets) {
     }
     if (
       artifact.backends.typeCheck !== "cpu" ||
-      artifact.backends.comptime !== "cpu+gpu" ||
+      artifact.backends.comptime !== "cpu" ||
       artifact.backends.coreRewrite !== "gpu" ||
       artifact.backends.wasmEmission !== "gpu" ||
       artifact.backends.wasmVerification !== "cpuDifferential"

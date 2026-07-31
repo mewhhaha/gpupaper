@@ -658,7 +658,7 @@ add_two(40)
   );
 });
 
-Deno.test("Ducklang comptime specializes a closure without a scalar GPU job", async () => {
+Deno.test("Ducklang comptime specializes a closure without a scalar bytecode job", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     `const make_adder = amount => {
@@ -670,9 +670,6 @@ add_three(39)
   );
   assertEquals(await runMain(artifact.wasm), 42);
   assertEquals(artifact.comptimeCpuValues, []);
-  if (artifact.comptimeGpuResult?.status === "completed") {
-    assertEquals(artifact.comptimeGpuResult.values, []);
-  }
 });
 
 Deno.test("Ducklang functional imports specialize composition and pipelines", async () => {
@@ -1081,12 +1078,6 @@ Deno.test("Ducklang scalar operators agree across comptime and Wasm", async () =
   );
   assertEquals(await runMain(artifact.wasm), 42);
   assertEquals(artifact.comptimeCpuValues, [{ kind: "integer", value: 42 }]);
-  if (artifact.comptimeGpuResult?.status === "completed") {
-    assertEquals(
-      artifact.comptimeGpuResult.values,
-      artifact.comptimeCpuValues,
-    );
-  }
 });
 
 Deno.test("Ducklang rejects arithmetic between different integer widths", async () => {
@@ -1283,12 +1274,11 @@ return { .result = result }
   assertEquals(inflateFlatFcgPackage(artifact.flatFcg), artifact.fcg);
 });
 
-Deno.test("Ducklang comptime, Core, and Wasm jobs reach the GPU passes", async () => {
+Deno.test("Ducklang Core and Wasm jobs reach the GPU passes", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let answer = comptime 6 * 7\nanswer\n",
   );
-  assertEquals(artifact.comptimeGpuResult === undefined, false);
   assertEquals(artifact.gpuCoreResult === undefined, false);
   assertEquals(artifact.gpuWasmResult === undefined, false);
   if (artifact.gpuCoreResult?.status === "completed") {

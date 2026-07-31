@@ -528,12 +528,13 @@ behavior no longer depends on statement concatenation order.
 - [x] Replace scalar-only comptime evaluation and ad hoc static closure
       substitution after equivalent behavior is covered. `DucklangConstValue` is
       now the semantic evaluator for scalars, products, sums, types, closures,
-      and modules. The remaining scalar GPU batch is differential validation of
-      closed scalar expressions, not a second source semantics. Expressions
-      closed over function parameters stay in their immutable closure
-      environment until specialization. `tests/ducklang_closures.test.ts` pins
-      both the specialized shape and the value, including a three-level capture
-      that would answer 123 if an environment were substituted incorrectly.
+      and modules. Independent CPU scalar bytecode validates closed scalar
+      expressions, while the direct GPU evaluator remains a conformance test
+      rather than production work. Expressions closed over function parameters
+      stay in their immutable closure environment until specialization.
+      `tests/ducklang_closures.test.ts` pins both the specialized shape and the
+      value, including a three-level capture that would answer 123 if an
+      environment were substituted incorrectly.
 
 Milestones:
 
@@ -1147,6 +1148,11 @@ CPU/GPU disagreement, or return partially written output.
       proving that its result has no semantic or backend consumer. Keep the
       standalone conformance experiment and generated tests; required GPU builds
       now spend device work only on compiler stages whose output is consumed.
+- [x] Remove differential scalar bytecode evaluation from production compilation
+      under the same noninterference criterion. Keep the independent CPU
+      scalar-versus-constant check and direct CPU/GPU conformance tests. Only
+      Editor had nonempty scalar GPU work in the frozen corpus: four jobs, one
+      submission, and one mapped readback.
 - [x] Admit algebraic rewrites only where the value type proves the required
       law. `x + 0` and `x * 1` are currently integer rules: bypassing an
       IEEE-754 operation can change signed-zero or NaN payload bits observable
