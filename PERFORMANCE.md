@@ -580,6 +580,12 @@ Retained block metrics show that Codex's scoped mutable environment avoids
 Editor avoids 57,311 across 827 and Tar 22,293 across 480. These are saved
 copies, not remaining work; a persistent map has no measured basis here.
 
+Temporary instrumentation counts 13,992 Codex lexical map mutations (6,996
+installs plus restores) across 6,828 blocks, or 2.05 operations/block. Editor
+has 1,406 and the remaining targets at most 772. The counter was removed;
+restoration work is proportional to introduced bindings and is not the broad
+rewrite frontier.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

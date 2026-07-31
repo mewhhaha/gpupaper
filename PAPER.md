@@ -5267,6 +5267,21 @@ for introduced bindings; it must be measured separately before alteration.
 Environment copying is closed as an explanation for the 32,184-entry encoder
 requests.
 
+### 2026-07-31: lexical restoration work is small and proportional
+
+Review 85 temporarily counts every value-map install and corresponding restore.
+Codex performs 13,992 mutations, representing 6,996 rewritten bindings, across
+6,828 blocks: 2.05 map operations per block and 10.75% as many operations as the
+130,143 rewrite entries. Editor performs 1,406, grep 164, Tar 772, wav zero, and
+raytracer 98. Each admitted binding induces exactly two mutations, so the
+algorithm meets its \(2\sum_b k_b\) cost model.
+
+Eliminating the restoration array cannot eliminate the map operations without
+changing representation, and its maximum record count is only 6,996 for Codex.
+A persistent environment would instead allocate at least one path node per
+install and increase lookup depth. These counts close lexical restoration as a
+primary specialization frontier. The temporary counter was removed.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

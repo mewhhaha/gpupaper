@@ -1513,6 +1513,9 @@ resource cost, and corpus measurements.
 - [x] Audit retained specialization block-environment metrics. Confirm scoped
       overlays already avoid 412,890 Codex entry copies and close persistent-map
       replacement absent a measurement of live restoration work.
+- [x] Count lexical environment installs and restores. Close the boundary after
+      Codex performs only 13,992 proportional mutations across 6,828 blocks,
+      then remove the counter.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
