@@ -339,9 +339,16 @@ Codex's largest isolated details are specialization rewrite 68.594 ms,
 control-flow lowering 60.450, type inference 40.457, specialization lifting
 22.751, and local-import resolution 18.349; CPU Wasm planning/emission is a
 52.286 ms top-level stage. Specialization rewrite is the next review frontier.
-Its current work vector includes 703 distinct keys, four cache hits, 884
-distinct plus 630 repeated function analyses, 6,828 rewritten blocks, and
+Its current work vector includes 703 distinct result keys, four result-cache
+hits, 884 distinct function analyses plus 630 analysis-cache hits, 6,828
+rewritten blocks, and
 412,890 already-avoided environment-entry copies.
+
+The former “repeated function analysis” name was incorrect: its increment site
+is the WeakMap cache-hit branch, which skips analysis. Codex therefore has 884
+scans and 630 avoided scans, a 41.61% hit share over 1,514 requests. The metric
+is now named `specializationFunctionAnalysisCacheHitCount`; a focused two-call
+higher-order program requires positive analysis reuse.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

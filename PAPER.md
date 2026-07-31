@@ -4656,11 +4656,34 @@ control-flow lowering 60.450, CPU Wasm planning/emission 52.286, type inference
 review therefore moves to specialization rewrite, the largest isolated
 substage, while retaining control flow as the second frontier.
 
-Codex specialization observes 703 distinct keys but only four cache hits,
-884 distinct and 630 repeated function analyses, 6,828 rewritten blocks, and
+Codex specialization observes 703 distinct keys but only four result-cache
+hits, 884 distinct function analyses and 630 analysis-cache hits, 6,828
+rewritten blocks, and
 412,890 avoided environment-entry copies. Those counts do not yet prove that a
 wider cache is sound or profitable; they define the questions for the next
 derivation.
+
+### 2026-07-31: function-analysis reuse is named as reuse
+
+Review 59 traces the apparent 630 “repeated function analyses” to the metric's
+increment site. The counter advances only when `functionAnalyses.get(factory)`
+returns a cached analysis or cached non-inlineable result; the body scan is then
+skipped. It measures successful memoization, not repeated work.
+
+The metric is renamed `specializationFunctionAnalysisCacheHitCount` throughout
+the specialization result and compilation profile. A focused program applies
+the same higher-order function twice and requires both a positive distinct
+analysis count and a positive cache-hit count. The WeakMap key is function AST
+object identity, which is sound because the analysis depends only on that
+immutable function's body and parameter symbols, not on the substitution
+environment.
+
+Codex's corrected interpretation is 884 scans plus 630 avoided scans, a 41.61%
+hit share among 1,514 analysis requests. This does not reduce the measured
+68.594 ms rewrite stage; it removes a false optimization lead. The four
+completed-result hits beside 703 distinct specialization keys remain a separate
+cache domain for Review 60. Pending-cycle encounters are not counted, so these
+two values alone do not define an exact result-cache hit rate.
 
 ## References
 

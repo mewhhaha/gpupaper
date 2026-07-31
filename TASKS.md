@@ -1435,6 +1435,9 @@ resource cost, and corpus measurements.
 - [x] Re-rank the retained six-target CPU frontier by absolute stage cost.
       Select Codex specialization rewrite as the next isolated target and
       record its current cache and analysis work vector.
+- [x] Audit the specialization function-analysis counter. Rename it as cache
+      hits, prove its object-identity key is context independent, and add a
+      focused reuse regression before pursuing the result-cache frontier.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

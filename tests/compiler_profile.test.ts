@@ -326,6 +326,26 @@ add 40
   }
 });
 
+Deno.test("Ducklang profile reports reused function analyses as cache hits", async () => {
+  const artifact = await compileModuleSource(
+    "specialization_analysis_cache_profile.duck",
+    `let apply = (f, value) => f value
+let inc = value => value + 1
+apply(inc, 20) + apply(inc, 20)
+`,
+    { gpuMode: "off" },
+  );
+  const { work } = artifact.profile;
+  if (
+    work.specializationDistinctFunctionAnalysisCount === 0 ||
+    work.specializationFunctionAnalysisCacheHitCount === 0
+  ) {
+    throw new Error(
+      `profile omitted function-analysis reuse: ${JSON.stringify(work)}`,
+    );
+  }
+});
+
 Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",

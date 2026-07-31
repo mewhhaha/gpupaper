@@ -24,7 +24,7 @@ export type DucklangSpecializationMetrics = {
   readonly distinctSpecializationKeyCount: number;
   readonly specializationCacheHitCount: number;
   readonly distinctFunctionAnalysisCount: number;
-  readonly repeatedFunctionAnalysisCount: number;
+  readonly functionAnalysisCacheHitCount: number;
   readonly rewrittenBlockCount: number;
   readonly avoidedEnvironmentEntryCopyCount: number;
   readonly nodeCountCacheHitCount: number;
@@ -80,7 +80,7 @@ type SpecializationContext = {
   nextValueId: number;
   cacheHitCount: number;
   distinctFunctionAnalysisCount: number;
-  repeatedFunctionAnalysisCount: number;
+  functionAnalysisCacheHitCount: number;
   rewrittenBlockCount: number;
   avoidedEnvironmentEntryCopyCount: number;
 };
@@ -175,7 +175,7 @@ export function specializeStaticDucklangClosures(
     nextValueId: 0,
     cacheHitCount: 0,
     distinctFunctionAnalysisCount: 0,
-    repeatedFunctionAnalysisCount: 0,
+    functionAnalysisCacheHitCount: 0,
     rewrittenBlockCount: 0,
     avoidedEnvironmentEntryCopyCount: 0,
   };
@@ -322,7 +322,7 @@ export function specializeStaticDucklangClosures(
     distinctSpecializationKeyCount: specialization.requests.size,
     specializationCacheHitCount: specialization.cacheHitCount,
     distinctFunctionAnalysisCount: specialization.distinctFunctionAnalysisCount,
-    repeatedFunctionAnalysisCount: specialization.repeatedFunctionAnalysisCount,
+    functionAnalysisCacheHitCount: specialization.functionAnalysisCacheHitCount,
     rewrittenBlockCount: specialization.rewrittenBlockCount,
     avoidedEnvironmentEntryCopyCount:
       specialization.avoidedEnvironmentEntryCopyCount,
@@ -1153,7 +1153,7 @@ function analyzeSpecializationFunction(
 ): FunctionSpecializationAnalysis | undefined {
   const cached = specialization.functionAnalyses.get(factory);
   if (cached !== undefined) {
-    specialization.repeatedFunctionAnalysisCount += 1;
+    specialization.functionAnalysisCacheHitCount += 1;
     return cached ?? undefined;
   }
 
