@@ -1037,6 +1037,9 @@ Core receives no source handler or open effect row.
 - [x] Fuse byte count, signed-64 count, and maximum byte rank into the mandatory
       atom-size traversal. This product fold deletes one complete host pass over
       every Wasm plan without changing validation or packing.
+- [x] Fuse scalar validation and sizing into one plan inspection while retaining
+      validation-only operation without a size allocation. Length sizing remains
+      a separate topological fold.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

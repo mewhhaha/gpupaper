@@ -625,6 +625,29 @@ discarded. Post-change dense/ranked medians were 28.07/28.22 ms for Editor and
 35.65/36.19 ms for Codex; no latency improvement is resolved. The 501-test
 required-GPU gate passed and compiled every frozen target twice.
 
+### Wasm validation and sizing fuse into one inspection
+
+The GPU boundary formerly made one complete validation traversal and one
+complete scalar-size traversal. Validation and sizing are independent folds over
+the same immutable atom stream; a single inspection now computes their product.
+This removes one additional atom visit per plan atom:
+
+| Target    | Atom visits removed |
+| --------- | ------------------: |
+| Editor    |              23,923 |
+| Codex     |             204,099 |
+| grep      |               3,897 |
+| tar       |              22,201 |
+| wav       |               2,477 |
+| raytracer |               3,851 |
+
+The frozen batch removes 260,448 visits and a second atom-kind dispatch. A
+validation-only CPU call still allocates no size column; it gains one
+sink-presence branch per scalar atom. Post-change dense/ranked medians were
+27.66/27.65 ms for Editor and 33.87/33.58 ms for Codex; no isolated latency
+claim is made. The 502-test required-GPU gate passed and compiled every frozen
+target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

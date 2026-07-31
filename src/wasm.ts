@@ -35,6 +35,13 @@ export type WasmBinaryPlanAnalysis = {
   readonly signed64AtomCount: number;
 };
 
+type WasmBinaryPlanInspection = {
+  readonly lengthLevels: readonly WasmLengthLevel[];
+  readonly byteAtomCount: number;
+  readonly maximumByteRank: number;
+  readonly signed64AtomCount: number;
+};
+
 type WasmNode =
   | WasmInstruction
   | { readonly kind: "sized"; readonly contents: readonly WasmNode[] };
@@ -305,6 +312,13 @@ export function emitWasmPlanOnCpu(plan: WasmBinaryPlan): Uint8Array {
 export function validateWasmBinaryPlan(
   plan: WasmBinaryPlan,
 ): readonly WasmLengthLevel[] {
+  return inspectWasmBinaryPlan(plan).lengthLevels;
+}
+
+function inspectWasmBinaryPlan(
+  plan: WasmBinaryPlan,
+  scalarSizes?: Uint8Array,
+): WasmBinaryPlanInspection {
   if (plan.atoms.length === 0) {
     throw new TypeError("Wasm binary plan must contain at least one atom");
   }
@@ -317,11 +331,17 @@ export function validateWasmBinaryPlan(
     );
   }
   let maximumDependencyLevel = 0;
+  let byteAtomCount = 0;
+  let maximumByteRank = 0;
+  let signed64AtomCount = 0;
   const lengthAtomsByLevel = new Map<
     number,
     { atomIndex: number; rangeStart: number; rangeCount: number }[]
   >();
   for (const [atomIndex, atom] of plan.atoms.entries()) {
+    if (scalarSizes !== undefined && (atomIndex & 7) === 0) {
+      maximumByteRank = byteAtomCount;
+    }
     if (atom.kind === "byte") {
       if (
         !Number.isSafeInteger(atom.value) || atom.value < 0 ||
@@ -330,6 +350,10 @@ export function validateWasmBinaryPlan(
         throw new RangeError(
           `Wasm byte atom ${atomIndex} must fit u8; received ${atom.value}`,
         );
+      }
+      if (scalarSizes !== undefined) {
+        scalarSizes[atomIndex] = 1;
+        byteAtomCount += 1;
       }
       continue;
     }
@@ -342,14 +366,24 @@ export function validateWasmBinaryPlan(
           `Wasm unsigned atom ${atomIndex} must fit u32; received ${atom.value}`,
         );
       }
+      if (scalarSizes !== undefined) {
+        scalarSizes[atomIndex] = unsignedEncodingByteLength(atom.value);
+      }
       continue;
     }
     if (atom.kind === "signed32") {
       requireSigned32(atom.value);
+      if (scalarSizes !== undefined) {
+        scalarSizes[atomIndex] = signed32EncodingByteLength(atom.value);
+      }
       continue;
     }
     if (atom.kind === "signed64") {
       requireSigned64(atom.value);
+      if (scalarSizes !== undefined) {
+        scalarSizes[atomIndex] = signed64EncodingByteLength(atom.value);
+        signed64AtomCount += 1;
+      }
       continue;
     }
     const rangeEnd = atom.rangeStart + atom.rangeCount;
@@ -406,32 +440,27 @@ export function validateWasmBinaryPlan(
       `Wasm plan declares maximum dependency level ${plan.maximumDependencyLevel}; atoms require ${maximumDependencyLevel}`,
     );
   }
-  return [...lengthAtomsByLevel.entries()]
+  const lengthLevels = [...lengthAtomsByLevel.entries()]
     .sort(([left], [right]) => left - right)
     .map(([dependencyLevel, atoms]) => ({ dependencyLevel, atoms }));
+  return {
+    lengthLevels,
+    byteAtomCount,
+    maximumByteRank,
+    signed64AtomCount,
+  };
 }
 
 export function analyzeWasmBinaryPlan(
   plan: WasmBinaryPlan,
 ): WasmBinaryPlanAnalysis {
-  const lengthLevels = validateWasmBinaryPlan(plan);
   const sizes = new Uint8Array(plan.atoms.length);
-  let byteAtomCount = 0;
-  let maximumByteRank = 0;
-  let signed64AtomCount = 0;
-  for (const [atomIndex, atom] of plan.atoms.entries()) {
-    if ((atomIndex & 7) === 0) maximumByteRank = byteAtomCount;
-    if (atom.kind === "byte") byteAtomCount += 1;
-    if (atom.kind === "signed64") signed64AtomCount += 1;
-    if (atom.kind === "length") continue;
-    sizes[atomIndex] = atom.kind === "byte"
-      ? 1
-      : atom.kind === "unsigned"
-      ? unsignedEncodingByteLength(atom.value)
-      : atom.kind === "signed32"
-      ? signed32EncodingByteLength(atom.value)
-      : signed64EncodingByteLength(atom.value);
-  }
+  const {
+    lengthLevels,
+    byteAtomCount,
+    maximumByteRank,
+    signed64AtomCount,
+  } = inspectWasmBinaryPlan(plan, sizes);
   for (const level of lengthLevels) {
     for (const atom of level.atoms) {
       let atomByteLength = 0;

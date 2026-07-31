@@ -1237,17 +1237,22 @@ L(A, Q, M)   = min(4A, L_ranked(A, Q, M))
 B_atom_input = L(A, Q, M) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 ```
 
-The mandatory atom-size pass simultaneously counts byte atoms, signed-64 atoms,
-and the maximum byte rank. This product fold removes a separate statistics
-traversal while preserving each component because all four accumulators depend
-only on the same immutable atom prefix. Rank construction and packing remain
-\(O(A)\). Four adjacent packed bytes are accumulated before one physical-word
-store, reducing byte-stream stores from \(Q\) to \(\lceil Q/4\rceil\). Ranked
-GPU lookup now has four constant shifts, three ORs, three masks/complements, and
-one population count rather than zero to seven data-dependent tag comparisons.
-Rank lookup adds one shift and mask on the 16-bit path. Its two adjacent ranks
-are likewise assembled before one physical word store. Five frozen targets use
-16-bit ranks; Codex uses 32. Relative to
+Scalar validation, atom sizing, byte counting, signed-64 counting, and maximum
+byte-rank calculation form a product algebra over the same immutable atom
+sequence. One inspection therefore computes all five components. Length-range
+validation is carried by that inspection, while length sizing remains a
+subsequent topological fold because a length atom depends on already-sized
+atoms. Relative to separate validation, sizing, and statistics traversals, the
+product fold removes \(2A\) atom visits. A validation-only caller supplies no
+size column and allocates none; it pays one predictable sink-presence branch per
+scalar atom. Rank construction and packing remain \(O(A)\). Four adjacent
+packed bytes are accumulated before one physical-word store, reducing
+byte-stream stores from \(Q\) to \(\lceil Q/4\rceil\). Ranked GPU lookup now has
+four constant shifts, three ORs, three masks/complements, and one population
+count rather than zero to seven data-dependent tag comparisons. Rank lookup
+adds one shift and mask on the 16-bit path. Its two adjacent ranks are likewise
+assembled before one physical word store. Five frozen targets use 16-bit ranks;
+Codex uses 32. Relative to
 dense low words, adaptive ranking removes 3,856–245,336 bytes and 14.14–25.05%
 of complete atom input. A 21-pair counterbalanced experiment measured
 ranked/dense median ratios from 0.9771 to 1.0015, so no latency improvement is
@@ -2940,6 +2945,26 @@ overhead, so no latency improvement is claimed. The required-GPU release gate
 passed 501 tests and compiled every frozen target twice. Its advisory samples in
 milliseconds were Editor 335.21/231.17, Codex 936.04/806.90, grep
 130.41/129.73, Tar 197.20/179.83, wav 113.49/110.44, and raytracer 95.57/95.01.
+
+### 2026-07-31: Wasm validation and sizing become one inspection
+
+GPU analysis still traversed all \(A\) atoms once for validation and again for
+scalar sizing. These folds share an immutable domain and have no cross-atom
+dependency. Section 7.4 now defines their product; length sizing remains
+topological and separate.
+
+The GPU path removes another 260,448 atom visits over the frozen batch, one per
+atom in each target. It also removes a second atom-kind dispatch. Validation-only
+CPU callers allocate no size column, but execute one sink-presence branch for
+each scalar atom; this is the admitted local cost. A regression checks that
+analysis still rejects an invalid byte before sizing it. Focused validation,
+compiler, and generated CPU/GPU differential tests pass. Post-change 21-round
+dense/ranked medians were 27.66/27.65 ms for Editor and 33.87/33.58 ms for
+Codex. These samples are consistent with discarded work but do not isolate it
+from run-to-run drift. The required-GPU release gate passed 502 tests and
+compiled every frozen target twice. Its advisory samples in milliseconds were
+Editor 341.45/224.94, Codex 955.82/840.71, grep 130.55/124.65, Tar
+196.14/177.78, wav 115.04/113.19, and raytracer 100.00/90.38.
 
 ## References
 

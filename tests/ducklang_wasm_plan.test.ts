@@ -103,6 +103,23 @@ Deno.test("Ducklang Wasm analysis resolves exact atom byte boundaries", () => {
   assertEquals(analysis.signed64AtomCount, 0);
 });
 
+Deno.test("Ducklang Wasm analysis rejects an invalid scalar before sizing", () => {
+  let caught: unknown;
+  try {
+    analyzeWasmBinaryPlan({
+      atoms: [{ kind: "byte", value: 256 }],
+      maximumDependencyLevel: 0,
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assertEquals(
+    caught instanceof Error ? caught.message : caught,
+    "Wasm byte atom 0 must fit u8; received 256",
+  );
+});
+
 function assertEquals(actual: unknown, expected: unknown): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
