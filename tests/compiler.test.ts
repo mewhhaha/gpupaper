@@ -1,5 +1,6 @@
 import {
   compileComptimeExpression,
+  compileScalarComptimeExpression,
   evaluateBytecodeOnCpu,
   evaluateBytecodeOnGpu,
 } from "../src/comptime.ts";
@@ -566,6 +567,30 @@ Deno.test("CPU and WebGPU compile-time evaluators return the same batch", async 
     backend: "cpu",
   });
   assertEquals(gpu.values, cpu.status === "completed" ? cpu.values : []);
+});
+
+Deno.test("comptime signed division traps on i32 overflow on both backends", async () => {
+  const span = { file: "test.hs", start: 7, end: 8 };
+  const overflowing = compileScalarComptimeExpression({
+    kind: "binary",
+    operator: "/",
+    left: { kind: "integer", value: -2_147_483_648, span },
+    right: { kind: "integer", value: -1, span },
+    span,
+  });
+  assertThrows(
+    () => evaluateBytecodeOnCpu([overflowing]),
+    /comptime program at 7 overflowed signed division/,
+  );
+
+  const available = await evaluateBytecodeOnGpu([
+    compileScalarComptimeExpression({ kind: "integer", value: 0, span }),
+  ]);
+  if (available.status === "unavailable") return;
+  await assertRejects(
+    () => evaluateBytecodeOnGpu([overflowing]),
+    /GPU comptime program at 7 overflowed signed division/,
+  );
 });
 
 Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {

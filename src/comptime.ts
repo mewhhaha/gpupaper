@@ -157,8 +157,18 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
     else if (operation == 3u) { stacks[stack_start + stack_size - 1u] = left - right; }
     else if (operation == 4u) { stacks[stack_start + stack_size - 1u] = left * right; }
     else if (operation == 5u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left == right); }
-    else if (operation == 7u) { stacks[stack_start + stack_size - 1u] = left / right; }
-    else if (operation == 8u) { stacks[stack_start + stack_size - 1u] = left % right; }
+    else if (operation == 7u) {
+      if (right == 0) { statuses[job] = 5u; return; }
+      if (left == bitcast<i32>(0x80000000u) && right == -1) {
+        statuses[job] = 6u;
+        return;
+      }
+      stacks[stack_start + stack_size - 1u] = left / right;
+    }
+    else if (operation == 8u) {
+      if (right == 0) { statuses[job] = 5u; return; }
+      stacks[stack_start + stack_size - 1u] = left % right;
+    }
     else if (operation == 9u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left < right); }
     else if (operation == 10u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left > right); }
     else if (operation == 11u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 && right != 0); }
@@ -341,14 +351,19 @@ export function evaluateBytecodeOnCpu(
             `comptime program at ${program.sourceStart} divided by zero`,
           );
         }
-        stack.push(Math.trunc(left / right));
+        if (left === -2_147_483_648 && right === -1) {
+          throw new Error(
+            `comptime program at ${program.sourceStart} overflowed signed division`,
+          );
+        }
+        stack.push(Math.trunc(left / right) | 0);
       } else if (operation === opcode.remainder) {
         if (right === 0) {
           throw new Error(
             `comptime program at ${program.sourceStart} divided by zero`,
           );
         }
-        stack.push(left % right);
+        stack.push((left % right) | 0);
       } else if (operation === opcode.equal) {
         stack.push(left === right ? 1 : 0);
       } else if (operation === opcode.notEqual) {
@@ -598,6 +613,10 @@ async function evaluateBytecodeWithGpu(
           ? `exceeded stack capacity ${comptimeStackCapacity}`
           : statuses[index] === 4
           ? `exceeded fuel ${fuel}`
+          : statuses[index] === 5
+          ? "divided by zero"
+          : statuses[index] === 6
+          ? "overflowed signed division"
           : `returned unknown status ${statuses[index]}`;
         throw new Error(
           `GPU comptime program at ${programs[index].sourceStart} ${failure}`,
