@@ -1049,6 +1049,9 @@ Core receives no source handler or open effect row.
 - [x] Separate checked public LEB entry points from validated-domain encoder
       bodies. Inspected scalar atoms skip duplicate predicates; derived length
       values remain checked.
+- [x] Use strict dependency-level descent as the proof that every CPU length
+      dependency is encoded before use. The interior range loop no longer
+      rechecks an impossible unresolved state.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

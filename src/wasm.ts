@@ -285,12 +285,7 @@ export function emitWasmPlanOnCpu(plan: WasmBinaryPlan): Uint8Array {
         dependencyIndex < atom.rangeStart + atom.rangeCount;
         dependencyIndex += 1
       ) {
-        const dependency = encoded[dependencyIndex];
-        if (dependency === undefined) {
-          throw new Error(
-            `Wasm length atom ${atom.atomIndex} at level ${level.dependencyLevel} depends on unresolved atom ${dependencyIndex}`,
-          );
-        }
+        const dependency = encoded[dependencyIndex]!;
         payloadByteLength += dependency.length;
       }
       const lengthEncoding = encodeUnsigned(payloadByteLength);

@@ -1330,9 +1330,14 @@ scalar value's range, it calls an internal encoder whose domain is that proof.
 Public encoders and derived length encodings retain their boundary checks. This
 removes one duplicate predicate family for every unsigned, signed-32, and
 signed-64 scalar without weakening the trust boundary. Engine validation then
-checks the selected module. With differential verification disabled, engine
-validity does not prove semantic equality to the plan; that mode deliberately
-trades away the independent byte oracle.
+checks the selected module. The same level invariant also proves by induction
+that every CPU length dependency has an encoding: scalars are encoded during
+inspection, and a level-\(\ell\) length can reference only levels below
+\(\ell\), which the sorted topological fold has completed. The interior sizing
+loop therefore reads the encoding directly rather than rechecking its presence
+for every dependency. With differential verification disabled, engine validity
+does not prove semantic equality to the plan; that mode deliberately trades
+away the independent byte oracle.
 
 ### 7.5 Type equality as a certified conformance experiment
 
@@ -3081,6 +3086,26 @@ the required-GPU release gate passed 503 tests and compiled every frozen target
 twice. Its advisory samples in milliseconds were Editor 355.69/243.04, Codex
 1112.49/826.90, grep 132.29/137.33, Tar 252.61/189.81, wav 111.19/115.47, and
 raytracer 99.07/99.23.
+
+### 2026-07-31: validated length levels eliminate presence checks
+
+The CPU oracle checked every range entry for an unresolved encoding after the
+plan validator had already proved strict dependency-level descent. Scalars are
+encoded in inspection, and induction over sorted levels proves every referenced
+length encoding exists before its consumer is sized.
+
+The interior presence branch is removed. The frozen batch eliminates 511,136
+checks: 45,418 Editor, 403,062 Codex, 7,286 grep, 43,479 Tar, 4,609 wav, and
+7,282 raytracer. A new public-boundary regression rejects a same-level length
+dependency with both atom IDs and the invalid level; valid nested plans and
+generated CPU/GPU differentials pass. Post-change 101-sample CPU medians were
+1.251 ms Editor, 17.413 Codex, 0.198 grep, 1.120 Tar, 0.102 wav, and
+0.163 raytracer. Run-to-run variation is larger than the removed predicate
+cost, so no latency improvement is claimed. Required-GPU release evidence
+passed 504 tests and compiled every frozen target twice. Its advisory samples in
+milliseconds were Editor 329.86/225.05, Codex 966.56/820.40, grep
+131.34/130.68, Tar 232.03/182.11, wav 119.89/115.77, and raytracer
+96.45/89.32.
 
 ## References
 

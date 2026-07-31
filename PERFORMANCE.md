@@ -713,6 +713,27 @@ Post-change CPU medians were 1.147 ms Editor, 14.801 Codex, 0.171 grep,
 shows no material latency change. The 503-test required-GPU gate passed and
 compiled every frozen target twice.
 
+### Validated length levels imply resolved encodings
+
+Strict dependency-level descent proves that every length dependency is encoded
+before the CPU topological fold reads it. Removing the redundant interior
+presence branch eliminates:
+
+| Target    | Presence checks removed |
+| --------- | ----------------------: |
+| Editor    |                  45,418 |
+| Codex     |                 403,062 |
+| grep      |                   7,286 |
+| tar       |                  43,479 |
+| wav       |                   4,609 |
+| raytracer |                   7,282 |
+
+The batch removes 511,136 checks. A boundary regression rejects a same-level
+dependency before emission. Post-change CPU medians were 1.251 ms Editor,
+17.413 Codex, 0.198 grep, 1.120 Tar, 0.102 wav, and 0.163 raytracer; no latency
+change is resolved. The 504-test required-GPU gate passed and compiled every
+frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

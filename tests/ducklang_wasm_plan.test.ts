@@ -123,6 +123,26 @@ Deno.test("Ducklang Wasm analysis rejects an invalid scalar before sizing", () =
   );
 });
 
+Deno.test("Ducklang Wasm emission rejects a same-level length dependency", () => {
+  let caught: unknown;
+  try {
+    emitWasmPlanOnCpu({
+      atoms: [
+        { kind: "length", rangeStart: 1, rangeCount: 1, dependencyLevel: 1 },
+        { kind: "length", rangeStart: 2, rangeCount: 0, dependencyLevel: 1 },
+      ],
+      maximumDependencyLevel: 1,
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assertEquals(
+    caught instanceof Error ? caught.message : caught,
+    "Wasm length atom 0 at level 1 depends on atom 1 at level 1",
+  );
+});
+
 Deno.test("Ducklang Wasm analysis counts only resolved lengths inside a range", () => {
   const scalarAtoms = Array.from(
     { length: 40 },
