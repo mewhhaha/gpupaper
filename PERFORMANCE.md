@@ -326,6 +326,23 @@ The mechanism is target-dependent and reduces no live-memory bound because the
 module owns all nodes throughout the synchronous scan. Ordinary sets remain for
 simpler single-operation insertion and direct cardinality.
 
+### Current CPU frontier after review 57
+
+The retained ordinary-set baseline has representative CPU totals summing to
+548.552 ms. Codex is 393.665 ms (71.76%), so it dominates an equal-target
+aggregate objective. Aggregate top-level stage milliseconds are elaboration
+114.595, pre-comptime specialization 110.790, type analysis 68.714, CPU Wasm
+planning/emission 68.634, Core flattening 42.988, Core lowering 42.372, and
+parsing 34.668.
+
+Codex's largest isolated details are specialization rewrite 68.594 ms,
+control-flow lowering 60.450, type inference 40.457, specialization lifting
+22.751, and local-import resolution 18.349; CPU Wasm planning/emission is a
+52.286 ms top-level stage. Specialization rewrite is the next review frontier.
+Its current work vector includes 703 distinct keys, four cache hits, 884
+distinct plus 630 repeated function analyses, 6,828 rewritten blocks, and
+412,890 already-avoided environment-entry copies.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

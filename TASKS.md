@@ -1432,6 +1432,9 @@ resource cost, and corpus measurements.
 - [x] Measure weak identity sets against ordinary sets in an A/B/A sequence.
       Reject the target-dependent result and prove that module ownership
       prevents a live-memory reduction.
+- [x] Re-rank the retained six-target CPU frontier by absolute stage cost.
+      Select Codex specialization rewrite as the next isolated target and
+      record its current cache and analysis work vector.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -4636,6 +4636,32 @@ single insertion operation per occurrence, direct cardinality, and the same
 asymptotic memory already forced by module ownership. A future arena IR should
 replace both with dense visitation epochs, not choose between object-set APIs.
 
+### 2026-07-31: the CPU frontier is re-ranked by absolute cost
+
+Review 58 returns to the retained ordinary-set baseline and re-ranks the six
+frozen CPU profiles. Representative totals sum to 548.552 ms; Codex contributes
+393.665 ms, or 71.76%. Optimizing the equal-weight corpus sum therefore selects
+Codex unless a cross-target primitive has comparable aggregate savings.
+
+Across all targets, top-level stage sums are elaboration 114.595 ms,
+pre-comptime specialization 110.790, type analysis 68.714, CPU Wasm planning
+and emission 68.634, Core flattening 42.988, Core lowering 42.372, and parsing
+34.668. These sums are workload-weighted observations, not intrinsic stage
+complexities.
+
+Within Codex, the largest substages are specialization rewrite 68.594 ms,
+control-flow lowering 60.450, CPU Wasm planning/emission 52.286, type inference
+40.457, Core flattening 32.570, Core lowering 31.706, specialization lifting
+22.751, local-import resolution 18.349, and ABI construction 21.058. The next
+review therefore moves to specialization rewrite, the largest isolated
+substage, while retaining control flow as the second frontier.
+
+Codex specialization observes 703 distinct keys but only four cache hits,
+884 distinct and 630 repeated function analyses, 6,828 rewritten blocks, and
+412,890 avoided environment-entry copies. Those counts do not yet prove that a
+wider cache is sound or profitable; they define the questions for the next
+derivation.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
