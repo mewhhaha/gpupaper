@@ -1046,6 +1046,9 @@ Core receives no source handler or open effect row.
 - [x] Fuse CPU-oracle scalar encoding into validated inspection and accumulate
       output size during scalar and length folds. This removes two atom passes
       without sharing the GPU boundary's adaptive length-sizing algorithm.
+- [x] Separate checked public LEB entry points from validated-domain encoder
+      bodies. Inspected scalar atoms skip duplicate predicates; derived length
+      values remain checked.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

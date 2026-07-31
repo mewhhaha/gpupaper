@@ -692,6 +692,27 @@ raytracer 0.161. No latency change is claimed without a counterbalanced
 pre/post experiment. The 503-test required-GPU gate passed and compiled every
 frozen target twice.
 
+### Validated scalars use validated-domain LEB encoders
+
+CPU inspection already proves scalar ranges. Calling the public checked encoder
+from that trusted interior repeated the same predicate:
+
+| Target    | Duplicate checks removed |
+| --------- | -----------------------: |
+| Editor    |                    9,893 |
+| Codex     |                   87,954 |
+| grep      |                    1,532 |
+| tar       |                    9,707 |
+| wav       |                      970 |
+| raytracer |                    1,416 |
+
+The batch removes 111,472 checks. Public encoders and length-derived values
+remain checked; only inspected scalar atoms use the validated-domain body.
+Post-change CPU medians were 1.147 ms Editor, 14.801 Codex, 0.171 grep,
+1.016 Tar, 0.100 wav, and 0.158 raytracer. The identical preceding protocol
+shows no material latency change. The 503-test required-GPU gate passed and
+compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

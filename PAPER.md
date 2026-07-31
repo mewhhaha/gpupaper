@@ -1325,7 +1325,11 @@ adds its encoding length. Addition is associative and every atom belongs to
 exactly one variant, so the accumulated total equals the sum formerly computed
 by a separate traversal. CPU-oracle atom/range visits fall from \(4A+2D\) to
 \(2A+2D\): validation/encoding and final copy each visit \(A\), while dependency
-validation and independent sizing each retain \(D\). Engine validation then
+validation and independent sizing each retain \(D\). Once inspection proves a
+scalar value's range, it calls an internal encoder whose domain is that proof.
+Public encoders and derived length encodings retain their boundary checks. This
+removes one duplicate predicate family for every unsigned, signed-32, and
+signed-64 scalar without weakening the trust boundary. Engine validation then
 checks the selected module. With differential verification disabled, engine
 validity does not prove semantic equality to the plan; that mode deliberately
 trades away the independent byte oracle.
@@ -3057,6 +3061,26 @@ passed 503 tests and compiled every frozen target twice. Its advisory samples in
 milliseconds were Editor 335.64/236.97, Codex 973.23/969.82, grep
 138.68/130.72, Tar 238.84/190.68, wav 117.17/118.74, and raytracer
 99.02/139.86.
+
+### 2026-07-31: validated scalars skip duplicate LEB checks
+
+Fusing inspection with CPU encoding exposed a remaining proof duplication:
+inspection checked each non-byte scalar's range, then the public LEB entry point
+checked it again. The encoder body is now factored behind an internal
+validated-domain function. Public callers still cross the checked boundary, and
+length payloads still use it because their values are derived after inspection.
+
+The frozen CPU-oracle batch removes 111,472 duplicate scalar checks: 9,893
+Editor, 87,954 Codex, 1,532 grep, 9,707 Tar, 970 wav, and 1,416 raytracer.
+Signed-64 has no frozen occurrence but remains covered by the boundary test.
+The post-change 101-sample CPU medians were 1.147 ms Editor, 14.801 Codex,
+0.171 grep, 1.016 Tar, 0.100 wav, and 0.158 raytracer. Comparison with the
+immediately preceding identical protocol resolves no material latency change,
+so none is claimed. Focused scalar-boundary and CPU/GPU differential tests pass;
+the required-GPU release gate passed 503 tests and compiled every frozen target
+twice. Its advisory samples in milliseconds were Editor 355.69/243.04, Codex
+1112.49/826.90, grep 132.29/137.33, Tar 252.61/189.81, wav 111.19/115.47, and
+raytracer 99.07/99.23.
 
 ## References
 

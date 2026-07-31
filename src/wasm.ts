@@ -379,7 +379,7 @@ function inspectWasmBinaryPlan(
       if (output?.kind === "sizes") {
         output.scalarSizes[atomIndex] = unsignedEncodingByteLength(atom.value);
       } else if (output?.kind === "encodings") {
-        const encoding = encodeUnsigned(atom.value);
+        const encoding = encodeValidatedUnsigned(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }
@@ -390,7 +390,7 @@ function inspectWasmBinaryPlan(
       if (output?.kind === "sizes") {
         output.scalarSizes[atomIndex] = signed32EncodingByteLength(atom.value);
       } else if (output?.kind === "encodings") {
-        const encoding = encodeSigned(atom.value);
+        const encoding = encodeValidatedSigned(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }
@@ -402,7 +402,7 @@ function inspectWasmBinaryPlan(
         output.scalarSizes[atomIndex] = signed64EncodingByteLength(atom.value);
         signed64AtomCount += 1;
       } else if (output?.kind === "encodings") {
-        const encoding = encodeSigned64(atom.value);
+        const encoding = encodeValidatedSigned64(atom.value);
         output.scalarEncodings[atomIndex] = encoding;
         scalarByteLength += encoding.length;
       }
@@ -824,6 +824,10 @@ export function encodeUnsigned(value: number): number[] {
       `unsigned LEB128 value must be a non-negative safe integer; received ${value}`,
     );
   }
+  return encodeValidatedUnsigned(value);
+}
+
+function encodeValidatedUnsigned(value: number): number[] {
   const bytes: number[] = [];
   let remaining = value;
   do {
@@ -837,6 +841,10 @@ export function encodeUnsigned(value: number): number[] {
 
 export function encodeSigned(value: number): number[] {
   requireSigned32(value);
+  return encodeValidatedSigned(value);
+}
+
+function encodeValidatedSigned(value: number): number[] {
   const bytes: number[] = [];
   let remaining = value | 0;
   while (true) {
@@ -852,6 +860,10 @@ export function encodeSigned(value: number): number[] {
 
 export function encodeSigned64(value: bigint): number[] {
   requireSigned64(value);
+  return encodeValidatedSigned64(value);
+}
+
+function encodeValidatedSigned64(value: bigint): number[] {
   const bytes: number[] = [];
   let remaining = value;
   while (true) {
