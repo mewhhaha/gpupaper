@@ -945,16 +945,20 @@ Their shifted byte masks are disjoint; therefore the atomic operations commute
 and the final word equals the source-ordered byte concatenation independently of
 invocation order.
 
-The current output allocation uses the uniform bound of ten bytes per atom:
+Let `A₁`, `A₅`, and `A₁₀` count byte atoms, 32-bit or length atoms, and 64-bit
+atoms. Their maximum LEB128 widths give the bound:
 
 ```text
-B_output = 4 ceil(10A / 4)
+B_max = A₁ + 5A₅ + 10A₁₀
+B_output = 4 ceil(B_max / 4)
 ```
 
-This is safe because signed `i64` LEB128 is the largest atom encoding. It is
-conservative for byte and 32-bit atoms and is recorded separately from the
-actual emitted byte count. The scan uses two `4A`-byte prefix buffers, and the
-size column uses another `4A` bytes. Packed batches add device-required
+This is safe by case analysis over the complete atom kind. It replaced the
+initial uniform `10A` bound, which was safe but reserved roughly nine times the
+frozen applications' final bytes. The bound remains conservative because most
+LEB128 values use fewer than their type maximum. It is recorded separately from
+the actual emitted byte count. The scan uses two `4A`-byte prefix buffers, and
+the size column uses another `4A` bytes. Packed batches add device-required
 alignment between job regions but do not change per-job atom semantics.
 
 The default CPU differential independently evaluates the length DAG, encodes
@@ -1579,6 +1583,22 @@ hierarchical work-efficient scan should reduce arithmetic from `Θ(A log A)` to
 maximum encoded size should reduce the output and readback buffers without
 changing scan work. Neither optimization is justified by the count alone; each
 requires an end-to-end before/after distribution and identical bytes.
+
+### 2026-07-31: atom kinds tighten the Wasm capacity proof
+
+The output and readback allocation now use the per-kind maximum derived in
+Section 7.4 instead of `10A`. Across the six frozen applications this reduces
+each buffer by 72.47–75.05% without changing a dispatch, scan value, or emitted
+byte. Codex falls from 2,040,992 to 557,308 bytes per buffer, saving 2,967,368
+bytes across output plus readback.
+
+The new bound is still 2.34–2.62 times the final module because it uses
+type-maximum rather than actual LEB128 widths. Exact allocation would require
+learning the final prefix before allocating output, adding a readback and second
+submission, or introducing a larger shared device arena with its own allocation
+proof. The smaller static bound is selected because it improves capacity with
+zero new synchronization. CPU/GPU byte differentials, the full-width signed
+`i64` fixture, and all frozen outputs remain the executable evidence.
 
 ## References
 

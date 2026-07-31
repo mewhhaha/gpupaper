@@ -185,14 +185,14 @@ cost. `length` is the number of full-array length-dependency rounds, `scan` is
 the number of full-array prefix rounds, and invocations include workgroup
 padding across size, length, scan, and emission passes:
 
-| Target    |   Atoms | Length | Scan | Invocations | Output buffer | Wasm bytes |
-| --------- | ------: | -----: | ---: | ----------: | ------------: | ---------: |
-| Editor    |  23,923 |      2 |   15 |     454,784 |       239,232 |     24,460 |
-| Codex     | 204,099 |      2 |   18 |   4,491,520 |     2,040,992 |    226,134 |
-| grep      |   3,897 |      2 |   12 |      62,464 |        38,972 |      3,911 |
-| tar       |  22,201 |      2 |   15 |     421,952 |       222,012 |     26,106 |
-| wav       |   2,477 |      2 |   12 |      39,936 |        24,772 |      2,520 |
-| raytracer |   3,851 |      2 |   12 |      62,464 |        38,512 |      3,864 |
+| Target    |   Atoms | Length | Scan | Invocations | Uniform output bound | Wasm bytes |
+| --------- | ------: | -----: | ---: | ----------: | -------------------: | ---------: |
+| Editor    |  23,923 |      2 |   15 |     454,784 |              239,232 |     24,460 |
+| Codex     | 204,099 |      2 |   18 |   4,491,520 |            2,040,992 |    226,134 |
+| grep      |   3,897 |      2 |   12 |      62,464 |               38,972 |      3,911 |
+| tar       |  22,201 |      2 |   15 |     421,952 |              222,012 |     26,106 |
+| wav       |   2,477 |      2 |   12 |      39,936 |               24,772 |      2,520 |
+| raytracer |   3,851 |      2 |   12 |      62,464 |               38,512 |      3,864 |
 
 The output buffer reserves ten bytes per atom even though actual modules use
 only 10.03–11.76% of that capacity. Codex schedules 22 full-width passes and
@@ -200,6 +200,24 @@ reserves 9.03× its final byte count. These are deterministic work and capacity
 counts. They identify two independent optimization candidates: a work-efficient
 hierarchical scan reduces scheduled arithmetic, while kind-sensitive atom bounds
 reduce memory without changing dispatch count.
+
+The selected kind-sensitive bound sums 1 byte for byte atoms, 5 bytes for 32-bit
+and length atoms, and 10 bytes for 64-bit atoms:
+
+| Target    | Uniform bound | Kind bound | Reduction | Kind bound / Wasm |
+| --------- | ------------: | ---------: | --------: | ----------------: |
+| Editor    |       239,232 |     64,036 |    73.23% |             2.62× |
+| Codex     |     2,040,992 |    557,308 |    72.69% |             2.46× |
+| grep      |        38,972 |     10,096 |    74.09% |             2.58× |
+| tar       |       222,012 |     61,112 |    72.47% |             2.34× |
+| wav       |        24,772 |      6,416 |    74.10% |             2.55× |
+| raytracer |        38,512 |      9,608 |    75.05% |             2.49× |
+
+Codex saves 1,483,684 bytes in each of the output and readback buffers, or
+2,967,368 bytes across both, without changing dispatches or emitted bytes. The
+remaining 2.34–2.62× slack is the gap between type-maximum and actual LEB128
+widths. Eliminating it would require either a size readback/allocation barrier
+or GPU-side suballocation from the resolved prefix, so it is not free.
 
 ## Incremental rebuild
 

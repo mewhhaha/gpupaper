@@ -48,7 +48,6 @@ const atomUnsigned = 1;
 const atomSigned32 = 2;
 const atomSigned64 = 3;
 const atomLength = 4;
-const maximumEncodedAtomSize = 10;
 let contextPromise: Promise<GpuWasmContextRequest> | undefined;
 const wasmBatchQueue = createCompilerGpuBatchQueue(
   (plans: readonly WasmBinaryPlan[]) =>
@@ -758,14 +757,7 @@ async function emitPackedWasmPlanBatch(
 
 function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   validateWasmBinaryPlan(plan);
-  const maximumByteCount = plan.atoms.length * maximumEncodedAtomSize;
-  if (
-    !Number.isSafeInteger(maximumByteCount) || maximumByteCount > 0xffff_ffff
-  ) {
-    throw new RangeError(
-      `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
-    );
-  }
+  const maximumByteCount = maximumWasmPlanByteCount(plan);
   const scanDistances: number[] = [];
   for (let distance = 1; distance < plan.atoms.length; distance *= 2) {
     scanDistances.push(distance);
@@ -859,14 +851,7 @@ async function emitWasmPlanWithGpu(
     scanPipeline,
     sizePipeline,
   } = context;
-  const maximumByteCount = plan.atoms.length * maximumEncodedAtomSize;
-  if (
-    !Number.isSafeInteger(maximumByteCount) || maximumByteCount > 0xffff_ffff
-  ) {
-    throw new RangeError(
-      `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
-    );
-  }
+  const maximumByteCount = maximumWasmPlanByteCount(plan);
   const maximumOutputWordCount = Math.ceil(maximumByteCount / 4);
   const atomBytes = Math.max(4, columns.kinds.byteLength);
   const outputBytes = maximumOutputWordCount * 4;
@@ -1188,6 +1173,27 @@ async function emitWasmPlanWithGpu(
       buffer.destroy();
     }
   }
+}
+
+function maximumWasmPlanByteCount(plan: WasmBinaryPlan): number {
+  let maximumByteCount = 0;
+  for (const atom of plan.atoms) {
+    const maximumAtomBytes = atom.kind === "byte"
+      ? 1
+      : atom.kind === "signed64"
+      ? 10
+      : 5;
+    maximumByteCount += maximumAtomBytes;
+    if (
+      !Number.isSafeInteger(maximumByteCount) ||
+      maximumByteCount > 0xffff_ffff
+    ) {
+      throw new RangeError(
+        `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
+      );
+    }
+  }
+  return maximumByteCount;
 }
 
 function atomColumns(atoms: readonly WasmAtom[]): {
