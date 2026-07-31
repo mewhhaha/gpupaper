@@ -743,7 +743,10 @@ validated against that job's input. A failed physical batch fails every payload
 in that batch rather than returning partially trusted results. The latency
 policy flushes ready work on the next scheduler turn; the throughput policy
 waits for the first of a 2 ms deadline, 16 queued jobs, or a device-capacity
-boundary.
+boundary. Sixteen is a partition boundary, not merely a wake-up hint: a burst of
+\(J\) simultaneously ready jobs produces at least \(\lceil J / 16 \rceil\)
+physical payload batches before any additional capacity splitting. Jobs retain
+enqueue order across those partitions.
 
 For one dirty compilation, the measured GPU-stage time must be decomposed as:
 

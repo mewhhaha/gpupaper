@@ -82,7 +82,7 @@ type CompilerGpuBatchJob<Input, Output> = {
 export function createCompilerGpuBatchQueue<Input, Output>(
   executeBatch: (inputs: readonly Input[]) => Promise<readonly Output[]>,
 ): CompilerGpuBatchQueue<Input, Output> {
-  let pending: CompilerGpuBatchJob<Input, Output>[] = [];
+  const pending: CompilerGpuBatchJob<Input, Output>[] = [];
   let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
 
   const flush = async (): Promise<void> => {
@@ -90,8 +90,8 @@ export function createCompilerGpuBatchQueue<Input, Output>(
       clearTimeout(scheduledFlush);
       scheduledFlush = undefined;
     }
-    const jobs = pending;
-    pending = [];
+    const jobs = pending.splice(0, maximumThroughputSubmissionBatchSize);
+    if (pending.length > 0) schedule();
     if (jobs.length === 0) return;
     const executionStart = performance.now();
     try {
@@ -280,13 +280,18 @@ function scheduleCompilerGpuSubmissionFlush(
 }
 
 async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
-  const submissions = pendingSubmissions.get(device);
-  if (submissions === undefined) return;
-  pendingSubmissions.delete(device);
+  const pending = pendingSubmissions.get(device);
+  if (pending === undefined) return;
   const scheduledFlush = scheduledSubmissionFlushes.get(device);
   if (scheduledFlush !== undefined) {
     clearTimeout(scheduledFlush);
     scheduledSubmissionFlushes.delete(device);
+  }
+  const submissions = pending.splice(0, maximumThroughputSubmissionBatchSize);
+  if (pending.length === 0) {
+    pendingSubmissions.delete(device);
+  } else {
+    scheduleCompilerGpuSubmissionFlush(device, pending);
   }
 
   const release = await acquireCompilerGpuErrorScope();

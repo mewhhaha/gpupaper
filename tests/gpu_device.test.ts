@@ -166,6 +166,38 @@ Deno.test("throughput GPU jobs retain order in one payload batch", async () => {
   );
 });
 
+Deno.test("throughput GPU bursts are partitioned at the batch-size boundary", async () => {
+  const executions: number[][] = [];
+  const queue = createCompilerGpuBatchQueue((inputs: readonly number[]) => {
+    executions.push([...inputs]);
+    return Promise.resolve(inputs);
+  });
+  const inputs = Array.from({ length: 35 }, (_, index) => index);
+
+  const results = await Promise.all(
+    inputs.map((input) => queue.enqueue(input, "throughput")),
+  );
+
+  assertEquals(
+    JSON.stringify(executions.map((execution) => execution.length)),
+    JSON.stringify([16, 16, 3]),
+  );
+  assertEquals(
+    JSON.stringify(results.map((result) => result.output)),
+    JSON.stringify(inputs),
+  );
+  assertEquals(
+    JSON.stringify(results.map((result) => result.payloadBatchSize)),
+    JSON.stringify([
+      ...Array.from({ length: 16 }, () => 16),
+      ...Array.from({ length: 16 }, () => 16),
+      3,
+      3,
+      3,
+    ]),
+  );
+});
+
 Deno.test("a failed GPU payload batch rejects every queued job", async () => {
   const queue = createCompilerGpuBatchQueue<number, number>(() => {
     throw new Error("batch failed with evidence");
