@@ -643,6 +643,11 @@ the remaining 98,211 capture-argument visits. Other targets perform at most
 1,360. The counter was removed; indexed mutable step lists are rejected for the
 current corpus.
 
+After zero-capture skipping, Codex changes only 886 call sites in 98,211 visited
+occurrences (0.90% output density); Tar changes 68 in 7,941. Counters were
+removed. A single batched symbol-to-captures traversal is the derived primitive,
+subject to duplicate-symbol renaming first.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

@@ -5503,6 +5503,26 @@ block. The measured comparison count is below one third of a residual traversal
 and does not justify that representation. The temporary counter was removed;
 capturing-function call rewriting remains the lifting frontier.
 
+### 2026-07-31: remaining capture insertion has 0.90% output density
+
+Review 98 counts calls changed by `appendCallArguments` after the empty-capture
+fast path. Codex updates 886 call sites while visiting 98,211 occurrences,
+0.90% output density. Editor updates 67 of 4,246, grep 23 of 1,424, Tar 68 of
+7,941, and raytracer six of 396. Wav remains zero.
+
+A use index could find those calls, but lifting immediately rebuilds and renames
+surrounding immutable objects, invalidating object-location indexes. The derived
+primitive is instead a batched rewrite: after capture summaries are known, build
+one map from function symbol to ordered capture references and traverse each
+residual root once. At a call whose callee symbol is in the map, append its
+captures; otherwise preserve identity. This changes work from
+\(O(\sum_f V_f)\) to \(O(V+A)\), where \(A=886\) updated Codex calls.
+
+The temporary counters were removed. Batched rewriting must be sequenced with
+deterministic duplicate-symbol renaming; applying a map keyed only by a symbol
+before resolving duplicate occurrences would conflate distinct lifted
+functions.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
