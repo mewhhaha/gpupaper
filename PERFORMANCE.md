@@ -378,8 +378,41 @@ column falls from `4A` to `4 ceil(A / 8)` bytes:
 
 Atom input includes packed kinds, two `u32` value columns, and the `A + 1`
 resolved offsets. It excludes output/readback and packed-job alignment. The
-profile checks the exact formula `8A + 4(A + 1) + 4 ceil(A / 8)`. Dispatch count
-and scheduled lanes are unchanged.
+intermediate formula was `8A + 4(A + 1) + 4 ceil(A / 8)`; the adaptive high-word
+section below supersedes it. Dispatch count and scheduled lanes were unchanged.
+
+### Adaptive signed64 high words
+
+Kind-distribution measurement found no signed-64 atom in any frozen target:
+
+| Target    |    Byte | Unsigned | Signed32 | Signed64 | Length |
+| --------- | ------: | -------: | -------: | -------: | -----: |
+| Editor    |  13,895 |    8,490 |    1,403 |        0 |    135 |
+| Codex     | 115,797 |   74,128 |   13,826 |        0 |    348 |
+| grep      |   2,348 |    1,254 |      278 |        0 |     17 |
+| tar       |  12,474 |    8,414 |    1,293 |        0 |     20 |
+| wav       |   1,493 |      784 |      186 |        0 |     14 |
+| raytracer |   2,412 |    1,217 |      199 |        0 |     23 |
+
+The emitter now chooses dense `4A` high words when `2S >= A`; otherwise it
+stores sorted `(atom_id, high_word)` pairs in `8S` bytes. Thus high-word
+capacity is `min(4A, 8S)` and never exceeds the prior representation. Sparse
+lookup is a binary search executed only by the `S` signed-64 lanes.
+
+| Target    | Previous atom input | Adaptive atom input | Bytes removed | Reduction |
+| --------- | ------------------: | ------------------: | ------------: | --------: |
+| Editor    |             299,044 |             203,352 |        95,692 |    32.00% |
+| Codex     |           2,551,244 |           1,734,848 |       816,396 |    32.00% |
+| grep      |              48,720 |              33,132 |        15,588 |    32.00% |
+| tar       |             277,520 |             188,716 |        88,804 |    32.00% |
+| wav       |              30,968 |              21,060 |         9,908 |    32.00% |
+| raytracer |              48,144 |              32,740 |        15,404 |    32.00% |
+
+The logical atom-input formula is now
+`4A + 4(A + 1) + 4 ceil(A / 8) + min(4A, 8S)`. A physical empty frontier still
+reserves the four-byte WebGPU binding minimum. Sparse and dense signed-64
+regressions compare extrema byte-for-byte with CPU emission. No dispatch is
+added.
 
 ### Compacted Core rewrite frontier
 

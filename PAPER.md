@@ -1096,18 +1096,38 @@ kind(i) = (kind_words[i >> 3] >> (4(i & 7))) & 15
 Tags 0 through 4 map injectively to the atom variants; the remaining nibble
 values are invalid and emit nothing, which the byte differential detects. This
 keeps \(O(1)\) lane-local lookup using shifts and masks while changing the kind
-column from `4A` to \(4\lceil A/8\rceil\) bytes. Including two full-width value
-columns and boundaries, logical atom input is:
+column from `4A` to \(4\lceil A/8\rceil\) bytes.
+
+Only signed-64 atoms read the high-word column. Let \(S\) be their count. Two
+representations are available:
 
 ```text
-B_atom_input = 8A + 4(A + 1) + 4 ceil(A / 8)
+H_dense(A)  = 4A
+H_sparse(S) = 8S
 ```
 
-The uncompressed kind representation required `16A + 4`, so the exact saving is
-\(4(A-\lceil A/8\rceil)\) bytes. A three-bit packing is denser but makes some
-tags cross word boundaries or restricts each word to ten tags; the nibble
-representation trades at most one bit per tag for one-word, shift-and-mask
-random access.
+The sparse representation is a source-ordered array of `(atom_id, high_word)`
+pairs. A signed-64 lane finds its pair by lower-bound binary search; all other
+lanes perform no high-word lookup. The compiler selects sparse exactly when
+\(2S<A\), otherwise dense. At equality dense wins because capacity is equal and
+direct indexing has less work. Therefore:
+
+```text
+H(A, S)      = min(4A, 8S)
+B_atom_input = 4A + 4(A + 1) + 4 ceil(A / 8) + H(A, S)
+```
+
+This representation is never larger than dense high words. Its additional sparse
+lookup work is \(O(S\log\max(1,S))\), paid only when it saves capacity. An
+atom-indexed rank column would restore \(O(1)\) lookup but itself costs `4A`,
+eliminating the sparse saving. With \(S=0\), the logical frontier is empty;
+WebGPU's nonempty-binding rule still gives a packed job a four-byte physical
+region.
+
+Before tag packing and adaptive high words, atom input required `16A + 4`. A
+three-bit tag packing is denser but makes some tags cross word boundaries or
+restricts each word to ten tags; the nibble representation trades at most one
+bit per tag for one-word, shift-and-mask random access.
 
 For comparison with the superseded hierarchy, let \(K\) be the number of length
 atoms, \(J\) its nonempty dependency levels, \(n_0=A\), \(n_{\ell+1}=\lceil
@@ -2169,6 +2189,22 @@ exact atom-input formula is an executable profile invariant; the existing
 generated GPU/CPU differential exercises tag-word boundaries and all atom
 variants. The full 496-test and six-target release gate passed. This is a
 deterministic transfer/capacity reduction, not a latency claim.
+
+### 2026-07-31: signed-64 high words become an adaptive frontier
+
+The packed atom input still carried one high word for every atom, although only
+signed-64 atoms can observe it. Frozen-plan measurement found zero signed-64
+atoms in all six applications. Section 7.4 now selects the smaller of a dense
+`4A` column and sorted `8S` `(atom_id, high_word)` pairs. Sparse lookup uses
+binary search only in signed-64 lanes; the dense representation wins ties.
+
+The choice proves \(H(A,S)=\min(4A,8S)\), so it cannot regress logical capacity.
+Sparse and dense boundary regressions cover signed-64 extrema and compare every
+byte to independent CPU emission. On the frozen \(S=0\) plans, editor removes
+95,692 bytes and codex 816,396 bytes; resolved atom input falls by approximately
+32%. Signed-64 count, high-word bytes, and total atom-input bytes are executable
+profile fields. The full 498-test and six-target release gate passed. This is a
+deterministic capacity result, not a latency claim.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

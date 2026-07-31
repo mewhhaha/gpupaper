@@ -985,6 +985,11 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     Math.ceil(gpu.byteCount / 4) * 4,
   );
   const lengthAtoms = plan.atoms.filter((atom) => atom.kind === "length");
+  const signed64AtomCount =
+    plan.atoms.filter((atom) => atom.kind === "signed64").length;
+  const signed64HighWordBytes = signed64AtomCount * 2 < plan.atoms.length
+    ? signed64AtomCount * 8
+    : plan.atoms.length * 4;
   assertEquals(gpu.lengthAtomCount, lengthAtoms.length);
   assertEquals(
     gpu.resolvedOffsetBytes,
@@ -993,9 +998,12 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   assertEquals(
     gpu.atomInputBytes,
     Math.ceil(plan.atoms.length / 8) * 4 +
-      plan.atoms.length * 8 +
+      plan.atoms.length * 4 +
+      signed64HighWordBytes +
       (plan.atoms.length + 1) * 4,
   );
+  assertEquals(gpu.signed64AtomCount, signed64AtomCount);
+  assertEquals(gpu.signed64HighWordBytes, signed64HighWordBytes);
   assertEquals(
     WebAssembly.validate(
       new Uint8Array(gpu.bytes).buffer as ArrayBuffer,
@@ -1024,6 +1032,40 @@ Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", 
   assertEquals(emitted.lengthAtomCount, 1);
   assertEquals(emitted.resolvedOffsetBytes, 12);
   assertEquals(emitted.dispatchedInvocationCount, 64);
+});
+
+Deno.test("WebGPU Wasm emission stores sparse signed64 high words by atom ID", async () => {
+  const plan = {
+    atoms: [
+      { kind: "byte" as const, value: 0 },
+      { kind: "signed64" as const, value: -0x8000_0000_0000_0000n },
+      { kind: "byte" as const, value: 1 },
+    ],
+    maximumDependencyLevel: 0,
+  };
+  const emitted = await emitWasmPlanOnGpu(plan);
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
+  assertEquals(emitted.signed64AtomCount, 1);
+  assertEquals(emitted.signed64HighWordBytes, 8);
+});
+
+Deno.test("WebGPU Wasm emission keeps dense signed64 high words above break-even", async () => {
+  const plan = {
+    atoms: [
+      { kind: "signed64" as const, value: -0x8000_0000_0000_0000n },
+      { kind: "signed64" as const, value: 0x7fff_ffff_ffff_ffffn },
+      { kind: "byte" as const, value: 0 },
+    ],
+    maximumDependencyLevel: 0,
+  };
+  const emitted = await emitWasmPlanOnGpu(plan);
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
+  assertEquals(emitted.signed64AtomCount, 2);
+  assertEquals(emitted.signed64HighWordBytes, 12);
 });
 
 Deno.test("packed WebGPU Wasm emission is deterministic across shared words", async () => {

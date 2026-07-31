@@ -27,6 +27,8 @@ export type GpuWasmEmissionResult =
     readonly lengthAtomCount: number;
     readonly resolvedOffsetBytes: number;
     readonly atomInputBytes: number;
+    readonly signed64AtomCount: number;
+    readonly signed64HighWordBytes: number;
     readonly dispatchedInvocationCount: number;
     readonly submissionBatchSize: number;
     readonly payloadBatchSize: number;
@@ -59,7 +61,11 @@ const wasmBatchQueue = createCompilerGpuBatchQueue(
 );
 
 const emissionShader = `
-struct Parameters { count: u32 }
+struct Parameters {
+  count: u32,
+  signed64_count: u32,
+  sparse_signed64_high_words: u32,
+}
 @group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
 @group(0) @binding(1) var<storage, read> low_words: array<u32>;
 @group(0) @binding(2) var<storage, read> high_words: array<u32>;
@@ -71,6 +77,30 @@ fn emit_byte(offset: u32, value: u32) {
   let word_index = offset >> 2u;
   let shift = (offset & 3u) << 3u;
   atomicOr(&output_words[word_index], (value & 255u) << shift);
+}
+
+fn signed64_high_word(atom_index: u32) -> u32 {
+  if (parameters.sparse_signed64_high_words == 0u) {
+    return high_words[atom_index];
+  }
+  var lower = 0u;
+  var upper = parameters.signed64_count;
+  while (lower < upper) {
+    let middle = lower + (upper - lower) / 2u;
+    let candidate = high_words[middle * 2u];
+    if (candidate < atom_index) {
+      lower = middle + 1u;
+    } else {
+      upper = middle;
+    }
+  }
+  if (
+    lower >= parameters.signed64_count ||
+    high_words[lower * 2u] != atom_index
+  ) {
+    return 0u;
+  }
+  return high_words[lower * 2u + 1u];
 }
 
 @compute @workgroup_size(64)
@@ -107,7 +137,7 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   }
   if (kind != ${atomSigned64}u) { return; }
   var low = low_words[index];
-  var high = high_words[index];
+  var high = signed64_high_word(index);
   for (var byte_index = 0u; byte_index < size; byte_index += 1u) {
     var encoded_byte = low & 127u;
     let next_low = (low >> 7u) | (high << 25u);
@@ -218,8 +248,15 @@ async function emitPackedWasmPlanBatch(
     storageAlignment,
   );
   const countParameters = packWasmColumns(
-    jobs.map((job) => new Uint32Array([job.plan.atoms.length])),
-    4,
+    jobs.map((job) =>
+      new Uint32Array([
+        job.plan.atoms.length,
+        job.columns.signed64AtomCount,
+        job.columns.sparseSigned64HighWords ? 1 : 0,
+        0,
+      ])
+    ),
+    16,
     uniformAlignment,
   );
   const readbacks = packWasmColumns(
@@ -360,6 +397,8 @@ async function emitPackedWasmPlanBatch(
           job.columns.lowWords.byteLength +
           job.columns.highWords.byteLength +
           job.atomByteOffsets.byteLength,
+        signed64AtomCount: job.columns.signed64AtomCount,
+        signed64HighWordBytes: job.columns.highWords.byteLength,
         dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize,
         submissionBatchSize: submission.submissionBatchSize,
         payloadBatchSize: jobs.length,
@@ -470,14 +509,15 @@ async function emitWasmPlanWithGpu(
   const { device, emissionPipeline } = context;
   const kindBytes = Math.max(4, columns.kinds.byteLength);
   const atomWordBytes = Math.max(4, columns.lowWords.byteLength);
+  const signed64HighWordBytes = Math.max(4, columns.highWords.byteLength);
   const outputBytes = outputWordCount * 4;
   const capacityRequests = [
     ["atom kinds", kindBytes, "storage"],
     ["atom low words", atomWordBytes, "storage"],
-    ["atom high words", atomWordBytes, "storage"],
+    ["signed64 high words", signed64HighWordBytes, "storage"],
     ["atom byte offsets", atomByteOffsets.byteLength, "storage"],
     ["packed output", outputBytes, "storage"],
-    ["count parameters", 4, "uniform"],
+    ["count parameters", 16, "uniform"],
     ["readback", outputBytes, "copy"],
   ] as const;
   for (const [label, byteLength, binding] of capacityRequests) {
@@ -534,7 +574,12 @@ async function emitWasmPlanWithGpu(
   const countParameterBuffer = createBuffer(
     device,
     "Wasm count parameters",
-    new Uint32Array([plan.atoms.length]),
+    new Uint32Array([
+      plan.atoms.length,
+      columns.signed64AtomCount,
+      columns.sparseSigned64HighWords ? 1 : 0,
+      0,
+    ]),
     GPUBufferUsage.UNIFORM,
   );
   const readback = createCompilerGpuBuffer(
@@ -612,6 +657,8 @@ async function emitWasmPlanWithGpu(
         columns.lowWords.byteLength +
         columns.highWords.byteLength +
         atomByteOffsets.byteLength,
+      signed64AtomCount: columns.signed64AtomCount,
+      signed64HighWordBytes: columns.highWords.byteLength,
       dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize,
       submissionBatchSize: submission.submissionBatchSize,
       payloadBatchSize: 1,
@@ -634,10 +681,20 @@ function atomColumns(
   readonly kinds: Uint32Array;
   readonly lowWords: Uint32Array;
   readonly highWords: Uint32Array;
+  readonly signed64AtomCount: number;
+  readonly sparseSigned64HighWords: boolean;
 } {
+  const signed64AtomCount = atoms.reduce(
+    (count, atom) => count + (atom.kind === "signed64" ? 1 : 0),
+    0,
+  );
+  const sparseSigned64HighWords = signed64AtomCount * 2 < atoms.length;
   const kinds = new Uint32Array(Math.ceil(atoms.length / 8));
   const lowWords = new Uint32Array(atoms.length);
-  const highWords = new Uint32Array(atoms.length);
+  const highWords = new Uint32Array(
+    sparseSigned64HighWords ? signed64AtomCount * 2 : atoms.length,
+  );
+  let signed64Index = 0;
   for (const [index, atom] of atoms.entries()) {
     if (atom.kind === "byte") {
       writeAtomKind(kinds, index, atomByte);
@@ -657,7 +714,14 @@ function atomColumns(
     if (atom.kind === "signed64") {
       writeAtomKind(kinds, index, atomSigned64);
       lowWords[index] = Number(BigInt.asUintN(32, atom.value));
-      highWords[index] = Number(BigInt.asUintN(32, atom.value >> 32n));
+      const highWord = Number(BigInt.asUintN(32, atom.value >> 32n));
+      if (sparseSigned64HighWords) {
+        highWords[signed64Index * 2] = index;
+        highWords[signed64Index * 2 + 1] = highWord;
+        signed64Index += 1;
+      } else {
+        highWords[index] = highWord;
+      }
       continue;
     }
     writeAtomKind(kinds, index, atomLength);
@@ -668,6 +732,8 @@ function atomColumns(
     kinds,
     lowWords,
     highWords,
+    signed64AtomCount,
+    sparseSigned64HighWords,
   };
 }
 

@@ -1005,6 +1005,9 @@ Core receives no source handler or open effect row.
 - [x] Pack the five Wasm atom tags as eight random-access nibbles per word.
       Profiles prove the exact input-byte formula, and generated CPU/GPU
       differentials cross tag-word boundaries.
+- [x] Represent signed-64 high words by the smaller of a dense column and a
+      sorted sparse frontier. The `min(4A, 8S)` rule has dense and sparse
+      byte-differential regressions and executable capacity metrics.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a
