@@ -5585,6 +5585,239 @@ observations were 266.57/143.09, 751.13/550.51, 43.99/40.69,
 145.60/134.31, 34.59/32.96, and 39.70/38.29 ms. These two-point observations
 validate the release boundary but are not distribution estimates.
 
+### 2026-07-31: Baba GPU syntax is a proved grammar profile
+
+Baba 7.10 has two distinct syntax runtimes. Its generated Wasm runtime is the
+complete synchronous grammar implementation and executes on the host CPU. Its
+experimental version-3 WebGPU frontend executes lexing, delimiter matching,
+island recognition, reachable compact token/node/edge allocation, and ordered
+diagnostic construction. Owned ingestion maps those arrays once and then runs
+bounded semantic recipes on the host. Resident ingestion stops after submitting
+the GPU work and leaves status, counts, and flat syntax on the device. Neither
+surface silently falls back.
+
+Let \(G_{gpu}\) be the grammar profiles for which Baba generation proves fixed
+terminal identity, deterministic island transducers, explicit structural
+boundaries, bounded contraction, and bounded output multiplicity. Selecting the
+GPU frontend is sound only for \(G\in G_{gpu}\). This resembles the local
+parsability restriction used by PAPAGENO [23] and the grammar reshaping used by
+Pareas [24]: parallelism follows from a restricted grammar model rather than
+from speculating that a conventional parser stack is parallel.
+
+Accepted-input conformance is equality of all token, node, edge, symbol, and
+type words against Baba's independent `CpuFrontend` oracle. Rejected-input
+conformance is equality of ordered diagnostic codes and source spans, not of
+internal attribution. The executable counterexample `let answer = ;` is
+attributed to island 19 by the CPU and island 3 by the GPU, while both report
+`GPU_FRONTEND_SYNTAX_ERROR` at `[13, 14)`. Diagnostic-record byte equality is
+therefore not a sound Baba 7.10 invariant.
+
+The current Ducklang grammar is not in \(G_{gpu}\). Its generated lexer has a
+29-state guard DFA, 16 excluded words, and guarded token specifications for
+contextual whitespace, statement terminators, arrow-parameter forms, and
+disambiguated product delimiters. Removing those guards without changing the
+language would alter token identity. Ducklang therefore uses Baba 7.10's
+complete Wasm parser until its source grammar is redesigned around explicit,
+state-free boundaries. A static test pins this rejection before adapter
+acquisition; it is an explicit semantic limit, not a runtime fallback.
+
+Blot is the first admitted GPU-syntax fixture. Its copied grammar uses
+semicolon-terminated declarations, `end`-terminated variable regions, flat
+operator chains, and a strict repeated root island. The generated plan proves a
+guard-free 114-state lexer, 20 islands with 854 states and 5,866 transitions, a
+repeated root island, at most one node and two edges per token, six candidates
+per token, and 33 bounded contraction rounds. Accepted and rejected examples
+pass the conformance relation above on the RTX 4080 SUPER.
+
+For source size \(S\), token count \(T\), and compact output words \(R\), the
+CPU oracle performs \(O(S+T+R)\) host work. Owned GPU ingestion performs
+\(O(S)\) upload, bounded scan/transducer work parameterized by the proved plan,
+\(O(R)\) readback, and host semantic recipes. It also pays device and plan
+constants. Resident ingestion removes the \(O(R)\) host materialization, but it
+does not prove success to the host. Its header is
+`[status, tokenCount, nodeCount, edgeCount]`, followed by capacity-sized
+four-word tokens, eight-word nodes, and four-word edges.
+
+Five warm samples on the RTX 4080 SUPER measured the following medians. Runtime
+creation was 233.72 ms and plan compilation 94.63 ms; both were amortized and
+excluded from per-source rows.
+
+|    source |  tokens | CPU oracle | owned GPU | resident submit | resident completion |
+| --------: | ------: | ---------: | --------: | --------------: | ------------------: |
+|     605 B |     293 |    0.51 ms |  12.92 ms |         1.74 ms |            12.81 ms |
+|  10,550 B |   4,613 |    4.71 ms |  14.37 ms |         2.84 ms |            13.91 ms |
+| 186,215 B |  73,733 |   51.30 ms |  18.60 ms |         3.76 ms |            14.81 ms |
+| 797,000 B | 294,917 |  224.82 ms |  31.25 ms |         6.36 ms |            17.53 ms |
+
+Owned GPU first wins in the measured set at 186,215 bytes (2.76 times faster)
+and is 7.19 times faster at 797,000 bytes. Linear interpolation of the signed
+CPU/GPU difference between 10,550 and 186,215 bytes estimates 50,610 bytes, but
+that is an unverified hypothesis rather than a selection threshold. The only
+validated crossover bracket is `(10,550, 186,215]` bytes for this grammar,
+adapter, driver, and source distribution. Resident completion is reported only
+as device completion; it excludes mapped diagnostics, symbols, types, and host
+semantic recipes and is not a completed-parser speedup.
+
+Keeping the next boundary resident requires a lowering kernel that consumes the
+same buffer and queue. Its validity predicate is `status == accepted`; its
+dispatch bounds come from the device-resident counts; and every output record
+must be a deterministic function of a node rule ID, its ordered field edges, and
+referenced token spans. Count-scan-emit produces payload offsets without host
+allocation. The preservation obligation is that this lowering matches a CPU
+flat-syntax-to-HIR oracle for every admitted rule and rejects unknown rule,
+field, and arity combinations. Blot's current source-to-Wasm compiler instead
+lowers Baba's pointer-like Wasm cursor on the CPU. The copied minimal program
+does compile through the sibling Blot/gpufuck backend to a 2,105-byte Wasm
+module, and the 4,275-byte tour compiles to 38,985 bytes, but neither result yet
+consumes the resident flat syntax. These are separate validated boundaries, not
+an all-GPU pipeline claim.
+
+The final release gate checked 138 formatted files and 120 linted files,
+type-checked every source, test, and benchmark entry point, and passed all 525
+tests. Required-GPU differential compilation retained the six frozen artifact
+sizes: Editor 24,460, Codex 226,134, grep 3,911, Tar 26,106, wav 2,520, and
+raytracer 3,864 bytes. This is executable validation of the upgraded Duck
+runtime and the new Blot syntax boundary, not a proof that Blot lowering is
+resident.
+
+### 2026-07-31: GPU-profile membership is language admission
+
+Production syntax now admits a language plan \(P\) exactly when
+
+\[ A(P) = \operatorname{version3}(P) \land \operatorname{guardFree}(P). \]
+
+Version-3 generation already proves deterministic islands, bounded contraction,
+and bounded output multiplicity. The explicit guard-free conjunct pins fixed
+terminal identity at the runtime boundary rather than relying on an incidental
+generator failure. Both general and strict throughput profiles satisfy the
+semantic admission rule; strict is a performance proof about the repeated root,
+not a stronger language-correctness proof.
+
+`BabaGpuSyntaxSession.create` evaluates \(A(P)\) before acquiring an adapter. If
+it holds, the session requires a non-fallback hardware device, compiles the
+plan, and exposes only GPU owned ingestion and GPU resident submission. It
+imports no CPU frontend and contains no fallback state. If it does not hold,
+creation fails with the missing proof. In particular, the contextual Duck plan
+is rejected before device work. This is executable validation of the admission
+rule.
+
+Baba's CPU frontend remains an independent oracle in tests and benchmarks. It is
+not a production recovery path: an unavailable device, capacity failure, device
+loss, or rejected plan is an explicit compilation failure. Removing the oracle
+would weaken the evidence without reducing production work, so “no CPU” means no
+CPU syntax execution in an admitted compilation, not no reference implementation
+in the repository.
+
+Admission inspection is \(O(|P|)\) host work once per compiled plan. For \(n\)
+sources in one session, its amortized cost is \(O(|P|/n)\); adapter and pipeline
+setup are likewise session constants. No source bytes are parsed on the host.
+Owned ingestion still maps compact output and runs Baba semantic recipes on the
+host, while resident ingestion keeps even that syntax boundary on-device. The
+latter is the selected production target.
+
+The existing Duck and Haskell entry points predate this rule and remain only as
+a transitional integrated payload-lowering reference. They are outside the new
+language-admission path and must not gain new fallback behavior. Once Blot's
+resident flat syntax reaches typed payload IR and Wasm, those CPU-syntax entry
+points can be removed without leaving the repository unable to compile a
+program. This sequencing preserves an executable differential target while
+making deletion, rather than compatibility, the terminal design.
+
+### 2026-07-31: First closed Blot payload fragment
+
+The first integrated Blot payload is deliberately smaller than the admitted
+syntax language. Its grammar is
+
+\[ \begin{aligned} M &::= L^*\;\mathtt{return}\;E\mathtt{;} \\ L &::=
+\mathtt{let}\;x\mathtt{=}E\mathtt{;} \\ E &::= n \mid x, \end{aligned} \]
+
+where \(n\) is a decimal integer in \([0,2^{31}-1]\), and a variable use may
+refer only to a preceding binding. Every expression has the sole payload type
+`I64`. A module environment \(\Gamma\) maps a source name to its latest binding
+identity. The rules are
+
+\[ \frac{0 \le n < 2^{31}}{\Gamma \vdash n : \mathrm{I64}} \qquad
+\frac{\Gamma(x)=b}{\Gamma \vdash x_b : \mathrm{I64}} \qquad \frac{\Gamma \vdash
+E : \mathrm{I64}} {\Gamma \vdash \mathtt{let}\;x=E : \Gamma[x \mapsto
+b_{fresh}]}. \]
+
+Thus shadowing creates a fresh immutable binding and changes only the
+environment's latest-name map. It does not mutate or alias an earlier binding.
+The runtime representation may reuse storage after liveness proves an earlier
+binding dead, but that optimization is not part of the source semantics.
+
+The payload IR is a straight-line sequence of fresh binding IDs whose right hand
+sides are either an `I64` constant or a reference to a lower binding ID,
+followed by one result expression. Lowering assigns binding \(b_i\) to Wasm
+local \(i\), emits the right-hand-side expression followed by `local.set i`,
+then emits the result expression. The module exports `main : [] -> [i64]`.
+Induction over the binding sequence proves the local environment after step
+\(i\) agrees with the source environment for every live latest-name binding; the
+result therefore preserves the fragment's evaluation.
+
+The compact Baba boundary is accepted only if node 0 is `program`, every ordered
+program child is `declaration`, and each declaration, pattern, and expression
+has exactly one of the event shapes above. Token spellings are read from
+GPU-produced token spans. Unknown rules, edge kinds, arities, declaration
+orders, identifiers, literals, and out-of-range references fail with a source
+span. GPU syntax acceptance is necessary but not sufficient for membership in
+this payload fragment.
+
+This boundary rejects several tempting but unsound shortcuts. Reusing the
+existing Haskell Core would silently change Blot's `i64` integer ABI to `i32`.
+The Baba 7.10 semantic validator currently rejects every unsigned decimal
+magnitude above signed `I32` maximum before payload lowering, so the source
+literal subset is narrower than its `I64` result type. Accepted literals are
+widened exactly to `I64`; constructing larger values needs a future Baba
+integer-domain parameter or an independently specified Blot primitive. Treating
+`+`, `*`, or other surface operators as Wasm instructions would bypass Blot's
+prelude-defined fixities and ordinary function meanings. Headers, imports,
+applications, effects, patterns other than one identifier, and all other
+declarations remain outside the fragment until their own typing and lowering
+rules are specified.
+
+For \(T\) compact tokens, \(N\) nodes, \(E_g\) edges, and \(B\) bindings, the
+owned implementation performs the proved GPU syntax work, reads \(4T+8N+4E_g\)
+32-bit words, validates and lowers in \(O(T+N+E_g+B)\) host work, stores
+\(O(B)\) payload records, and emits a Wasm plan with \(O(B)\) atoms. It requires
+one GPU syntax submission and one GPU Wasm submission. This is a GPU
+parser/lexer/validator and GPU binary emitter, but the compact-to-payload
+lowering is initially a host reference. A resident count-scan-emit kernel
+becomes worthwhile only after measurement shows its avoided readback and host
+work exceed another dispatch and synchronization; until then an all-GPU lowering
+claim would be false.
+
+The implementation obligations are executable tests for literal evaluation,
+prior-binding resolution, shadowing, unbound-use rejection, overflow rejection,
+payload-shape rejection, deterministic Wasm, and CPU/GPU binary-emission
+equality. Differential comparison with the sibling Blot compiler is valid only
+inside this fragment and compares exported `i64` results, not binary identity.
+The typing and preservation statements above are paper derivations; the tests
+are executable validation, not mechanized proofs.
+
+The owned implementation is now integrated in `compileModuleSource`: a `.blot`
+input implies required GPU syntax and required GPU Wasm emission, while CPU
+binary emission occurs only when differential verification is explicitly
+requested through the API. Eleven focused tests cover the obligations above,
+including a hardware CPU/GPU byte differential. The 32-byte example
+`let answer = 42; return answer;` emits a 43-byte Wasm module whose exported
+`main` returns `42n`. The sibling Blot evaluator independently returns
+`{ kind: "signed-integer-64", value: 42n }` for that source. This is empirical
+semantic agreement for one fragment witness, not equivalence of the compilers.
+The complete repository suite passed all 536 tests, and the required-GPU
+release script retained the frozen Editor, Codex, grep, Tar, wav, and raytracer
+sizes of 24,460, 226,134, 3,911, 26,106, 2,520, and 3,864 bytes.
+
+One cold CLI observation on the RTX 4080 SUPER measured 531.08 ms for runtime
+creation, 375.90 ms for plan compilation, 134.70 ms for owned syntax, 2.73 ms
+for host compact-to-payload lowering and Wasm planning, 317.93 ms for GPU Wasm
+emission through a separately acquired runtime, and 3.90 ms for engine
+validation. These components total approximately 1.37 seconds; the reported
+frontend total of 1.14 seconds ends before binary emission. This single profile
+is diagnostic evidence, not a latency distribution. It shows that payload
+lowering is not the present small-input bottleneck: reusing one runtime and
+compiled pipelines across syntax and emission is the next constant-cost target.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -5642,3 +5875,8 @@ validate the release boundary but are not distribution estimates.
 22. Peter M. Fenwick. “A New Data Structure for Cumulative Frequency Tables.”
     Software: Practice and Experience 24(3), 1994.
     <https://onlinelibrary.wiley.com/doi/10.1002/spe.4380240306>
+23. Massimo Pradella, Matteo Reghizzi, and Paola Panazza. “Parallel Parsing with
+    Operator Precedence Grammars.” Compiler Construction 2014.
+    <https://pradella.faculty.polimi.it/papers/cc2014.pdf>
+24. Robin Voetter. “Pareas: A GPU-Accelerated Compiler.” MSc thesis, 2023.
+    <https://futhark-lang.org/student-projects/robin-voetter-msc-thesis.pdf>

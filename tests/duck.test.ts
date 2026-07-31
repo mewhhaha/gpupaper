@@ -1299,7 +1299,9 @@ async function assertDuckFixture(
 async function compileDuckFixture(filename: string) {
   const file = new URL(`../examples/duck/${filename}`, import.meta.url);
   const source = await Deno.readTextFile(file);
-  return await compileModuleSource(file.pathname, source, { gpuMode: "off" });
+  return await compileModuleSource(file.pathname as `${string}.duck`, source, {
+    gpuMode: "off",
+  });
 }
 
 function assertEquals(actual: unknown, expected: unknown): void {

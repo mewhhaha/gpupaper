@@ -6,7 +6,7 @@ const grammarUrl = new URL(
   import.meta.url,
 );
 
-Deno.test("Baba 6 Wasm parser handles Duck contextual whitespace", async () => {
+Deno.test("Baba 7 Wasm parser handles Duck contextual whitespace", async () => {
   const grammar = await Deno.readTextFile(grammarUrl);
   const bundle = generate(grammar, { name: "duck_contextual" });
   const wasm = binaryFile(bundle, "wasm/parser.wasm");
@@ -25,7 +25,7 @@ Deno.test("Baba 6 Wasm parser handles Duck contextual whitespace", async () => {
   }
 });
 
-Deno.test("Baba 6 generates a valid standalone Wasm parser", async () => {
+Deno.test("Baba 7 generates a valid standalone Wasm parser", async () => {
   const grammar = await Deno.readTextFile(grammarUrl);
   const bundle = generate(grammar, { name: "duck_contextual" });
   const wasm = binaryFile(bundle, "wasm/parser.wasm");

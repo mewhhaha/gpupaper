@@ -1,4 +1,9 @@
 import { contentIdentity } from "./content_identity.ts";
+import {
+  type BlotGpuFrontendTimings,
+  type BlotI64Module,
+  compileBlotPayload,
+} from "./blot_compiler.ts";
 import { type ComptimeValue, evaluateModuleComptime } from "./comptime.ts";
 import {
   parseDucklangTextLiterals,
@@ -105,7 +110,7 @@ export type CompilationOptions = {
 
 export type CompilationBackends = {
   readonly typeCheck: "cpu";
-  readonly comptime: "cpu";
+  readonly comptime: "cpu" | "notApplicable";
   readonly coreRewrite: "cpu" | "gpu" | "identity" | "notApplicable";
   readonly wasmEmission: "cpu" | "gpu";
   readonly wasmVerification: "none" | "cpuDifferential";
@@ -342,9 +347,26 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly profile: DucklangCompilationProfile;
 };
 
+export type BlotCompilationTimings = BlotGpuFrontendTimings & {
+  readonly gpuWasmMilliseconds: number;
+  readonly wasmValidationMilliseconds: number;
+};
+
+export type BlotCompilationArtifact = {
+  readonly language: "blot";
+  readonly wasm: Uint8Array;
+  readonly core: BlotI64Module;
+  readonly initialTypes: readonly string[];
+  readonly finalTypes: readonly string[];
+  readonly gpuWasmResult: GpuWasmEmissionResult;
+  readonly backends: CompilationBackends;
+  readonly timings: BlotCompilationTimings;
+};
+
 export type CompilationArtifact =
   | HaskellCompilationArtifact
-  | DucklangCompilationArtifact;
+  | DucklangCompilationArtifact
+  | BlotCompilationArtifact;
 
 type DucklangDependencyIdentity = {
   readonly importer: string;
@@ -404,6 +426,11 @@ export function compileModuleSource(
   options?: CompilationOptions,
 ): Promise<DucklangCompilationArtifact>;
 export function compileModuleSource(
+  file: `${string}.blot`,
+  source: string,
+  options?: CompilationOptions,
+): Promise<BlotCompilationArtifact>;
+export function compileModuleSource(
   file: string,
   source: string,
   options?: CompilationOptions,
@@ -416,6 +443,9 @@ export async function compileModuleSource(
   if (file.endsWith(".duck")) {
     return await compileDucklangModuleSource(file, source, options);
   }
+  if (file.endsWith(".blot")) {
+    return await compileBlotModuleSource(file, source, options);
+  }
   if (options.hostInterface !== undefined) {
     throw new TypeError(
       `hostInterface is available only for Ducklang compilation; received ${file}`,
@@ -427,6 +457,72 @@ export async function compileModuleSource(
     );
   }
   return await compileHaskellModuleSource(file, source, options);
+}
+
+async function compileBlotModuleSource(
+  file: string,
+  source: string,
+  options: CompilationOptions,
+): Promise<BlotCompilationArtifact> {
+  if (options.hostInterface !== undefined) {
+    throw new TypeError(
+      `hostInterface is available only for Ducklang compilation; received ${file}`,
+    );
+  }
+  if (options.session !== undefined) {
+    throw new TypeError(
+      `session is available only for Ducklang compilation; received ${file}`,
+    );
+  }
+  if (options.gpuMode !== undefined && options.gpuMode !== "required") {
+    throw new TypeError(
+      `${file}: admitted Blot compilation requires GPU syntax and GPU Wasm emission; received gpuMode ${options.gpuMode}`,
+    );
+  }
+
+  const verification = options.gpuWasmVerification ?? "none";
+  const payload = await compileBlotPayload(file, source);
+  const cpuWasm = verification === "differential"
+    ? emitWasmPlanOnCpu(payload.wasmPlan)
+    : undefined;
+  const gpuWasmStart = performance.now();
+  const gpuWasmResult = await emitWasmPlanOnGpu(payload.wasmPlan, {
+    scheduling: options.gpuScheduling,
+  });
+  const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
+  const wasm = selectWasmOutput(
+    file,
+    cpuWasm,
+    payload.wasmPlan,
+    gpuWasmResult,
+    "required",
+    verification,
+  );
+  const validationStart = performance.now();
+  validateSelectedWasm(file, wasm);
+  const wasmValidationMilliseconds = performance.now() - validationStart;
+  return {
+    language: "blot",
+    wasm,
+    core: payload.core,
+    initialTypes: ["main :: I64"],
+    finalTypes: ["main :: I64"],
+    gpuWasmResult,
+    backends: {
+      typeCheck: "cpu",
+      comptime: "notApplicable",
+      coreRewrite: "notApplicable",
+      wasmEmission: "gpu",
+      wasmVerification: verification === "differential"
+        ? "cpuDifferential"
+        : "none",
+    },
+    timings: {
+      ...payload.timings,
+      gpuWasmMilliseconds,
+      wasmValidationMilliseconds,
+    },
+  };
 }
 
 async function compileHaskellModuleSource(

@@ -1,0 +1,263 @@
+{
+  "version": 2,
+  "gpuFrontend": {
+    "version": 3,
+    "throughput": "strict",
+    "root": "program",
+    "islands": [
+      {
+        "rule": "program",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "module_header",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": ";"
+        }
+      },
+      {
+        "rule": "operator_section",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": ";"
+        }
+      },
+      {
+        "rule": "declaration",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": ";"
+        }
+      },
+      {
+        "rule": "statement",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": ";"
+        }
+      },
+      {
+        "rule": "expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "binding_pattern",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "constructor_pattern",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "tuple_pattern",
+        "boundary": {
+          "kind": "paired",
+          "open": "(",
+          "close": ")"
+        }
+      },
+      {
+        "rule": "array_pattern",
+        "boundary": {
+          "kind": "separated",
+          "open": "[",
+          "close": "]",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "shape_pattern",
+        "boundary": {
+          "kind": "paired",
+          "open": "{",
+          "close": "}"
+        }
+      },
+      {
+        "rule": "shape_pattern_field",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": ";"
+        }
+      },
+      {
+        "rule": "lambda",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "parenthesized_or_tuple",
+        "boundary": {
+          "kind": "paired",
+          "open": "(",
+          "close": ")"
+        }
+      },
+      {
+        "rule": "array",
+        "boundary": {
+          "kind": "separated",
+          "open": "[",
+          "close": "]",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "shape",
+        "boundary": {
+          "kind": "paired",
+          "open": "{",
+          "close": "}"
+        }
+      },
+      {
+        "rule": "conditional",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "end"
+        }
+      },
+      {
+        "rule": "case_expression",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "end"
+        }
+      },
+      {
+        "rule": "handler_composition",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "end"
+        }
+      },
+      {
+        "rule": "block",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "end"
+        }
+      }
+    ],
+    "semantics": {
+      "rules": {
+        "program": {
+          "opcode": "module"
+        },
+        "binding": {
+          "opcode": "binding",
+          "fields": {
+            "pattern": "pattern",
+            "value": "value"
+          }
+        },
+        "rebinding": {
+          "opcode": "shadow",
+          "fields": {
+            "name": "binder",
+            "value": "value"
+          }
+        },
+        "lambda": {
+          "opcode": "lambda",
+          "fields": {
+            "parameter": "pattern",
+            "body": "body"
+          }
+        },
+        "expression": {
+          "opcode": "fold-fixity"
+        },
+        "array": {
+          "opcode": "array"
+        },
+        "shape": {
+          "opcode": "shape"
+        },
+        "case_expression": {
+          "opcode": "case"
+        },
+        "binding_pattern": {
+          "opcode": "pattern"
+        }
+      },
+      "primitives": {},
+      "operators": {},
+      "scopes": [
+        "program",
+        "lambda",
+        "block",
+        "case_arm"
+      ],
+      "namespaces": [
+        "value"
+      ],
+      "binders": [
+        "binding",
+        "rebinding",
+        "module_header"
+      ],
+      "patterns": [
+        "binding_pattern",
+        "case_arm"
+      ],
+      "typeEntries": []
+    }
+  },
+  "queries": {
+    "highlights": {
+      "entries": [
+        {
+          "node": "IDENT",
+          "capture": "variable"
+        },
+        {
+          "node": "TYPE_IDENT",
+          "capture": "type"
+        },
+        {
+          "node": "INTEGER",
+          "capture": "number"
+        },
+        {
+          "node": "TEXT",
+          "capture": "string"
+        },
+        {
+          "node": "INTRINSIC",
+          "capture": "function.builtin"
+        },
+        {
+          "node": "OPERATOR",
+          "capture": "operator"
+        }
+      ]
+    },
+    "rainbows": {
+      "scopes": [
+        "program",
+        "operator_section",
+        "shape",
+        "array"
+      ],
+      "brackets": [
+        "(",
+        ")",
+        "[",
+        "]",
+        "{",
+        "}"
+      ]
+    }
+  }
+}

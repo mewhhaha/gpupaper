@@ -1562,6 +1562,37 @@ resource cost, and corpus measurements.
 - [ ] Implement occurrence-aware one-pass lifting from Reviews 89--100, with
       alpha-equivalence, capture-order, direct-call, deterministic-binary, and
       CPU/GPU differential validation before retiring the current transformer.
+- [x] Upgrade parser generation and runtime compatibility from Baba 6.1.0 to
+      pinned Baba 7.10.0 and regenerate the complete Ducklang parser pair.
+- [x] Record the exact Baba GPU-profile rejection for contextual Ducklang and
+      keep the CPU Wasm runtime explicit instead of silently falling back.
+- [x] Copy Blot's strict grammar and metadata, generate a local parser plan, and
+      prove CPU/GPU compact-IR parity over representative accepted and rejected
+      Blot sources.
+- [x] Use Baba's reusable GPU syntax runtime with required hardware, an explicit
+      CPU oracle, token/node/edge capacity diagnostics, stage timings, and
+      deterministic owned and resident disposal. Do not wrap the runtime until a
+      production caller needs a different abstraction.
+- [x] Benchmark owned and resident Blot ingestion and derive the source-size
+      break-even point before selecting GPU syntax automatically.
+- [x] Define the resident Baba-flat-IR to payload-IR lowering required to keep
+      syntax on-device; do not call host readback an all-GPU frontend.
+- [ ] Implement and differentially validate the resident Baba-flat-IR to typed
+      payload-IR lowering. The current Blot/gpufuck source-to-Wasm success still
+      reparses with Baba's CPU Wasm cursor and is not an integrated GPU path.
+- [x] Make version-3, guard-free Baba plans the production language-admission
+      rule. The required-hardware session has no CPU import or fallback and
+      rejects contextual Duck before adapter acquisition.
+- [ ] Route admitted Blot compilation from resident syntax through typed payload
+      IR and Wasm without a CPU syntax pass.
+- [x] Compile the closed Blot `I64` let/return fragment through admitted GPU
+      syntax, exhaustive compact-event decoding, typed payload IR, and required
+      GPU Wasm emission. Reject every surface form whose Blot meaning is not yet
+      modeled, and differentially validate the fragment against the sibling
+      compiler.
+- [ ] Delete the transitional Duck and Haskell CPU-syntax entry points after the
+      admitted Blot pipeline is end-to-end; retain CPU implementations only as
+      offline differential oracles.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -2186,6 +2186,37 @@ selecting GPU latency. Default CPU removes device initialization, Core queueing,
 GPU Wasm packing, dispatch, mapping, and differential comparison. Explicit GPU
 modes retain all conformance and production-GPU behavior.
 
+## Baba 7.10 GPU syntax boundary
+
+`benchmark:syntax` reuses the production GPU-only syntax session and compiled
+Blot plan, verifies all five compact arrays against a benchmark-only CPU oracle,
+and then measures five warm samples. On the RTX 4080 SUPER, runtime creation
+took 233.72 ms and plan compilation 94.63 ms; neither constant is included
+below. The production session has no CPU fallback.
+
+| Blot source | CPU oracle | owned GPU | resident submit | resident completion |
+| ----------: | ---------: | --------: | --------------: | ------------------: |
+| 605 B | 0.51 ms | 12.92 ms | 1.74 ms | 12.81 ms |
+| 10,550 B | 4.71 ms | 14.37 ms | 2.84 ms | 13.91 ms |
+| 186,215 B | 51.30 ms | 18.60 ms | 3.76 ms | 14.81 ms |
+| 797,000 B | 224.82 ms | 31.25 ms | 6.36 ms | 17.53 ms |
+
+Owned ingestion first wins in the measured set at 186,215 bytes and reaches a
+7.19x speedup at 797,000 bytes. Resident completion is not equivalent work: it
+does not map status or compact arrays and does not run host semantic recipes.
+The observed owned crossover is bracketed by 10,550 and 186,215 bytes; no
+automatic policy is inferred from four source sizes.
+
+The integrated gpupaper Blot path currently consumes owned GPU syntax for the
+closed `I64` let/return fragment and emits its Wasm on the GPU. One cold
+32-byte compile measured 531.08 ms runtime creation, 375.90 ms plan
+compilation, 134.70 ms owned syntax, 2.73 ms host payload lowering and Wasm
+planning, 317.93 ms GPU emission through a separately acquired runtime, and
+3.90 ms engine validation. It emitted 43 bytes and returned `42n`. This single
+profile is diagnostic rather than a distribution: setup, not the linear host
+lowering, is the measured small-input target. Resident payload lowering and a
+shared syntax/emission runtime remain unimplemented.
+
 ## Peer boundaries
 
 `benchmark:peers` isolates unlike compiler boundaries instead of presenting one
@@ -2193,17 +2224,18 @@ leaderboard:
 
 | Compiler | Boundary                            | Workload         |  Source |       p50 |       p95 |    Wasm |
 | -------- | ----------------------------------- | ---------------- | ------: | --------: | --------: | ------: |
-| gpupaper | Ducklang source to Wasm             | Binned grep      | 2,856 B | 157.86 ms | 191.92 ms | 3,911 B |
-| blot     | Blot source to Wasm through gpufuck | tour             | 4,275 B |     error |     error |       — |
-| gpufuck  | prepared Surface module to Wasm     | integer addition |    13 B |  11.98 ms |  12.54 ms |    37 B |
+| gpupaper | Ducklang source to Wasm             | Binned grep      | 2,856 B |  41.81 ms |  56.47 ms |  3,911 B |
+| blot     | Blot source to Wasm through gpufuck | tour             | 4,275 B | 204.11 ms | 292.96 ms | 38,985 B |
+| gpufuck  | prepared Surface module to Wasm     | integer addition |    13 B |   0.22 ms |   0.83 ms |    37 B |
 
 The gpufuck number excludes parsing, source semantics, and lowering and uses a
 much smaller program. The source-to-Wasm rows include those stages and compile
 different languages, so their absolute times describe their workloads rather
 than equivalent compiler throughput.
 
-The current Blot tour reaches gpufuck's Wasm backend and fails because
-`WasmCoreIndex.weakHeadNormalForms` is absent when `expressionIsWhnf` reads it.
-The peer harness records this external boundary as an error without discarding
-the independent gpupaper and prepared-gpufuck samples. Its previous successful
-Blot timing is no longer presented as current.
+These are 15-sample measurements of the current sibling working trees. Blot's
+checkout contains uncommitted backend work, so its successful result is evidence
+for the present integration boundary, not a commit-pinned historical baseline.
+Blot still parses through Baba's CPU Wasm cursor before lowering to gpufuck; the
+separate GPU syntax measurement above must not be added to or substituted for
+this source-to-Wasm row.

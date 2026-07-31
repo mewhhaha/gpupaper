@@ -76,12 +76,14 @@ Useful project commands are:
 
 ```sh
 deno task benchmark:frontend
+deno task benchmark:syntax
 deno task benchmark:rebuild
 deno task benchmark:break-even
 deno task benchmark:peers
 deno task experiments
 deno task run examples/all.hs
 deno task run examples/duck/06_functions_and_blocks.duck
+deno task run examples/blot/gpu_i64.blot
 ```
 
 The release gate runs formatting, linting, type checking, all CPU/GPU tests,
@@ -207,8 +209,19 @@ identity remains independent of those source names. This semantics permits
 lifetime-based physical reuse without exposing a shareable mutating reference.
 
 The canonical grammar is [grammar/duck.baba](grammar/duck.baba).
-`@mewhhaha/baba` 6.1.0 is pinned for deterministic parser generation and its
+`@mewhhaha/baba` 7.10.0 is pinned for deterministic parser generation and its
 standalone Wasm runtime. Generated parser artifacts are checked in.
+
+Duck's contextual token guards are outside Baba's strict GPU grammar profile, so
+Duck is not admitted by the GPU-only language path. Its existing complete Wasm
+parser is a transitional payload-lowering reference, not a fallback. The copied
+Blot grammar is guard-free and exercises Baba's GPU lexer, delimiter validator,
+island parser, and compact syntax allocation with exact accepted-output parity.
+Its closed `I64` let/return fragment consumes owned GPU syntax, lowers through a
+typed payload IR, and requires GPU Wasm emission. Resident syntax-to-payload
+lowering and the rest of Blot remain explicit future boundaries. Run
+`deno task benchmark:syntax`; CPU syntax exists only as a differential oracle
+outside the admitted production session.
 
 ## Deliberate boundaries
 

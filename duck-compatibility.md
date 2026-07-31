@@ -12,7 +12,7 @@ revision are recorded in [examples/binned/SOURCE.md](examples/binned/SOURCE.md).
 
 ## Enforced corpus contract
 
-The generated Baba 6 Wasm parser accepts all 121 vendored `.duck` files. The
+The generated Baba 7 Wasm parser accepts all 121 vendored `.duck` files. The
 semantic contract then classifies every file exactly once:
 
 - 94 success fixtures compile to Wasm and return every declared result;

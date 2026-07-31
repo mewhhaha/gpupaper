@@ -26,7 +26,7 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     !["compile", "run", "experiments"].includes(command)
   ) {
     throw new Error(
-      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--try-gpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
+      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck|file.blot> [output.wasm] [--cpu|--try-gpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
     );
   }
   const positional: string[] = [];
@@ -82,16 +82,24 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
   if (command === "compile" && positional[0] === file) {
     throw new Error(`compile output must differ from input ${file}`);
   }
+  const blotInput = file.endsWith(".blot");
+  if (blotInput && (rest.includes("--cpu") || rest.includes("--try-gpu"))) {
+    throw new Error(
+      `${file}: Blot compilation requires GPU syntax and GPU Wasm emission`,
+    );
+  }
   return {
     command: command as CliInvocation["command"],
     file,
     output: positional[0],
-    gpuMode: rest.includes("--require-gpu")
+    gpuMode: blotInput
+      ? "required"
+      : rest.includes("--require-gpu")
       ? "required"
       : rest.includes("--try-gpu")
       ? "optional"
       : "off",
-    gpuWasmVerification: rest.includes("--no-gpu-verification")
+    gpuWasmVerification: blotInput || rest.includes("--no-gpu-verification")
       ? "none"
       : "differential",
     hostInterfaceFile,
@@ -117,7 +125,7 @@ async function main(arguments_: readonly string[]): Promise<void> {
   });
 
   if (command === "compile") {
-    const output = outputArgument ?? file.replace(/\.(?:hs|duck)$/, "") +
+    const output = outputArgument ?? file.replace(/\.(?:hs|duck|blot)$/, "") +
         ".wasm";
     const inputPath = await Deno.realPath(file);
     const inputFile = await Deno.stat(inputPath);
@@ -214,6 +222,19 @@ async function experimentReport(
   mainResult: number | bigint,
   runGpuTypeExperiment: boolean,
 ): Promise<Record<string, unknown>> {
+  if (artifact.language === "blot") {
+    return {
+      languageToWasm: {
+        language: artifact.language,
+        bindings: artifact.core.bindings.length,
+        wasmBytes: artifact.wasm.length,
+        mainResult: typeof mainResult === "bigint"
+          ? mainResult.toString()
+          : mainResult,
+      },
+      timingsMilliseconds: artifact.timings,
+    };
+  }
   const gpuTypeResult = runGpuTypeExperiment
     ? await solveTypeEqualitiesOnGpu(artifact.inferred.equalities)
     : undefined;

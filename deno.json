@@ -14,15 +14,18 @@
     "run": "deno run --unstable-webgpu --allow-read src/cli.ts run",
     "experiments": "deno run --unstable-webgpu --allow-read src/cli.ts experiments examples/all.hs",
     "benchmark:frontend": "deno run --unstable-webgpu --allow-read scripts/benchmark_ducklang_frontend.ts",
+    "benchmark:syntax": "deno run --unstable-webgpu --allow-read scripts/benchmark_baba_gpu_syntax.ts",
     "benchmark:rebuild": "deno run --unstable-webgpu --allow-read --allow-write=/tmp scripts/benchmark_ducklang_rebuild.ts",
     "benchmark:break-even": "deno run --unstable-webgpu --allow-read scripts/benchmark_gpu_break_even.ts",
     "benchmark:wasm": "deno run --unstable-webgpu --allow-read scripts/benchmark_wasm_emission.ts",
     "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno scripts/benchmark_peer_compilers.ts",
     "release:gpu": "deno task check && deno task test && deno run --unstable-webgpu --allow-read scripts/release_gpu.ts",
-    "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_ducklang_parser.ts grammar/duck.baba grammar/duck.baba.json grammar/generated",
+    "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_baba_parser.ts ducklang grammar/duck.baba grammar/duck.baba.json grammar/generated",
+    "blot:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts blot grammar/blot/grammar.baba grammar/blot/baba.json grammar/blot/generated",
     "duck:contract": "deno run --allow-read --allow-write scripts/import_ducklang_contract.ts ../binned/examples/manifest.ts examples/binned/contract.json && deno fmt examples/binned/contract.json"
   },
   "imports": {
-    "@mewhhaha/baba": "jsr:@mewhhaha/baba@6.1.0"
+    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.10.0",
+    "@mewhhaha/baba/runtime/webgpu": "jsr:@mewhhaha/baba@7.10.0/runtime/webgpu"
   }
 }

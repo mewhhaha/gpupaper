@@ -83,7 +83,7 @@ export async function parseDucklangModuleWithTimings(
 
   const parserExecutionStart = performance.now();
   const result = parser.parse(classifiedSource, {
-    maxTraceActions: 10_000_000,
+    maxParserActions: 10_000_000,
   });
   const parserExecutionMilliseconds = performance.now() -
     parserExecutionStart;
