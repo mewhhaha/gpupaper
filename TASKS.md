@@ -1068,8 +1068,8 @@ Core receives no source handler or open effect row.
       atom.
 - [x] Reuse the private byte table for validated one-byte unsigned and signed
       LEB values while keeping exported mutable-array encoders fresh.
-- [x] Audit emission-local memoization of remaining multi-byte LEB encodings. An
-      88.75% frozen-batch hit rate still regressed every CPU-oracle median by
+- [x] Audit emission-local memoization of remaining multi-byte LEB encodings.
+      An 88.75% frozen-batch hit rate still regressed every CPU-oracle median by
       55.05–93.82%, so retain fresh encodings and record the rejected cost model
       and unsigned-128 counterexample.
 - [x] Replace the CPU oracle's per-atom encoding graph with width analysis and
@@ -1197,16 +1197,16 @@ CPU/GPU disagreement, or return partially written output.
 - [x] Derive the Core candidate frontier from the common structural head of the
       admitted rules. CPU discrimination checks only necessary representation
       facts; the GPU still decides constant identity, orientation, and
-      replacement. Frozen candidates fall from 3,788 to 1,242 without removing a
-      possible match.
-- [x] Make Core backend provenance disjoint. A host-proved empty frontier
-      reports `identity`, a submitted matcher reports `gpu`, and fallback
-      reports `cpu`. Raytracer no longer claims GPU Core execution after its
-      frontier became empty.
-- [x] Pack two resolved Wasm offsets per word exactly when the final module is
-      at most 65,535 bytes. Five frozen targets use lossless u16 boundaries;
-      Codex retains u32. Boundary tests pin both sides of the threshold and
-      profiles report the selected width.
+      replacement. Frozen candidates fall from 3,788 to 1,242 without removing
+      a possible match.
+- [x] Make Core backend provenance disjoint. A host-proved empty frontier reports
+      `identity`, a submitted matcher reports `gpu`, and fallback reports `cpu`.
+      Raytracer no longer claims GPU Core execution after its frontier became
+      empty.
+- [x] Pack two resolved Wasm offsets per word exactly when the final module is at
+      most 65,535 bytes. Five frozen targets use lossless u16 boundaries; Codex
+      retains u32. Boundary tests pin both sides of the threshold and profiles
+      report the selected width.
 - [x] Isolate real-plan Wasm emission measurement from frontend and backend
       lowering. The benchmark constructs each frozen plan once, warms the
       persistent GPU context, alternates target order, reports median and p95
@@ -1226,10 +1226,10 @@ CPU/GPU disagreement, or return partially written output.
       constructor witness per union-find class. Enqueue injective child
       equalities when witnessed classes merge, prove the witness-star invariant,
       and pin one comparison per additional compatible constructor.
-- [x] Remove differential type solving from production compilation after proving
-      that its result has no semantic or backend consumer. Keep the standalone
-      conformance experiment and generated tests; required GPU builds now spend
-      device work only on compiler stages whose output is consumed.
+- [x] Remove differential type solving from production compilation after
+      proving that its result has no semantic or backend consumer. Keep the
+      standalone conformance experiment and generated tests; required GPU builds
+      now spend device work only on compiler stages whose output is consumed.
 - [x] Remove differential scalar bytecode evaluation from production compilation
       under the same noninterference criterion. Keep the independent CPU
       scalar-versus-constant check and direct CPU/GPU conformance tests. Only
@@ -1253,9 +1253,9 @@ CPU/GPU disagreement, or return partially written output.
       retry a later compilation on a newly requested device. Every submitted
       readback races the device-loss promise and carries its reason and driver
       message. The shared device, Core, comptime, Wasm, and union caches all
-      discard state tied to a lost device. Required mode promotes unavailability
-      to failure; validation errors, semantic disagreement, and malformed GPU
-      output remain hard failures.
+      discard state tied to a lost device. Required
+      mode promotes unavailability to failure; validation errors, semantic
+      disagreement, and malformed GPU output remain hard failures.
 - [x] Separate production execution from differential verification.
       `gpuWasmVerification: "none"` lowers only a Wasm plan, lets GPU emission
       produce the first byte buffer, and encodes on CPU only if optional mode
@@ -1414,9 +1414,9 @@ resource cost, and corpus measurements.
 - [x] Decompose the residual source-control measure by constructor without an
       additional traversal. Prove the component sum and identify Codex's two
       residual nodes as ordinary loops.
-- [x] Separate residual occurrence multiplicity from source provenance. Prove
-      the quotient bounds and identify Codex's two residual occurrences as one
-      prelude-runtime source constructor.
+- [x] Separate residual occurrence multiplicity from source provenance.
+      Prove the quotient bounds and identify Codex's two residual occurrences
+      as one prelude-runtime source constructor.
 - [x] Separate residual occurrence paths from AST object identity. Reject the
       duplicate-instance hypothesis with Codex's `(2,1,1)`
       occurrence/vertex/source vector and bound safe memoization by context.
@@ -1426,15 +1426,15 @@ resource cost, and corpus measurements.
 - [x] Replace the residual outer-frontier count with full descent through
       source-control operands and bodies. Record the frontier counterexample,
       corrected Codex work, and nested-stagnation regression.
-- [x] Implement and measure exact topological DAG occurrence aggregation. Reject
-      its object-map overhead against the simple typed walk and retain the
-      break-even inequality for a future flat syntax IR.
+- [x] Implement and measure exact topological DAG occurrence aggregation.
+      Reject its object-map overhead against the simple typed walk and retain
+      the break-even inequality for a future flat syntax IR.
 - [x] Measure weak identity sets against ordinary sets in an A/B/A sequence.
       Reject the target-dependent result and prove that module ownership
       prevents a live-memory reduction.
 - [x] Re-rank the retained six-target CPU frontier by absolute stage cost.
-      Select Codex specialization rewrite as the next isolated target and record
-      its current cache and analysis work vector.
+      Select Codex specialization rewrite as the next isolated target and
+      record its current cache and analysis work vector.
 - [x] Audit the specialization function-analysis counter. Rename it as cache
       hits, prove its object-identity key is context independent, and add a
       focused reuse regression before pursuing the result-cache frontier.
@@ -1443,8 +1443,7 @@ resource cost, and corpus measurements.
       pending recursion, and derive the exact result-cache request partition.
 - [x] Test final specialization-expression identity memoization. Reject it with
       a 15-sample stage-specific median/MAD comparison and require substage
-      decisions to estimate the substage rather than reuse total-median
-      profiles.
+      decisions to estimate the substage rather than reuse total-median profiles.
 - [x] Measure recursive specialization rewrite entries without retaining a
       hot-path counter. Identify Codex's 8.07× rewrite amplification and show
       that its 1.46× residual-size growth does not explain the work alone.
@@ -1481,9 +1480,6 @@ resource cost, and corpus measurements.
 - [x] Measure exclusive rewrite entries per specialization request. Reject the
       uniform-key model after one Codex request accounts for 28.16% of
       substitution work, and remove the hot counters.
-- [x] Partition specialization requests at explicit work thresholds. Establish
-      that seven Codex requests contain 79.36% of exclusive rewrite work and
-      four contain 71.96%, then remove the hot counters.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
@@ -1500,18 +1496,18 @@ proof obligations from empirical timing evidence.
 The live targets have no remaining first-error boundary inside the admitted
 contract. Each former boundary now has an executable completion proof:
 
-| Boundary                    | Final state                                                                                                                                                                                                                                                                                                    |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Syntax                      | The generated parser accepts all 121 compatibility sources and all 35 frozen live sources. Exact and trailing-trivia revisions reuse the lowered AST and semantic fingerprint; earlier edits conservatively reparse.                                                                                           |
-| Modules and namespaces      | Canonical module instances preserve private captures, namespace projections, parameterized modules, and complete transitive declaration environments.                                                                                                                                                          |
-| Extensions and protocols    | Canonical receiver identities select same-file and cross-file implementations; missing, ambiguous, overlapping, and incoherent implementations fail before Core with receiver evidence.                                                                                                                        |
-| Staging                     | Scalars, products, sums, types, closures, and modules inhabit one `ConstValue` domain; specialization erases modules, protocols, extensions, type values, and compile-time closures before Core.                                                                                                               |
-| Control flow                | Shadowing, joins, early return, nested loops, carried values, valued exits, dynamic ranges, collection loops, and `continue` reach typed Core blocks and edges.                                                                                                                                                |
-| Primitives                  | Scalar, SIMD, buffer, UTF-8, conversion, reinterpretation, trap, and host operations use stable primitive IDs before flat Core.                                                                                                                                                                                |
-| Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                                                                                                   |
-| Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, canonical open rows, lexical capability identities, deep one-shot resumptions, capture-sensitive control linearity, selective lowering, and exact host-row closure validate before flattening.      |
-| ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.                                                                                     |
-| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, stable suballocated Core/Wasm payload batches, direct type-conformance and generated differential tests, concurrent isolation, and the six-application release gate are implemented and measured. |
+| Boundary                    | Final state                                                                                                                                                                                                                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Syntax                      | The generated parser accepts all 121 compatibility sources and all 35 frozen live sources. Exact and trailing-trivia revisions reuse the lowered AST and semantic fingerprint; earlier edits conservatively reparse.                                                                                      |
+| Modules and namespaces      | Canonical module instances preserve private captures, namespace projections, parameterized modules, and complete transitive declaration environments.                                                                                                                                                     |
+| Extensions and protocols    | Canonical receiver identities select same-file and cross-file implementations; missing, ambiguous, overlapping, and incoherent implementations fail before Core with receiver evidence.                                                                                                                   |
+| Staging                     | Scalars, products, sums, types, closures, and modules inhabit one `ConstValue` domain; specialization erases modules, protocols, extensions, type values, and compile-time closures before Core.                                                                                                          |
+| Control flow                | Shadowing, joins, early return, nested loops, carried values, valued exits, dynamic ranges, collection loops, and `continue` reach typed Core blocks and edges.                                                                                                                                           |
+| Primitives                  | Scalar, SIMD, buffer, UTF-8, conversion, reinterpretation, trap, and host operations use stable primitive IDs before flat Core.                                                                                                                                                                           |
+| Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                                                                                              |
+| Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, canonical open rows, lexical capability identities, deep one-shot resumptions, capture-sensitive control linearity, selective lowering, and exact host-row closure validate before flattening. |
+| ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.                                                                                |
+| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, stable suballocated Core/Wasm payload batches, direct type-conformance and generated differential tests, concurrent isolation, and the six-application release gate are implemented and measured.              |
 
 Deliberate exclusions are part of the contract rather than live errors:
 asynchronous, scoped, and multi-shot effects await their own typed calculi, and
