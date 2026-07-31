@@ -1507,6 +1507,9 @@ resource cost, and corpus measurements.
 - [x] Audit existing module, session, and structural identities for typed-body
       reuse. Derive a stable lexical-definition key and record why current
       typed functions lack sufficient provenance for cross-object templates.
+- [x] Derive invariant-region discovery work, span, and storage on flat HIR.
+      Keep it on CPU for the current object IR and measured 5,298-occurrence
+      body; reserve GPU frontier propagation for a future batched flat payload.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -5219,6 +5219,32 @@ is a separate representation feature, not a local cache patch. Until its
 invariants and differential tests exist, optimization remains bounded to object
 identity within one typed module.
 
+### 2026-07-31: invariant discovery is currently a CPU preparation pass
+
+Review 83 derives the execution boundary for Review 81. On a flat expression
+DAG with reverse edges, dependency marking is a Boolean data-flow problem:
+parameter references seed a frontier, parents receive logical OR, and compaction
+produces maximal invariant roots. Work is \(O(V+E)\); level-synchronous span is
+\(O(h)\), or \(O(\log V)\) for tree contraction with greater constants. Storage
+is one dependency bit per vertex plus frontier and reverse-edge arrays.
+
+The implementation does not yet have that flat payload. Typed Ducklang uses
+object variants and child arrays, so GPU discovery would first serialize every
+node and edge, allocate reverse adjacency, submit kernels, and read or retain a
+new index mapping. The largest measured encoder body has only 5,298 occurrences
+(about 663 packed dependency bytes), while current isolated GPU emission has a
+roughly 27--28 ms small-job floor. Even zero-cost device propagation cannot
+repay that boundary for one body when the entire CPU rewrite stage is about
+70 ms and discovery is only its prerequisite.
+
+Therefore invariant analysis, if implemented before flat HIR exists, belongs in
+the existing CPU function analysis and emits compact root annotations consumed
+by rewriting. A future flat HIR can reuse the same monotone equation on GPU when
+many bodies are batched; the break-even condition is
+\(T_{serialize}+T_{submit}+T_{readback}<T_{CPU-mark}-T_{GPU-mark}\). Current
+measurements provide no positive right-hand margin, so GPU offload is an
+unverified future hypothesis rather than part of this optimization.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
