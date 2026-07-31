@@ -1501,6 +1501,9 @@ resource cost, and corpus measurements.
 - [x] Measure the rejected epoch cache's hit rate. Close dynamic identity
       memoization after Codex reaches at most 3.74% hits and must repay 26.73
       lookups per hit.
+- [x] Specify maximal invariant specialization regions with a semantic body and
+      captured-environment key. Derive safety by free-variable induction and
+      quantify the encoder's source-level reuse ceiling.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

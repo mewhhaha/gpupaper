@@ -5166,6 +5166,33 @@ invert the domain: they pay a branch at candidate roots rather than a map lookup
 at all entries. The cache and counters were removed; the evidence closes dynamic
 identity memoization for this corpus.
 
+### 2026-07-31: invariant regions require semantic environment keys
+
+Review 81 specifies, but does not implement, a specialization invariant-region
+primitive. For body occurrence \(n\), parameter set \(P\), captured value map
+\(\rho\), and substitution \(\sigma\), define
+\(dependent(n)=FV(n)\cap P\ne\varnothing\). A maximal invariant region is a node
+with `dependent = false` whose parent is dependent or absent. Its reusable key
+is `(body semantic identity, region index, captured-environment identity)`.
+Source span alone is excluded: equal spans in parameterized module instances
+can denote closures with different captures.
+
+The lowering computes dependency bits bottom-up, compacts maximal roots, and
+rewrites each root once under \(\rho\). Request rewriting treats the cached
+result as an immutable leaf and traverses dependent regions normally. By
+structural induction, substitution cannot alter an invariant root because none
+of its free references belongs to \(P\); equality of captured-environment
+identity supplies equal values for the remaining free references. Unique typed
+symbol IDs discharge shadowing. Nested specialization remains inside the cached
+root's one-time rewrite and must use the same captured key.
+
+With \(V\) body occurrences and \(K\) requests sharing the key, analysis costs
+\(O(V)\) once and stores one bit plus compacted roots. The maximum traversal
+saving is \((K-1)(V-D)\), where \(D\) is dependent occurrences. For the two
+encoder requests, this source-level ceiling is 5,286 avoided occurrences for
+about 663 bytes of dependency bits before packing. Generated rewrite work may
+raise the benefit, but only an implementation experiment can establish it.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
