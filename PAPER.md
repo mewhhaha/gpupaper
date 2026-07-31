@@ -825,14 +825,24 @@ The search predicate is an exhaustive typed walk over the source AST:
 \texttt{forCollection}\}.
 \]
 
+A matching constructor contributes one and traversal continues through its
+body and control operands. Stopping at a match would count only the outer
+frontier \(F(M)\). That is not a decreasing measure: one outer loop containing
+two inner loops gives \(|F(M)|=1\), while removing only the outer loop exposes a
+frontier of size two. The complete occurrence count \(\mu(M)=3\) instead
+decreases to two. This counterexample requires full descent even when a target
+has already been found.
+
 The earlier reflective walk traversed every enumerable JavaScript field,
 including spans, names, and type metadata. The typed walk enumerates every
 statement and expression constructor and follows exactly its syntax-bearing
 children. Structural induction on those constructors establishes predicate
-equivalence: a target constructor returns immediately; otherwise the induction
-hypothesis applies to every and only syntax child. Metadata is excluded by its
-static type and cannot contain a `DucklangExpression` or `DucklangStatement`.
-An exhaustive `never` branch makes a future unhandled constructor a type error.
+equivalence: a target constructor contributes itself and the induction
+hypothesis applies to every syntax child; every other constructor contributes
+zero and likewise follows every and only syntax child. Metadata is excluded by
+its static type and cannot contain a `DucklangExpression` or
+`DucklangStatement`. An exhaustive `never` branch makes a future unhandled
+constructor a type error.
 
 For \(P\) transformations, \(N_i\) input nodes in round \(i\), and \(S_i\)
 objects visited by the following search, work is
@@ -4509,8 +4519,10 @@ boundary before sharing transformed output.
 
 ### 2026-07-31: complete syntax sharing is measured
 
-Review 54 extends the first-pass report from residual targets to the entire
-post-transformation syntax DAG. The frozen occurrence/vertex pairs are Editor
+Review 54 extended the first-pass report from residual targets to the entire
+post-transformation syntax DAG. Its then-current scanner stopped below residual
+targets, so these measurements are retained as frontier-pruned evidence and
+superseded by Review 55. The recorded occurrence/vertex pairs were Editor
 3,528/3,188, Codex 22,103/12,231, grep 1,193/934, Tar 6,083/1,375, wav
 317/317, and raytracer 578/578. The respective redundant occurrence counts are
 340, 9,872, 259, 4,708, zero, and zero; the corresponding sharing factors
@@ -4527,6 +4539,30 @@ The same instrumented run measured CPU control-flow representatives of 1.312,
 435.759, 11.526, 65.554, 5.779, and 9.584 ms. The identity set is itself new
 work, so these are baselines for the next algorithm rather than an improvement
 claim.
+
+### 2026-07-31: residual search descends through source control
+
+Review 55 finds that the residual scanner's three target cases counted a match
+and stopped instead of traversing the target's operands and body. Section 6.5
+now distinguishes the invalid outer-frontier measure from the complete syntax
+occurrence measure and gives the `one outer containing two inner`
+counterexample.
+
+The scanner now follows a loop body, range start/end/optional-step/body, and
+collection/body after counting the constructor. A regression builds two nested
+unsupported refutable collection loops. Their second pass diagnoses
+`forCollection count from 2 to 2`; the former scanner reported only one. This
+is executable validation of full descent and stagnation, while strict decrease
+for all admitted lowering shapes remains a dynamically checked invariant.
+
+Five corpus targets are unchanged because no residual target remains after
+pass one. Codex changes from 22,103/12,231 to 22,177/12,248 search
+occurrences/vertices, exposing 74 occurrence visits and 17 vertices inside the
+shared residual loop. Its residual vector remains two occurrences, one vertex,
+and one source. Contemporary CPU control-flow representatives were 1.180,
+60.108, 0.247, 0.369, 0.125, and 0.597 ms; CPU total medians were 80.157,
+422.822, 11.636, 60.740, 4.964, and 9.425 ms. The change is semantic
+measurement repair, not a speed claim.
 
 ## References
 

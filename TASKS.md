@@ -1423,6 +1423,9 @@ resource cost, and corpus measurements.
 - [x] Measure complete first-pass syntax occurrences and unique AST vertices.
       Quantify sharing per target and derive the vertex-memoized search
       opportunity without assuming a universal benefit.
+- [x] Replace the residual outer-frontier count with full descent through
+      source-control operands and bodies. Record the frontier counterexample,
+      corrected Codex work, and nested-stagnation regression.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -266,7 +266,7 @@ costs expected \(O(r_1)\) work and \(O(u_1)\) storage. It supplies the boundary
 for a possible memoized homomorphism; object-only memoization is not yet valid
 for context-sensitive control lowering.
 
-Complete first-pass search sharing is now measured:
+Review 54 initially measured complete first-pass search sharing as follows:
 
 | Target | Occurrences | Vertices | Redundant visits | Sharing factor |
 | ------ | ----------: | -------: | ---------------: | -------------: |
@@ -282,6 +282,15 @@ summary could bound structural work by \(O(V+E)\), but lookup and multiplicity
 aggregation remain. Instrumented control-flow representatives were 1.312,
 56.944, 0.237, 0.414, 0.191, and 0.373 ms. These are the next baseline, not a
 speedup claim.
+
+Review 55 found that the search stopped below residual source-control nodes.
+That table is therefore frontier-pruned, not complete. Full descent leaves five
+targets unchanged and corrects Codex to 22,177 occurrences, 12,248 vertices,
+9,929 redundant visits, and a 1.81× sharing factor. The additional 74
+occurrences and 17 vertices are the shared residual loop's body. Corrected
+control-flow representatives were 1.180, 60.108, 0.247, 0.369, 0.125, and
+0.597 ms. A nested-refutable-loop regression observes both residual
+constructors and rejects stagnation as `2→2`.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

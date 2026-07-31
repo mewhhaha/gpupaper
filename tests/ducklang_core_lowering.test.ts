@@ -6,7 +6,10 @@ import {
   lowerDucklangToCore,
   validateDucklangCore,
 } from "../src/ducklang_core.ts";
-import { lowerDucklangControlFlow } from "../src/ducklang_control_flow.ts";
+import {
+  lowerDucklangControlFlow,
+  lowerDucklangControlFlowWithMetrics,
+} from "../src/ducklang_control_flow.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
@@ -525,6 +528,28 @@ Deno.test("Core replaces a dynamic range recursion with header and exit edges", 
   );
   assertEquals(exits.length, 1);
   assertEquals(exits[0].parameters.length, 1);
+});
+
+Deno.test("control-flow descent counts nested unsupported loops", async () => {
+  const parsed = await parseDucklangModule(
+    "nested_refutable_loops.duck",
+    "type Maybe = | `Some I32 | `None Unit\nlet values = [`Some 1]\nfor outer_index, `Some outer in values {\n  for inner_index, `Some inner in values {\n    ()\n  }\n}\n",
+  );
+
+  try {
+    lowerDucklangControlFlowWithMetrics(parsed);
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message.includes(
+        "did not decrease residual forCollection count from 2 to 2",
+      )
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("nested refutable loops unexpectedly reached Core lowering");
 });
 
 async function lower(

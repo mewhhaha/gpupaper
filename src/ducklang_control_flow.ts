@@ -150,6 +150,7 @@ function sourceControlFlowSummary(
         loopCount += 1;
         count += 1;
         first ??= current;
+        pending.push(current.body);
         break;
       case "forRange":
         distinctNodes.add(current);
@@ -157,6 +158,8 @@ function sourceControlFlowSummary(
         rangeCount += 1;
         count += 1;
         first ??= current;
+        pending.push(current.start, current.end, current.body);
+        if (current.step !== undefined) pending.push(current.step);
         break;
       case "forCollection":
         distinctNodes.add(current);
@@ -164,6 +167,7 @@ function sourceControlFlowSummary(
         collectionCount += 1;
         count += 1;
         first ??= current;
+        pending.push(current.collection, current.body);
         break;
       case "binding":
       case "assignment":
