@@ -1024,6 +1024,10 @@ Core receives no source handler or open effect row.
 - [x] Pack two byte-rank boundaries per word exactly when the maximum stored
       rank fits u16. Five frozen targets halve the rank frontier; Codex retains
       u32. Direct boundary tests distinguish a 65,535 maximum from 65,536.
+- [x] Assemble adjacent u16 offsets and byte ranks before assigning their
+      physical word. Pairwise-disjoint half-word masks reduce host stores to the
+      exact physical word count instead of read/modify/writing once per logical
+      value.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

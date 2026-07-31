@@ -1128,8 +1128,11 @@ P(A, p_A) = 4 ceil((A + 1) / 2)  when p_A <= 65535
 
 The narrow representation adds two shifts, one mask, and one shared word load
 per boundary lookup; the host packing loop is \(O(A)\) and requires no new pass
-or synchronization. Output capacity is exactly \(4\lceil B/4\rceil\), and
-readback contains only that output.
+or synchronization. Adjacent half words are assembled in a scalar and assigned
+once, so host offset-vector stores equal the physical
+\(\lceil(A+1)/2\rceil\) words rather than the \(A+1\) logical boundaries.
+Output capacity is exactly \(4\lceil B/4\rceil\), and readback contains only
+that output.
 
 The kind domain has five inhabitants. It is represented as eight four-bit tags
 per `u32`:
@@ -1236,7 +1239,8 @@ representation; byte counting is fused into that pass. Rank construction and
 packing remain \(O(A)\). Ranked GPU lookup now has four constant shifts, three
 ORs, three masks/complements, and one population count rather than zero to seven
 data-dependent tag comparisons. Rank lookup adds one shift and mask on the
-16-bit path. Five frozen targets use 16-bit ranks; Codex uses 32. Relative to
+16-bit path. Its two adjacent ranks are likewise assembled before one physical
+word store. Five frozen targets use 16-bit ranks; Codex uses 32. Relative to
 dense low words, adaptive ranking removes 3,856–245,336 bytes and 14.14–25.05%
 of complete atom input. A 21-pair counterbalanced experiment measured
 ranked/dense median ratios from 0.9771 to 1.0015, so no latency improvement is
@@ -2858,6 +2862,23 @@ masks and every atom variant remain covered by GPU/CPU differentials. The exact
 required-GPU gate passed 501 tests. Paired target samples in milliseconds were
 Editor 344.68/227.20, Codex 951.33/803.70, grep 131.24/134.15, Tar
 201.21/185.90, wav 115.76/108.91, and raytracer 96.58/92.49.
+
+### 2026-07-31: packed u16 pairs commit once
+
+The u16 output-offset and byte-rank packers still used one typed-array
+read/modify/write per logical value. Their low and high half-word masks are
+disjoint, so the same local-accumulation lemma as kind packing applies.
+Section 7.4 now assigns each completed pair once.
+
+This removes 1,394–13,457 derived host stores from the five narrow frozen
+plans. Codex's two u32 vectors remain zero-copy/direct and remove no work.
+Capacity, transfer, bindings, GPU instructions, and output bytes are unchanged.
+The exact offset-width, rank-width, 256-mask, and CPU/GPU byte differentials
+exercise odd and even physical-word tails. The post-change ranked/dense median
+ratios are 0.9974–1.0026, detecting no material latency change. The required-GPU
+gate passed 501 tests. Paired target samples in milliseconds were Editor
+333.60/232.86, Codex 931.34/781.89, grep 132.36/128.21, Tar 196.53/178.44,
+wav 110.98/109.15, and raytracer 98.65/91.83.
 
 ## References
 

@@ -532,11 +532,11 @@ function prepareWasmGpuJob(
     for (
       let offsetIndex = 0;
       offsetIndex < analysis.atomByteOffsets.length;
-      offsetIndex += 1
+      offsetIndex += 2
     ) {
-      atomByteOffsets[offsetIndex >> 1] |=
-        analysis.atomByteOffsets[offsetIndex] <<
-        ((offsetIndex & 1) << 4);
+      const upper = analysis.atomByteOffsets[offsetIndex + 1] ?? 0;
+      atomByteOffsets[offsetIndex >> 1] =
+        analysis.atomByteOffsets[offsetIndex] | (upper << 16);
     }
   }
   return {
@@ -898,11 +898,16 @@ function atomColumns(
   let nonByteIndex = 0;
   let signed64Index = 0;
   let kindWord = 0;
+  let byteRankWord = 0;
   for (const [index, atom] of atoms.entries()) {
     if (lowWordLayout === "ranked" && (index & 7) === 0) {
       const rankIndex = index >> 3;
       if (byteRankBitWidth === 16) {
-        byteRanks[rankIndex >> 1] |= byteIndex << ((rankIndex & 1) << 4);
+        byteRankWord |= byteIndex << ((rankIndex & 1) << 4);
+        if ((rankIndex & 1) === 1 || rankIndex + 1 === byteRankCount) {
+          byteRanks[rankIndex >> 1] = byteRankWord;
+          byteRankWord = 0;
+        }
       } else {
         byteRanks[rankIndex] = byteIndex;
       }

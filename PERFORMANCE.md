@@ -564,6 +564,25 @@ pin maximum ranks 65,535 and 65,536 to 16 and 32 bits respectively. The exact
 representation passed the 501-test required-GPU gate and compiled every frozen
 target twice.
 
+The first packer still read/modified/wrote each physical u16 word once per
+logical value. Building each disjoint low/high pair locally reduces derived host
+stores without changing capacity:
+
+| Target    | Offset stores before → after | Rank stores before → after | Stores removed |
+| --------- | ---------------------------: | -------------------------: | -------------: |
+| Editor    |              23,924 → 11,962 |             2,991 → 1,496 |         13,457 |
+| Codex     |                 zero-copy u32 |                direct u32 |              0 |
+| grep      |                3,898 → 1,949 |                 488 → 244 |          2,193 |
+| tar       |              22,202 → 11,101 |             2,776 → 1,388 |         12,489 |
+| wav       |                2,478 → 1,239 |                 310 → 155 |          1,394 |
+| raytracer |                3,852 → 1,926 |                 482 → 241 |          2,167 |
+
+These are exact construction-work counts. Transfer, GPU work, and output are
+unchanged. Post-change ranked/dense median ratios were 0.9974–1.0026 across the
+six targets, again detecting no material emitter-latency change. The exact
+pair-store implementation passed the 501-test required-GPU gate and compiled
+every frozen target twice.
+
 ### Compacted Core rewrite frontier
 
 The current rewrite rules can match only `scalarBinary` operations. Dispatching
