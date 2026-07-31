@@ -64,6 +64,25 @@ Deno.test("flat Ducklang Core validation rejects a cross-function operand", asyn
   );
 });
 
+Deno.test("flat Ducklang Core validation rejects a gap in packed ranges", async () => {
+  const flat = flattenDucklangCore(
+    await lower(
+      "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
+    ),
+  );
+  const operandStarts = flat.operationOperandStarts.slice();
+  operandStarts[0] = 1;
+
+  assertThrows(
+    () =>
+      validateFlatDucklangCore({
+        ...flat,
+        operationOperandStarts: operandStarts,
+      }),
+    /operation operand 0 starts at 1; expected contiguous start 0/,
+  );
+});
+
 Deno.test("flat Ducklang Core validation rejects a falsified physical layout", async () => {
   const flat = flattenDucklangCore(
     await lower("let pair = [20, 22]\npair[0] + pair[1]\n"),

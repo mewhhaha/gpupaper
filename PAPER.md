@@ -775,6 +775,74 @@ closure, Core rewrites and Wasm plans, and the six-target required-GPU release
 gate. These establish implementation behavior for tested inputs; they do not
 prove arbitrary kernels correct.
 
+### 7.2 Flat Core representation
+
+The GPU boundary uses schema-versioned structure-of-arrays storage. Entity IDs
+are dense `u32` indices. A semantic record such as an operation is split into
+equal-length columns for its block, opcode, result, result type, operand range,
+attribute range, and source location. Variable-arity relations use a parent
+range table and one packed payload column.
+
+For parent rows `i ∈ [0,n)` with starts `sᵢ`, counts `cᵢ`, and a packed payload
+of length `m`, validity requires:
+
+```text
+s₀ = 0
+sᵢ₊₁ = sᵢ + cᵢ
+sₙ₋₁ + cₙ₋₁ = m
+```
+
+Thus the ranges form an ordered disjoint partition: they contain no overlap,
+gap, or unowned suffix. Empty relations use `n = m = 0`. This representation is
+used for type payloads, signature parameters, function blocks, block parameters,
+block operations, operation operands and attributes, terminator edges and
+returns, edge arguments, and layout components.
+
+Structural validation establishes all of the following before a package is
+branded as trusted:
+
+1. every column for one entity has equal length;
+2. every range family satisfies the partition equation;
+3. every ID is inside its target table;
+4. function block ranges preserve dense source order and contain their entry;
+5. every block owns exactly one same-index terminator;
+6. each `(function_id, local_value_id)` pair is unique and has exactly one
+   parameter or operation definition;
+7. operands, terminator values, edge arguments, and edge targets remain inside
+   their function;
+8. type, operation, terminator, attribute, and layout discriminants are known;
+9. source spans have valid file IDs and `start ≤ end`; and
+10. independently recomputed physical layouts equal the encoded layouts.
+
+Inflation then reconstructs semantic Core, invokes the semantic Core validator,
+and checks layouts again. For a valid semantic module `M`, the intended
+round-trip property is:
+
+```text
+inflate(flatten(M)) = M
+```
+
+where equality includes source order, provenance, types, block/value identity,
+and layout. The current test suite validates this property on representative
+closures, control flow, values, and layouts and separately checks deterministic
+columns. This is executable conformance evidence, not a universal proof of the
+serializer.
+
+Let `U(P)` be the multiset of `Uint32Array` columns and `S(P)` the string-byte
+column. The exact payload storage occupied by the flat package, excluding
+JavaScript object headers, is:
+
+```text
+B_flat(P) = |S(P)| + 4 Σa∈U(P) |a|
+```
+
+The three scalar header words are supplied separately. GPU stages upload only
+the columns they consume and may add validation, proposal, metadata, uniform,
+and readback buffers, so `B_flat` is a lower bound on a stage's device
+allocation, not its allocation formula. Each stage calculates those additional
+bytes explicitly and checks both individual binding limits and device buffer
+limits before allocation.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
