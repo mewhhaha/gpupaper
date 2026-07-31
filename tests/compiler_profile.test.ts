@@ -55,6 +55,14 @@ add(20, 22)
     details.typeInferenceMilliseconds + details.typeReflectionMilliseconds,
     "type analysis",
   );
+  assertContains(
+    stages.cpuCoreRewriteMilliseconds,
+    details.cpuCoreValidationMilliseconds +
+      details.cpuCoreMatchingMilliseconds +
+      details.cpuCoreConflictResolutionMilliseconds +
+      details.cpuCoreRebuildMilliseconds,
+    "CPU Core rewrite",
+  );
   if (stages.gpuCorePassMilliseconds !== 0) {
     throw new Error(
       `CPU compilation reported ${stages.gpuCorePassMilliseconds}ms of GPU Core work`,

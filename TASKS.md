@@ -1369,6 +1369,9 @@ resource cost, and corpus measurements.
 - [x] Reuse the retained structured Core round-trip witness when rewrite returns
       the exact package produced by flattening. Identity profiles report zero
       inflation; transformed packages remain on the validated inflation path.
+- [x] Decompose CPU Core rewrite into validation, matching, conflict resolution,
+      and rebuild intervals. The profile containment invariant and frozen
+      measurements identify validation—not matching—as the remaining cost.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

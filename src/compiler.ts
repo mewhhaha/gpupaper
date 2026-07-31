@@ -191,6 +191,10 @@ export type DucklangCompilationTimingDetails = {
   readonly postSpecializationLiftingMilliseconds: number;
   readonly postSpecializationReachabilityMilliseconds: number;
   readonly postSpecializationAccountingMilliseconds: number;
+  readonly cpuCoreValidationMilliseconds: number;
+  readonly cpuCoreMatchingMilliseconds: number;
+  readonly cpuCoreConflictResolutionMilliseconds: number;
+  readonly cpuCoreRebuildMilliseconds: number;
   readonly gpuCoreInitializationMilliseconds: number;
   readonly gpuCoreQueueWaitMilliseconds: number;
   readonly gpuWasmQueueWaitMilliseconds: number;
@@ -1097,6 +1101,10 @@ async function elaborateDucklangModuleSource(
           postComptimeSpecialization?.timings.reachabilityMilliseconds ?? 0,
         postSpecializationAccountingMilliseconds:
           postComptimeSpecialization?.timings.accountingMilliseconds ?? 0,
+        cpuCoreValidationMilliseconds: 0,
+        cpuCoreMatchingMilliseconds: 0,
+        cpuCoreConflictResolutionMilliseconds: 0,
+        cpuCoreRebuildMilliseconds: 0,
         gpuCoreInitializationMilliseconds: 0,
         gpuCoreQueueWaitMilliseconds: 0,
         gpuWasmQueueWaitMilliseconds: 0,
@@ -1376,6 +1384,10 @@ async function compileDucklangModuleSource(
             postSpecializationLiftingMilliseconds: 0,
             postSpecializationReachabilityMilliseconds: 0,
             postSpecializationAccountingMilliseconds: 0,
+            cpuCoreValidationMilliseconds: 0,
+            cpuCoreMatchingMilliseconds: 0,
+            cpuCoreConflictResolutionMilliseconds: 0,
+            cpuCoreRebuildMilliseconds: 0,
             gpuCoreInitializationMilliseconds: 0,
             gpuCoreQueueWaitMilliseconds: 0,
             gpuWasmQueueWaitMilliseconds: 0,
@@ -1469,6 +1481,10 @@ async function compileDucklangModuleSource(
   let cpuCoreRewriteMilliseconds = 0;
   let cpuCoreRewriteProposalCount = 0;
   let cpuCoreRewriteAcceptedCount = 0;
+  let cpuCoreValidationMilliseconds = 0;
+  let cpuCoreMatchingMilliseconds = 0;
+  let cpuCoreConflictResolutionMilliseconds = 0;
+  let cpuCoreRebuildMilliseconds = 0;
   if (gpuCoreResult?.status === "completed") {
     optimizedFlatCore = gpuCoreResult.package;
   } else {
@@ -1477,6 +1493,11 @@ async function compileDucklangModuleSource(
     optimizedFlatCore = coreRewrite.package;
     cpuCoreRewriteProposalCount = coreRewrite.proposals.length;
     cpuCoreRewriteAcceptedCount = coreRewrite.accepted.length;
+    cpuCoreValidationMilliseconds = coreRewrite.timings.validationMilliseconds;
+    cpuCoreMatchingMilliseconds = coreRewrite.timings.matchingMilliseconds;
+    cpuCoreConflictResolutionMilliseconds =
+      coreRewrite.timings.conflictResolutionMilliseconds;
+    cpuCoreRebuildMilliseconds = coreRewrite.timings.rebuildMilliseconds;
     cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
   }
 
@@ -1559,6 +1580,10 @@ async function compileDucklangModuleSource(
     stages,
     details: {
       ...frontend.profile.details,
+      cpuCoreValidationMilliseconds,
+      cpuCoreMatchingMilliseconds,
+      cpuCoreConflictResolutionMilliseconds,
+      cpuCoreRebuildMilliseconds,
       gpuCoreInitializationMilliseconds: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.initializationMilliseconds
         : 0,

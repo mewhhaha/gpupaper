@@ -20,6 +20,14 @@ export type DucklangCoreRewriteResult = {
   readonly package: FlatDucklangCore;
   readonly proposals: readonly DucklangCoreRewriteProposal[];
   readonly accepted: readonly DucklangCoreRewriteProposal[];
+  readonly timings: DucklangCoreRewriteTimings;
+};
+
+export type DucklangCoreRewriteTimings = {
+  readonly validationMilliseconds: number;
+  readonly matchingMilliseconds: number;
+  readonly conflictResolutionMilliseconds: number;
+  readonly rebuildMilliseconds: number;
 };
 
 export type DucklangCoreRewriteCommit = {
@@ -36,25 +44,46 @@ const absentFlatId = 0xffff_ffff;
 export function rewriteFlatDucklangCore(
   snapshot: FlatDucklangCore,
 ): DucklangCoreRewriteResult {
+  const validationStart = performance.now();
   validateFlatDucklangCore(snapshot);
+  const validationMilliseconds = performance.now() - validationStart;
+  const matchingStart = performance.now();
   const proposals = proposeValidatedDucklangCoreRewrites(snapshot);
+  const matchingMilliseconds = performance.now() - matchingStart;
+  const conflictResolutionStart = performance.now();
   const accepted = resolveValidatedDucklangCoreRewriteConflicts(
     snapshot,
     proposals,
   );
+  const conflictResolutionMilliseconds = performance.now() -
+    conflictResolutionStart;
   if (accepted.length === 0) {
     return {
       package: snapshot,
       proposals,
       accepted,
+      timings: {
+        validationMilliseconds,
+        matchingMilliseconds,
+        conflictResolutionMilliseconds,
+        rebuildMilliseconds: 0,
+      },
     };
   }
+  const rebuildStart = performance.now();
   const rewritten = rebuildValidatedFlatDucklangCore(snapshot, accepted);
   validateFlatDucklangCore(rewritten);
+  const rebuildMilliseconds = performance.now() - rebuildStart;
   return {
     package: rewritten,
     proposals,
     accepted,
+    timings: {
+      validationMilliseconds,
+      matchingMilliseconds,
+      conflictResolutionMilliseconds,
+      rebuildMilliseconds,
+    },
   };
 }
 

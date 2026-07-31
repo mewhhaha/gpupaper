@@ -1217,6 +1217,30 @@ Codex's correctness samples were 754.22 and 536.71 ms; Tar's transformed path
 was 140.31 and 129.36 ms. Both outputs remained byte-identical to CPU emission
 and passed engine validation.
 
+### CPU Core rewrite decomposition
+
+The CPU profile now separates flat input validation, rule matching, conflict
+resolution, and nonempty rebuild. The following are seven-sample warm medians
+after one unrecorded warmup:
+
+| Target | Rewrite | Input validation | Matching | Resolution | Rebuild | Accepted |
+| ------ | ------: | ---------------: | -------: | ---------: | ------: | -------: |
+| Editor | 3.857 ms | 3.835 ms | 0.024 ms | 0.002 ms | 0 | 0 |
+| Codex | 34.860 ms | 34.708 ms | 0.147 ms | 0.002 ms | 0 | 0 |
+| grep | 0.490 ms | 0.486 ms | 0.002 ms | 0.001 ms | 0 | 0 |
+| Tar | 10.059 ms | 4.993 ms | 0.028 ms | 0.019 ms | 4.825 ms | 24 |
+| wav | 0.332 ms | 0.327 ms | 0.003 ms | 0.001 ms | 0 | 0 |
+| raytracer | 0.525 ms | 0.516 ms | 0.007 ms | 0.001 ms | 0 | 0 |
+
+Codex validation is 99.56% of the rewrite median; matching is 0.42%. Tar proves
+that rebuild remains necessary when proposals are accepted. The data rejects
+matcher parallelization as the next frozen-corpus CPU priority. It does not
+justify removing validation: that requires an independently stated trust model
+or a cheaper validator preserving the same invariants.
+
+The 508-test required-GPU gate passed with all profile containment checks and
+compiled each frozen target twice with byte-identical, engine-valid output.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and

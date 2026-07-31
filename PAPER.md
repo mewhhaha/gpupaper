@@ -1188,6 +1188,19 @@ that work. Initial validation and proposal matching remain
 \(O(B_{\mathrm{flat}}+O)\), so an empty accepted set does not imply an empty
 matcher frontier or a zero-cost pass.
 
+CPU profiles decompose this remaining pass into validation, matching, conflict
+resolution, and nonempty rebuild. These intervals are disjoint children of the
+enclosing rewrite stage; instrumentation overhead and call boundaries remain in
+the enclosing remainder. A profile is consistent when:
+
+```text
+validation + matching + resolution + rebuild <= CPU rewrite
+```
+
+Proposal and acceptance counts accompany the timings. This distinction is
+necessary because \(C\ne\varnothing\), proposals \(=\varnothing\), and
+acceptances \(=\varnothing\) describe different proofs and different work.
+
 Executable evidence checks CPU/GPU proposal equality, immutable rebuild,
 multi-step replacement, floating-point exclusion, and rejection of a
 structurally valid but semantically false certificate. A separate regression
@@ -3677,6 +3690,33 @@ The required-GPU gate passed all 508 tests. Its two byte-identical, validated
 samples in milliseconds were Editor 283.09/170.11, Codex 754.22/536.71, grep
 70.24/70.17, Tar 140.31/129.36, wav 62.45/60.98, and raytracer 44.21/42.18.
 They are correctness observations rather than a second timing experiment.
+
+### 2026-07-31: CPU Core rewrite is decomposed
+
+The enclosing CPU rewrite timer could no longer distinguish matcher work from
+flat-package validation. The result and artifact profiles now expose four
+disjoint intervals: input validation, proposal matching, conflict resolution,
+and rebuild plus successor validation. A containment regression prevents their
+sum from exceeding the enclosing stage, and zero accepted batches report
+exactly zero rebuild time.
+
+Seven warm observations after one unrecorded warmup show that input validation
+accounts for 34.708 of Codex's 34.860 ms median rewrite stage (99.56%).
+Matching takes 0.147 ms, conflict resolution 0.002 ms, and rebuild zero. Tar is
+the counterexample: its 24 accepted rewrites divide the 10.059 ms stage between
+4.993 ms input validation and 4.825 ms rebuild, with 0.028 ms matching and
+0.019 ms conflict resolution. These are empirical medians; the interval
+containment and zero-rebuild identity are executable invariants.
+
+The measurement falsifies CPU matcher parallelism as the next material target
+for the frozen corpus. The next review must instead justify either a cheaper
+flat validator or a stronger by-construction trust boundary; simply deleting
+validation would weaken the accepted-package theorem.
+
+The 508-test required-GPU gate passed with the decomposed profile. Its paired
+correctness samples in milliseconds were Editor 286.78/173.54, Codex
+743.25/523.55, grep 72.04/67.27, Tar 136.11/129.56, wav 62.60/60.85, and
+raytracer 43.84/40.63.
 
 ## References
 
