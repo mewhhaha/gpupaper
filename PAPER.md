@@ -766,10 +766,11 @@ Whole compilation also includes CPU parsing, semantic lowering, flattening, Wasm
 planning, ABI construction, and final validation. Consequently a faster kernel
 does not imply a faster compilation. `gpu_*_queue_wait`,
 `gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
-submission batch sizes, validation records, Core candidate/proposal/scheduled
-lane counts, Wasm atom and length-frontier counts, length and scan dispatches,
-total Wasm scheduled lanes, and output-buffer bytes expose the terms that the
-current implementation can measure. Pipeline initialization and
+submission batch sizes, validation-record and validation-lane counts, Core
+candidate/proposal/rewrite-lane counts, Wasm atom and length-frontier counts,
+length and scan dispatches, total Wasm scheduled lanes, and output-buffer bytes
+expose the terms that the current implementation can measure. Pipeline
+initialization and
 capacity/packing are currently combined with their containing stage except
 where Core initialization is reported separately; this is a stated
 instrumentation limit.
@@ -1969,6 +1970,22 @@ counts are executable profile fields. Generated CPU/GPU proposal equality,
 semantic certificate validation, empty-frontier behavior, packed isolation, and
 the full required-GPU gate are the executable evidence; no latency distribution
 is claimed.
+
+### 2026-07-31: redundant Core validation becomes measurable
+
+The compact rewrite frontier made the separate GPU structural validator the
+dominant Core schedule. Frozen plans contain 3,390–257,934 validation records
+and schedule 3,392–257,984 validation lanes, compared with only 64–2,944 rewrite
+lanes. Codex additionally uploads 4,126,944 bytes of `vec4<u32>` validation
+records.
+
+These are deterministic profile counts from required-GPU compilations. They
+falsify the assumption that rewrite matching dominates the Core GPU boundary.
+The records duplicate the stronger CPU structural and semantic validator that
+already brands the immutable input before proposal generation. The theoretical
+next step is removal, not a denser record encoding: Section 7.1 requires
+CPU-validated input, and Section 7.3 independently revalidates every proposed
+semantic change.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

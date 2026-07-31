@@ -34,6 +34,10 @@ integer_result
     result.validationRecordCount > snapshot.operationKinds.length,
     true,
   );
+  assertEquals(
+    result.validationDispatchedInvocationCount,
+    Math.ceil(result.validationRecordCount / 64) * 64,
+  );
 });
 
 Deno.test("WebGPU and CPU both reject an out-of-range Core type", async () => {

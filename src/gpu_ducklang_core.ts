@@ -29,6 +29,7 @@ export type GpuDucklangCoreResult =
     readonly proposals: readonly DucklangCoreRewriteProposal[];
     readonly accepted: readonly DucklangCoreRewriteProposal[];
     readonly validationRecordCount: number;
+    readonly validationDispatchedInvocationCount: number;
     readonly rewriteCandidateCount: number;
     readonly rewriteDispatchedInvocationCount: number;
     readonly initializationMilliseconds: number;
@@ -626,6 +627,8 @@ async function runPackedDucklangCoreGpuBatch(
         proposals,
         accepted: committed.accepted,
         validationRecordCount: job.records.length / 4,
+        validationDispatchedInvocationCount:
+          Math.ceil((job.records.length / 4) / 64) * 64,
         rewriteCandidateCount: candidateCount,
         rewriteDispatchedInvocationCount: Math.ceil(candidateCount / 64) * 64,
         initializationMilliseconds,
@@ -1073,6 +1076,8 @@ async function runDucklangCoreWithGpu(
       proposals: gpuProposals,
       accepted: committed.accepted,
       validationRecordCount: records.length / 4,
+      validationDispatchedInvocationCount:
+        Math.ceil((records.length / 4) / 64) * 64,
       rewriteCandidateCount: rewriteCandidateOperationIds.length,
       rewriteDispatchedInvocationCount:
         Math.ceil(rewriteCandidateOperationIds.length / 64) * 64,

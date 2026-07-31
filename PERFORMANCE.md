@@ -345,6 +345,22 @@ the rule column and are overwritten in place, so compaction adds no ninth
 storage binding. The dense Core snapshot inputs remain unchanged. These are
 deterministic profile counts, not latency samples.
 
+The remaining GPU structural-validation pass is much larger than the rewrite
+frontier:
+
+| Target    | Validation records | Validation lanes | Validation bytes | Rewrite lanes |
+| --------- | -----------------: | ---------------: | ---------------: | ------------: |
+| Editor    |             33,157 |           33,216 |          530,512 |           192 |
+| Codex     |            257,934 |          257,984 |        4,126,944 |         2,944 |
+| grep      |              4,874 |            4,928 |           77,984 |            64 |
+| tar       |             28,832 |           28,864 |          461,312 |           576 |
+| wav       |              3,390 |            3,392 |           54,240 |            64 |
+| raytracer |              5,495 |            5,504 |           87,920 |           128 |
+
+This pass duplicates the trusted CPU validator and is not part of rewrite
+certificate checking. The counts motivate deleting that redundant GPU work;
+they do not by themselves establish a latency change.
+
 ### Scalar comptime stack capacity
 
 The bytecode validator derives stack depth at every instruction. GPU scalar

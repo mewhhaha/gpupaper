@@ -113,6 +113,8 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     ? 0
     : paddedInvocationCount(work.gpuRewriteCandidateCount);
   if (
+    work.gpuValidationDispatchedInvocationCount !==
+      Math.ceil(work.gpuValidationRecordCount / 64) * 64 ||
     work.gpuRewriteCandidateCount === 0 ||
     work.gpuRewriteCandidateCount > work.coreOperationCount ||
     work.gpuRewriteDispatchedInvocationCount !==
