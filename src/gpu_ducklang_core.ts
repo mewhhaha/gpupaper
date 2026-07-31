@@ -28,8 +28,6 @@ export type GpuDucklangCoreResult =
     readonly package: FlatDucklangCore;
     readonly proposals: readonly DucklangCoreRewriteProposal[];
     readonly accepted: readonly DucklangCoreRewriteProposal[];
-    readonly validationRecordCount: number;
-    readonly validationDispatchedInvocationCount: number;
     readonly rewriteCandidateCount: number;
     readonly rewriteDispatchedInvocationCount: number;
     readonly initializationMilliseconds: number;
@@ -43,7 +41,6 @@ export type GpuDucklangCoreResult =
   | {
     readonly status: "invalid";
     readonly reason: string;
-    readonly validationRecordCount: number;
   }
   | {
     readonly status: "unavailable";
@@ -54,36 +51,9 @@ type GpuCoreContext =
   | {
     readonly status: "available";
     readonly device: GPUDevice;
-    readonly validationPipeline: GPUComputePipeline;
     readonly rewritePipeline: GPUComputePipeline;
   }
   | { readonly status: "unavailable"; readonly reason: string };
-
-const validationShader = `
-struct Parameters { record_count: u32 }
-@group(0) @binding(0) var<storage, read> records: array<vec4<u32>>;
-@group(0) @binding(1) var<storage, read_write> errors: array<atomic<u32>>;
-@group(0) @binding(2) var<uniform> parameters: Parameters;
-
-@compute @workgroup_size(64)
-fn validate_records(@builtin(global_invocation_id) invocation: vec3<u32>) {
-  let index = invocation.x;
-  if (index >= parameters.record_count) { return; }
-  let record = records[index];
-  var valid = false;
-  if (record.x == 0u) {
-    valid = record.y < record.z;
-  } else if (record.x == 1u) {
-    valid = record.y == record.z;
-  } else if (record.x == 2u) {
-    valid = record.y <= record.w && record.z <= record.w - record.y;
-  }
-  if (!valid) {
-    atomicAdd(&errors[0], 1u);
-    atomicMin(&errors[1], index);
-  }
-}
-`;
 
 const rewriteShader = `
 struct Parameters {
@@ -240,7 +210,6 @@ type CoreCpuValidation =
 
 type PreparedCoreGpuJob = {
   readonly snapshot: FlatDucklangCore;
-  readonly records: Uint32Array;
   readonly cpuValidation: CoreCpuValidation;
   readonly operationColumns: Uint32Array;
   readonly operationRanges: Uint32Array;
@@ -280,31 +249,28 @@ async function runDucklangCoreGpuBatch(
 async function runPackedDucklangCoreGpuBatch(
   snapshots: readonly FlatDucklangCore[],
 ): Promise<readonly GpuDucklangCoreResult[]> {
+  const jobs = snapshots.map(prepareCoreGpuJob);
+  if (jobs.some((job) => job.cpuValidation.status === "invalid")) {
+    return await Promise.all(
+      jobs.map((job) =>
+        job.cpuValidation.status === "invalid"
+          ? {
+            status: "invalid" as const,
+            reason: job.cpuValidation.reason,
+          }
+          : runDucklangCoreWithGpu(job.snapshot, "latency")
+      ),
+    );
+  }
   const initializationStart = performance.now();
   const context = await requestGpuCoreContext();
   if (context.status === "unavailable") {
     return snapshots.map(() => context);
   }
   const initializationMilliseconds = performance.now() - initializationStart;
-  const { device, validationPipeline, rewritePipeline } = context;
-  const jobs = snapshots.map(prepareCoreGpuJob);
+  const { device, rewritePipeline } = context;
   const storageAlignment = device.limits.minStorageBufferOffsetAlignment;
   const uniformAlignment = device.limits.minUniformBufferOffsetAlignment;
-  const records = packCoreColumns(
-    jobs.map((job) => job.records),
-    4,
-    storageAlignment,
-  );
-  const errors = packCoreColumns(
-    jobs.map(() => new Uint32Array([0, 0xffff_ffff])),
-    8,
-    storageAlignment,
-  );
-  const validationParameters = packCoreColumns(
-    jobs.map((job) => new Uint32Array([job.records.length / 4])),
-    4,
-    uniformAlignment,
-  );
   const operations = packCoreColumns(
     jobs.map((job) => job.operationColumns),
     4,
@@ -361,31 +327,13 @@ async function runPackedDucklangCoreGpuBatch(
   );
   const readback = packCoreColumns(
     jobs.map((job) =>
-      new Uint32Array(2 + job.rewriteCandidateOperationIds.length * 2)
+      new Uint32Array(job.rewriteCandidateOperationIds.length * 2)
     ),
     8,
     4,
   );
 
   const transferStart = performance.now();
-  const recordBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch validation records",
-    records,
-    GPUBufferUsage.STORAGE,
-  );
-  const errorBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch validation errors",
-    errors,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  );
-  const validationParameterBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch validation parameters",
-    validationParameters,
-    GPUBufferUsage.UNIFORM,
-  );
   const operationBuffer = createPackedCoreBuffer(
     device,
     "Ducklang Core batch operations",
@@ -451,9 +399,6 @@ async function runPackedDucklangCoreGpuBatch(
   );
   const transferMilliseconds = performance.now() - transferStart;
   const buffers = [
-    recordBuffer,
-    errorBuffer,
-    validationParameterBuffer,
     operationBuffer,
     operationRangeBuffer,
     operandBuffer,
@@ -468,33 +413,6 @@ async function runPackedDucklangCoreGpuBatch(
   let mapped = false;
   try {
     const encoder = device.createCommandEncoder();
-    const validationPass = encoder.beginComputePass();
-    validationPass.setPipeline(validationPipeline);
-    for (const [index, job] of jobs.entries()) {
-      validationPass.setBindGroup(
-        0,
-        device.createBindGroup({
-          layout: validationPipeline.getBindGroupLayout(0),
-          entries: [
-            coreBindGroupEntry(0, recordBuffer, records.regions[index]),
-            coreBindGroupEntry(1, errorBuffer, errors.regions[index]),
-            coreBindGroupEntry(
-              2,
-              validationParameterBuffer,
-              validationParameters.regions[index],
-            ),
-          ],
-        }),
-      );
-      dispatchCompilerGpuWorkgroups(
-        device,
-        validationPass,
-        `Ducklang Core batch validation job ${index}`,
-        Math.max(1, Math.ceil(job.records.length / 256)),
-      );
-    }
-    validationPass.end();
-
     const rewritePass = encoder.beginComputePass();
     rewritePass.setPipeline(rewritePipeline);
     for (const [index, job] of jobs.entries()) {
@@ -543,26 +461,19 @@ async function runPackedDucklangCoreGpuBatch(
 
     for (const [index, job] of jobs.entries()) {
       const output = readback.regions[index].offset;
-      encoder.copyBufferToBuffer(
-        errorBuffer,
-        errors.regions[index].offset,
-        readbackBuffer,
-        output,
-        8,
-      );
       if (job.rewriteCandidateOperationIds.byteLength === 0) continue;
       encoder.copyBufferToBuffer(
         ruleBuffer,
         rules.regions[index].offset,
         readbackBuffer,
-        output + 8,
+        output,
         job.rewriteCandidateOperationIds.byteLength,
       );
       encoder.copyBufferToBuffer(
         replacementBuffer,
         replacements.regions[index].offset,
         readbackBuffer,
-        output + 8 + job.rewriteCandidateOperationIds.byteLength,
+        output + job.rewriteCandidateOperationIds.byteLength,
         job.rewriteCandidateOperationIds.byteLength,
       );
     }
@@ -583,31 +494,16 @@ async function runPackedDucklangCoreGpuBatch(
     const range = readbackBuffer.getMappedRange();
     return jobs.map((job, index) => {
       const output = readback.regions[index].offset;
-      const errorWords = new Uint32Array(range, output, 2);
-      const gpuValid = errorWords[0] === 0;
-      const cpuValid = job.cpuValidation.status === "valid";
-      if (gpuValid !== cpuValid) {
-        const cpuDescription = cpuValid
-          ? "accepted"
-          : `rejected ${job.cpuValidation.reason}`;
+      if (job.cpuValidation.status !== "valid") {
         throw new Error(
-          `CPU and GPU flat Core validation disagree for batch job ${index}: CPU ${cpuDescription}; GPU found ${
-            errorWords[0]
-          } invalid records, first ${errorWords[1]}`,
+          `Ducklang Core batch job ${index} reached GPU execution after CPU validation rejected it: ${job.cpuValidation.reason}`,
         );
       }
-      if (job.cpuValidation.status === "invalid") {
-        return {
-          status: "invalid",
-          reason: job.cpuValidation.reason,
-          validationRecordCount: job.records.length / 4,
-        };
-      }
       const candidateCount = job.rewriteCandidateOperationIds.length;
-      const ruleWords = new Uint32Array(range, output + 8, candidateCount);
+      const ruleWords = new Uint32Array(range, output, candidateCount);
       const replacementWords = new Uint32Array(
         range,
-        output + 8 + job.rewriteCandidateOperationIds.byteLength,
+        output + job.rewriteCandidateOperationIds.byteLength,
         candidateCount,
       );
       const proposals = gpuRewriteProposals(
@@ -626,9 +522,6 @@ async function runPackedDucklangCoreGpuBatch(
         package: committed.package,
         proposals,
         accepted: committed.accepted,
-        validationRecordCount: job.records.length / 4,
-        validationDispatchedInvocationCount:
-          Math.ceil((job.records.length / 4) / 64) * 64,
         rewriteCandidateCount: candidateCount,
         rewriteDispatchedInvocationCount: Math.ceil(candidateCount / 64) * 64,
         initializationMilliseconds,
@@ -657,7 +550,6 @@ function prepareCoreGpuJob(snapshot: FlatDucklangCore): PreparedCoreGpuJob {
   }
   return {
     snapshot,
-    records: gpuValidationRecords(snapshot),
     cpuValidation: validateCoreSnapshotForGpu(snapshot),
     operationColumns: interleaveColumns(
       snapshot.operationKinds,
@@ -778,22 +670,21 @@ async function runDucklangCoreWithGpu(
     cpuValidation,
     operationColumns,
     operationRanges,
-    records,
     rewriteCandidateOperationIds,
     types,
     values,
   } = job;
+  if (cpuValidation.status === "invalid") {
+    return { status: "invalid", reason: cpuValidation.reason };
+  }
 
   const initializationStart = performance.now();
   const context = await requestGpuCoreContext();
   if (context.status === "unavailable") return context;
   const initializationMilliseconds = performance.now() - initializationStart;
-  const { device, validationPipeline, rewritePipeline } = context;
-  const outputSize = 8 + rewriteCandidateOperationIds.byteLength * 2;
+  const { device, rewritePipeline } = context;
+  const outputSize = rewriteCandidateOperationIds.byteLength * 2;
   const capacityRequests = [
-    ["validation records", Math.max(4, records.byteLength), "storage"],
-    ["validation errors", 8, "storage"],
-    ["validation parameters", 4, "uniform"],
     ["operations", Math.max(4, operationColumns.byteLength), "storage"],
     ["operation ranges", Math.max(4, operationRanges.byteLength), "storage"],
     ["operands", Math.max(4, snapshot.operandValueIds.byteLength), "storage"],
@@ -822,9 +713,7 @@ async function runDucklangCoreWithGpu(
     });
     if (reason !== undefined) return { status: "unavailable", reason };
   }
-  const dispatchRequests: [string, number][] = [
-    ["validation", Math.max(1, Math.ceil(records.length / 256))],
-  ];
+  const dispatchRequests: [string, number][] = [];
   if (rewriteCandidateOperationIds.length > 0) {
     dispatchRequests.push([
       "rewrite",
@@ -840,24 +729,6 @@ async function runDucklangCoreWithGpu(
     if (reason !== undefined) return { status: "unavailable", reason };
   }
   const transferStart = performance.now();
-  const recordBuffer = createBuffer(
-    device,
-    "Ducklang Core validation records",
-    records,
-    GPUBufferUsage.STORAGE,
-  );
-  const errorBuffer = createBuffer(
-    device,
-    "Ducklang Core validation errors",
-    new Uint32Array([0, 0xffff_ffff]),
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  );
-  const validationParameters = createBuffer(
-    device,
-    "Ducklang Core validation parameters",
-    new Uint32Array([records.length / 4]),
-    GPUBufferUsage.UNIFORM,
-  );
   const operationBuffer = createBuffer(
     device,
     "Ducklang Core operations",
@@ -933,9 +804,6 @@ async function runDucklangCoreWithGpu(
   );
   const transferMilliseconds = performance.now() - transferStart;
   const buffers = [
-    recordBuffer,
-    errorBuffer,
-    validationParameters,
     operationBuffer,
     operationRangeBuffer,
     operandBuffer,
@@ -950,25 +818,6 @@ async function runDucklangCoreWithGpu(
   let mapped = false;
   try {
     const encoder = device.createCommandEncoder();
-    const validationBindGroup = device.createBindGroup({
-      layout: validationPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: recordBuffer } },
-        { binding: 1, resource: { buffer: errorBuffer } },
-        { binding: 2, resource: { buffer: validationParameters } },
-      ],
-    });
-    const validationPass = encoder.beginComputePass();
-    validationPass.setPipeline(validationPipeline);
-    validationPass.setBindGroup(0, validationBindGroup);
-    dispatchCompilerGpuWorkgroups(
-      device,
-      validationPass,
-      "Ducklang Core validation",
-      Math.max(1, Math.ceil(records.length / 256)),
-    );
-    validationPass.end();
-
     if (rewriteCandidateOperationIds.length > 0) {
       const rewriteBindGroup = device.createBindGroup({
         layout: rewritePipeline.getBindGroupLayout(0),
@@ -995,20 +844,19 @@ async function runDucklangCoreWithGpu(
       );
       rewritePass.end();
     }
-    encoder.copyBufferToBuffer(errorBuffer, 0, readback, 0, 8);
     if (rewriteCandidateOperationIds.byteLength > 0) {
       encoder.copyBufferToBuffer(
         ruleBuffer,
         0,
         readback,
-        8,
+        0,
         rewriteCandidateOperationIds.byteLength,
       );
       encoder.copyBufferToBuffer(
         replacementBuffer,
         0,
         readback,
-        8 + rewriteCandidateOperationIds.byteLength,
+        rewriteCandidateOperationIds.byteLength,
         rewriteCandidateOperationIds.byteLength,
       );
     }
@@ -1027,35 +875,14 @@ async function runDucklangCoreWithGpu(
     mapped = true;
     const gpuMilliseconds = performance.now() - gpuStart;
     const range = readback.getMappedRange();
-    const errorWords = new Uint32Array(range, 0, 2);
-    const gpuValid = errorWords[0] === 0;
-    const cpuValid = cpuValidation.status === "valid";
-    if (gpuValid !== cpuValid) {
-      const cpuDescription = cpuValidation.status === "valid"
-        ? "accepted"
-        : `rejected ${cpuValidation.reason}`;
-      throw new Error(
-        `CPU and GPU flat Core validation disagree: CPU ${cpuDescription}; GPU found ${
-          errorWords[0]
-        } invalid records, first ${errorWords[1]}`,
-      );
-    }
-    if (cpuValidation.status === "invalid") {
-      return {
-        status: "invalid",
-        reason: cpuValidation.reason,
-        validationRecordCount: records.length / 4,
-      };
-    }
-
     const ruleWords = new Uint32Array(
       range,
-      8,
+      0,
       rewriteCandidateOperationIds.length,
     );
     const replacementWords = new Uint32Array(
       range,
-      8 + rewriteCandidateOperationIds.byteLength,
+      rewriteCandidateOperationIds.byteLength,
       rewriteCandidateOperationIds.length,
     );
     const gpuProposals = gpuRewriteProposals(
@@ -1075,9 +902,6 @@ async function runDucklangCoreWithGpu(
       package: committed.package,
       proposals: gpuProposals,
       accepted: committed.accepted,
-      validationRecordCount: records.length / 4,
-      validationDispatchedInvocationCount:
-        Math.ceil((records.length / 4) / 64) * 64,
       rewriteCandidateCount: rewriteCandidateOperationIds.length,
       rewriteDispatchedInvocationCount:
         Math.ceil(rewriteCandidateOperationIds.length / 64) * 64,
@@ -1133,337 +957,6 @@ function gpuRewriteProposals(
   });
 }
 
-function gpuValidationRecords(package_: FlatDucklangCore): Uint32Array {
-  const words: number[] = [];
-  const lessThan = (value: number, limit: number): void => {
-    words.push(0, value, limit, 0);
-  };
-  const equal = (left: number, right: number): void => {
-    words.push(1, left, right, 0);
-  };
-  const range = (start: number, count: number, limit: number): void => {
-    words.push(2, start, count, limit);
-  };
-  equal(package_.schemaVersion, 1);
-  lessThan(package_.moduleFileId, package_.stringStarts.length);
-  lessThan(package_.entryFunctionId, package_.functionNameIds.length);
-
-  const equalColumnLengths = (...columns: readonly ArrayLike<unknown>[]) => {
-    for (const column of columns.slice(1)) {
-      equal(columns[0].length, column.length);
-    }
-  };
-  equalColumnLengths(
-    package_.stringStarts,
-    package_.stringLengths,
-  );
-  equalColumnLengths(
-    package_.sourceLocationFileIds,
-    package_.sourceLocationStarts,
-    package_.sourceLocationEnds,
-  );
-  equalColumnLengths(
-    package_.typeKinds,
-    package_.typePayloadStarts,
-    package_.typePayloadCounts,
-    package_.typeAuxiliaries,
-    package_.typeLayoutIds,
-  );
-  equalColumnLengths(
-    package_.signatureParameterStarts,
-    package_.signatureParameterCounts,
-    package_.signatureResultTypeIds,
-  );
-  equalColumnLengths(
-    package_.functionNameIds,
-    package_.functionSourceSymbolIds,
-    package_.functionSignatureIds,
-    package_.functionEntryBlockIds,
-    package_.functionBlockStarts,
-    package_.functionBlockCounts,
-    package_.functionSourceLocationIds,
-  );
-  equalColumnLengths(
-    package_.blockFunctionIds,
-    package_.blockLocalIds,
-    package_.blockParameterStarts,
-    package_.blockParameterCounts,
-    package_.blockOperationStarts,
-    package_.blockOperationCounts,
-    package_.blockTerminatorIds,
-  );
-  equalColumnLengths(
-    package_.valueFunctionIds,
-    package_.valueLocalIds,
-    package_.valueTypeIds,
-    package_.valueDefinitionKinds,
-    package_.valueDefinitionIds,
-  );
-  equalColumnLengths(
-    package_.operationBlockIds,
-    package_.operationKinds,
-    package_.operationResultValueIds,
-    package_.operationTypeIds,
-    package_.operationOperandStarts,
-    package_.operationOperandCounts,
-    package_.operationAttributeStarts,
-    package_.operationAttributeCounts,
-    package_.operationSourceLocationIds,
-  );
-  equalColumnLengths(
-    package_.attributeKinds,
-    package_.attributeLowWords,
-    package_.attributeHighWords,
-  );
-  equalColumnLengths(
-    package_.terminatorBlockIds,
-    package_.terminatorKinds,
-    package_.terminatorConditionValueIds,
-    package_.terminatorEdgeStarts,
-    package_.terminatorEdgeCounts,
-    package_.terminatorReturnStarts,
-    package_.terminatorReturnCounts,
-    package_.terminatorSourceLocationIds,
-  );
-  equalColumnLengths(
-    package_.edgeTargetBlockIds,
-    package_.edgeArgumentStarts,
-    package_.edgeArgumentCounts,
-    package_.edgeSourceLocationIds,
-  );
-  equalColumnLengths(
-    package_.layoutKinds,
-    package_.layoutSizes,
-    package_.layoutAlignments,
-    package_.layoutComponentStarts,
-    package_.layoutComponentCounts,
-    package_.layoutTagOffsets,
-    package_.layoutTagSizes,
-    package_.layoutPayloadOffsets,
-  );
-
-  for (
-    let index = 0;
-    index < package_.sourceLocationFileIds.length;
-    index += 1
-  ) {
-    lessThan(
-      package_.sourceLocationFileIds[index],
-      package_.stringStarts.length,
-    );
-    range(
-      package_.sourceLocationStarts[index],
-      package_.sourceLocationEnds[index] - package_.sourceLocationStarts[index],
-      0xffff_ffff,
-    );
-  }
-  addIdRecords(words, package_.typeKinds, 5);
-  addRangeRecords(
-    words,
-    package_.stringStarts,
-    package_.stringLengths,
-    package_.stringBytes.length,
-  );
-  addRangeRecords(
-    words,
-    package_.typePayloadStarts,
-    package_.typePayloadCounts,
-    package_.typePayloads.length,
-  );
-  addIdRecords(words, package_.typePayloads, package_.typeKinds.length);
-  addRangeRecords(
-    words,
-    package_.signatureParameterStarts,
-    package_.signatureParameterCounts,
-    package_.signatureParameterTypeIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.signatureParameterTypeIds,
-    package_.typeKinds.length,
-  );
-  addIdRecords(
-    words,
-    package_.signatureResultTypeIds,
-    package_.typeKinds.length,
-  );
-  addIdRecords(words, package_.functionNameIds, package_.stringStarts.length);
-  addIdRecords(
-    words,
-    package_.functionSignatureIds,
-    package_.signatureResultTypeIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.functionSourceLocationIds,
-    package_.sourceLocationFileIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.functionBlockStarts,
-    package_.functionBlockCounts,
-    package_.blockFunctionIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.functionEntryBlockIds,
-    package_.blockFunctionIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.blockFunctionIds,
-    package_.functionNameIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.blockParameterStarts,
-    package_.blockParameterCounts,
-    package_.blockParameterValueIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.blockOperationStarts,
-    package_.blockOperationCounts,
-    package_.operationKinds.length,
-  );
-  addIdRecords(
-    words,
-    package_.blockTerminatorIds,
-    package_.terminatorKinds.length,
-  );
-  addIdRecords(
-    words,
-    package_.blockParameterValueIds,
-    package_.valueLocalIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.blockParameterTypeIds,
-    package_.typeKinds.length,
-  );
-  addIdRecords(
-    words,
-    package_.blockParameterSourceLocationIds,
-    package_.sourceLocationFileIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.valueFunctionIds,
-    package_.functionNameIds.length,
-  );
-  addIdRecords(words, package_.valueTypeIds, package_.typeKinds.length);
-  addIdRecords(
-    words,
-    package_.operationBlockIds,
-    package_.blockFunctionIds.length,
-  );
-  addIdRecords(words, package_.operationKinds, 20);
-  addIdRecords(
-    words,
-    package_.operationResultValueIds,
-    package_.valueLocalIds.length,
-  );
-  addIdRecords(words, package_.operationTypeIds, package_.typeKinds.length);
-  addRangeRecords(
-    words,
-    package_.operationOperandStarts,
-    package_.operationOperandCounts,
-    package_.operandValueIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.operationAttributeStarts,
-    package_.operationAttributeCounts,
-    package_.attributeKinds.length,
-  );
-  addIdRecords(
-    words,
-    package_.operationSourceLocationIds,
-    package_.sourceLocationFileIds.length,
-  );
-  addIdRecords(words, package_.operandValueIds, package_.valueLocalIds.length);
-  addIdRecords(words, package_.attributeKinds, 6);
-  addIdRecords(
-    words,
-    package_.terminatorBlockIds,
-    package_.blockFunctionIds.length,
-  );
-  addIdRecords(words, package_.terminatorKinds, 4);
-  addRangeRecords(
-    words,
-    package_.terminatorEdgeStarts,
-    package_.terminatorEdgeCounts,
-    package_.edgeTargetBlockIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.terminatorReturnStarts,
-    package_.terminatorReturnCounts,
-    package_.returnValueIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.terminatorSourceLocationIds,
-    package_.sourceLocationFileIds.length,
-  );
-  addIdRecords(words, package_.returnValueIds, package_.valueLocalIds.length);
-  addIdRecords(
-    words,
-    package_.edgeTargetBlockIds,
-    package_.blockFunctionIds.length,
-  );
-  addRangeRecords(
-    words,
-    package_.edgeArgumentStarts,
-    package_.edgeArgumentCounts,
-    package_.edgeArgumentValueIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.edgeSourceLocationIds,
-    package_.sourceLocationFileIds.length,
-  );
-  addIdRecords(
-    words,
-    package_.edgeArgumentValueIds,
-    package_.valueLocalIds.length,
-  );
-  addIdRecords(words, package_.layoutKinds, 4);
-  addRangeRecords(
-    words,
-    package_.layoutComponentStarts,
-    package_.layoutComponentCounts,
-    package_.layoutComponentIds.length,
-  );
-  addIdRecords(words, package_.layoutComponentIds, package_.layoutKinds.length);
-  addIdRecords(words, package_.typeLayoutIds, package_.layoutKinds.length);
-  return new Uint32Array(words);
-}
-
-function addIdRecords(
-  words: number[],
-  ids: Uint32Array,
-  limit: number,
-): void {
-  for (const id of ids) words.push(0, id, limit, 0);
-}
-
-function addRangeRecords(
-  words: number[],
-  starts: Uint32Array,
-  counts: Uint32Array,
-  limit: number,
-): void {
-  const length = Math.min(starts.length, counts.length);
-  let expectedStart = 0;
-  for (let index = 0; index < length; index += 1) {
-    words.push(1, starts[index], expectedStart, 0);
-    words.push(2, starts[index], counts[index], limit);
-    expectedStart += counts[index];
-  }
-  words.push(1, expectedStart, limit, 0);
-}
-
 function interleaveColumns(
   first: Uint32Array,
   second: Uint32Array,
@@ -1508,49 +1001,26 @@ async function requestGpuCoreContext(): Promise<GpuCoreContext> {
     try {
       requireCompilerGpuCapacity(device, {
         kind: "pipelineBindings",
-        label: "Ducklang Core validation",
-        storageBufferCount: 2,
-        uniformBufferCount: 1,
-      });
-      requireCompilerGpuCapacity(device, {
-        kind: "pipelineBindings",
         label: "Ducklang Core rewrite",
         storageBufferCount: 8,
         uniformBufferCount: 1,
       });
-      const validationModule = device.createShaderModule({
-        code: validationShader,
-      });
       const rewriteModule = device.createShaderModule({ code: rewriteShader });
-      const errors = (await Promise.all([
-        validationModule.getCompilationInfo(),
-        rewriteModule.getCompilationInfo(),
-      ])).flatMap((info) =>
-        info.messages.filter((message) => message.type === "error")
-      );
+      const errors = (await rewriteModule.getCompilationInfo()).messages
+        .filter((message) => message.type === "error");
       if (errors.length > 0) {
         throw new Error(errors.map((error) => error.message).join("; "));
       }
-      const [validationPipeline, rewritePipeline] = await Promise.all([
-        device.createComputePipelineAsync({
-          layout: "auto",
-          compute: {
-            module: validationModule,
-            entryPoint: "validate_records",
-          },
-        }),
-        device.createComputePipelineAsync({
-          layout: "auto",
-          compute: {
-            module: rewriteModule,
-            entryPoint: "propose_rewrites",
-          },
-        }),
-      ]);
+      const rewritePipeline = await device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: rewriteModule,
+          entryPoint: "propose_rewrites",
+        },
+      });
       return {
         status: "available",
         device,
-        validationPipeline,
         rewritePipeline,
       };
     } catch (error) {

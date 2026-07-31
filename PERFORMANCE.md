@@ -248,8 +248,8 @@ validation. This changes capacity and host width work, not scan dispatches.
 ### Hierarchical Wasm scan
 
 The subsequent hierarchical scan recursively scans 64-element blocks and
-propagates block prefixes downward. The counts below are observed profile
-values from one required-GPU differential compilation per frozen target:
+propagates block prefixes downward. The counts below are observed profile values
+from one required-GPU differential compilation per frozen target:
 
 | Target    | Old scan dispatches | New scan dispatches | Old invocations | New invocations | Reduction |
 | --------- | ------------------: | ------------------: | --------------: | --------------: | --------: |
@@ -260,9 +260,9 @@ values from one required-GPU differential compilation per frozen target:
 | wav       |                  12 |                   3 |          39,936 |          15,040 |    62.34% |
 | raytracer |                  12 |                   3 |          62,464 |          23,488 |    62.40% |
 
-The invocation metric counts scheduled GPU lanes. Section 7.4 of `PAPER.md`
-also accounts for the six shared-memory addition steps within each upward lane;
-the total scan work remains linear because the hierarchy is geometric.
+The invocation metric counts scheduled GPU lanes. Section 7.4 of `PAPER.md` also
+accounts for the six shared-memory addition steps within each upward lane; the
+total scan work remains linear because the hierarchy is geometric.
 
 The old scan used two full atom-width prefix buffers. The new scan uses one
 full-width result and two alternating sum/prefix hierarchy pairs:
@@ -345,8 +345,8 @@ the rule column and are overwritten in place, so compaction adds no ninth
 storage binding. The dense Core snapshot inputs remain unchanged. These are
 deterministic profile counts, not latency samples.
 
-The remaining GPU structural-validation pass is much larger than the rewrite
-frontier:
+Before removal, the GPU structural-validation pass was much larger than the
+rewrite frontier:
 
 | Target    | Validation records | Validation lanes | Validation bytes | Rewrite lanes |
 | --------- | -----------------: | ---------------: | ---------------: | ------------: |
@@ -357,9 +357,33 @@ frontier:
 | wav       |              3,390 |            3,392 |           54,240 |            64 |
 | raytracer |              5,495 |            5,504 |           87,920 |           128 |
 
-This pass duplicates the trusted CPU validator and is not part of rewrite
-certificate checking. The counts motivate deleting that redundant GPU work;
-they do not by themselves establish a latency change.
+The pass duplicated the stronger trusted CPU validator and was not part of
+rewrite-certificate checking. It has now been deleted. An invalid flat-Core job
+stops without requesting a device on its behalf; valid Core reaches only
+proposal generation, whose results still undergo exact CPU semantic-certificate
+checking and complete rebuild validation.
+
+The table therefore gives the exact scheduled lanes and four-word record payload
+removed per Core pass. The implementation also removes one error buffer, one
+uniform parameter buffer, one compute pipeline and dispatch, and an eight-byte
+readback prefix for a nonempty frontier. CPU validation is unchanged. These
+deterministic savings do not by themselves establish a latency change.
+
+The post-removal required-GPU correctness gate passed 493 tests and compiled
+each frozen target twice:
+
+| Target    | GPU sample 1 | GPU sample 2 | Wasm bytes |
+| --------- | -----------: | -----------: | ---------: |
+| Editor    |    377.55 ms |    270.31 ms |     24,460 |
+| Codex     |      1.016 s |    847.40 ms |    226,134 |
+| grep      |    158.37 ms |    159.59 ms |      3,911 |
+| tar       |    241.54 ms |    218.52 ms |     26,106 |
+| wav       |    141.88 ms |    134.10 ms |      2,520 |
+| raytracer |    153.63 ms |    150.14 ms |      3,864 |
+
+All bytes remained identical to CPU emission and passed engine validation. The
+samples are integration evidence, not a controlled before/after experiment: they
+do not isolate this pass from temperature, scheduling, or process-order effects.
 
 ### Scalar comptime stack capacity
 

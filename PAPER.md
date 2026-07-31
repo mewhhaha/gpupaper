@@ -12,9 +12,9 @@ capability passing with direct state passing for linear tail-resumptive handlers
 and selective CPS otherwise.
 
 The GPU never executes source handlers and never searches for a handler. It
-validates and transforms an effect-closed payload IR. This separation keeps
-source control semantics on the CPU while preserving the bulk, deterministic
-compiler transformations that are suitable for the GPU.
+transforms CPU-validated, effect-closed payload IR. This separation keeps source
+control semantics and trust-boundary validation on the CPU while preserving the
+bulk, deterministic compiler transformations that are suitable for the GPU.
 
 This document is simultaneously the language specification, derivation of the
 compiler representation, implementation report, cost model, and continuous
@@ -766,14 +766,12 @@ Whole compilation also includes CPU parsing, semantic lowering, flattening, Wasm
 planning, ABI construction, and final validation. Consequently a faster kernel
 does not imply a faster compilation. `gpu_*_queue_wait`,
 `gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
-submission batch sizes, validation-record and validation-lane counts, Core
-candidate/proposal/rewrite-lane counts, Wasm atom and length-frontier counts,
-length and scan dispatches, total Wasm scheduled lanes, and output-buffer bytes
-expose the terms that the current implementation can measure. Pipeline
-initialization and
-capacity/packing are currently combined with their containing stage except
-where Core initialization is reported separately; this is a stated
-instrumentation limit.
+submission batch sizes, Core candidate/proposal/rewrite-lane counts, Wasm atom
+and length-frontier counts, length and scan dispatches, total Wasm scheduled
+lanes, and output-buffer bytes expose the terms that the current implementation
+can measure. Pipeline initialization and capacity/packing are currently combined
+with their containing stage except where Core initialization is reported
+separately; this is a stated instrumentation limit.
 
 Comparative timing uses paired, counterbalanced observations: even samples run
 CPU then GPU and odd samples run GPU then CPU for the same workload, batch size,
@@ -817,7 +815,7 @@ used for type payloads, signature parameters, function blocks, block parameters,
 block operations, operation operands and attributes, terminator edges and
 returns, edge arguments, and layout components.
 
-Structural validation establishes all of the following before a package is
+CPU structural validation establishes all of the following before a package is
 branded as trusted:
 
 1. every column for one entity has equal length;
@@ -856,11 +854,11 @@ B_flat(P) = |S(P)| + 4 Σa∈U(P) |a|
 ```
 
 The three scalar header words are supplied separately. GPU stages upload only
-the columns they consume and may add validation, proposal, metadata, uniform,
-and readback buffers, so `B_flat` is a lower bound on a stage's device
-allocation, not its allocation formula. Each stage calculates those additional
-bytes explicitly and checks both individual binding limits and device buffer
-limits before allocation.
+the columns they consume and may add proposal, metadata, uniform, and readback
+buffers, so `B_flat` is a lower bound on a stage's device allocation, not its
+allocation formula. Each stage calculates those additional bytes explicitly and
+checks both individual binding limits and device buffer limits before
+allocation.
 
 ### 7.3 Rewrite proposals as checked certificates
 
@@ -879,9 +877,8 @@ The rules are restricted to `i32` and `i64`, whose Wasm arithmetic is modular.
 They are deliberately not applied to floating point: `x + 0` can change negative
 zero, and `x * 1` participates in NaN behavior.
 
-Let \(O\) be the operation count and let
-\(C=\{o\mid kind(o)=scalarBinary\}\). The partial matcher is undefined for
-every operation outside \(C\), so:
+Let \(O\) be the operation count and let \(C=\{o\mid kind(o)=scalarBinary\}\).
+The partial matcher is undefined for every operation outside \(C\), so:
 
 ```text
 { M(S, o) | o in [0, O), M(S, o) defined }
@@ -893,18 +890,44 @@ The host therefore sends the stable increasing IDs in \(C\) as the rewrite
 frontier. This is scheduling classification, not CPU rewrite matching: operator,
 arity, attributes, result type, and constant operands remain GPU decisions. An
 empty frontier encodes no rewrite dispatch. For nonempty \(C\), scheduled lanes
-are \(64\lceil|C|/64\rceil\), replacing
-\(64\lceil O/64\rceil\).
+are \(64\lceil|C|/64\rceil\), replacing \(64\lceil O/64\rceil\).
+
+Validation is a trust-boundary operation rather than a property that becomes
+stronger by repetition. `validateFlatDucklangCore` either rejects the untrusted
+input before a device is requested or returns a branded snapshot held read-only
+by this stage. The GPU therefore receives only branded input and does not
+re-encode those invariants as validation records. This is safe under the
+boundary model because the GPU can neither commit a mutation nor manufacture
+trusted Core: it can only return a proposal that must satisfy the independent
+matcher equation below.
+
+The theorem assumes exclusive read ownership of the flat package from validation
+through commit. Compiler orchestration satisfies this condition because it
+constructs the package and does not publish or mutate it during the pass.
+TypeScript's readonly properties do not prevent an external caller from writing
+through a `Uint32Array`, so the exported low-level function cannot enforce this
+condition dynamically. A defensive copy would enforce it at
+\(B_{\mathrm{flat}}\) additional host bytes and \(O(B_{\mathrm{flat}})\) work
+per pass. The current API instead treats concurrent caller mutation as outside
+its ownership contract; this is a stated enforcement limitation, not a proved
+property of typed arrays.
+
+Let \(R\) be the former number of four-word validation records. Removing the
+duplicate pass eliminates exactly \(16R\) record bytes, its error and parameter
+buffers, and \(64\lceil R/64\rceil\) scheduled lanes. It also removes the
+eight-byte validation prefix from nonempty rewrite readback. CPU validation
+remains \(O(B_{\mathrm{flat}})\); this change removes repeated device work but
+does not change asymptotic host validation.
 
 The rule buffer initially contains the candidate IDs. Lane \(q\) reads its
 operation ID and then replaces only slot \(q\) with its rule result; the
 replacement buffer has the same frontier width. This one-writer-per-slot
 invariant permits the input queue and rule output to share a buffer and keeps
 the shader at the device's eight-storage-binding limit. The rule/replacement
-columns and their copied readback payload each change from `8O` to `8|C|`
-bytes. Dense operations, operands, values, attributes, and types remain
-necessary because a candidate may reference arbitrary definitions; compacting
-them would require a closed-subgraph remapping, not another local filter.
+columns and their copied readback payload each change from `8O` to `8|C|` bytes.
+Dense operations, operands, values, attributes, and types remain necessary
+because a candidate may reference arbitrary definitions; compacting them would
+require a closed-subgraph remapping, not another local filter.
 
 The GPU returns proposal certificates containing rule, function, operation,
 result, replacement, and profit. A proposal `p` is admissible exactly when:
@@ -956,22 +979,22 @@ For `A` atoms and maximum length level `D`, emission performs:
 4. one full-array pass writing each atom into its assigned byte interval.
 
 The validated host plan groups length records
-`(atom_id, range_start, range_count)` stably by dependency level. Let \(K_d\)
-be the number of length atoms at level \(d\), and let
-\(J=\{d\mid K_d>0\}\). A level dispatch schedules \(L(K_d)\) lanes and uses the
-compacted record to reach the atom's global size column. Induction on increasing
-\(d\) proves readiness: validation requires every length dependency of a
-level-\(d\) atom to have a strictly smaller level, and all lower nonempty levels
-have completed. Empty levels carry no dependency and require no dispatch.
-Stable ordering is not necessary for the size result, but makes the frontier
-and diagnostics deterministic.
+`(atom_id, range_start, range_count)` stably by dependency level. Let \(K_d\) be
+the number of length atoms at level \(d\), and let \(J=\{d\mid K_d>0\}\). A
+level dispatch schedules \(L(K_d)\) lanes and uses the compacted record to reach
+the atom's global size column. Induction on increasing \(d\) proves readiness:
+validation requires every length dependency of a level-\(d\) atom to have a
+strictly smaller level, and all lower nonempty levels have completed. Empty
+levels carry no dependency and require no dispatch. Stable ordering is not
+necessary for the size result, but makes the frontier and diagnostics
+deterministic.
 
 The logical record frontier takes \(12\sum_d K_d\) transfer bytes. It replaces
 dense atom-indexed dependency-level, range-start, and range-count columns
 totaling `12A` bytes. When the frontier is empty, WebGPU's nonzero binding
 requirement reserves one word for each of the three physical columns but
-transfers no semantic record. The scheduled length work changes from
-\(D L(A)\) lanes to:
+transfers no semantic record. The scheduled length work changes from \(D L(A)\)
+lanes to:
 
 ```text
 length_dispatches = |J|
@@ -990,10 +1013,10 @@ n₀ = A
 nₗ₊₁ = ceil(nₗ / W)
 ```
 
-and stop at level \(h-1\) where \(n_{h-1}\le W\). An upward dispatch computes
-an inclusive scan independently within each block and emits its block sum as
-the next level. The top level is therefore a complete prefix of all block sums.
-A downward dispatch for levels \(h-2,\ldots,0\) adds:
+and stop at level \(h-1\) where \(n_{h-1}\le W\). An upward dispatch computes an
+inclusive scan independently within each block and emits its block sum as the
+next level. The top level is therefore a complete prefix of all block sums. A
+downward dispatch for levels \(h-2,\ldots,0\) adds:
 
 ```text
 parent_prefix[floor(i / W) - 1]
@@ -1020,9 +1043,8 @@ all_invocations = 2L(A) + length_invocations + scan_invocations
 ```
 
 The block-local implementation performs six Hillis–Steele shared-memory steps.
-For a full workgroup this is
-\(\sum_{k=0}^{5}(64-2^k)=321\) additions. Upward work is therefore
-\(321\sum_l\lceil n_l/64\rceil\); downward work adds
+For a full workgroup this is \(\sum_{k=0}^{5}(64-2^k)=321\) additions. Upward
+work is therefore \(321\sum_l\lceil n_l/64\rceil\); downward work adds
 \(\sum_{l=0}^{h-2}(n_l-\min(n_l,64))\). Because the hierarchy is geometric,
 total scan work is \(\Theta(A)\), while its synchronization span is
 \(\Theta(h\log W)\). A Blelloch local scan would use fewer additions but twice
@@ -1060,13 +1082,13 @@ B_output = 4 ceil(B_exact / 4)
 The plan validator has already proved that every referenced dependency has a
 lower level, so induction on ordered nonempty levels makes every \(s_j\)
 available. With \(K=\sum_dK_d\), grouping takes \(O(A)\), sorting the nonempty
-levels takes \(O(|J|\log\max(1,|J|))\), and width evaluation takes
-\(O(A+\sum_i range_count_i)\). Host storage is `A` bytes for widths plus
-\(O(K+|J|)\) frontier records. Iterating nonempty levels is essential: a valid
-sparse plan may declare a very large numeric level without requiring work
-proportional to that number. It is not CPU emission: no encoded byte or offset
-is constructed. The GPU independently executes its size, length, scan, and
-write passes, and the returned final prefix must equal \(B_\text{exact}\).
+levels takes \(O(|J|\log\max(1,|J|))\), and width evaluation takes \(O(A+\sum_i
+range_count_i)\). Host storage is `A` bytes for widths plus \(O(K+|J|)\)
+frontier records. Iterating nonempty levels is essential: a valid sparse plan
+may declare a very large numeric level without requiring work proportional to
+that number. It is not CPU emission: no encoded byte or offset is constructed.
+The GPU independently executes its size, length, scan, and write passes, and the
+returned final prefix must equal \(B_\text{exact}\).
 
 An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
 case analysis but conservative. Exact host sizing removes their slack without a
@@ -1943,8 +1965,8 @@ distribution is claimed.
 The first sparse frontier carried only atom IDs and retained two dense
 atom-indexed range columns. Since range start and count are immutable properties
 of the same length record, that representation had no semantic justification.
-The transferred frontier now carries all three words and the GPU indexes them
-by frontier position. Its representation invariant is column-length equality:
+The transferred frontier now carries all three words and the GPU indexes them by
+frontier position. Its representation invariant is column-length equality:
 position \(q\) contains one atom ID and exactly that atom's validated range.
 
 Across the frozen plans, length metadata changes from `8A + 4K` to `12K` bytes,
@@ -1956,11 +1978,11 @@ executable evidence.
 ### 2026-07-31: Core rewrites gain an opcode frontier
 
 The rewrite matcher previously scheduled and read back one lane for every Core
-operation even though its complete rule set is undefined outside
-`scalarBinary`. Section 7.3 proves that filtering on this outer discriminant
-cannot omit a proposal. The stable candidate queue reuses the rule-output buffer
-so the kernel stays within eight storage bindings; the empty-frontier regression
-proves that zero candidates encode zero rewrite dispatches.
+operation even though its complete rule set is undefined outside `scalarBinary`.
+Section 7.3 proves that filtering on this outer discriminant cannot omit a
+proposal. The stable candidate queue reuses the rule-output buffer so the kernel
+stays within eight storage bindings; the empty-frontier regression proves that
+zero candidates encode zero rewrite dispatches.
 
 Frozen candidate frontiers contain 34–2,890 of 130–12,956 operations. Scheduled
 rewrite lanes fall by 50.00–85.71%, and rule/replacement payload falls by
@@ -1982,10 +2004,41 @@ records.
 These are deterministic profile counts from required-GPU compilations. They
 falsify the assumption that rewrite matching dominates the Core GPU boundary.
 The records duplicate the stronger CPU structural and semantic validator that
-already brands the immutable input before proposal generation. The theoretical
-next step is removal, not a denser record encoding: Section 7.1 requires
-CPU-validated input, and Section 7.3 independently revalidates every proposed
-semantic change.
+already brands the exclusively held input before proposal generation. The
+theoretical next step is removal, not a denser record encoding: Section 7.1
+requires CPU-validated input, and Section 7.3 independently revalidates every
+proposed semantic change.
+
+### 2026-07-31: Core validation stays at one trust boundary
+
+The duplicate GPU structural validator, its record construction, shader,
+pipeline, three device buffers, readback prefix, dispatch, and profile fields
+have been removed. An invalid flat-Core job now returns from CPU validation
+without requesting a device on its behalf in both the single-job and packed
+paths. Valid jobs receive the branded, exclusively held snapshot described in
+Section 7.2; the GPU can only propose rewrites, and Section 7.3's exact CPU
+matcher still validates every proposal before deterministic rebuild and complete
+output validation.
+
+This is a reduction in proof surface as well as work. The removed GPU predicate
+checked only column lengths, ranges, discriminants, and ID bounds, whereas the
+CPU boundary also checks ownership, definition uniqueness, same-function uses,
+layouts, and semantic inflation. Agreement with a weaker duplicate did not prove
+an additional invariant. Retaining it would therefore spend \(64\lceil
+R/64\rceil\) lanes and \(16R\) record bytes without strengthening the
+accepted-result theorem.
+
+For the frozen applications, the deterministic savings are 3,392–257,984
+scheduled lanes and 54,240–4,126,944 record bytes per Core pass, plus the small
+error, parameter, and readback allocations. The malformed-type regression now
+passes even when no adapter is available, which executes the pre-device trust
+boundary. CPU/GPU rewrite equality, false-certificate rejection, packed
+isolation, and the required-GPU release gate are executable validations. No
+latency distribution or proof of the WebGPU kernel follows from these counts.
+The post-removal gate passed all 493 tests and compiled each frozen application
+twice with byte-identical CPU/GPU emission and engine validation. Codex's two
+correctness samples were 1,016.31 ms and 847.40 ms; Editor's were 377.55 ms and
+270.31 ms. They are not a controlled latency comparison.
 
 ### 2026-07-31: type closure gains a semantic oracle
 
@@ -2125,8 +2178,9 @@ change for such a small job.
 16. WebAssembly Community Group. “WebAssembly Core Specification: Integer
     Operations.”
     <https://webassembly.github.io/spec/core/exec/numerics.html#integer-operations>
-17. Guy E. Blelloch. “Prefix Sums and Their Applications.” CMU-CS-90-190,
-    1990. <https://www.cs.cmu.edu/afs/cs.cmu.edu/project/scandal/public/papers/CMU-CS-90-190.html>
+17. Guy E. Blelloch. “Prefix Sums and Their Applications.” CMU-CS-90-190, 1990.
+    <https://www.cs.cmu.edu/afs/cs.cmu.edu/project/scandal/public/papers/CMU-CS-90-190.html>
 18. Shubhabrata Sengupta, Mark Harris, Yao Zhang, and John D. Owens. “Efficient
     Parallel Scan Algorithms for GPUs.” NVIDIA Technical Report NVR-2008-003,
-    2008. <https://research.nvidia.com/publication/2008-12_efficient-parallel-scan-algorithms-gpus>
+    2008.
+    <https://research.nvidia.com/publication/2008-12_efficient-parallel-scan-algorithms-gpus>

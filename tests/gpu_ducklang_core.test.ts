@@ -6,7 +6,7 @@ import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
 
-Deno.test("WebGPU validates and proposes the same Core rewrites as the CPU", async () => {
+Deno.test("WebGPU proposes the same Core rewrites as the CPU", async () => {
   const snapshot = await flat(
     `let value = 21
 let first = value + 0
@@ -30,17 +30,9 @@ integer_result
   assertEquals(result.rewriteCandidateCount, 3);
   assertEquals(result.rewriteDispatchedInvocationCount, 64);
   assertEquals(columns(result.package), columns(expected.package));
-  assertEquals(
-    result.validationRecordCount > snapshot.operationKinds.length,
-    true,
-  );
-  assertEquals(
-    result.validationDispatchedInvocationCount,
-    Math.ceil(result.validationRecordCount / 64) * 64,
-  );
 });
 
-Deno.test("WebGPU and CPU both reject an out-of-range Core type", async () => {
+Deno.test("CPU Core boundary rejects an out-of-range type before GPU work", async () => {
   const snapshot = await flat("42\n");
   const operationTypeIds = snapshot.operationTypeIds.slice();
   operationTypeIds[0] = snapshot.typeKinds.length + 7;
@@ -50,7 +42,6 @@ Deno.test("WebGPU and CPU both reject an out-of-range Core type", async () => {
     operationTypeIds,
   });
 
-  if (result.status === "unavailable") return;
   assertEquals(result.status, "invalid");
   if (result.status === "invalid") {
     assertEquals(/operation type/.test(result.reason), true);

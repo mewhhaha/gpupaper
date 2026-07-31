@@ -989,9 +989,9 @@ Core receives no source handler or open effect row.
       since a rewriter could hand back a fresh object while still writing
       through arrays it shares with the snapshot. Rewriting the same module
       twice accepts the same proposals and produces the same columns.
-- [x] Add GPU differential validation against the CPU Core validator and use
-      generated CPU/GPU matcher comparisons as the rewrite oracle. Production
-      GPU compilation then treats the proven GPU proposals as authoritative.
+- [x] Validate flat Core once at the CPU trust boundary and use generated exact
+      CPU/GPU matcher comparisons as the rewrite oracle. Production GPU
+      compilation treats only CPU-checked GPU proposals as authoritative.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

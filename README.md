@@ -218,7 +218,7 @@ standalone Wasm runtime. Generated parser artifacts are checked in.
   GPU kernels compile the payload; they do not execute its buffer operations.
 - The semantic frontend, ownership/effect policy, type oracle, and host-ABI
   policy run on the CPU. GPU stages handle equality closure, scalar compile-time
-  batches, flat-Core validation and rewrite matching, and Wasm binary emission.
+  batches, flat-Core rewrite matching, and Wasm binary emission.
 - The separate Haskell-like frontend remains eager and rank-1. It is an
   experiment, not a GHC-compatible implementation.
 
