@@ -25,7 +25,7 @@ unimplemented rules remain explicitly marked.
 ## 1. Status and review discipline
 
 - Last semantic review: 2026-07-31.
-- Implementation under review: the current working tree based on `50423f5`.
+- Implementation under review: the repository revision containing this document.
 - Normative status: Sections 3 through 8 define the intended language and
   compiler boundary.
 - Implementation status at the start of this migration: the effect prototype
@@ -42,6 +42,13 @@ Claims use four evidence classes:
 4. **Measurement**: an empirical result with a named workload and environment.
 
 No empirical result discharges a theorem obligation by itself.
+
+This repository retains two earlier design proposals: `paper.md` describes the
+original flat GPU backend, and `type-resolution-and-comptime.md` describes the
+original type and staging experiments. Their dated proposals and hypotheses are
+historical inputs, not current implementation claims. This document is
+normative; `PERFORMANCE.md` contains reproducible empirical evidence; `TASKS.md`
+records completion criteria; and `THEORY.md` is historical migration material.
 
 ## 2. Research basis and design decision
 

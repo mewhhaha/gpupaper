@@ -3,7 +3,9 @@
 _A companion to GPU-hosted compilation to WebAssembly, with Haskell and
 interaction calculus as stress tests_
 
-**Status:** research and engineering proposal, not an empirical results paper
+**Status:** historical research and engineering proposal. Current normative
+semantics and implementation status are in [PAPER.md](PAPER.md); reproducible
+measurements are in [PERFORMANCE.md](PERFORMANCE.md).
 
 **Date:** 22 July 2026
 
