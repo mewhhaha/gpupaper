@@ -1522,6 +1522,9 @@ resource cost, and corpus measurements.
 - [x] Measure lifted bindings and direct-function symbols. Identify Codex's 403
       lifts in 22.926 ms and derive the current repeated-scan worst case before
       instrumenting lifting traversals.
+- [x] Count direct-use validation scans and occurrences. Reject them as the
+      lifting multiplier after only 57 Codex scans visit 19,541 occurrences,
+      then remove the counters.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -596,6 +596,11 @@ function symbols in 22.926 ms (56.89 microseconds/lift). Editor lifts 55 in
 1.630 ms; other targets lift at most 13. The counters were removed and the next
 frontier is repeated per-candidate lifting scans.
 
+Direct-use instrumentation rejects the first candidate: Codex performs only 57
+scans over 19,541 occurrences, less than one 23,594-node residual traversal.
+Generated control functions bypass the scan by construction. Counters were
+removed; accepted-function rewriting remains the lifting frontier.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

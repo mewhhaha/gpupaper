@@ -5322,6 +5322,24 @@ The counters were removed. The next review must count the actual nodes visited
 by direct-use and capture scans before changing algorithms; lifted-binding count
 alone does not identify which repeated traversal dominates.
 
+### 2026-07-31: direct-use validation is not the lifting multiplier
+
+Review 88 instruments `isOnlyDirectlyCalled`. Codex invokes it 57 times and
+visits 19,541 expression occurrences, less than one traversal of the 23,594-node
+residual program. Editor visits 820 in 10 scans, grep 257 in four, and raytracer
+828 in nine; generated-control-only Tar and wav invoke no scan.
+
+The 403 Codex lifts do not imply 403 direct-use traversals because generated
+loop/range functions are call-only by construction and bypass validation. The
+measured 19,541 occurrences are only 15.02% of specialization rewrite entries
+and cannot explain an \(O(FV)\) multiplier. Removing or memoizing this scan would
+also weaken validation for ordinary nested functions unless an equivalent use
+classification were produced upstream.
+
+The counters were removed. Lifting review narrows to the work performed for the
+403 accepted functions: capture discovery, capture-argument insertion, step
+removal, and repeated block rebuilding.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
