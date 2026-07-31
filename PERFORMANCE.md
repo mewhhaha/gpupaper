@@ -581,6 +581,28 @@ ranked/dense emitter ratios were 0.9731–1.0071; no latency improvement is
 claimed. The exact grouped-byte writer passed the 501-test required-GPU gate
 and compiled every frozen target twice.
 
+### Byte lanes omit their known end boundary
+
+Byte atoms have encoded width one, but the first one-pass shader loaded
+`offset[i + 1]` and subtracted `offset[i]` before dispatching on kind. Moving
+that operation below the byte return changes boundary reads from `2A` to
+`2A - Q` and removes one subtraction per byte lane:
+
+| Target    | Byte lanes | Boundary reads before → after | Reduction |
+| --------- | ---------: | ----------------------------: | --------: |
+| Editor    |     13,895 |               47,846 → 33,951 |    29.04% |
+| Codex     |    115,797 |             408,198 → 292,401 |    28.37% |
+| grep      |      2,348 |                 7,794 → 5,446 |    30.12% |
+| tar       |     12,474 |               44,402 → 31,928 |    28.09% |
+| wav       |      1,493 |                 4,954 → 3,461 |    30.14% |
+| raytracer |      2,412 |                 7,702 → 5,290 |    31.32% |
+
+Capacity, transfer, scheduled lanes, and output are unchanged.
+The post-change dense/ranked medians were 27.87/28.01 ms for Editor and
+35.18/35.29 ms for Codex. No latency improvement is resolved at this boundary.
+The exact early-return shader passed the 501-test required-GPU gate and compiled
+every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

@@ -165,11 +165,11 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
   let low_word = atom_low_word(index, kind, kind_word);
   let output_start = atom_offset(index);
-  let size = atom_offset(index + 1u) - output_start;
   if (kind == ${atomByte}u) {
     emit_byte(output_start, low_word);
     return;
   }
+  let size = atom_offset(index + 1u) - output_start;
   if (kind == ${atomUnsigned}u || kind == ${atomLength}u) {
     var remaining = low_word;
     for (var byte_index = 0u; byte_index < size; byte_index += 1u) {

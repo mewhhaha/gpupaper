@@ -1101,8 +1101,10 @@ p_i    = (word_(i >> 1) >> (16(i & 1))) & 0xffff
 Otherwise boundaries remain one `u32` each. The GPU receives atom kinds,
 resolved low/high value words, and this adaptive boundary vector. Lane \(i\)
 owns exactly \([p_i,p_{i+1})\), encodes its atom there, and no sizing or scan
-kernel is required. Packing is lossless because \(0\leq p_i\leq B\); it changes
-representation, not the interval proof.
+kernel is required. A byte lane uses its statically known width one, so it reads
+only \(p_i\); every variable-width lane reads \(p_{i+1}\) as well. Packing is
+lossless because \(0\leq p_i\leq B\); it changes representation, not the
+interval proof.
 
 Adjacent intervals may share a `u32` output word, so writers use `atomicOr` into
 a zeroed buffer. The byte masks of distinct intervals are disjoint; the atomic
@@ -1127,9 +1129,10 @@ P(A, p_A) = 4 ceil((A + 1) / 2)  when p_A <= 65535
 ```
 
 The narrow representation adds two shifts, one mask, and one shared word load
-per boundary lookup; the host packing loop is \(O(A)\) and requires no new pass
-or synchronization. Adjacent half words are assembled in a scalar and assigned
-once, so host offset-vector stores equal the physical
+per observed boundary lookup. With \(Q\) byte atoms, emission performs exactly
+\(2A-Q\) boundary lookups rather than \(2A\). The host packing loop is \(O(A)\)
+and requires no new pass or synchronization. Adjacent half words are assembled
+in a scalar and assigned once, so host offset-vector stores equal the physical
 \(\lceil(A+1)/2\rceil\) words rather than the \(A+1\) logical boundaries.
 Output capacity is exactly \(4\lceil B/4\rceil\), and readback contains only
 that output.
@@ -2898,6 +2901,24 @@ hides any small host effect, so no latency improvement is claimed. Required-GPU
 gate passed 501 tests. Paired target samples in milliseconds were Editor
 334.96/230.85, Codex 971.32/805.07, grep 130.73/130.47, Tar 192.80/180.05,
 wav 114.29/114.13, and raytracer 94.42/93.19.
+
+### 2026-07-31: byte lanes stop reading an unobserved boundary
+
+The one-pass emitter computed every atom's dynamic interval width before
+dispatching on its tag. Byte width is definitionally one, so its end boundary
+and subtraction cannot affect byte emission. Section 7.4 now performs that work
+only after the byte lane returns.
+
+Frozen boundary reads fall by 28.09–31.32%, from \(2A\) to \(2A-Q\); 1,493 to
+115,797 lane-local subtractions disappear as well. Capacity, transfer,
+dispatches, and output are unchanged. The exhaustive byte-mask regression and
+all CPU/GPU plan differentials validate the early return. The 21-round
+post-change medians were 27.87/28.01 ms for Editor dense/ranked and
+35.18/35.29 ms for Codex; the fixed boundary hides any latency effect, so no
+speedup is claimed. The required-GPU gate passed 501 tests. Paired target
+samples in milliseconds were Editor 355.83/223.95, Codex 907.54/794.40, grep
+117.55/122.43, Tar 183.14/173.97, wav 109.50/111.68, and raytracer
+92.28/96.82.
 
 ## References
 

@@ -1031,6 +1031,9 @@ Core receives no source handler or open effect row.
 - [x] Accumulate four packed byte values before assigning their low-word entry.
       Disjoint byte masks reduce host byte-stream stores from `Q` to
       `ceil(Q / 4)` while preserving the ranked lookup proof.
+- [x] Use the definitional width one of byte atoms to skip their end-boundary
+      lookup. GPU emission now performs `2A - Q` offset reads and avoids one
+      subtraction for every byte lane.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a
