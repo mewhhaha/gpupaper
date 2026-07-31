@@ -1339,6 +1339,14 @@ for every dependency. With differential verification disabled, engine validity
 does not prove semantic equality to the plan; that mode deliberately trades
 away the independent byte oracle.
 
+Byte encodings have the finite domain \(B=\{0,\ldots,255\}\) and the extensional
+definition \(E_b(v)=[v]\). The encoder never mutates an encoding, so replacing
+each fresh \(E_b(v)\) with the corresponding member of one private canonical
+table is observationally equivalent. It changes per-emission byte-array
+allocation from \(Q\) to zero at a one-time cost of 256 singleton arrays. The
+first compilation batch breaks even when its aggregate \(Q>256\); every frozen
+target individually satisfies that condition.
+
 ### 7.5 Type equality as a certified conformance experiment
 
 The direct GPU type experiment consumes first-order equality constraints over
@@ -3106,6 +3114,25 @@ passed 504 tests and compiled every frozen target twice. Its advisory samples in
 milliseconds were Editor 329.86/225.05, Codex 966.56/820.40, grep
 131.34/130.68, Tar 232.03/182.11, wav 119.89/115.77, and raytracer
 96.45/89.32.
+
+### 2026-07-31: byte encodings are canonical finite values
+
+The CPU oracle allocated one fresh singleton array for every byte atom even
+though byte encoding is the immutable function \(v\mapsto[v]\) on a 256-element
+domain. Section 7.4 now treats these encodings as canonical values in a private
+table.
+
+One frozen batch removes 148,419 per-emission arrays—13,895 Editor, 115,797
+Codex, 2,348 grep, 12,474 Tar, 1,493 wav, and 2,412 raytracer—while adding 256
+persistent arrays once. The first batch therefore has 148,163 fewer allocations,
+and subsequent batches remove all 148,419. CPU/GPU byte differentials prove the
+sharing is unobservable. Post-change 101-sample CPU medians were 1.077 ms
+Editor, 14.294 Codex, 0.169 grep, 0.969 Tar, 0.103 wav, and 0.199 raytracer.
+The mixed changes do not resolve a latency effect. Required-GPU release evidence
+passed 504 tests and compiled every frozen target twice. Its advisory samples in
+milliseconds were Editor 349.09/243.67, Codex 948.26/839.47, grep
+145.16/136.63, Tar 255.35/197.77, wav 126.10/124.12, and raytracer
+105.14/98.83.
 
 ## References
 

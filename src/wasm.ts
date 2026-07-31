@@ -59,6 +59,11 @@ type WasmNode =
   | WasmInstruction
   | { readonly kind: "sized"; readonly contents: readonly WasmNode[] };
 
+const singleByteEncodings = Array.from(
+  { length: 0x100 },
+  (_, value) => [value] as const,
+);
+
 export class WasmModuleBuilder {
   readonly #types: WasmNode[][] = [];
   readonly #imports: WasmNode[][] = [];
@@ -357,7 +362,7 @@ function inspectWasmBinaryPlan(
         output.scalarSizes[atomIndex] = 1;
         byteAtomCount += 1;
       } else if (output?.kind === "encodings") {
-        output.scalarEncodings[atomIndex] = [atom.value];
+        output.scalarEncodings[atomIndex] = singleByteEncodings[atom.value];
         scalarByteLength += 1;
       }
       continue;

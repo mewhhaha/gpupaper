@@ -734,6 +734,26 @@ dependency before emission. Post-change CPU medians were 1.251 ms Editor,
 change is resolved. The 504-test required-GPU gate passed and compiled every
 frozen target twice.
 
+### Canonical singleton byte encodings
+
+CPU emission allocated one singleton array per byte atom. A private table of the
+256 immutable byte encodings removes those per-emission allocations:
+
+| Target    | Arrays removed per emission |
+| --------- | --------------------------: |
+| Editor    |                      13,895 |
+| Codex     |                     115,797 |
+| grep      |                       2,348 |
+| tar       |                      12,474 |
+| wav       |                       1,493 |
+| raytracer |                       2,412 |
+
+The batch removes 148,419 dynamic allocations and adds 256 persistent arrays
+once, for 148,163 fewer allocations on the first batch. Post-change CPU medians
+were 1.077 ms Editor, 14.294 Codex, 0.169 grep, 0.969 Tar, 0.103 wav, and
+0.199 raytracer. The timing changes are mixed, so no latency claim is made. The
+504-test required-GPU gate passed and compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:
