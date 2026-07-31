@@ -924,6 +924,24 @@ This is an opportunity bound, not a predicted speedup: memo lookup, edge
 aggregation, and occurrence multiplicities remain, and the transformation is
 context-sensitive even where the search is not.
 
+The evaluated DAG algorithm discovered every vertex and outgoing edge once,
+computed incoming-edge counts, seeded root multiplicities, and propagated exact
+root-path counts in topological order. For \(E_i\) syntax edges, its cost model
+is
+
+\[
+T_{dag}=c_vV_i+c_eE_i+c_m(V_i+E_i),
+\qquad
+T_{walk}=c_oO_i,
+\]
+
+where \(c_m\) covers map/set operations and queue bookkeeping. It wins only if
+\(c_o(O_i-V_i)>c_eE_i+c_m(V_i+E_i)+(c_v-c_o)V_i\). The frozen measurements
+reject that inequality even for Tar's 4.42× occurrence sharing. The simple walk
+therefore remains the specified implementation; the DAG formulation remains a
+correct alternative for a representation with compact integer IDs and dense
+arrays rather than JavaScript object maps.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4563,6 +4581,28 @@ and one source. Contemporary CPU control-flow representatives were 1.180,
 60.108, 0.247, 0.369, 0.125, and 0.597 ms; CPU total medians were 80.157,
 422.822, 11.636, 60.740, 4.964, and 9.425 ms. The change is semantic
 measurement repair, not a speed claim.
+
+### 2026-07-31: object-map DAG aggregation is rejected
+
+Review 56 implemented the exact DAG alternative derived after Review 54. It
+discovered each syntax vertex and edge once, rejected cycles, topologically
+propagated root occurrence multiplicities, checked safe-integer arithmetic, and
+preserved every frozen residual and search count. The 38 focused profile/Core
+tests passed, including nested residual descent.
+
+The implementation nevertheless raised CPU control-flow representatives from
+1.180→2.095 ms Editor, 60.108→64.663 Codex, 0.247→0.478 grep,
+0.369→0.717 Tar, and 0.125→0.224 wav. Raytracer measured 0.597→0.430 ms,
+but its sub-millisecond change does not outweigh five coherent regressions.
+Whole-compiler medians moved 80.157→76.180, 422.822→416.835,
+11.636→11.104, 60.740→57.518, 4.964→5.193, and 9.425→9.924 ms; the
+mixed totals demonstrate why the isolated stage decides this mechanism.
+
+The failed implementation was removed before commit. Its counterexample is
+important: structural sharing alone is insufficient when exploiting it needs
+multiple object-keyed maps, edge arrays, an indegree pass, and a topological
+queue. A future flat integer-ID syntax IR changes those constants and may cross
+the derived inequality; the current object AST does not.
 
 ## References
 

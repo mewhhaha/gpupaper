@@ -1426,6 +1426,9 @@ resource cost, and corpus measurements.
 - [x] Replace the residual outer-frontier count with full descent through
       source-control operands and bodies. Record the frontier counterexample,
       corrected Codex work, and nested-stagnation regression.
+- [x] Implement and measure exact topological DAG occurrence aggregation.
+      Reject its object-map overhead against the simple typed walk and retain
+      the break-even inequality for a future flat syntax IR.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

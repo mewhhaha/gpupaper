@@ -292,6 +292,24 @@ control-flow representatives were 1.180, 60.108, 0.247, 0.369, 0.125, and
 0.597 ms. A nested-refutable-loop regression observes both residual
 constructors and rejects stagnation as `2→2`.
 
+An exact DAG aggregation was then tested and rejected. It reduced constructor
+switches from occurrences to vertices but added edge materialization,
+object-keyed maps, indegrees, and topological multiplicity propagation:
+
+| Target | Simple walk | DAG aggregation | Change |
+| ------ | ----------: | --------------: | -----: |
+| Editor | 1.180 ms | 2.095 ms | +77.5% |
+| Codex | 60.108 ms | 64.663 ms | +7.6% |
+| grep | 0.247 ms | 0.478 ms | +93.4% |
+| Tar | 0.369 ms | 0.717 ms | +94.4% |
+| wav | 0.125 ms | 0.224 ms | +79.0% |
+| raytracer | 0.597 ms | 0.430 ms | -27.9% |
+
+The isolated stage rejects the algorithm despite noisy whole-compiler totals
+moving down on four targets. The simple typed walk remains. DAG aggregation may
+be revisited after syntax uses compact integer IDs and dense adjacency arrays,
+which remove the dominant object-map constants.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
