@@ -429,6 +429,19 @@ overlay updates and rollback for 703 requests. It is rejected. The 28,955
 Codex misses motivate measuring symbol scope before attempting a semantic
 non-parameter fast path.
 
+Resolver-proved scope partitions active-substitution queries:
+
+| Target | Module | Parameter | Local | Guaranteed misses |
+| ------ | -----: | --------: | ----: | ----------------: |
+| Editor | 107 | 417 | 299 | 406 (49.33%) |
+| Codex | 56 | 15,000 | 16,604 | 16,660 (52.62%) |
+| grep | 0 | 1 | 0 | 0 |
+| Tar/wav/raytracer | 0 | 0 | 0 | 0 |
+
+Substitution maps contain only resolver parameter symbols. Module and local
+queries can therefore bypass map search by proof, not heuristic. Temporary
+scope counters were removed before implementing the guard.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

@@ -1453,6 +1453,9 @@ resource cost, and corpus measurements.
 - [x] Measure substitution reference queries, probes, and hits. Reject stack
       flattening because Codex has only nine depth probes, and identify symbol
       scope as the proof boundary for bypassing guaranteed misses.
+- [x] Partition substitution queries by resolver scope. Prove module/local IDs
+      cannot inhabit parameter substitution maps and measure a 52.62% Codex
+      guaranteed-miss ceiling for the next fast path.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

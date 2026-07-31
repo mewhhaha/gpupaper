@@ -4814,6 +4814,28 @@ provably disjoint symbol scopes can bypass the stack entirely. Review 65 must
 measure query scope before adding that guard; symbol scope is semantic evidence,
 whereas a name or ID-range heuristic would be unsound.
 
+### 2026-07-31: resolver scope proves substitution misses
+
+Review 65 partitions active-substitution reference queries by the resolver's
+symbol scope. Editor reports 107 module, 417 parameter, and 299 local queries;
+Codex reports 56, 15,000, and 16,604; grep reports one parameter query. The
+other targets have no active substitutions.
+
+Each substitution environment is constructed exactly from
+`factory.parameters`. Resolution assigns every such symbol scope `parameter`.
+Therefore
+
+\[
+scope(r)\neq parameter \Longrightarrow
+\forall E\in substitutionStack.\ r.id\notin dom(E).
+\]
+
+This is a proved negative lookup, independent of naming and numeric ID
+allocation. It covers 16,660/31,660 = 52.62% of Codex queries and 406/823 =
+49.33% of Editor queries. The temporary scope counters were removed. Review 66
+can guard the reverse map search with `scope === parameter`; observable output
+is unchanged because the skipped branch is proved unable to return a value.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
