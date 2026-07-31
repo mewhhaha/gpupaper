@@ -1528,6 +1528,9 @@ resource cost, and corpus measurements.
 - [x] Count accepted-function capture traversal. Identify 107,069 Codex visits,
       4.54 residual traversals, and derive compositional free-variable summaries
       as the next lifting candidate.
+- [x] Measure capture output density. Establish 418 records from 107,069 Codex
+      visits, estimate summary storage, and preserve nested-binder and stable
+      ordering obligations for implementation.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -5360,6 +5360,25 @@ captures emitted versus nodes scanned; then an implementation can choose between
 cached per-function summaries and a whole-residual bottom-up pass with a stated
 memory cost.
 
+### 2026-07-31: capture discovery has 0.39% output density
+
+Review 90 counts capture records produced by the scans from Review 89. Codex
+emits 418 captures from 107,069 visited occurrences: 1.04 captures per 403
+lifted functions and 0.39% output density. Editor emits 65 from 2,114, grep 20
+from 672, Tar eight from 4,070, raytracer nine from 256, and wav none.
+
+The compact result domain is therefore \(O(F+C)\), where \(F=403\) and
+\(C=418\) for Codex, while repeated discovery performs 107,069 visits. A summary
+record needs a function ID, capture offset, and capture count (12 bytes with
+32-bit fields), plus capture symbol/type references. Even at 16 bytes per
+capture, Codex metadata is about 11.5 KiB, far below the object traffic of the
+repeated scans. Deterministic first-reference order can be retained by stable
+source occurrence order rather than set iteration accident.
+
+The counters were removed. This measurement justifies implementing one capture
+summary per function, but correctness still requires nested-binder subtraction
+and direct-function treatment to match `collectDefinedSymbols` exactly.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

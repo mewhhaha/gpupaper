@@ -606,6 +606,12 @@ and 5.48× direct-use validation. Editor visits 2,114 and Tar 4,070. The counter
 were removed; compositional free-variable summaries are now the measured lifting
 candidate.
 
+Codex capture scans emit only 418 records from 107,069 visits: 1.04 captures per
+lift and 0.39% output density. Tar emits eight from 4,070 visits. Estimated
+summary metadata is about 11.5 KiB for Codex, making compositional capture
+summaries the first lifting change with a positive work/memory case. Counters
+were removed.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
