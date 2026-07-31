@@ -8,7 +8,7 @@ These measurements were recorded on 2026-07-30 and 2026-07-31 with:
 - Linux 7.1.5-1-cachyos on x86-64;
 - frozen Binned contract digest
   `8031077802b03700258d527d9a9d20addffe786b90111b5694cc5ff3a16a70d4`;
-- gpupaper working tree based on `50423f5`.
+- gpupaper working tree through the Core identity audit at `ebc641a`.
 
 Timings are advisory. The 2026-07-30 baseline reports p50 and p95 values from 15
 samples in one process; the 2026-07-31 optimization audit reports warm medians
@@ -49,7 +49,13 @@ requires an even sample count, and uses the midpoint of the two central
 observations as the even-sample median. This counterbalances first-order
 run-order drift but does not remove autocorrelation or turn six or sixteen
 samples into a population-level performance claim. The frontend comparison uses
-six warm observations as three complete CPU-first/GPU-first pairs.
+six warm observations as three complete CPU-first/GPU-first order pairs. It
+retains every warm total and reports the paired differences
+`d_i = GPU_i - CPU_i`, their median, and their median absolute deviation
+`median(|d_i - median(d)|)`. The paired statistic removes additive noise shared
+by adjacent CPU/GPU observations; the raw samples expose stalls that a marginal
+median would hide. It does not estimate confidence or remove backend-specific
+noise.
 
 ```sh
 deno task benchmark:frontend
@@ -105,12 +111,38 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    |  99.19 ms | 152.19 ms |     24,460 |
-| Codex     | 499.64 ms | 569.61 ms |    226,134 |
-| grep      |  14.05 ms |  70.53 ms |      3,911 |
-| tar       |  66.21 ms | 121.05 ms |     26,106 |
-| wav       |   7.87 ms |  61.59 ms |      2,520 |
-| raytracer |  11.25 ms |  40.52 ms |      3,864 |
+| Editor    |  90.99 ms | 115.27 ms |     24,460 |
+| Codex     | 409.07 ms | 440.27 ms |    226,134 |
+| grep      |  12.30 ms |  40.43 ms |      3,911 |
+| tar       |  65.51 ms | 120.65 ms |     26,106 |
+| wav       |   5.73 ms |  33.95 ms |      2,520 |
+| raytracer |  10.25 ms |  38.50 ms |      3,864 |
+
+The corresponding paired GPU-minus-CPU measurements are:
+
+| Target    | Median difference | MAD | Dominant required-GPU stage |
+| --------- | ----------------: | --: | --------------------------- |
+| Editor    |          24.48 ms | 3.49 ms | Wasm emission, 28.67 ms |
+| Codex     |          23.50 ms | 5.05 ms | specialization, 105.24 ms |
+| grep      |          28.23 ms | 0.38 ms | Wasm emission, 27.48 ms |
+| tar       |          55.29 ms | 5.07 ms | Core pass, 34.38 ms |
+| wav       |          28.02 ms | 0.51 ms | Wasm emission, 27.81 ms |
+| raytracer |          28.38 ms | 1.31 ms | Wasm emission, 28.63 ms |
+
+These are one six-observation run, not confidence intervals. Five targets have
+an exact Core identity frontier, so their required-GPU latency premium is close
+to the isolated 27 ms Wasm boundary. Tar alone has 24 physical Core rewrites
+and pays both a 34.38 ms Core pass and a 29.70 ms Wasm pass. Codex's marginal
+median difference is 31.20 ms, while its median paired difference is 23.50 ms;
+this 7.70 ms discrepancy is a concrete counterexample to treating a difference
+of marginal medians as the paired effect.
+
+An immediately preceding run reported a 352.97 ms Editor GPU median and a
+209.25 ms representative Wasm stage. The old output discarded the six
+observations, so that excursion cannot be classified as a queue stall, thermal
+event, or repeated backend cost. It is retained as an inconclusive failed
+measurement and is the reason raw observations are now part of the benchmark
+contract.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

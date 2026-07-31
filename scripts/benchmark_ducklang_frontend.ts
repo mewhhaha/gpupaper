@@ -122,6 +122,9 @@ try {
       compilation: {
         pairOrder: "alternatingCpuFirst",
         pairCount: warmIterationCount / 2,
+        ...(compilations.pairedGpuMinusCpu === undefined
+          ? {}
+          : { pairedGpuMinusCpu: compilations.pairedGpuMinusCpu }),
         cpu: compilations.cpu,
         gpu: compilations.gpu,
       },
@@ -218,6 +221,7 @@ async function measureCompilation(
 type CompilationModeReport = {
   readonly first: CompilationMeasurement;
   readonly warmIterationCount: number;
+  readonly warmTotalMilliseconds: readonly number[];
   readonly warmMedianTotalMilliseconds: number;
   readonly warmRepresentativeProfile?: DucklangCompilationProfile;
   readonly warmHotStages?: readonly {
@@ -235,6 +239,11 @@ async function measureCompilationModes(
 ): Promise<{
   readonly cpu: CompilationModeReport;
   readonly gpu: CompilationModeReport;
+  readonly pairedGpuMinusCpu?: {
+    readonly milliseconds: readonly number[];
+    readonly medianMilliseconds: number;
+    readonly medianAbsoluteDeviationMilliseconds: number;
+  };
 }> {
   await clearDucklangParserCache();
   const cpuFirst = await measureCompilation(file, source, hostInterface, "off");
@@ -264,9 +273,29 @@ async function measureCompilationModes(
       );
     }
   }
+  const completedPairs = cpuWarm.flatMap((cpu, index) => {
+    const gpu = gpuWarm[index];
+    return cpu.status === "completed" && gpu?.status === "completed"
+      ? [gpu.totalMilliseconds - cpu.totalMilliseconds]
+      : [];
+  });
+  const pairedMedian = completedPairs.length === warmIterationCount
+    ? median(completedPairs)
+    : undefined;
   return {
     cpu: summarizeCompilationMode(cpuFirst, cpuWarm),
     gpu: summarizeCompilationMode(gpuFirst, gpuWarm),
+    ...(pairedMedian === undefined ? {} : {
+      pairedGpuMinusCpu: {
+        milliseconds: completedPairs,
+        medianMilliseconds: pairedMedian,
+        medianAbsoluteDeviationMilliseconds: median(
+          completedPairs.map((difference) =>
+            Math.abs(difference - pairedMedian)
+          ),
+        ),
+      },
+    }),
   };
 }
 
@@ -283,6 +312,9 @@ function summarizeCompilationMode(
   return {
     first,
     warmIterationCount,
+    warmTotalMilliseconds: warm.map((measurement) =>
+      measurement.totalMilliseconds
+    ),
     warmMedianTotalMilliseconds: median(
       warm.map((measurement) => measurement.totalMilliseconds),
     ),

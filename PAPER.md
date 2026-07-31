@@ -870,9 +870,23 @@ Comparative timing uses paired, counterbalanced observations: even samples run
 CPU then GPU and odd samples run GPU then CPU for the same workload, batch size,
 and scheduling policy. The sample count is even, so every CPU-first observation
 has a GPU-first counterpart; even-sample medians average the two central
-observations. This cancels a linear run-order trend within adjacent pairs. A
-reported stage breakdown is one observed profile nearest the scalar median
-total, not a vector of independently selected component medians. Thus
+observations. For frontend pair \(i\), let \(C_i\) and \(G_i\) be adjacent CPU
+and GPU elapsed times and define
+
+\[
+d_i = G_i-C_i,\qquad
+\widetilde d=\operatorname{median}_i(d_i),\qquad
+\operatorname{MAD}_d=\operatorname{median}_i|d_i-\widetilde d|.
+\]
+
+Under the nuisance model \(C_i=c+a_i+\epsilon^C_i\) and
+\(G_i=g+a_i+\epsilon^G_i\), differencing cancels the pair-local additive term
+\(a_i\). Alternating order counterbalances a first-order directional order
+effect. The benchmark retains all \(C_i\), \(G_i\), and \(d_i\), because neither
+a marginal median nor MAD identifies backend-specific stalls, autocorrelation,
+or thermal drift. A reported stage breakdown is one observed profile nearest
+the scalar median total, not a vector of independently selected component
+medians. Thus
 `accounted + unattributed = total` and all stage percentages refer to a possible
 execution. Parser sub-stage reports select an observed parse by the same rule.
 Medians and nearest-rank p95 values remain descriptive statistics; without
@@ -3943,6 +3957,51 @@ physical parallelism.
 The 509-test release gate passed. Its paired byte-identical, engine-valid
 samples in milliseconds were Editor 255.03/137.79, Codex 678.63/480.74, grep
 41.96/41.33, Tar 138.67/127.84, wav 35.06/34.24, and raytracer 42.73/38.03.
+
+### 2026-07-31: frontend measurements retain paired evidence
+
+The frontend harness previously retained only each backend's scalar median and
+one profile near that median. An initial post-Core audit observed an Editor GPU
+median of 352.973 ms with 209.252 ms in representative Wasm emission, versus
+roughly 115 and 29 ms in the following run. Because the six input observations
+had been discarded, no calculation could distinguish a queue stall from a
+repeatable compiler cost. That run is an inconclusive empirical measurement,
+not evidence for or against a compiler transformation.
+
+Section 7.1 now makes the paired estimator part of the measurement
+specification. The output retains every warm CPU and GPU total and reports
+\(\widetilde d\) and \(\operatorname{MAD}_d\). For Codex, the retained totals
+were
+
+\[
+\begin{aligned}
+C={}&[423.755,406.384,417.988,403.072,411.753,388.763],\\
+G={}&[445.917,439.579,440.966,427.093,426.497,452.171]\ {\rm ms}.
+\end{aligned}
+\]
+
+Their marginal medians are 409.068 and 440.273 ms, whose difference is
+31.205 ms. The paired differences have median 23.499 ms and MAD 5.046 ms.
+Therefore subtraction of marginal medians overstates the measured paired
+latency difference by 7.706 ms on this run. This is an arithmetic property of
+the retained observations; interpreting it as a population effect remains an
+unverified hypothesis.
+
+The same executable six-target run measured paired GPU-minus-CPU median/MAD
+milliseconds of Editor 24.483/3.489, Codex 23.499/5.046, grep 28.226/0.377,
+Tar 55.289/5.074, wav 28.020/0.511, and raytracer 28.379/1.306. Five programs
+have an exact Core identity frontier and their premium is close to the measured
+27--29 ms Wasm boundary. Tar alone performs physical Core rewriting and its
+representative required-GPU profile spends 34.378 ms in Core plus 29.696 ms in
+Wasm. This is empirical evidence that the next latency boundary is Wasm
+scheduling for identity-Core programs and useful Core execution for Tar; it is
+not a proof that either transformation will be profitable.
+
+The benchmark execution itself is the validation for the serialization and
+arithmetic contract: every completed pair produces one difference, incomplete
+pairs omit the paired summary, and the existing required-GPU compilation path
+still returns validated artifacts. No compiler semantics or emitted bytes
+changed in this audit.
 
 ## References
 
