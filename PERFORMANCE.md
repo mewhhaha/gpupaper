@@ -569,6 +569,19 @@ plus a structurally admitted non-identity constant that the GPU rejects.
 Raytracer now reports `core=identity`, zero Core submissions, and zero Core GPU
 time instead of claiming a GPU backend for the host-proved empty frontier.
 
+### Rejected Core rule expansion
+
+The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and
+`x / 1 → x` for i32/i64; division by positive one neither divides by zero nor
+triggers signed overflow. An exact scan of the six frozen pre-rewrite snapshots
+found zero matches for all three rules in both CPU and required-GPU
+compilations. The only existing matches are Tar's 24 add-zero operations.
+
+Adding those rules now would widen the CPU rule head and WGSL branch set without
+removing one operation in the measured contract. They remain rejected until a
+profile reports nonzero matches or a different workload supplies a measured
+break-even case.
+
 ### Scalar comptime stack capacity
 
 The standalone GPU bytecode conformance evaluator derives stack depth at every

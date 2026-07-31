@@ -2640,6 +2640,32 @@ required-GPU samples were 378.83/239.13 ms for Editor,
 94.66/97.97 ms for raytracer. These are correctness observations, not a timing
 claim.
 
+### 2026-07-31: unobserved algebra does not enter the matcher
+
+Three additional rules are semantically valid over the admitted modular integer
+types:
+
+```text
+imul(x, 0) -> 0
+isub(x, 0) -> x
+idiv(x, 1) -> x
+```
+
+The first two are ring identities. For the third, the fixed divisor is nonzero
+and signed division overflow occurs only at
+\((-2^{w-1})/(-1)\), so division by positive one is total and returns its
+dividend under the Wasm integer semantics [16].
+
+An exact scan of every frozen pre-rewrite Flat Core snapshot under both CPU and
+required-GPU policies found zero matches for each proposed rule. The current
+rules found only Tar's 24 add-zero matches. Widening \(H\), the shader, the rule
+ID domain, certificate validation, and generated tests would therefore add
+implementation and scheduled-work surface without changing one frozen Core
+module. The expansion is rejected under the cost model. It should be reopened
+only when retained profiles show nonzero matches or a new workload establishes
+a measured benefit. This is an empirical design rejection, not a claim that the
+laws are unsound.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
