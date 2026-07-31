@@ -543,6 +543,13 @@ function objects for the same `encode_json` source span each cost 32,184
 entries, together 56.33%. Source-span canonicalization is not justified because
 module environments may differ; the temporary provenance was removed.
 
+The two 32,184-entry encoder requests have equal captured environments but
+different `Json.Object` payload-reference identities (2,464 versus 2,922).
+Canonical factory identity therefore would not merge their complete keys or
+eliminate body rewriting. The shared optimization domain is a parametric body
+template, subject to measuring argument-dependent reductions; temporary
+identity counters were removed.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

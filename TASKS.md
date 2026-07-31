@@ -1486,6 +1486,9 @@ resource cost, and corpus measurements.
 - [x] Attribute the seven large requests to source factories and call sites.
       Localize all of them to JSON paths, including two distinct function
       objects for one encoder span, without unsafely merging by source span.
+- [x] Compare the two dominant encoder requests' complete identity components.
+      Reject result-cache merging because their static payload references differ
+      and define the parametric-template proof obligation instead.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

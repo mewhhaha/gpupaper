@@ -5048,6 +5048,32 @@ determine whether the duplicate encoder bodies arise from legitimately distinct
 module environments or avoidable repeated frontend instantiation before any
 identity merge is attempted.
 
+### 2026-07-31: duplicate encoder work is not a result-cache miss
+
+Review 76 decomposes the two 32,184-entry encoder requests into static-argument
+and captured-environment identities. Their captured environments are identical:
+both capture the same recursive encoder function identity. Their sole static
+arguments are both `Json.Object` cases, but the contained object-list references
+have distinct value identities, 2,464 and 2,922. Therefore the complete
+specialization keys are semantically distinct even if factory identity is
+canonicalized by source and environment.
+
+This rejects both module-instance deduplication and result-cache merging as an
+explanation for the duplicated traversal. Reusing either specialized result
+would substitute the wrong object payload. What is common is the encoder body
+and its control skeleton; what differs is the leaf substitution. A safe reuse
+mechanism must therefore be parametric: precompute a body traversal plan or
+residual template whose holes are explicitly indexed by parameter symbols, then
+instantiate those holes per request. Its correctness obligation is
+\(instantiate(template(B), \sigma) = rewrite(B, \sigma)\) for every admitted
+substitution \(\sigma\), including nested specialization requests and captured
+values.
+
+The identity instrumentation was removed. No implementation follows yet:
+current rewriting performs context-sensitive reductions while traversing, so a
+template is viable only after classifying how much of the 32,184 entries is
+structurally invariant versus argument-dependent.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
