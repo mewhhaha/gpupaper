@@ -28,6 +28,8 @@ integer_result
   assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
   assertEquals(result.rewriteCandidateCount, 3);
+  assertEquals(result.candidateDescriptorBytes, 240);
+  assertEquals(result.logicalDeviceBufferBytes, 292);
   assertEquals(result.rewriteDispatchedInvocationCount, 64);
   assertEquals(columns(result.package), columns(expected.package));
 });
@@ -60,6 +62,8 @@ Deno.test("empty Core rewrite frontier completes without WebGPU work", async () 
     throw new Error("empty Core rewrite frontier replaced its snapshot");
   }
   assertEquals(result.rewriteCandidateCount, 0);
+  assertEquals(result.candidateDescriptorBytes, 0);
+  assertEquals(result.logicalDeviceBufferBytes, 0);
   assertEquals(result.rewriteDispatchedInvocationCount, 0);
   assertEquals(result.proposals, []);
   assertEquals(result.accepted, []);

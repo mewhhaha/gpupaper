@@ -995,6 +995,9 @@ Core receives no source handler or open effect row.
 - [x] Treat an empty Core rewrite frontier as a validated identity before GPU
       preparation. Packed execution removes identity jobs while preserving
       logical result order; zero-work tests do not require an adapter.
+- [x] Project each nonempty Core rewrite candidate to the exact 20-word matcher
+      neighborhood. The GPU still decides the rule, while profiles prove
+      descriptor and total device capacities and CPU certificates check output.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

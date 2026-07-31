@@ -767,11 +767,12 @@ planning, ABI construction, and final validation. Consequently a faster kernel
 does not imply a faster compilation. `gpu_*_queue_wait`,
 `gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
 submission batch sizes, Core candidate/proposal/rewrite-lane counts, Wasm atom
-and length-frontier counts, length and scan dispatches, total Wasm scheduled
-lanes, and output-buffer bytes expose the terms that the current implementation
-can measure. Pipeline initialization and capacity/packing are currently combined
-with their containing stage except where Core initialization is reported
-separately; this is a stated instrumentation limit.
+and length-frontier counts, Core candidate-descriptor and logical device-buffer
+bytes, length and scan dispatches, total Wasm scheduled lanes, and output-buffer
+bytes expose the terms that the current implementation can measure. Pipeline
+initialization and capacity/packing are currently combined with their containing
+stage except where Core initialization is reported separately; this is a stated
+instrumentation limit.
 
 Comparative timing uses paired, counterbalanced observations: even samples run
 CPU then GPU and odd samples run GPU then CPU for the same workload, batch size,
@@ -950,15 +951,53 @@ eight-byte minimum readback. The transformation has no empirical break-even:
 once \(C=\varnothing\), those resources cannot affect the result, and the
 classification branch uses information already computed by the frontier scan.
 
-The rule buffer initially contains the candidate IDs. Lane \(q\) reads its
-operation ID and then replaces only slot \(q\) with its rule result; the
-replacement buffer has the same frontier width. This one-writer-per-slot
-invariant permits the input queue and rule output to share a buffer and keeps
-the shader at the device's eight-storage-binding limit. The rule/replacement
-columns and their copied readback payload each change from `8O` to `8|C|` bytes.
-Dense operations, operands, values, attributes, and types remain necessary
-because a candidate may reference arbitrary definitions; compacting them would
-require a closed-subgraph remapping, not another local filter.
+For candidate operation \(o\), define the projection \(D(S,o)\) to contain its
+operand and attribute counts, operator attribute kind and value, result type
+kind and scalar, and two operand descriptors. An operand descriptor contains its
+original value ID, definition kind, defining operation kind, and that
+operation's attribute count, kind, low word, and high word. The flat-Core
+validator has already proved every referenced ID and range safe. Direct
+substitution into the matcher gives:
+
+```text
+M(S, o) = M_D(D(S, o))
+```
+
+because these are exactly the fields read by `hasIntegerScalarResult` and
+`coreConstantEquals`; no other snapshot column affects either rule. The host
+gathers both operands and all fields regardless of operator or constant value,
+so projection does not decide a rewrite. Operator selection, integer-type
+selection, and both constant comparisons remain GPU decisions.
+
+Each descriptor is 20 `u32` words: six operation words and two seven-word
+operand records. Position \(q\) corresponds to the stable candidate ID at
+position \(q\). Lane \(q\) writes only rule and replacement slot \(q\), while
+the host retains the candidate IDs for certificate construction. The rewrite
+pipeline therefore uses three storage bindings—descriptor, rules, and
+replacements—rather than eight dense snapshot bindings.
+
+For nonempty \(C\), the previous derived host allocation and logical device
+capacity were:
+
+```text
+B_host_dense = 32O + 20A + 16V + 8T + 4C
+B_device_dense = 32O + 4E + 16A + 16V + 8T + 16C + 24
+```
+
+where \(E,A,V,T\) are operand, attribute, value, and type counts. Candidate
+projection changes them to:
+
+```text
+B_host_descriptor = 84C
+B_device_descriptor = 96C + 4
+```
+
+The host formula contains the 80-byte descriptor and retained four-byte
+operation ID. The device formula adds four-byte rule and replacement outputs,
+their eight-byte readback, and one four-byte uniform per candidate batch.
+Gathering costs \(O(C)\) work after the \(O(O)\) frontier scan. Projection is
+preferable exactly when these formulas are smaller; the frozen targets satisfy
+that condition, but a rule domain approaching the complete graph may not.
 
 The GPU returns proposal certificates containing rule, function, operation,
 result, replacement, and profit. A proposal `p` is admissible exactly when:
@@ -2113,6 +2152,25 @@ The regression has no unavailable branch, so it executes on runtimes without
 WebGPU. Nonempty type graphs are unchanged. The 495-test required-GPU gate and
 six frozen targets remain executable integration evidence; the empty case claims
 no effect on those nonempty workloads.
+
+### 2026-07-31: Core matching consumes candidate-local descriptors
+
+The first opcode frontier still uploaded dense operation, operand, attribute,
+value, and type columns because a candidate could refer to arbitrary
+definitions. Section 7.3 now observes that the current rule set follows at most
+two value-definition edges and reads a fixed 20-word projection. The CPU trust
+boundary gathers that projection without evaluating the operator or identity;
+the GPU matcher remains authoritative, and exact CPU certificate validation
+still rejects any false result.
+
+Across the frozen applications, derived host typed-array allocation falls by
+48.57–85.11%, logical Core device capacity by 45.67–83.61%, and storage bindings
+from eight to three. Codex changes from 908,316 to 242,760 derived host bytes
+and from 956,080 to 277,444 logical device bytes. Candidate-descriptor and
+logical device byte counts are executable profile fields. Generated CPU/GPU
+equality, the false-certificate regression, packed isolation, and the
+required-GPU gate are conformance evidence; deterministic byte counts do not
+establish a latency distribution.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

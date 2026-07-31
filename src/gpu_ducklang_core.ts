@@ -29,6 +29,8 @@ export type GpuDucklangCoreResult =
     readonly proposals: readonly DucklangCoreRewriteProposal[];
     readonly accepted: readonly DucklangCoreRewriteProposal[];
     readonly rewriteCandidateCount: number;
+    readonly candidateDescriptorBytes: number;
+    readonly logicalDeviceBufferBytes: number;
     readonly rewriteDispatchedInvocationCount: number;
     readonly initializationMilliseconds: number;
     readonly gpuMilliseconds: number;
@@ -56,105 +58,97 @@ type GpuCoreContext =
   | { readonly status: "unavailable"; readonly reason: string };
 
 const rewriteShader = `
-struct Parameters {
-  candidate_count: u32,
-  operation_count: u32,
+struct ConstantDescriptor {
+  value_id: u32,
+  definition_kind: u32,
+  operation_kind: u32,
+  attribute_count: u32,
+  attribute_kind: u32,
+  attribute_low: u32,
+  attribute_high: u32,
+}
+struct CandidateDescriptor {
   operand_count: u32,
   attribute_count: u32,
-  value_count: u32,
-  type_count: u32,
+  operator_kind: u32,
+  operator_value: u32,
+  result_type_kind: u32,
+  result_scalar: u32,
+  left: ConstantDescriptor,
+  right: ConstantDescriptor,
 }
-@group(0) @binding(0) var<storage, read> operations: array<vec4<u32>>;
-@group(0) @binding(1) var<storage, read> operation_ranges: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> operands: array<u32>;
-@group(0) @binding(3) var<storage, read> attributes: array<vec4<u32>>;
-@group(0) @binding(4) var<storage, read> values: array<vec4<u32>>;
-@group(0) @binding(5) var<storage, read> types: array<vec2<u32>>;
-@group(0) @binding(6) var<storage, read_write> rules: array<u32>;
-@group(0) @binding(7) var<storage, read_write> replacements: array<u32>;
-@group(0) @binding(8) var<uniform> parameters: Parameters;
+struct Parameters {
+  candidate_count: u32,
+}
+@group(0) @binding(0) var<storage, read> candidates: array<CandidateDescriptor>;
+@group(0) @binding(1) var<storage, read_write> rules: array<u32>;
+@group(0) @binding(2) var<storage, read_write> replacements: array<u32>;
+@group(0) @binding(3) var<uniform> parameters: Parameters;
 
-fn has_integer_scalar_result(operation: vec4<u32>) -> bool {
-  let type_id = operation.w;
+fn constant_equals(value: ConstantDescriptor, expected_high: u32) -> bool {
   if (
-    type_id >= parameters.type_count ||
-    types[type_id].x != ${FlatDucklangCoreKind.type.scalar}u
+    value.definition_kind !=
+      ${FlatDucklangCoreKind.valueDefinition.operation}u
   ) {
     return false;
   }
-  let scalar = types[type_id].y;
-  return
-    scalar == ${FlatDucklangCoreKind.scalar.i32}u ||
-    scalar == ${FlatDucklangCoreKind.scalar.i64}u;
-}
-
-fn constant_equals(value_id: u32, expected_high: u32) -> bool {
-  if (value_id >= parameters.value_count) { return false; }
-  let value = values[value_id];
-  if (value.z != ${FlatDucklangCoreKind.valueDefinition.operation}u) {
-    return false;
-  }
-  let operation_id = value.w;
-  if (operation_id >= parameters.operation_count) { return false; }
-  let operation = operations[operation_id];
-  let ranges = operation_ranges[operation_id];
   if (
-    operation.x != ${FlatDucklangCoreKind.operation.constant}u ||
-    ranges.z >= parameters.attribute_count ||
-    ranges.w != 1u
+    value.operation_kind != ${FlatDucklangCoreKind.operation.constant}u ||
+    value.attribute_count != 1u
   ) {
     return false;
   }
-  let operation_attribute = attributes[ranges.z];
   return
-    operation_attribute.x == ${FlatDucklangCoreKind.attribute.number}u &&
-    operation_attribute.y == 0u &&
-    operation_attribute.z == expected_high;
+    value.attribute_kind == ${FlatDucklangCoreKind.attribute.number}u &&
+    value.attribute_low == 0u &&
+    value.attribute_high == expected_high;
 }
 
 @compute @workgroup_size(64)
 fn propose_rewrites(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let candidate_id = invocation.x;
   if (candidate_id >= parameters.candidate_count) { return; }
-  let operation_id = rules[candidate_id];
   rules[candidate_id] = 0u;
   replacements[candidate_id] = 0xffffffffu;
-  let operation = operations[operation_id];
-  let ranges = operation_ranges[operation_id];
+  let candidate = candidates[candidate_id];
   if (
-    operation.x != ${FlatDucklangCoreKind.operation.scalarBinary}u ||
-    ranges.y != 2u ||
-    ranges.w != 1u ||
-    ranges.x > parameters.operand_count ||
-    ranges.y > parameters.operand_count - ranges.x ||
-    ranges.z >= parameters.attribute_count ||
-    !has_integer_scalar_result(operation)
+    candidate.operand_count != 2u ||
+    candidate.attribute_count != 1u ||
+    candidate.result_type_kind != ${FlatDucklangCoreKind.type.scalar}u ||
+    (
+      candidate.result_scalar != ${FlatDucklangCoreKind.scalar.i32}u &&
+      candidate.result_scalar != ${FlatDucklangCoreKind.scalar.i64}u
+    )
   ) {
     return;
   }
-  let operation_attribute = attributes[ranges.z];
-  if (operation_attribute.x != ${FlatDucklangCoreKind.attribute.unsigned}u) {
+  if (
+    candidate.operator_kind !=
+      ${FlatDucklangCoreKind.attribute.unsigned}u
+  ) {
     return;
   }
-  let left = operands[ranges.x];
-  let right = operands[ranges.x + 1u];
-  if (operation_attribute.y == ${FlatDucklangCoreKind.binaryOperator.add}u) {
-    if (constant_equals(right, 0u)) {
+  if (
+    candidate.operator_value ==
+      ${FlatDucklangCoreKind.binaryOperator.add}u
+  ) {
+    if (constant_equals(candidate.right, 0u)) {
       rules[candidate_id] = 1u;
-      replacements[candidate_id] = left;
-    } else if (constant_equals(left, 0u)) {
+      replacements[candidate_id] = candidate.left.value_id;
+    } else if (constant_equals(candidate.left, 0u)) {
       rules[candidate_id] = 1u;
-      replacements[candidate_id] = right;
+      replacements[candidate_id] = candidate.right.value_id;
     }
   } else if (
-    operation_attribute.y == ${FlatDucklangCoreKind.binaryOperator.multiply}u
+    candidate.operator_value ==
+      ${FlatDucklangCoreKind.binaryOperator.multiply}u
   ) {
-    if (constant_equals(right, 0x3ff00000u)) {
+    if (constant_equals(candidate.right, 0x3ff00000u)) {
       rules[candidate_id] = 2u;
-      replacements[candidate_id] = left;
-    } else if (constant_equals(left, 0x3ff00000u)) {
+      replacements[candidate_id] = candidate.left.value_id;
+    } else if (constant_equals(candidate.left, 0x3ff00000u)) {
       rules[candidate_id] = 2u;
-      replacements[candidate_id] = right;
+      replacements[candidate_id] = candidate.right.value_id;
     }
   }
 }
@@ -220,11 +214,7 @@ type PreparedCoreJob =
   | {
     readonly status: "rewrite";
     readonly snapshot: ValidatedFlatDucklangCore;
-    readonly operationColumns: Uint32Array;
-    readonly operationRanges: Uint32Array;
-    readonly attributes: Uint32Array;
-    readonly values: Uint32Array;
-    readonly types: Uint32Array;
+    readonly candidateDescriptors: Uint32Array;
     readonly rewriteCandidateOperationIds: Uint32Array;
   };
 
@@ -324,38 +314,15 @@ async function runPackedDucklangCoreGpuBatch(
   const { device, rewritePipeline } = context;
   const storageAlignment = device.limits.minStorageBufferOffsetAlignment;
   const uniformAlignment = device.limits.minUniformBufferOffsetAlignment;
-  const operations = packCoreColumns(
-    gpuJobs.map((job) => job.operationColumns),
-    4,
-    storageAlignment,
-  );
-  const operationRanges = packCoreColumns(
-    gpuJobs.map((job) => job.operationRanges),
-    4,
-    storageAlignment,
-  );
-  const operands = packCoreColumns(
-    gpuJobs.map((job) => job.snapshot.package.operandValueIds),
-    4,
-    storageAlignment,
-  );
-  const attributes = packCoreColumns(
-    gpuJobs.map((job) => job.attributes),
-    4,
-    storageAlignment,
-  );
-  const values = packCoreColumns(
-    gpuJobs.map((job) => job.values),
-    4,
-    storageAlignment,
-  );
-  const types = packCoreColumns(
-    gpuJobs.map((job) => job.types),
-    8,
+  const candidateDescriptors = packCoreColumns(
+    gpuJobs.map((job) => job.candidateDescriptors),
+    80,
     storageAlignment,
   );
   const rules = packCoreColumns(
-    gpuJobs.map((job) => job.rewriteCandidateOperationIds),
+    gpuJobs.map((job) =>
+      new Uint32Array(job.rewriteCandidateOperationIds.length)
+    ),
     4,
     storageAlignment,
   );
@@ -368,16 +335,9 @@ async function runPackedDucklangCoreGpuBatch(
   );
   const rewriteParameters = packCoreColumns(
     gpuJobs.map((job) =>
-      new Uint32Array([
-        job.rewriteCandidateOperationIds.length,
-        job.snapshot.package.operationKinds.length,
-        job.snapshot.package.operandValueIds.length,
-        job.snapshot.package.attributeKinds.length,
-        job.snapshot.package.valueLocalIds.length,
-        job.snapshot.package.typeKinds.length,
-      ])
+      new Uint32Array([job.rewriteCandidateOperationIds.length])
     ),
-    24,
+    4,
     uniformAlignment,
   );
   const readback = packCoreColumns(
@@ -389,40 +349,10 @@ async function runPackedDucklangCoreGpuBatch(
   );
 
   const transferStart = performance.now();
-  const operationBuffer = createPackedCoreBuffer(
+  const candidateDescriptorBuffer = createPackedCoreBuffer(
     device,
-    "Ducklang Core batch operations",
-    operations,
-    GPUBufferUsage.STORAGE,
-  );
-  const operationRangeBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch operation ranges",
-    operationRanges,
-    GPUBufferUsage.STORAGE,
-  );
-  const operandBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch operands",
-    operands,
-    GPUBufferUsage.STORAGE,
-  );
-  const attributeBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch attributes",
-    attributes,
-    GPUBufferUsage.STORAGE,
-  );
-  const valueBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch values",
-    values,
-    GPUBufferUsage.STORAGE,
-  );
-  const typeBuffer = createPackedCoreBuffer(
-    device,
-    "Ducklang Core batch types",
-    types,
+    "Ducklang Core batch candidate descriptors",
+    candidateDescriptors,
     GPUBufferUsage.STORAGE,
   );
   const ruleBuffer = createPackedCoreBuffer(
@@ -454,12 +384,7 @@ async function runPackedDucklangCoreGpuBatch(
   );
   const transferMilliseconds = performance.now() - transferStart;
   const buffers = [
-    operationBuffer,
-    operationRangeBuffer,
-    operandBuffer,
-    attributeBuffer,
-    valueBuffer,
-    typeBuffer,
+    candidateDescriptorBuffer,
     ruleBuffer,
     replacementBuffer,
     rewriteParameterBuffer,
@@ -476,28 +401,19 @@ async function runPackedDucklangCoreGpuBatch(
         device.createBindGroup({
           layout: rewritePipeline.getBindGroupLayout(0),
           entries: [
-            coreBindGroupEntry(0, operationBuffer, operations.regions[index]),
             coreBindGroupEntry(
-              1,
-              operationRangeBuffer,
-              operationRanges.regions[index],
+              0,
+              candidateDescriptorBuffer,
+              candidateDescriptors.regions[index],
             ),
-            coreBindGroupEntry(2, operandBuffer, operands.regions[index]),
+            coreBindGroupEntry(1, ruleBuffer, rules.regions[index]),
             coreBindGroupEntry(
-              3,
-              attributeBuffer,
-              attributes.regions[index],
-            ),
-            coreBindGroupEntry(4, valueBuffer, values.regions[index]),
-            coreBindGroupEntry(5, typeBuffer, types.regions[index]),
-            coreBindGroupEntry(6, ruleBuffer, rules.regions[index]),
-            coreBindGroupEntry(
-              7,
+              2,
               replacementBuffer,
               replacements.regions[index],
             ),
             coreBindGroupEntry(
-              8,
+              3,
               rewriteParameterBuffer,
               rewriteParameters.regions[index],
             ),
@@ -571,6 +487,8 @@ async function runPackedDucklangCoreGpuBatch(
         proposals,
         accepted: committed.accepted,
         rewriteCandidateCount: candidateCount,
+        candidateDescriptorBytes: job.candidateDescriptors.byteLength,
+        logicalDeviceBufferBytes: candidateCount * 96 + 4,
         rewriteDispatchedInvocationCount: Math.ceil(candidateCount / 64) * 64,
         initializationMilliseconds,
         gpuMilliseconds,
@@ -606,31 +524,10 @@ function prepareCoreJob(snapshot: FlatDucklangCore): PreparedCoreJob {
   return {
     status: "rewrite",
     snapshot: cpuValidation.snapshot,
-    operationColumns: interleaveColumns(
-      snapshot.operationKinds,
-      snapshot.operationResultValueIds,
-      snapshot.operationBlockIds,
-      snapshot.operationTypeIds,
+    candidateDescriptors: coreRewriteCandidateDescriptors(
+      snapshot,
+      rewriteCandidateOperationIds,
     ),
-    operationRanges: interleaveColumns(
-      snapshot.operationOperandStarts,
-      snapshot.operationOperandCounts,
-      snapshot.operationAttributeStarts,
-      snapshot.operationAttributeCounts,
-    ),
-    attributes: interleaveColumns(
-      snapshot.attributeKinds,
-      snapshot.attributeLowWords,
-      snapshot.attributeHighWords,
-      new Uint32Array(snapshot.attributeKinds.length),
-    ),
-    values: interleaveColumns(
-      snapshot.valueFunctionIds,
-      snapshot.valueTypeIds,
-      snapshot.valueDefinitionKinds,
-      snapshot.valueDefinitionIds,
-    ),
-    types: interleavePairs(snapshot.typeKinds, snapshot.typeAuxiliaries),
     rewriteCandidateOperationIds: new Uint32Array(
       rewriteCandidateOperationIds,
     ),
@@ -651,6 +548,72 @@ function validateCoreSnapshotForGpu(
       reason: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function coreRewriteCandidateDescriptors(
+  snapshot: FlatDucklangCore,
+  candidateOperationIds: readonly number[],
+): Uint32Array {
+  const descriptorWordCount = 20;
+  const constantWordCount = 7;
+  const words = new Uint32Array(
+    candidateOperationIds.length * descriptorWordCount,
+  );
+  const writeConstant = (
+    valueId: number | undefined,
+    wordOffset: number,
+  ): void => {
+    if (valueId === undefined) {
+      words[wordOffset] = 0xffff_ffff;
+      return;
+    }
+    words[wordOffset] = valueId;
+    const definitionKind = snapshot.valueDefinitionKinds[valueId];
+    words[wordOffset + 1] = definitionKind;
+    if (
+      definitionKind !== FlatDucklangCoreKind.valueDefinition.operation
+    ) return;
+    const operationId = snapshot.valueDefinitionIds[valueId];
+    words[wordOffset + 2] = snapshot.operationKinds[operationId];
+    const attributeCount = snapshot.operationAttributeCounts[operationId];
+    words[wordOffset + 3] = attributeCount;
+    if (attributeCount === 0) return;
+    const attributeId = snapshot.operationAttributeStarts[operationId];
+    words[wordOffset + 4] = snapshot.attributeKinds[attributeId];
+    words[wordOffset + 5] = snapshot.attributeLowWords[attributeId];
+    words[wordOffset + 6] = snapshot.attributeHighWords[attributeId];
+  };
+
+  for (
+    let candidateId = 0;
+    candidateId < candidateOperationIds.length;
+    candidateId += 1
+  ) {
+    const operationId = candidateOperationIds[candidateId];
+    const wordOffset = candidateId * descriptorWordCount;
+    const operandCount = snapshot.operationOperandCounts[operationId];
+    const attributeCount = snapshot.operationAttributeCounts[operationId];
+    words[wordOffset] = operandCount;
+    words[wordOffset + 1] = attributeCount;
+    if (attributeCount > 0) {
+      const attributeId = snapshot.operationAttributeStarts[operationId];
+      words[wordOffset + 2] = snapshot.attributeKinds[attributeId];
+      words[wordOffset + 3] = snapshot.attributeLowWords[attributeId];
+    }
+    const typeId = snapshot.operationTypeIds[operationId];
+    words[wordOffset + 4] = snapshot.typeKinds[typeId];
+    words[wordOffset + 5] = snapshot.typeAuxiliaries[typeId];
+    const operandStart = snapshot.operationOperandStarts[operationId];
+    writeConstant(
+      operandCount > 0 ? snapshot.operandValueIds[operandStart] : undefined,
+      wordOffset + 6,
+    );
+    writeConstant(
+      operandCount > 1 ? snapshot.operandValueIds[operandStart + 1] : undefined,
+      wordOffset + 6 + constantWordCount,
+    );
+  }
+  return words;
 }
 
 function packCoreColumns(
@@ -727,12 +690,8 @@ async function runDucklangCoreWithGpu(
     return completeEmptyCoreRewriteFrontier(job.snapshot);
   }
   const {
-    attributes,
-    operationColumns,
-    operationRanges,
+    candidateDescriptors,
     rewriteCandidateOperationIds,
-    types,
-    values,
   } = job;
   const validatedSnapshot = job.snapshot;
   const snapshot = validatedSnapshot.package;
@@ -744,12 +703,7 @@ async function runDucklangCoreWithGpu(
   const { device, rewritePipeline } = context;
   const outputSize = rewriteCandidateOperationIds.byteLength * 2;
   const capacityRequests = [
-    ["operations", Math.max(4, operationColumns.byteLength), "storage"],
-    ["operation ranges", Math.max(4, operationRanges.byteLength), "storage"],
-    ["operands", Math.max(4, snapshot.operandValueIds.byteLength), "storage"],
-    ["attributes", Math.max(4, attributes.byteLength), "storage"],
-    ["values", Math.max(4, values.byteLength), "storage"],
-    ["types", Math.max(8, types.byteLength), "storage"],
+    ["candidate descriptors", candidateDescriptors.byteLength, "storage"],
     [
       "rewrite rules",
       Math.max(4, rewriteCandidateOperationIds.byteLength),
@@ -760,7 +714,7 @@ async function runDucklangCoreWithGpu(
       Math.max(4, rewriteCandidateOperationIds.byteLength),
       "storage",
     ],
-    ["rewrite parameters", 24, "uniform"],
+    ["rewrite parameters", 4, "uniform"],
     ["readback", Math.max(8, outputSize), "copy"],
   ] as const;
   for (const [label, byteLength, binding] of capacityRequests) {
@@ -781,47 +735,20 @@ async function runDucklangCoreWithGpu(
     return { status: "unavailable", reason: dispatchReason };
   }
   const transferStart = performance.now();
-  const operationBuffer = createBuffer(
+  const candidateDescriptorBuffer = createBuffer(
     device,
-    "Ducklang Core operations",
-    operationColumns,
+    "Ducklang Core candidate descriptors",
+    candidateDescriptors,
     GPUBufferUsage.STORAGE,
   );
-  const operationRangeBuffer = createBuffer(
-    device,
-    "Ducklang Core operation ranges",
-    operationRanges,
-    GPUBufferUsage.STORAGE,
-  );
-  const operandBuffer = createBuffer(
-    device,
-    "Ducklang Core operands",
-    snapshot.operandValueIds,
-    GPUBufferUsage.STORAGE,
-  );
-  const attributeBuffer = createBuffer(
-    device,
-    "Ducklang Core attributes",
-    attributes,
-    GPUBufferUsage.STORAGE,
-  );
-  const valueBuffer = createBuffer(
-    device,
-    "Ducklang Core values",
-    values,
-    GPUBufferUsage.STORAGE,
-  );
-  const typeBuffer = createBuffer(
-    device,
-    "Ducklang Core types",
-    types,
-    GPUBufferUsage.STORAGE,
-  );
-  const ruleBuffer = createBuffer(
+  const ruleBuffer = createCompilerGpuBuffer(
     device,
     "Ducklang Core rewrite rules",
-    rewriteCandidateOperationIds,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    {
+      size: rewriteCandidateOperationIds.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    },
+    "storage",
   );
   const replacementBuffer = createCompilerGpuBuffer(
     device,
@@ -835,14 +762,7 @@ async function runDucklangCoreWithGpu(
   const rewriteParameters = createBuffer(
     device,
     "Ducklang Core rewrite parameters",
-    new Uint32Array([
-      rewriteCandidateOperationIds.length,
-      snapshot.operationKinds.length,
-      snapshot.operandValueIds.length,
-      snapshot.attributeKinds.length,
-      snapshot.valueLocalIds.length,
-      snapshot.typeKinds.length,
-    ]),
+    new Uint32Array([rewriteCandidateOperationIds.length]),
     GPUBufferUsage.UNIFORM,
   );
   const readback = createCompilerGpuBuffer(
@@ -856,12 +776,7 @@ async function runDucklangCoreWithGpu(
   );
   const transferMilliseconds = performance.now() - transferStart;
   const buffers = [
-    operationBuffer,
-    operationRangeBuffer,
-    operandBuffer,
-    attributeBuffer,
-    valueBuffer,
-    typeBuffer,
+    candidateDescriptorBuffer,
     ruleBuffer,
     replacementBuffer,
     rewriteParameters,
@@ -873,15 +788,10 @@ async function runDucklangCoreWithGpu(
     const rewriteBindGroup = device.createBindGroup({
       layout: rewritePipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: operationBuffer } },
-        { binding: 1, resource: { buffer: operationRangeBuffer } },
-        { binding: 2, resource: { buffer: operandBuffer } },
-        { binding: 3, resource: { buffer: attributeBuffer } },
-        { binding: 4, resource: { buffer: valueBuffer } },
-        { binding: 5, resource: { buffer: typeBuffer } },
-        { binding: 6, resource: { buffer: ruleBuffer } },
-        { binding: 7, resource: { buffer: replacementBuffer } },
-        { binding: 8, resource: { buffer: rewriteParameters } },
+        { binding: 0, resource: { buffer: candidateDescriptorBuffer } },
+        { binding: 1, resource: { buffer: ruleBuffer } },
+        { binding: 2, resource: { buffer: replacementBuffer } },
+        { binding: 3, resource: { buffer: rewriteParameters } },
       ],
     });
     const rewritePass = encoder.beginComputePass();
@@ -951,6 +861,8 @@ async function runDucklangCoreWithGpu(
       proposals: gpuProposals,
       accepted: committed.accepted,
       rewriteCandidateCount: rewriteCandidateOperationIds.length,
+      candidateDescriptorBytes: candidateDescriptors.byteLength,
+      logicalDeviceBufferBytes: rewriteCandidateOperationIds.length * 96 + 4,
       rewriteDispatchedInvocationCount:
         Math.ceil(rewriteCandidateOperationIds.length / 64) * 64,
       initializationMilliseconds,
@@ -983,6 +895,8 @@ function completeEmptyCoreRewriteFrontier(
     proposals: [],
     accepted: [],
     rewriteCandidateCount: 0,
+    candidateDescriptorBytes: 0,
+    logicalDeviceBufferBytes: 0,
     rewriteDispatchedInvocationCount: 0,
     initializationMilliseconds: 0,
     gpuMilliseconds: 0,
@@ -1025,41 +939,6 @@ function gpuRewriteProposals(
   });
 }
 
-function interleaveColumns(
-  first: Uint32Array,
-  second: Uint32Array,
-  third: Uint32Array,
-  fourth: Uint32Array,
-): Uint32Array {
-  const length = Math.max(
-    first.length,
-    second.length,
-    third.length,
-    fourth.length,
-  );
-  const words = new Uint32Array(length * 4);
-  for (let index = 0; index < length; index += 1) {
-    words[index * 4] = first[index] ?? 0;
-    words[index * 4 + 1] = second[index] ?? 0;
-    words[index * 4 + 2] = third[index] ?? 0;
-    words[index * 4 + 3] = fourth[index] ?? 0;
-  }
-  return words;
-}
-
-function interleavePairs(
-  first: Uint32Array,
-  second: Uint32Array,
-): Uint32Array {
-  const length = Math.max(first.length, second.length);
-  const words = new Uint32Array(length * 2);
-  for (let index = 0; index < length; index += 1) {
-    words[index * 2] = first[index] ?? 0;
-    words[index * 2 + 1] = second[index] ?? 0;
-  }
-  return words;
-}
-
 async function requestGpuCoreContext(): Promise<GpuCoreContext> {
   if (contextPromise !== undefined) return await contextPromise;
   const pending = (async (): Promise<GpuCoreContext> => {
@@ -1070,7 +949,7 @@ async function requestGpuCoreContext(): Promise<GpuCoreContext> {
       requireCompilerGpuCapacity(device, {
         kind: "pipelineBindings",
         label: "Ducklang Core rewrite",
-        storageBufferCount: 8,
+        storageBufferCount: 3,
         uniformBufferCount: 1,
       });
       const rewriteModule = device.createShaderModule({ code: rewriteShader });

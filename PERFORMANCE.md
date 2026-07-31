@@ -342,8 +342,9 @@ that stable opcode frontier gives:
 
 The output columns are also the readback payload. Candidate IDs initially occupy
 the rule column and are overwritten in place, so compaction adds no ninth
-storage binding. The dense Core snapshot inputs remain unchanged. These are
-deterministic profile counts, not latency samples.
+storage binding. At this intermediate measurement, dense Core snapshot inputs
+remained unchanged; the candidate-local descriptor section below supersedes that
+representation. These are deterministic profile counts, not latency samples.
 
 Before removal, the GPU structural-validation pass was much larger than the
 rewrite frontier:
@@ -400,6 +401,33 @@ regression reports one logical payload batch but zero physical submissions for
 both results. These are executable zero-work invariants, not timing samples.
 Every frozen target has a nonempty frontier, so the six-target release table is
 unaffected.
+
+### Candidate-local Core descriptors
+
+The current matcher reads a fixed projection of each candidate and at most two
+constant definitions. A 20-word descriptor now carries exactly those fields. The
+GPU still decides operator, scalar type, and constant identity; the CPU still
+checks every resulting certificate against the complete immutable snapshot.
+
+For operations `O`, operands `E`, attributes `A`, values `V`, types `T`, and
+candidates `C`, logical device capacity changes from
+`32O + 4E + 16A + 16V + 8T + 16C + 24` to `96C + 4`. Derived host typed-array
+allocation changes from `32O + 20A + 16V + 8T + 4C` to `84C`.
+
+| Target    | Old host bytes | Descriptor host bytes | Host reduction | Old device bytes | Descriptor device bytes | Device reduction |
+| --------- | -------------: | --------------------: | -------------: | ---------------: | ----------------------: | ---------------: |
+| Editor    |         95,316 |                14,196 |         85.11% |           99,000 |                  16,228 |           83.61% |
+| Codex     |        908,316 |               242,760 |         73.27% |          956,080 |                 277,444 |           70.98% |
+| grep      |         12,624 |                 2,856 |         77.38% |           13,112 |                   3,268 |           75.08% |
+| tar       |        111,756 |                46,116 |         58.74% |          120,620 |                  52,708 |           56.30% |
+| wav       |          9,436 |                 3,612 |         61.72% |            9,968 |                   4,132 |           58.55% |
+| raytracer |         16,824 |                 8,652 |         48.57% |           18,208 |                   9,892 |           45.67% |
+
+Storage bindings fall from eight to three. Profile invariants require exactly
+`80C` descriptor bytes and `96C + 4` logical device bytes for every nonempty
+frontier. Packed alignment is additional physical capacity. These are
+deterministic capacity measurements; latency still requires a counterbalanced
+benchmark.
 
 ### Scalar comptime stack capacity
 
