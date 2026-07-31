@@ -1029,6 +1029,24 @@ child position, plus independently checkable clash and acyclicity certificates.
 
 ### 7.6 Scalar comptime integer semantics
 
+The admitted scalar fragment has two kinds, `i32` and `bool`. Lowering derives a
+kind for every expression:
+
+```text
+i32 arithmetic (+, -, *, /, %) : i32 × i32 -> i32
+i32 order (<, <=, >, >=)       : i32 × i32 -> bool
+equality (==, !=)               : A × A -> bool, A ∈ {i32, bool}
+Boolean (&&, ||)                : bool × bool -> bool
+if                              : bool × A × A -> A
+```
+
+Integer literals must lie in \([-2^{31}, 2^{31}-1]\). These checks run while
+source expressions become bytecode, take \(O(S_c)\) work for \(S_c\) scalar
+nodes, and make the bytecode result kind a derivation rather than an unchecked
+annotation. The general frontend type checker provides the same facts for
+ordinary compilation, but the exported scalar-lowering boundary establishes them
+independently.
+
 Scalar comptime integers denote Wasm `i32`, not unbounded JavaScript numbers.
 Addition, subtraction, and multiplication compute modulo \(2^{32}\) and are then
 interpreted as signed two's-complement values. Signed division truncates toward
@@ -1128,6 +1146,8 @@ The implementation must establish:
     neither a value, a trap, nor executed arithmetic.
 16. **Bytecode confinement**: every comptime program counter and stack access
     remains inside its validated logical job.
+17. **Scalar kind preservation**: comptime lowering emits bytecode only for the
+    typed `i32`/`bool` fragment and reports the derived result kind.
 
 ## 9. Cost model
 
@@ -1801,6 +1821,15 @@ independently. No historical timing was rewritten; future measurements use the
 corrected design. Parser sub-stage vectors now follow the same observed-run rule
 instead of combining independently selected initialization, classification,
 syntax, and lowering times.
+
+### 2026-07-31: scalar lowering checks its own type boundary
+
+The main frontend inferred scalar types before comptime lowering, but the
+exported scalar IR still admitted mixed-kind arithmetic, integer conditions, and
+out-of-range constants. Lowering now derives the Section 7.6 kind at every node
+and rejects those three counterexamples with source evidence before bytecode
+exists. This duplicates a linear check at an explicit public trust boundary; it
+does not replace general source inference.
 
 ## References
 

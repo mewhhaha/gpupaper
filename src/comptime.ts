@@ -220,6 +220,14 @@ export function compileScalarComptimeExpression(
   const emit = (node: ScalarComptimeExpression): ComptimeValue["kind"] => {
     switch (node.kind) {
       case "integer":
+        if (
+          !Number.isSafeInteger(node.value) || node.value < -2_147_483_648 ||
+          node.value > 2_147_483_647
+        ) {
+          throw new TypeError(
+            `${node.span.file}:${node.span.start}: comptime integer ${node.value} is outside the i32 domain`,
+          );
+        }
         opcodes.push(opcode.constant);
         operands.push(node.value);
         return "integer";
@@ -227,9 +235,22 @@ export function compileScalarComptimeExpression(
         opcodes.push(opcode.constant);
         operands.push(node.value ? 1 : 0);
         return "boolean";
-      case "binary":
-        emit(node.left);
-        emit(node.right);
+      case "binary": {
+        const leftKind = emit(node.left);
+        const rightKind = emit(node.right);
+        const requiresBoolean = node.operator === "&&" ||
+          node.operator === "||";
+        const permitsEitherKind = node.operator === "==" ||
+          node.operator === "!=";
+        if (
+          leftKind !== rightKind ||
+          (requiresBoolean && leftKind !== "boolean") ||
+          (!requiresBoolean && !permitsEitherKind && leftKind !== "integer")
+        ) {
+          throw new TypeError(
+            `${node.span.file}:${node.span.start}: comptime operator ${node.operator} cannot combine ${leftKind} and ${rightKind}`,
+          );
+        }
         opcodes.push(
           {
             "+": opcode.add,
@@ -260,8 +281,14 @@ export function compileScalarComptimeExpression(
           ].includes(node.operator)
           ? "boolean"
           : "integer";
+      }
       case "if": {
-        emit(node.condition);
+        const conditionKind = emit(node.condition);
+        if (conditionKind !== "boolean") {
+          throw new TypeError(
+            `${node.span.file}:${node.span.start}: comptime if condition has kind ${conditionKind}; expected boolean`,
+          );
+        }
         const alternativeJump = opcodes.length;
         opcodes.push(opcode.jumpIfFalse);
         operands.push(0);

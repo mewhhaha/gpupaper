@@ -644,6 +644,41 @@ Deno.test("comptime rejects malformed packed bytecode before GPU execution", asy
   );
 });
 
+Deno.test("comptime scalar lowering rejects values outside its typed i32 fragment", () => {
+  const span = { file: "typed.hs", start: 11, end: 12 };
+  assertThrows(
+    () =>
+      compileScalarComptimeExpression({
+        kind: "binary",
+        operator: "+",
+        left: { kind: "boolean", value: true, span },
+        right: { kind: "integer", value: 1, span },
+        span,
+      }),
+    /typed\.hs:11: comptime operator \+ cannot combine boolean and integer/,
+  );
+  assertThrows(
+    () =>
+      compileScalarComptimeExpression({
+        kind: "if",
+        condition: { kind: "integer", value: 1, span },
+        thenBranch: { kind: "integer", value: 2, span },
+        elseBranch: { kind: "integer", value: 3, span },
+        span,
+      }),
+    /typed\.hs:11: comptime if condition has kind integer; expected boolean/,
+  );
+  assertThrows(
+    () =>
+      compileScalarComptimeExpression({
+        kind: "integer",
+        value: 2_147_483_648,
+        span,
+      }),
+    /typed\.hs:11: comptime integer 2147483648 is outside the i32 domain/,
+  );
+});
+
 Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {
   let sourceExpression = "1";
   for (let depth = 1; depth < 65; depth += 1) {
