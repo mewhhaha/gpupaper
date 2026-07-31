@@ -310,6 +310,22 @@ moving down on four targets. The simple typed walk remains. DAG aggregation may
 be revisited after syntax uses compact integer IDs and dense adjacency arrays,
 which remove the dominant object-map constants.
 
+Weak identity sets plus scalar cardinalities were also tested and rejected.
+The A/B/A control-flow samples were:
+
+| Target | Weak A | Set B | Weak A |
+| ------ | -----: | ----: | -----: |
+| Editor | 1.794 ms | 2.087 ms | 2.571 ms |
+| Codex | 57.566 ms | 60.450 ms | 58.531 ms |
+| grep | 0.271 ms | 0.228 ms | 0.261 ms |
+| Tar | 0.404 ms | 0.372 ms | 0.420 ms |
+| wav | 0.130 ms | 0.123 ms | 0.127 ms |
+| raytracer | 0.241 ms | 0.289 ms | 0.245 ms |
+
+The mechanism is target-dependent and reduces no live-memory bound because the
+module owns all nodes throughout the synchronous scan. Ordinary sets remain for
+simpler single-operation insertion and direct cardinality.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

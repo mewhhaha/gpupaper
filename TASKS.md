@@ -1429,6 +1429,9 @@ resource cost, and corpus measurements.
 - [x] Implement and measure exact topological DAG occurrence aggregation.
       Reject its object-map overhead against the simple typed walk and retain
       the break-even inequality for a future flat syntax IR.
+- [x] Measure weak identity sets against ordinary sets in an A/B/A sequence.
+      Reject the target-dependent result and prove that module ownership
+      prevents a live-memory reduction.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

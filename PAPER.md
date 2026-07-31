@@ -942,6 +942,16 @@ therefore remains the specified implementation; the DAG formulation remains a
 correct alternative for a representation with compact integer IDs and dense
 arrays rather than JavaScript object maps.
 
+Identity cardinalities use ordinary sets. Replacing an object set with a weak
+set plus a scalar counter preserves the count during this synchronous scan,
+because the module and worklist keep every reachable node alive. It does not,
+however, reduce the live-memory bound: the module already strongly owns all
+\(V_i\) vertices. Its work changes from approximately one set insertion per
+occurrence to one membership query per occurrence, one insertion per unique
+vertex, and a branch/increment per first visit. The relative constants are
+engine- and sharing-dependent, so neither representation dominates from the
+asymptotic model.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4603,6 +4613,28 @@ important: structural sharing alone is insufficient when exploiting it needs
 multiple object-keyed maps, edge arrays, an indegree pass, and a topological
 queue. A future flat integer-ID syntax IR changes those constants and may cross
 the derived inequality; the current object AST does not.
+
+### 2026-07-31: weak identity sets are rejected
+
+Review 57 tested replacing the two object-identity sets with weak sets and
+explicit cardinality counters. Correctness and all frozen work counts were
+unchanged. The lifetime proof is straightforward: weak membership cannot
+disappear during the scan because the input module and pending traversal paths
+retain every reachable node. Conversely, that same ownership proves there is
+no peak-live-memory reduction.
+
+An A/B/A sequence produced Weak/Set/Weak control-flow milliseconds of
+1.794/2.087/2.571 Editor, 57.566/60.450/58.531 Codex,
+0.271/0.228/0.261 grep, 0.404/0.372/0.420 Tar,
+0.130/0.123/0.127 wav, and 0.241/0.289/0.245 raytracer. Codex and raytracer
+favor weak identity; grep and Tar favor ordinary identity; Editor is unstable.
+The result demonstrates target-dependent constants rather than an admissible
+global speedup.
+
+The weak-set implementation was removed before commit. Ordinary sets retain a
+single insertion operation per occurrence, direct cardinality, and the same
+asymptotic memory already forced by module ownership. A future arena IR should
+replace both with dense visitation epochs, not choose between object-set APIs.
 
 ## References
 
