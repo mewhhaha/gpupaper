@@ -1034,6 +1034,9 @@ Core receives no source handler or open effect row.
 - [x] Use the definitional width one of byte atoms to skip their end-boundary
       lookup. GPU emission now performs `2A - Q` offset reads and avoids one
       subtraction for every byte lane.
+- [x] Fuse byte count, signed-64 count, and maximum byte rank into the mandatory
+      atom-size traversal. This product fold deletes one complete host pass over
+      every Wasm plan without changing validation or packing.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -30,6 +30,9 @@ export type WasmBinaryPlanAnalysis = {
   readonly byteLength: number;
   readonly atomByteOffsets: Uint32Array;
   readonly lengthLevels: readonly WasmLengthLevel[];
+  readonly byteAtomCount: number;
+  readonly maximumByteRank: number;
+  readonly signed64AtomCount: number;
 };
 
 type WasmNode =
@@ -413,7 +416,13 @@ export function analyzeWasmBinaryPlan(
 ): WasmBinaryPlanAnalysis {
   const lengthLevels = validateWasmBinaryPlan(plan);
   const sizes = new Uint8Array(plan.atoms.length);
+  let byteAtomCount = 0;
+  let maximumByteRank = 0;
+  let signed64AtomCount = 0;
   for (const [atomIndex, atom] of plan.atoms.entries()) {
+    if ((atomIndex & 7) === 0) maximumByteRank = byteAtomCount;
+    if (atom.kind === "byte") byteAtomCount += 1;
+    if (atom.kind === "signed64") signed64AtomCount += 1;
     if (atom.kind === "length") continue;
     sizes[atomIndex] = atom.kind === "byte"
       ? 1
@@ -452,7 +461,14 @@ export function analyzeWasmBinaryPlan(
     }
     atomByteOffsets[atomIndex + 1] = byteLength;
   }
-  return { byteLength, atomByteOffsets, lengthLevels };
+  return {
+    byteLength,
+    atomByteOffsets,
+    lengthLevels,
+    byteAtomCount,
+    maximumByteRank,
+    signed64AtomCount,
+  };
 }
 
 export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {

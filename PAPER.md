@@ -1237,15 +1237,17 @@ L(A, Q, M)   = min(4A, L_ranked(A, Q, M))
 B_atom_input = L(A, Q, M) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 ```
 
-The host already counts signed-64 atoms before choosing their high-word
-representation; byte counting is fused into that pass. Rank construction and
-packing remain \(O(A)\). Four adjacent packed bytes are accumulated before one
-physical-word store, reducing byte-stream stores from \(Q\) to
-\(\lceil Q/4\rceil\). Ranked GPU lookup now has four constant shifts, three ORs,
-three masks/complements, and one population count rather than zero to seven
-data-dependent tag comparisons. Rank lookup adds one shift and mask on the
-16-bit path. Its two adjacent ranks are likewise assembled before one physical
-word store. Five frozen targets use 16-bit ranks; Codex uses 32. Relative to
+The mandatory atom-size pass simultaneously counts byte atoms, signed-64 atoms,
+and the maximum byte rank. This product fold removes a separate statistics
+traversal while preserving each component because all four accumulators depend
+only on the same immutable atom prefix. Rank construction and packing remain
+\(O(A)\). Four adjacent packed bytes are accumulated before one physical-word
+store, reducing byte-stream stores from \(Q\) to \(\lceil Q/4\rceil\). Ranked
+GPU lookup now has four constant shifts, three ORs, three masks/complements, and
+one population count rather than zero to seven data-dependent tag comparisons.
+Rank lookup adds one shift and mask on the 16-bit path. Its two adjacent ranks
+are likewise assembled before one physical word store. Five frozen targets use
+16-bit ranks; Codex uses 32. Relative to
 dense low words, adaptive ranking removes 3,856–245,336 bytes and 14.14–25.05%
 of complete atom input. A 21-pair counterbalanced experiment measured
 ranked/dense median ratios from 0.9771 to 1.0015, so no latency improvement is
@@ -2919,6 +2921,25 @@ speedup is claimed. The required-GPU gate passed 501 tests. Paired target
 samples in milliseconds were Editor 355.83/223.95, Codex 907.54/794.40, grep
 117.55/122.43, Tar 183.14/173.97, wav 109.50/111.68, and raytracer
 92.28/96.82.
+
+### 2026-07-31: Wasm statistics become a product fold
+
+GPU column preparation traversed the complete atom sequence once to count bytes,
+signed-64 values, and maximum byte rank, immediately after analysis traversed
+the same sequence for encoded sizes. Section 7.4 now computes the product of
+those prefix folds during the mandatory size pass.
+
+This deletes one \(A\)-atom traversal without moving validation or changing
+which facts are trusted. The six frozen plans remove 260,448 host atom visits;
+predicate counts, allocation, transfer, GPU work, and bytes remain identical.
+The public analysis regression now exposes the three statistics, while profile
+equations and all emitter differentials consume them. The post-change 21-round
+medians were 28.07/28.22 ms for Editor dense/ranked and 35.65/36.19 ms for
+Codex. The fixed boundary and run-to-run drift dominate the removed iterator
+overhead, so no latency improvement is claimed. The required-GPU release gate
+passed 501 tests and compiled every frozen target twice. Its advisory samples in
+milliseconds were Editor 335.21/231.17, Codex 936.04/806.90, grep
+130.41/129.73, Tar 197.20/179.83, wav 113.49/110.44, and raytracer 95.57/95.01.
 
 ## References
 

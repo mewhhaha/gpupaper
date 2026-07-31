@@ -603,6 +603,28 @@ The post-change dense/ranked medians were 27.87/28.01 ms for Editor and
 The exact early-return shader passed the 501-test required-GPU gate and compiled
 every frozen target twice.
 
+### Wasm statistics fuse into size analysis
+
+GPU preparation counted byte atoms, signed-64 atoms, and maximum byte rank in a
+separate pass immediately after the mandatory atom-size pass. These are
+independent prefix accumulators over the same immutable sequence, so their
+product fold now runs with size calculation. One full host traversal disappears:
+
+| Target    | Atom visits removed |
+| --------- | ------------------: |
+| Editor    |              23,923 |
+| Codex     |             204,099 |
+| grep      |               3,897 |
+| tar       |              22,201 |
+| wav       |               2,477 |
+| raytracer |               3,851 |
+
+The frozen batch removes 260,448 atom visits. Predicate evaluations, allocation,
+transfer, GPU work, and output are unchanged; only loop and iterator overhead is
+discarded. Post-change dense/ranked medians were 28.07/28.22 ms for Editor and
+35.65/36.19 ms for Codex; no latency improvement is resolved. The 501-test
+required-GPU gate passed and compiled every frozen target twice.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:

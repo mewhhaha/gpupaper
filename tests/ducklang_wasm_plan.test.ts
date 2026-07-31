@@ -98,6 +98,9 @@ Deno.test("Ducklang Wasm analysis resolves exact atom byte boundaries", () => {
 
   assertEquals([...analysis.atomByteOffsets], [0, 1, 3, 4, 5]);
   assertEquals(analysis.byteLength, 5);
+  assertEquals(analysis.byteAtomCount, 1);
+  assertEquals(analysis.maximumByteRank, 0);
+  assertEquals(analysis.signed64AtomCount, 0);
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {

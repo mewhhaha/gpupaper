@@ -15,6 +15,7 @@ import {
   analyzeWasmBinaryPlan,
   type WasmAtom,
   type WasmBinaryPlan,
+  type WasmBinaryPlanAnalysis,
 } from "./wasm.ts";
 
 export type GpuWasmEmissionResult =
@@ -543,7 +544,7 @@ function prepareWasmGpuJob(
     plan,
     columns: atomColumns(
       plan.atoms,
-      analysis.atomByteOffsets,
+      analysis,
       lowWordLayout,
     ),
     expectedByteCount: analysis.byteLength,
@@ -846,7 +847,7 @@ async function emitWasmPlanWithGpu(
 
 function atomColumns(
   atoms: readonly WasmAtom[],
-  atomByteOffsets: Uint32Array,
+  analysis: WasmBinaryPlanAnalysis,
   requestedLowWordLayout: GpuWasmLowWordLayout,
 ): {
   readonly kinds: Uint32Array;
@@ -861,14 +862,12 @@ function atomColumns(
   readonly signed64AtomCount: number;
   readonly sparseSigned64HighWords: boolean;
 } {
-  let byteAtomCount = 0;
-  let maximumByteRank = 0;
-  let signed64AtomCount = 0;
-  for (const [index, atom] of atoms.entries()) {
-    if ((index & 7) === 0) maximumByteRank = byteAtomCount;
-    if (atom.kind === "byte") byteAtomCount += 1;
-    if (atom.kind === "signed64") signed64AtomCount += 1;
-  }
+  const {
+    atomByteOffsets,
+    byteAtomCount,
+    maximumByteRank,
+    signed64AtomCount,
+  } = analysis;
   const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
   const byteRankCount = Math.ceil(atoms.length / 8);
   const byteRankWords = byteRankBitWidth === 16
