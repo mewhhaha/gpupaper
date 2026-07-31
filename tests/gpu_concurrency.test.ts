@@ -7,8 +7,8 @@ import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
 
 Deno.test("concurrent compilations remain isolated after a failed GPU job", async () => {
-  const duckSource = `let value = 41
-value + 1
+  const duckSource = `let keep = (value: I32) => value + 0
+keep(41)
 `;
   const haskellSource = "main = 40 + 2\n";
   const [duckBaseline, haskellBaseline] = await Promise.all([

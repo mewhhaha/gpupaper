@@ -1085,6 +1085,22 @@ silently downgrade a raw input into trusted input. Completed results report the
 input provenance. This is an information-flow invariant: batching changes
 physical grouping, not the proof attached to a logical job.
 
+For compiler-owned trusted input, preparation precedes scheduling:
+
+```text
+submit(T) =
+  identity(T)          when prepare(T) proves C empty
+  queue(prepared(T,C)) otherwise
+```
+
+The prepared variant contains the trust wrapper, exact candidate IDs, and their
+descriptors. Queue splitting and mixed-batch filtering preserve that value
+without repeating matching or descriptor construction. The public raw API
+continues to enter the queue before validation so its throughput-batch
+observability remains explicit. This asymmetry follows the trust boundary:
+internal construction provenance permits eager pure classification, while raw
+input first belongs to the defensive scheduling boundary.
+
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects an untrusted
 input or returns a validation-provenance snapshot held read-only by this stage.
@@ -3867,6 +3883,31 @@ The 508-test release gate passed with the exact frontier. Its paired
 byte-identical, engine-valid samples in milliseconds were Editor 255.92/140.90,
 Codex 679.85/487.44, grep 44.47/43.28, Tar 138.29/124.89, wav 37.67/36.10, and
 raytracer 40.77/39.68.
+
+### 2026-07-31: trusted Core identity stops before scheduling
+
+The exact frontier initially proved identity only after a compiler job entered
+the asynchronous GPU batch queue. This retained roughly one scheduler turn even
+though no physical work could be shared. Section 7.3 now prepares trusted input
+before queueing. Identity returns immediately; a nonempty prepared job carries
+its descriptors through batching and capacity splits without recomputation.
+
+An alternating 21-pair Codex required-GPU experiment against detached commit
+`f8bd93a` changed median Core-pass time from 2.310 to 0.113 ms (-95.12%) and
+complete compilation from 435.368 to 428.949 ms (-1.47%). GPU Wasm emission was
+stable at 36.794 versus 36.745 ms, the Core backend remained `identity`, and
+every observation emitted the same 226,134-byte module. The end-to-end movement
+is larger than the isolated 2.198-ms removal and is therefore not wholly
+attributed.
+
+The concurrency regression now uses an actual add-zero match, so its physical
+Core batching assertion continues to test nonempty work rather than demanding
+that identity jobs enter a queue. Raw empty-frontier throughput tests retain
+their logical batching contract.
+
+The 508-test release gate passed. Its paired byte-identical, engine-valid
+samples in milliseconds were Editor 263.72/146.35, Codex 790.83/540.59, grep
+42.72/43.72, Tar 149.74/131.27, wav 35.52/34.73, and raytracer 41.43/40.59.
 
 ## References
 

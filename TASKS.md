@@ -1381,6 +1381,9 @@ resource cost, and corpus measurements.
 - [x] Replace the necessary-only Core rule-head queue with the exact matcher
       domain. Discard host proposal payloads, independently recompute retained
       matches on GPU, and submit only Tar's 24 useful frozen-corpus operations.
+- [x] Prepare trusted Core before GPU scheduling. Return exact-frontier identity
+      immediately and carry nonempty descriptors through batching and capacity
+      splits without recomputation.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

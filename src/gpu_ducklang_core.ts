@@ -166,6 +166,12 @@ type CoreGpuInput =
   | {
     readonly kind: "trusted";
     readonly snapshot: TrustedFlatDucklangCore;
+  }
+  | {
+    readonly kind: "prepared";
+    readonly snapshot: TrustedFlatDucklangCore;
+    readonly candidateDescriptors: Uint32Array;
+    readonly rewriteCandidateOperationIds: Uint32Array;
   };
 
 const coreBatchQueue = createCompilerGpuBatchQueue(
@@ -195,8 +201,15 @@ export async function runTrustedDucklangCoreGpuPass(
     readonly scheduling?: CompilerGpuSchedulingPolicy;
   } = {},
 ): Promise<GpuDucklangCoreResult> {
+  const prepared = prepareCoreJob({ kind: "trusted", snapshot });
+  if (prepared.status === "identity") {
+    return completeEmptyCoreRewriteFrontier(prepared.snapshot);
+  }
+  if (prepared.status === "invalid") {
+    return { status: "invalid", reason: prepared.reason };
+  }
   return await enqueueDucklangCoreGpuPass(
-    { kind: "trusted", snapshot },
+    preparedCoreGpuInput(prepared),
     options.scheduling ?? "latency",
   );
 }
@@ -298,7 +311,7 @@ async function runPackedDucklangCoreGpuBatch(
           : job.status === "identity"
           ? completeEmptyCoreRewriteFrontier(job.snapshot)
           : runDucklangCoreWithGpu(
-            { kind: "trusted", snapshot: job.snapshot },
+            preparedCoreGpuInput(job),
             "latency",
           )
       ),
@@ -313,15 +326,12 @@ async function runPackedDucklangCoreGpuBatch(
       : rewriteJobs.length === 1
       ? [
         await runDucklangCoreWithGpu(
-          { kind: "trusted", snapshot: rewriteJobs[0].snapshot },
+          preparedCoreGpuInput(rewriteJobs[0]),
           "latency",
         ),
       ]
       : await runDucklangCoreGpuBatch(
-        rewriteJobs.map((job) => ({
-          kind: "trusted" as const,
-          snapshot: job.snapshot,
-        })),
+        rewriteJobs.map(preparedCoreGpuInput),
       );
     let rewriteResultIndex = 0;
     return jobs.map((job, index) => {
@@ -547,6 +557,14 @@ async function runPackedDucklangCoreGpuBatch(
 }
 
 function prepareCoreJob(input: CoreGpuInput): PreparedCoreJob {
+  if (input.kind === "prepared") {
+    return {
+      status: "rewrite",
+      snapshot: input.snapshot,
+      candidateDescriptors: input.candidateDescriptors,
+      rewriteCandidateOperationIds: input.rewriteCandidateOperationIds,
+    };
+  }
   const cpuValidation = input.kind === "trusted"
     ? { status: "valid" as const, snapshot: input.snapshot }
     : validateCoreSnapshotForGpu(input.package);
@@ -570,6 +588,15 @@ function prepareCoreJob(input: CoreGpuInput): PreparedCoreJob {
     rewriteCandidateOperationIds: new Uint32Array(
       rewriteCandidateOperationIds,
     ),
+  };
+}
+
+function preparedCoreGpuInput(job: PreparedCoreRewriteJob): CoreGpuInput {
+  return {
+    kind: "prepared",
+    snapshot: job.snapshot,
+    candidateDescriptors: job.candidateDescriptors,
+    rewriteCandidateOperationIds: job.rewriteCandidateOperationIds,
   };
 }
 

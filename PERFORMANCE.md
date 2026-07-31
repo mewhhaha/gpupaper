@@ -1327,6 +1327,28 @@ The 508-test release gate passed under that contract. All six targets compiled
 twice to byte-identical, engine-valid Wasm; Tar reported `core=gpu`, the other
 five `core=identity`, and every target reported GPU Wasm emission.
 
+### Trusted identity before the GPU scheduler
+
+Trusted compiler input now computes its exact frontier before queueing. Empty
+jobs return immediately; nonempty jobs carry prepared descriptors through the
+queue. An alternating 21-pair Codex required-GPU experiment after one
+unrecorded warmup compared the current tree with detached commit `f8bd93a`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| GPU Core pass | 2.310 ms | 0.113 ms | -95.12% |
+| Complete compilation | 435.368 ms | 428.949 ms | -1.47% |
+| GPU Wasm emission | 36.794 ms | 36.745 ms | -0.13% |
+
+All samples emitted identical 226,134-byte Wasm and retained `core=identity`.
+Only the 2.198-ms Core-stage reduction is isolated; the larger total movement
+contains unrelated variation. Physical concurrency coverage now uses a program
+with a real add-zero proposal. The raw empty-frontier API still exercises
+logical throughput batching and pre-device validation.
+
+The 508-test release gate passed, including physical Core concurrency on
+nonempty prepared jobs and all six byte-identical GPU Wasm pairs.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and
