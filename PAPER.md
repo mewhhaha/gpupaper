@@ -5193,6 +5193,32 @@ encoder requests, this source-level ceiling is 5,286 avoided occurrences for
 about 663 bytes of dependency bits before packing. Generated rewrite work may
 raise the benefit, but only an implementation experiment can establish it.
 
+### 2026-07-31: existing fingerprints cannot directly name typed bodies
+
+Review 82 audits the repository's identity mechanisms. The module-instance key
+contains frontend version, canonical module ID, transitive analysis hash,
+parameter names, and compile-time argument keys. The session semantic
+fingerprint names root syntax plus host/backend context. `contentIdentity` is an
+injective structural serialization for acyclic values, not a fixed-size hash;
+applying it to every typed body would cost \(O(V)\) bytes and work per identity
+construction and duplicate the traversal being optimized.
+
+Neither module identity nor source span alone selects one typed function:
+desugaring may create multiple functions at one span, while one module contains
+many spans. The derived body key is therefore `(module-instance key,
+lexical-definition path, typed-lowering schema)`. A lexical-definition path is
+the stable sequence of statement/binder ordinals in source order, not the
+allocator-dependent symbol ID. Generated functions append a deterministic
+generation ordinal. This key is collision-free by construction when each
+component uses the existing length-prefixed encoding.
+
+Current specialization does not retain that provenance on typed functions, so
+Review 81's cross-object template cannot be implemented soundly yet. Adding it
+would touch parsing, linking, hygiene, typing, and specialization and therefore
+is a separate representation feature, not a local cache patch. Until its
+invariants and differential tests exist, optimization remains bounded to object
+identity within one typed module.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

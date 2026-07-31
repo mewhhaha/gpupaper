@@ -1504,6 +1504,9 @@ resource cost, and corpus measurements.
 - [x] Specify maximal invariant specialization regions with a semantic body and
       captured-environment key. Derive safety by free-variable induction and
       quantify the encoder's source-level reuse ceiling.
+- [x] Audit existing module, session, and structural identities for typed-body
+      reuse. Derive a stable lexical-definition key and record why current
+      typed functions lack sufficient provenance for cross-object templates.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
