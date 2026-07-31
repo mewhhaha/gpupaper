@@ -696,6 +696,23 @@ complete compilation 2.14%. The lazy loop was removed. Native `map` plus
 identity scan remains the selected transient representation; immutable parent
 sharing is still preserved.
 
+Closure lifting admits another product analysis. For a block \(b\) with
+\(F_b\) candidate nested functions and \(S_b\) expression nodes, checking each
+symbol independently for uses outside direct-callee position costs
+\(O(F_bS_b)\). A single traversal can instead collect the set of every symbol
+used outside a direct-callee position, making all decisions in
+\(O(S_b+F_b)\). The equivalence follows by reference cases: a reference in a
+direct callee contributes no member; every other reference contributes exactly
+its symbol.
+
+That asymptotic improvement is rejected for the current corpus. Applying the
+product scan unconditionally to all blocks, including \(F_b=0\), regressed
+Codex lifting by 55.80%. Guarding it with \(F_b>0\) restored parity but still
+changed the median from 25.083 to 25.125 ms (+0.17%). Most eligible blocks do
+not have enough candidate functions to amortize allocation of the set and the
+extra traversal machinery. Per-symbol early-exit scanning remains selected
+until the measured distribution of \(F_b\) changes.
+
 Pointer preservation is semantically inert because typed expressions are
 immutable: replacing an unchanged reconstructed node by the original node
 preserves every field and child by constructor extensionality. It is
@@ -3539,6 +3556,20 @@ regressed from 72.666 to 75.320 ms (3.65%), while function lifting was unchanged
 at 24.226 versus 24.158 ms. Complete compilation regressed from 526.56 to
 537.83 ms (2.14%). The production code was restored; this review changes only
 the recorded rejected alternative.
+
+### 2026-07-31: product direct-call classification is rejected
+
+Closure lifting experimentally replaced one `isOnlyDirectlyCalled` traversal per
+nested function with a product traversal collecting all symbols used outside
+direct-callee positions. Section 6.3 records the equivalence and asymptotic cost.
+
+The unguarded draft scanned blocks with no eligible function and increased the
+21-sample Codex lifting median from 24.481 to 38.141 ms, a 55.80% regression.
+Restricting the product traversal to blocks containing a non-generated function
+restored lifting to 25.125 ms versus a concurrent detached-`3ae5dc2` median of
+25.083 ms (+0.17%). Pre-specialization was likewise unresolved at
+108.660 versus 108.547 ms. The production implementation was restored; current
+corpus fan-out does not justify the product set.
 
 ## References
 

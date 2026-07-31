@@ -365,6 +365,26 @@ Times are 21-sample warm Codex medians after one unrecorded warmup. Current and
 detached-`7aed752` processes ran concurrently. The lazy implementation was
 removed; no production latency or allocation claim survives this audit.
 
+### Rejected product direct-call classification
+
+The closure lifter asks whether each nested function symbol occurs outside a
+direct-callee position. A product traversal can answer for every symbol at once,
+changing a block's worst-case classification from \(O(FS)\) to \(O(S+F)\).
+
+The first 21-sample Codex experiment ran that traversal for every block and
+regressed lifting from 24.481 to 38.141 ms (+55.80%). Adding the necessary
+`F > 0` block-head guard produced:
+
+| Measurement            | Per symbol | Product set | Change |
+| ---------------------- | ---------: | ----------: | -----: |
+| Function lifting       |     25.083 |      25.125 |  +0.17% |
+| Pre-specialization     |    108.547 |     108.660 |  +0.10% |
+| Complete compilation   |    551.843 |     566.955 |  +2.74% |
+
+Times are 21-sample warm CPU medians after one warmup, with current and detached
+`3ae5dc2` processes run concurrently. The total movement is treated as noise;
+the isolated target reached no gain. The product implementation was removed.
+
 The required-GPU release gate then compiled every target twice with GPU type
 validation, authoritative Core rewriting, authoritative Wasm emission, CPU
 differential comparison, engine validation, and byte determinism:

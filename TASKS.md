@@ -1359,6 +1359,9 @@ resource cost, and corpus measurements.
 - [x] Audit copy-on-first-change child lists. Twenty-one-sample Codex medians
       regressed rewrite by 3.65% and total CPU time by 2.14%; retain native
       `map` plus identity scan and record the rejected cost inequality.
+- [x] Audit product direct-call classification during closure lifting. An
+      unguarded scan regressed lifting by 55.80%; a necessary block-head guard
+      reached parity but no gain, so retain per-symbol early-exit scans.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
