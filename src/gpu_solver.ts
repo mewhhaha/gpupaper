@@ -21,7 +21,12 @@ export type GpuSolveResult =
     readonly termCount: number;
     readonly equalityCount: number;
     readonly unionRounds: number;
+    readonly constructorComparisonCount: number;
     readonly decompositionCount: number;
+    readonly flattenMilliseconds: number;
+    readonly closureMilliseconds: number;
+    readonly unionMilliseconds: number;
+    readonly cycleCheckMilliseconds: number;
     readonly submissionBatchSize?: number;
     readonly payloadBatchSize?: number;
     readonly queueWaitMilliseconds?: number;
@@ -52,6 +57,7 @@ type FlatConstraintClosure =
     readonly status: "completed";
     readonly representatives: readonly number[];
     readonly equalities: readonly [number, number][];
+    readonly constructorComparisonCount: number;
     readonly decompositionCount: number;
   }
   | {
@@ -63,6 +69,7 @@ type FlatConstraintClosure =
 
 type ConstructorDecomposition = {
   readonly clash: readonly [number, number] | undefined;
+  readonly comparisonCount: number;
   readonly equalities: readonly {
     readonly equality: [number, number];
     readonly constructors: readonly [number, number];
@@ -174,7 +181,12 @@ async function solveTypeEqualitiesWithoutPayloadBatch(
       termCount: 0,
       equalityCount: 0,
       unionRounds: 0,
+      constructorComparisonCount: 0,
       decompositionCount: 0,
+      flattenMilliseconds: 0,
+      closureMilliseconds: 0,
+      unionMilliseconds: 0,
+      cycleCheckMilliseconds: 0,
       submissionBatchSize: 0,
       queueWaitMilliseconds: 0,
     };
@@ -220,14 +232,19 @@ async function solveTypeEqualitiesWithDevice(
   submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<GpuSolveResult> {
   selectPipelineDevice(device);
+  const flattenStart = performance.now();
   const flat = flattenEqualities(equalities);
+  const flattenMilliseconds = performance.now() - flattenStart;
+  const closureStart = performance.now();
   const cpuClosure = closeFlatConstraintsOnCpu(flat);
+  const closureMilliseconds = performance.now() - closureStart;
   return await validateFlatConstraintClosureOnGpu(
     device,
     flat,
     cpuClosure,
     scheduling,
     submissions,
+    { flattenMilliseconds, closureMilliseconds },
   );
 }
 
@@ -330,8 +347,13 @@ async function validateFlatConstraintClosureOnGpu(
   cpuClosure: FlatConstraintClosure,
   scheduling: CompilerGpuSchedulingPolicy,
   submissions: CompilerGpuSubmissionMetrics[],
+  cpuTimings: {
+    readonly flattenMilliseconds: number;
+    readonly closureMilliseconds: number;
+  },
 ): Promise<GpuSolveResult> {
   if (cpuClosure.status === "constructorClash") return cpuClosure;
+  const unionStart = performance.now();
   const gpuUnion = await unionOnGpu(
     device,
     flat.terms.map((_, index) => index),
@@ -339,14 +361,17 @@ async function validateFlatConstraintClosureOnGpu(
     scheduling,
     submissions,
   );
+  const unionMilliseconds = performance.now() - unionStart;
   requireRepresentativeAgreement(
     cpuClosure.representatives,
     gpuUnion.representatives,
   );
+  const cycleCheckStart = performance.now();
   const infiniteRepresentative = findInfiniteTypeInRepresentativeGraph(
     flat.terms,
     gpuUnion.representatives,
   );
+  const cycleCheckMilliseconds = performance.now() - cycleCheckStart;
   if (infiniteRepresentative !== undefined) {
     return { status: "infiniteType", representative: infiniteRepresentative };
   }
@@ -356,7 +381,11 @@ async function validateFlatConstraintClosureOnGpu(
     termCount: flat.terms.length,
     equalityCount: cpuClosure.equalities.length,
     unionRounds: gpuUnion.rounds,
+    constructorComparisonCount: cpuClosure.constructorComparisonCount,
     decompositionCount: cpuClosure.decompositionCount,
+    ...cpuTimings,
+    unionMilliseconds,
+    cycleCheckMilliseconds,
   };
 }
 
@@ -406,12 +435,14 @@ function closeFlatConstraintsOnCpu(
   }
 
   let decompositionCount = 0;
+  let constructorComparisonCount = 0;
   while (true) {
     const representatives = parents.map((_, index) => find(index));
     const decomposition = decomposeConstructorsByRepresentative(
       flat.terms,
       representatives,
     );
+    constructorComparisonCount += decomposition.comparisonCount;
     decompositionCount += decomposition.equalities.length;
     if (decomposition.clash !== undefined) {
       const [leftIndex, rightIndex] = decomposition.clash;
@@ -447,6 +478,7 @@ function closeFlatConstraintsOnCpu(
     status: "completed",
     representatives: parents.map((_, index) => find(index)),
     equalities: allEqualities,
+    constructorComparisonCount,
     decompositionCount,
   };
 }
@@ -476,6 +508,7 @@ function decomposeConstructorsByRepresentative(
 ): ConstructorDecomposition {
   const constructorByRepresentative = new Map<number, number>();
   const equalities: ConstructorDecomposition["equalities"][number][] = [];
+  let comparisonCount = 0;
   for (const [termIndex, term] of terms.entries()) {
     if (term.kind !== "constructor") continue;
     const representative = representatives[termIndex];
@@ -484,6 +517,7 @@ function decomposeConstructorsByRepresentative(
       constructorByRepresentative.set(representative, termIndex);
       continue;
     }
+    comparisonCount += 1;
     const previous = terms[previousIndex];
     if (
       previous.label !== term.label ||
@@ -491,6 +525,7 @@ function decomposeConstructorsByRepresentative(
     ) {
       return {
         clash: [previousIndex, termIndex],
+        comparisonCount,
         equalities: [],
       };
     }
@@ -501,7 +536,7 @@ function decomposeConstructorsByRepresentative(
       });
     }
   }
-  return { clash: undefined, equalities };
+  return { clash: undefined, comparisonCount, equalities };
 }
 
 type PackedTypeSolverColumn = {

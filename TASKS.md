@@ -1135,6 +1135,10 @@ CPU/GPU disagreement, or return partially written output.
       emitted Wasm bytes into each output word. The removed alternative compared
       all term pairs and formed a dense transitive closure; neither operation
       scales with the admitted corpus.
+- [x] Split GPU type time into flattening, CPU closure, GPU union/readback, and
+      quotient-cycle checking. Report terms, closed equalities, constructor
+      comparisons, and child-equation proposals, reset them on semantic reuse,
+      and assert their accounting relationships in the compilation profile.
 - [x] Admit algebraic rewrites only where the value type proves the required
       law. `x + 0` and `x * 1` are currently integer rules: bypassing an
       IEEE-754 operation can change signed-zero or NaN payload bits observable

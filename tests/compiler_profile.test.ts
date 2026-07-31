@@ -82,7 +82,7 @@ add(20, 22)
   }
 });
 
-Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
+Deno.test("GPU profile exposes type, compacted Core, and Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",
     "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
@@ -92,6 +92,7 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     },
   );
   const work = artifact.profile.work;
+  const details = artifact.profile.details;
   const paddedInvocationCount = (count: number) => Math.ceil(count / 64) * 64;
   const signed64HighWordBytes =
     work.gpuWasmSigned64AtomCount * 2 < work.wasmAtomCount
@@ -101,6 +102,10 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     ? 0
     : paddedInvocationCount(work.gpuRewriteCandidateCount);
   if (
+    work.gpuTypeTermCount === 0 ||
+    work.gpuTypeClosedEqualityCount < work.typeEqualityCount ||
+    work.gpuTypeClosedEqualityCount >
+      work.typeEqualityCount + work.gpuTypeChildEqualityProposalCount ||
     work.gpuRewriteCandidateCount === 0 ||
     work.gpuRewriteCandidateCount > work.coreOperationCount ||
     work.gpuRewriteCandidateDescriptorBytes !==
@@ -126,6 +131,14 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
       `GPU profile omitted compacted work: ${JSON.stringify(work)}`,
     );
   }
+  assertContains(
+    artifact.profile.stages.gpuTypeSolveMilliseconds,
+    details.gpuTypeFlattenMilliseconds +
+      details.gpuTypeClosureMilliseconds +
+      details.gpuTypeUnionMilliseconds +
+      details.gpuTypeCycleCheckMilliseconds,
+    "GPU type solve",
+  );
 });
 
 Deno.test("Ducklang post-comptime specialization skips a clean module", async () => {

@@ -200,6 +200,10 @@ export type DucklangCompilationTimingDetails = {
   readonly postSpecializationAccountingMilliseconds: number;
   readonly gpuCoreInitializationMilliseconds: number;
   readonly gpuTypeQueueWaitMilliseconds: number;
+  readonly gpuTypeFlattenMilliseconds: number;
+  readonly gpuTypeClosureMilliseconds: number;
+  readonly gpuTypeUnionMilliseconds: number;
+  readonly gpuTypeCycleCheckMilliseconds: number;
   readonly gpuCoreQueueWaitMilliseconds: number;
   readonly gpuWasmQueueWaitMilliseconds: number;
   readonly gpuCoreExecutionMilliseconds: number;
@@ -223,6 +227,10 @@ export type DucklangCompilationWork = {
   readonly semanticFingerprintReuseCount: number;
   readonly typedBindingCount: number;
   readonly typeEqualityCount: number;
+  readonly gpuTypeTermCount: number;
+  readonly gpuTypeClosedEqualityCount: number;
+  readonly gpuTypeConstructorComparisonCount: number;
+  readonly gpuTypeChildEqualityProposalCount: number;
   readonly effectRowMembershipCount: number;
   readonly capabilityOperandCount: number;
   readonly rootCapabilityCount: number;
@@ -1159,6 +1167,18 @@ async function elaborateDucklangModuleSource(
         gpuTypeQueueWaitMilliseconds: gpuTypeResult?.status === "solved"
           ? gpuTypeResult.queueWaitMilliseconds ?? 0
           : 0,
+        gpuTypeFlattenMilliseconds: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.flattenMilliseconds
+          : 0,
+        gpuTypeClosureMilliseconds: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.closureMilliseconds
+          : 0,
+        gpuTypeUnionMilliseconds: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.unionMilliseconds
+          : 0,
+        gpuTypeCycleCheckMilliseconds: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.cycleCheckMilliseconds
+          : 0,
         gpuCoreQueueWaitMilliseconds: 0,
         gpuWasmQueueWaitMilliseconds: 0,
         gpuCoreExecutionMilliseconds: 0,
@@ -1186,6 +1206,18 @@ async function elaborateDucklangModuleSource(
         semanticFingerprintReuseCount: semanticFingerprintReused ? 1 : 0,
         typedBindingCount: initialInference.bindings.length,
         typeEqualityCount: initialInference.equalities.length,
+        gpuTypeTermCount: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.termCount
+          : 0,
+        gpuTypeClosedEqualityCount: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.equalityCount
+          : 0,
+        gpuTypeConstructorComparisonCount: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.constructorComparisonCount
+          : 0,
+        gpuTypeChildEqualityProposalCount: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.decompositionCount
+          : 0,
         effectRowMembershipCount: initialInference.bindings.reduce(
           (total, binding) =>
             total + binding.latentEffectRow.operations.length +
@@ -1422,6 +1454,10 @@ async function compileDucklangModuleSource(
             postSpecializationAccountingMilliseconds: 0,
             gpuCoreInitializationMilliseconds: 0,
             gpuTypeQueueWaitMilliseconds: 0,
+            gpuTypeFlattenMilliseconds: 0,
+            gpuTypeClosureMilliseconds: 0,
+            gpuTypeUnionMilliseconds: 0,
+            gpuTypeCycleCheckMilliseconds: 0,
             gpuCoreQueueWaitMilliseconds: 0,
             gpuWasmQueueWaitMilliseconds: 0,
             gpuCoreExecutionMilliseconds: 0,
@@ -1450,6 +1486,10 @@ async function compileDucklangModuleSource(
               : 0,
             backendFunctionAnalysisCount: 0,
             backendFunctionReuseCount: 0,
+            gpuTypeTermCount: 0,
+            gpuTypeClosedEqualityCount: 0,
+            gpuTypeConstructorComparisonCount: 0,
+            gpuTypeChildEqualityProposalCount: 0,
             gpuTypeSubmissionBatchSize: 0,
             gpuTypePayloadBatchSize: 0,
             gpuCoreSubmissionBatchSize: 0,

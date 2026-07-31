@@ -1231,6 +1231,14 @@ the closure is a work metric rather than a semantic result: pairwise and
 star-shaped constructor decomposition can prove the same partition with
 different redundant equation sets.
 
+Every accepted solve reports four non-overlapping internal timings—flattening,
+CPU closure, GPU union including its queue and readback, and sparse cycle
+checking—plus term count, closed-equality count, constructor comparisons, and
+child-equation proposals. Their sum is bounded by the enclosing GPU type stage;
+the remainder is orchestration and exact representative validation. A reused
+semantic artifact reports zero new type work rather than retaining the previous
+artifact's counts.
+
 For \(T\) flat terms, \(E\) source equalities, \(K\) distinct equalities added
 by constructor injectivity, \(M=E+K\), and \(F\) nonempty closure frontiers, the
 CPU closure uses \(O(T+M)\) memory and
@@ -2390,6 +2398,25 @@ closure itself to the GPU; dense pair enumeration is no longer an admitted
 prototype. The full required-GPU gate passed 498 tests and compiled every frozen
 application twice with byte-identical differential emission and engine
 validation.
+
+### 2026-07-31: type solving exposes its internal cost vector
+
+The top-level GPU type duration previously combined flattening, CPU congruence
+closure, WebGPU submission/readback, and quotient-cycle checking. The artifact
+profile now reports those four child timings and the term, closed-equality,
+constructor-comparison, and child-equation work volumes. Tests require the
+children to fit inside the parent stage, closure to contain every source
+equality, and generated unique equalities not to exceed proposed child
+equations. A reused semantic artifact resets all new work fields to zero.
+
+On the first six-warm-sample measurement, GPU union occupied 28.22–31.74 ms on
+all targets. CPU closure ranged from 0.09 ms on raytracer to 131.60 ms on Codex;
+Codex compared 41,971 constructor pairs and considered 83,484 child equations.
+The observed profiles are executable measurements, not independent medians or a
+causal speedup claim. They identify CPU closure and the constant
+submission/readback floor as separate optimization problems.
+The full required-GPU gate passed 498 tests and compiled every frozen target
+twice with byte-identical differential emission and engine validation.
 
 ## References
 

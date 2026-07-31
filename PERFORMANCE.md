@@ -21,11 +21,13 @@ emission; CPU mode does not initialize WebGPU.
 Every Ducklang artifact carries a `profile` with:
 
 - 23 non-overlapping top-level stages;
-- parser, elaboration, type-analysis, specialization, and GPU-Core sub-stage
-  details;
+- parser, elaboration, type-analysis, GPU type flatten/closure/union/cycle,
+  specialization, and GPU-Core sub-stage details;
 - total, accounted, and unattributed wall time;
 - work volume, cache reuse, GPU queue wait, and submission and payload batch
   sizes;
+- GPU type terms, closed equalities, constructor comparisons, and child-equation
+  proposals;
 - effect-row memberships, added capability operands, root capabilities,
   direct-state and CPS transformed regions and functions, handled performances,
   continuation captures, specialization retention, memo reuse, dirty-frontier
@@ -581,6 +583,24 @@ entered that branch:
 | tar       |             7,888 |      3,838 |             9,174 |              24,102 |                1 |
 | wav       |               241 |         99 |               264 |                 180 |                1 |
 | raytracer |               292 |         86 |               292 |                  72 |                1 |
+
+The first six-warm-sample run with the decomposed type profile selected these
+real observations nearest each target's median GPU total:
+
+| Target    | Flatten | CPU closure | GPU union | Cycle check | Constructor comparisons |
+| --------- | ------: | ----------: | --------: | ----------: | ----------------------: |
+| Editor    | 3.85 ms |     7.57 ms |  28.84 ms |     0.39 ms |                   4,176 |
+| Codex     | 24.78 ms |  131.60 ms |  31.74 ms |     2.04 ms |                  41,971 |
+| grep      | 1.29 ms |     1.67 ms |  28.22 ms |     0.18 ms |                   1,264 |
+| tar       | 12.59 ms |   24.85 ms |  30.30 ms |     0.48 ms |                  12,051 |
+| wav       | 0.21 ms |     0.15 ms |  29.30 ms |     0.02 ms |                      90 |
+| raytracer | 0.20 ms |     0.09 ms |  28.77 ms |     0.02 ms |                      36 |
+
+These are observed-run diagnostics, not independent field medians or a
+before/after experiment. They distinguish a roughly 29–32 ms submission/readback
+floor from corpus-dependent CPU closure. In particular, Codex closure is now a
+measured optimization target; changing GPU dispatch cannot remove its 131.60 ms
+sample.
 
 Thus the frozen production work is unchanged: it already used certified CPU
 closure, one GPU union/compression submission, and sparse CPU cycle detection.
