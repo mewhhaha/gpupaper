@@ -1174,25 +1174,32 @@ restricts each word to ten tags; the nibble representation trades at most one
 bit per tag for one-word, shift-and-mask random access.
 
 Low words adapt between direct atom indexing and rank/select compression. Let
-\(Q\) be the byte-atom count and \(N=A-Q\). The ranked representation has a
-packed byte stream, a dense non-byte stream, and an exclusive byte rank for each
-eight-tag word:
+\(Q\) be the byte-atom count, \(N=A-Q\), \(G=\lceil A/8\rceil\), and \(M\) the
+maximum exclusive byte rank stored at a tag-word boundary. The ranked
+representation has a packed byte stream, a dense non-byte stream, and an
+exclusive byte rank for each eight-tag word. Its rank vector uses the least of
+these two lossless widths:
 
 ```text
-L_ranked(A, Q) =
+R(G, M) = 4 ceil(G / 2)  when M <= 65535
+          4G              otherwise
+
+L_ranked(A, Q, M) =
     4 ceil(Q / 4)
   + 4(A - Q)
-  + 4 ceil(A / 8)
+  + R(ceil(A / 8), M)
 ```
 
-It beats the dense `4A` low-word column exactly when:
+It beats the dense `4A` low-word column exactly when
+\(L_{\mathrm{ranked}}(A,Q,M)<4A\). With 32-bit ranks this reduces to:
 
 ```text
 Q - ceil(Q / 4) > ceil(A / 8)
 ```
 
-asymptotically \(Q>A/6\). The selector chooses ranked only under this strict
-inequality; dense wins equal-capacity ties because it has less lookup work.
+asymptotically \(Q>A/6\). The selector uses the exact \(L_{\mathrm{ranked}}<4A\)
+inequality for the selected rank width; dense wins equal-capacity ties because
+it has less lookup work.
 Within ranked lookup, the rank word supplies the preceding eight-atom groups and
 one bit-parallel expression supplies the within-group byte count. Byte has tag
 zero, so for kind word \(x\):
@@ -1216,22 +1223,25 @@ word, byte rank, high word, boundaries, and output—and one uniform. The logica
 input capacity is:
 
 ```text
-L(A, Q)      = min(4A, L_ranked(A, Q))
-B_atom_input = L(A, Q) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
+L(A, Q, M)   = min(4A, L_ranked(A, Q, M))
+B_atom_input = L(A, Q, M) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 ```
 
 The host already counts signed-64 atoms before choosing their high-word
 representation; byte counting is fused into that pass. Rank construction and
 packing remain \(O(A)\). Ranked GPU lookup now has four constant shifts, three
 ORs, three masks/complements, and one population count rather than zero to seven
-data-dependent tag comparisons. Every frozen target selects ranked and removes
-3,236–245,336 additional bytes. A 21-pair counterbalanced experiment measured
-ranked/dense median ratios from 0.9907 to 1.0040, so no latency improvement is
+data-dependent tag comparisons. Rank lookup adds one shift and mask on the
+16-bit path. Five frozen targets use 16-bit ranks; Codex uses 32. Relative to
+dense low words, adaptive ranking removes 3,856–245,336 bytes and 14.14–25.05%
+of complete atom input. A 21-pair counterbalanced experiment measured
+ranked/dense median ratios from 0.9771 to 1.0015, so no latency improvement is
 claimed; the representation is admitted because it strictly reduces capacity
 without an observed material latency regression. Forced dense/ranked
-differentials and mixed-layout packed batches validate both paths. A rank-free
-sparse pair frontier would require binary search in most lanes and is strictly
-less attractive for the observed 56.19–62.63% byte density.
+differentials, both rank widths, and mixed-layout packed batches validate both
+paths. A rank-free sparse pair frontier would require binary search in most
+lanes and is strictly less attractive for the observed 56.19–62.63% byte
+density.
 
 For comparison with the superseded hierarchy, let \(K\) be the number of length
 atoms, \(J\) its nonempty dependency levels, \(n_0=A\), \(n_{\ell+1}=\lceil
@@ -2805,6 +2815,27 @@ encoder. The exact 501-test required-GPU gate passed; paired target samples in
 milliseconds were Editor 325.67/223.58, Codex 931.50/790.41, grep
 125.21/127.96, Tar 191.43/181.10, wav 112.90/113.90, and raytracer
 97.69/92.46.
+
+### 2026-07-31: byte-rank width follows its observed maximum
+
+The rank frontier still stored one `u32` per eight atoms although its maximum is
+known during the mandatory byte-count pass. Section 7.4 now packs two ranks per
+word iff the actual maximum stored boundary is at most 65,535. The proof is the
+same injective fixed-width encoding used for output boundaries, but the
+selection variables differ: output width depends on final byte length, while
+rank width depends on the maximum exclusive byte count at a tag-word boundary.
+
+Editor, grep, Tar, wav, and raytracer select 16 bits; Codex selects 32. Rank
+input falls by 620–5,980 bytes on the five narrow plans and is unchanged on
+Codex. Complete atom input becomes 119,804, 1,489,512, 19,268, 112,444,
+12,248, and 18,764 bytes in target order. Profiles expose maximum rank, width,
+and physical rank bytes. A direct boundary regression proves that maxima 65,535
+and 65,536 select 16 and 32 bits and compares both outputs with the CPU oracle.
+The post-change ranked/dense median ratios remain within 0.9771–1.0015; this is
+no material measured regression, not a speedup claim. The required-GPU gate
+passed 501 tests. Paired target samples in milliseconds were Editor
+329.96/226.44, Codex 907.51/830.48, grep 123.49/128.36, Tar 191.72/175.71,
+wav 120.78/111.96, and raytracer 97.33/93.22.
 
 ## References
 

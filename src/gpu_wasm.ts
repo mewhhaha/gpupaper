@@ -31,6 +31,9 @@ export type GpuWasmEmissionResult =
     readonly lowWordLayout: "dense" | "ranked";
     readonly lowWordBytes: number;
     readonly byteAtomCount: number;
+    readonly byteRankBitWidth: 0 | 16 | 32;
+    readonly byteRankBytes: number;
+    readonly maximumByteRank: number;
     readonly signed64AtomCount: number;
     readonly signed64HighWordBytes: number;
     readonly dispatchedInvocationCount: number;
@@ -133,7 +136,12 @@ fn atom_low_word(index: u32, kind: u32, kind_word: u32) -> u32 {
   if ((parameters.representation_flags & 4u) == 0u) {
     return primary_low_words[index];
   }
-  var byte_rank = byte_ranks[index >> 3u];
+  let rank_index = index >> 3u;
+  var byte_rank = byte_ranks[rank_index];
+  if ((parameters.representation_flags & 8u) != 0u) {
+    let packed_rank = byte_ranks[rank_index >> 1u];
+    byte_rank = (packed_rank >> ((rank_index & 1u) << 4u)) & 0xffffu;
+  }
   let nonzero_nibbles =
     kind_word |
     (kind_word >> 1u) |
@@ -493,6 +501,9 @@ async function emitPackedWasmPlanBatch(
           job.columns.nonByteLowWords.byteLength +
           job.columns.byteRanks.byteLength,
         byteAtomCount: job.columns.byteAtomCount,
+        byteRankBitWidth: job.columns.byteRankBitWidth,
+        byteRankBytes: job.columns.byteRanks.byteLength,
+        maximumByteRank: job.columns.maximumByteRank,
         signed64AtomCount: job.columns.signed64AtomCount,
         signed64HighWordBytes: job.columns.highWords.byteLength,
         dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize,
@@ -813,6 +824,9 @@ async function emitWasmPlanWithGpu(
         columns.nonByteLowWords.byteLength +
         columns.byteRanks.byteLength,
       byteAtomCount: columns.byteAtomCount,
+      byteRankBitWidth: columns.byteRankBitWidth,
+      byteRankBytes: columns.byteRanks.byteLength,
+      maximumByteRank: columns.maximumByteRank,
       signed64AtomCount: columns.signed64AtomCount,
       signed64HighWordBytes: columns.highWords.byteLength,
       dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize,
@@ -841,19 +855,28 @@ function atomColumns(
   readonly byteRanks: Uint32Array;
   readonly lowWordLayout: "dense" | "ranked";
   readonly byteAtomCount: number;
+  readonly byteRankBitWidth: 0 | 16 | 32;
+  readonly maximumByteRank: number;
   readonly highWords: Uint32Array;
   readonly signed64AtomCount: number;
   readonly sparseSigned64HighWords: boolean;
 } {
   let byteAtomCount = 0;
+  let maximumByteRank = 0;
   let signed64AtomCount = 0;
-  for (const atom of atoms) {
+  for (const [index, atom] of atoms.entries()) {
+    if ((index & 7) === 0) maximumByteRank = byteAtomCount;
     if (atom.kind === "byte") byteAtomCount += 1;
     if (atom.kind === "signed64") signed64AtomCount += 1;
   }
+  const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
+  const byteRankCount = Math.ceil(atoms.length / 8);
+  const byteRankWords = byteRankBitWidth === 16
+    ? Math.ceil(byteRankCount / 2)
+    : byteRankCount;
   const rankedLowWordWords = Math.ceil(byteAtomCount / 4) +
     atoms.length - byteAtomCount +
-    Math.ceil(atoms.length / 8);
+    byteRankWords;
   const lowWordLayout = requestedLowWordLayout === "adaptive"
     ? rankedLowWordWords < atoms.length ? "ranked" : "dense"
     : requestedLowWordLayout;
@@ -866,7 +889,7 @@ function atomColumns(
     lowWordLayout === "ranked" ? atoms.length - byteAtomCount : 0,
   );
   const byteRanks = new Uint32Array(
-    lowWordLayout === "ranked" ? Math.ceil(atoms.length / 8) : 0,
+    lowWordLayout === "ranked" ? byteRankWords : 0,
   );
   const highWords = new Uint32Array(
     sparseSigned64HighWords ? signed64AtomCount * 2 : atoms.length,
@@ -876,7 +899,12 @@ function atomColumns(
   let signed64Index = 0;
   for (const [index, atom] of atoms.entries()) {
     if (lowWordLayout === "ranked" && (index & 7) === 0) {
-      byteRanks[index >> 3] = byteIndex;
+      const rankIndex = index >> 3;
+      if (byteRankBitWidth === 16) {
+        byteRanks[rankIndex >> 1] |= byteIndex << ((rankIndex & 1) << 4);
+      } else {
+        byteRanks[rankIndex] = byteIndex;
+      }
     }
     let lowWord: number;
     if (atom.kind === "byte") {
@@ -921,6 +949,8 @@ function atomColumns(
     byteRanks,
     lowWordLayout,
     byteAtomCount,
+    byteRankBitWidth: lowWordLayout === "ranked" ? byteRankBitWidth : 0,
+    maximumByteRank: lowWordLayout === "ranked" ? maximumByteRank : 0,
     highWords,
     signed64AtomCount,
     sparseSigned64HighWords,
@@ -930,7 +960,8 @@ function atomColumns(
 function representationFlags(job: PreparedWasmGpuJob): number {
   return (job.columns.sparseSigned64HighWords ? 1 : 0) |
     (job.resolvedOffsetBitWidth === 16 ? 2 : 0) |
-    (job.columns.lowWordLayout === "ranked" ? 4 : 0);
+    (job.columns.lowWordLayout === "ranked" ? 4 : 0) |
+    (job.columns.byteRankBitWidth === 16 ? 8 : 0);
 }
 
 function writeAtomKind(

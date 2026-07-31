@@ -139,6 +139,9 @@ async function measureEmission(
     resolvedOffsetBitWidth: emitted.resolvedOffsetBitWidth,
     dispatchedInvocationCount: emitted.dispatchedInvocationCount,
     lowWordBytes: emitted.lowWordBytes,
+    byteRankBitWidth: emitted.byteRankBitWidth,
+    byteRankBytes: emitted.byteRankBytes,
+    maximumByteRank: emitted.maximumByteRank,
   };
 }
 
@@ -153,6 +156,9 @@ function reportLayout(
     maximumMilliseconds: Math.max(...samples),
     atomInputBytes: work.atomInputBytes,
     lowWordBytes: work.lowWordBytes,
+    byteRankBitWidth: work.byteRankBitWidth,
+    byteRankBytes: work.byteRankBytes,
+    maximumByteRank: work.maximumByteRank,
     resolvedOffsetBytes: work.resolvedOffsetBytes,
     resolvedOffsetBitWidth: work.resolvedOffsetBitWidth,
     dispatchedInvocationCount: work.dispatchedInvocationCount,

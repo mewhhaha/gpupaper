@@ -1019,8 +1019,12 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     Math.ceil(gpu.byteCount / 4) * 4,
   );
   const lengthAtoms = plan.atoms.filter((atom) => atom.kind === "length");
-  const byteAtomCount =
-    plan.atoms.filter((atom) => atom.kind === "byte").length;
+  let byteAtomCount = 0;
+  let maximumByteRank = 0;
+  for (const [index, atom] of plan.atoms.entries()) {
+    if ((index & 7) === 0) maximumByteRank = byteAtomCount;
+    if (atom.kind === "byte") byteAtomCount += 1;
+  }
   const signed64AtomCount =
     plan.atoms.filter((atom) => atom.kind === "signed64").length;
   const signed64HighWordBytes = signed64AtomCount * 2 < plan.atoms.length
@@ -1030,11 +1034,14 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
     ? Math.ceil((plan.atoms.length + 1) / 2) * 4
     : (plan.atoms.length + 1) * 4;
-  const rankedLowWordBytes = (
-    Math.ceil(byteAtomCount / 4) +
-    plan.atoms.length - byteAtomCount +
-    Math.ceil(plan.atoms.length / 8)
-  ) * 4;
+  const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
+  const byteRankCount = Math.ceil(plan.atoms.length / 8);
+  const byteRankBytes = byteRankBitWidth === 16
+    ? Math.ceil(byteRankCount / 2) * 4
+    : byteRankCount * 4;
+  const rankedLowWordBytes = Math.ceil(byteAtomCount / 4) * 4 +
+    (plan.atoms.length - byteAtomCount) * 4 +
+    byteRankBytes;
   const lowWordLayout = rankedLowWordBytes < plan.atoms.length * 4
     ? "ranked"
     : "dense";
@@ -1045,6 +1052,18 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   assertEquals(gpu.byteAtomCount, byteAtomCount);
   assertEquals(gpu.lowWordLayout, lowWordLayout);
   assertEquals(gpu.lowWordBytes, lowWordBytes);
+  assertEquals(
+    gpu.byteRankBitWidth,
+    lowWordLayout === "ranked" ? byteRankBitWidth : 0,
+  );
+  assertEquals(
+    gpu.byteRankBytes,
+    lowWordLayout === "ranked" ? byteRankBytes : 0,
+  );
+  assertEquals(
+    gpu.maximumByteRank,
+    lowWordLayout === "ranked" ? maximumByteRank : 0,
+  );
   assertEquals(gpu.resolvedOffsetBitWidth, resolvedOffsetBitWidth);
   assertEquals(gpu.resolvedOffsetBytes, resolvedOffsetBytes);
   assertEquals(
@@ -1111,6 +1130,7 @@ Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
   const narrow = await emitWasmPlanOnGpu(narrowPlan);
   if (narrow.status === "unavailable") return;
   assertEquals(narrow.lowWordLayout, "ranked");
+  assertEquals(narrow.byteRankBitWidth, 16);
   assertEquals(narrow.resolvedOffsetBitWidth, 16);
   assertEquals(
     narrow.resolvedOffsetBytes,
@@ -1130,6 +1150,7 @@ Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
   };
   const wide = await emitWasmPlanOnGpu(widePlan);
   if (wide.status === "unavailable") return;
+  assertEquals(wide.byteRankBitWidth, 16);
   assertEquals(wide.resolvedOffsetBitWidth, 32);
   assertEquals(
     wide.resolvedOffsetBytes,
@@ -1142,6 +1163,35 @@ Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
       );
     }
   }
+
+  const narrowRankPlan = {
+    atoms: [
+      ...narrowPlan.atoms,
+      { kind: "unsigned" as const, value: 0 },
+      { kind: "unsigned" as const, value: 0 },
+    ],
+    maximumDependencyLevel: 0,
+  };
+  const narrowRank = await emitWasmPlanOnGpu(narrowRankPlan);
+  if (narrowRank.status === "unavailable") return;
+  assertEquals(narrowRank.lowWordLayout, "ranked");
+  assertEquals(narrowRank.maximumByteRank, 0xffff);
+  assertEquals(narrowRank.byteRankBitWidth, 16);
+  assertEquals(narrowRank.bytes, emitWasmPlanOnCpu(narrowRankPlan));
+
+  const wideRankPlan = {
+    atoms: [
+      ...widePlan.atoms,
+      { kind: "unsigned" as const, value: 0 },
+    ],
+    maximumDependencyLevel: 0,
+  };
+  const wideRank = await emitWasmPlanOnGpu(wideRankPlan);
+  if (wideRank.status === "unavailable") return;
+  assertEquals(wideRank.lowWordLayout, "ranked");
+  assertEquals(wideRank.maximumByteRank, 0x1_0000);
+  assertEquals(wideRank.byteRankBitWidth, 32);
+  assertEquals(wideRank.bytes, emitWasmPlanOnCpu(wideRankPlan));
 });
 
 Deno.test("WebGPU Wasm emission stores sparse signed64 high words by atom ID", async () => {

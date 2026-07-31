@@ -1018,6 +1018,9 @@ Core receives no source handler or open effect row.
       `countOneBits`. Four fixed shifts replace a divergent zero-to-seven
       comparison loop while preserving the exact stable-rank proof. A GPU/CPU
       differential enumerates all 256 byte/non-byte masks in one kind word.
+- [x] Pack two byte-rank boundaries per word exactly when the maximum stored
+      rank fits u16. Five frozen targets halve the rank frontier; Codex retains
+      u32. Direct boundary tests distinguish a 65,535 maximum from 65,536.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

@@ -523,6 +523,28 @@ bit-parallel implementation passed the 500-test required-GPU release gate and
 compiled all frozen targets twice. After adding the exhaustive 256-mask
 regression, the exact gate passed 501 tests.
 
+### Adaptive byte-rank width
+
+The byte-rank frontier is monotone. Its maximum stored value, rather than total
+byte count, determines whether every group boundary fits u16. Two ranks then
+share one word; otherwise they remain u32.
+
+| Target    | Maximum rank | Width | Rank bytes before → after | Atom input before → after |
+| --------- | -----------: | ----: | ------------------------: | ------------------------: |
+| Editor    |       13,892 |    16 |            11,964 → 5,984 |         125,784 → 119,804 |
+| Codex     |      115,794 |    32 |          102,052 → 102,052 |     1,489,512 → 1,489,512 |
+| grep      |        2,347 |    16 |               1,952 → 976 |           20,244 → 19,268 |
+| tar       |       12,473 |    16 |             11,104 → 5,552 |         117,996 → 112,444 |
+| wav       |        1,490 |    16 |               1,240 → 620 |           12,868 → 12,248 |
+| raytracer |        2,410 |    16 |               1,928 → 964 |           19,728 → 18,764 |
+
+The post-change 21-pair ranked/dense median ratios were 0.9982, 0.9771, 0.9977,
+1.0015, 1.0005, and 0.9995 in target order. The narrow-rank decode adds a shift
+and mask, and this experiment detects no material latency change. Direct tests
+pin maximum ranks 65,535 and 65,536 to 16 and 32 bits respectively. The exact
+representation passed the 501-test required-GPU gate and compiled every frozen
+target twice.
+
 ### Compacted Core rewrite frontier
 
 The current rewrite rules can match only `scalarBinary` operations. Dispatching
