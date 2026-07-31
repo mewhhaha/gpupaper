@@ -125,6 +125,17 @@ Deno.test("independent compilation skips session identity work", async () => {
       `straight-line compilation retained ${work.controlFlowFirstPassResidualCount} source-control nodes`,
     );
   }
+  if (
+    work.controlFlowFirstPassResidualLoopCount !== 0 ||
+    work.controlFlowFirstPassResidualRangeCount !== 0 ||
+    work.controlFlowFirstPassResidualCollectionCount !== 0
+  ) {
+    throw new Error(
+      `straight-line compilation retained source-control components: ${
+        JSON.stringify(work)
+      }`,
+    );
+  }
 });
 
 Deno.test("residual source control bounds fixed-point passes", async () => {
@@ -146,11 +157,39 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
       `expected Ducklang artifact; received ${artifact.language}`,
     );
   }
-  const { controlFlowFirstPassResidualCount, controlFlowLoweringPassCount } =
-    artifact.profile.work;
+  const {
+    controlFlowFirstPassResidualCollectionCount,
+    controlFlowFirstPassResidualCount,
+    controlFlowFirstPassResidualLoopCount,
+    controlFlowFirstPassResidualRangeCount,
+    controlFlowLoweringPassCount,
+  } = artifact.profile.work;
 
   if (controlFlowFirstPassResidualCount === 0) {
     throw new Error("Codex did not exercise a residual source-control pass");
+  }
+  const componentCount = controlFlowFirstPassResidualLoopCount +
+    controlFlowFirstPassResidualRangeCount +
+    controlFlowFirstPassResidualCollectionCount;
+  if (componentCount !== controlFlowFirstPassResidualCount) {
+    throw new Error(
+      `Codex residual components sum to ${componentCount}, expected ${controlFlowFirstPassResidualCount}`,
+    );
+  }
+  if (
+    controlFlowFirstPassResidualLoopCount !== 2 ||
+    controlFlowFirstPassResidualRangeCount !== 0 ||
+    controlFlowFirstPassResidualCollectionCount !== 0
+  ) {
+    throw new Error(
+      `Codex residual source control changed: ${
+        JSON.stringify({
+          loop: controlFlowFirstPassResidualLoopCount,
+          range: controlFlowFirstPassResidualRangeCount,
+          collection: controlFlowFirstPassResidualCollectionCount,
+        })
+      }`,
+    );
   }
   if (
     controlFlowLoweringPassCount > controlFlowFirstPassResidualCount + 1

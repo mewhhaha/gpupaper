@@ -221,6 +221,9 @@ export type DucklangCompilationWork = {
   readonly semanticFingerprintReuseCount: number;
   readonly controlFlowLoweringPassCount: number;
   readonly controlFlowFirstPassResidualCount: number;
+  readonly controlFlowFirstPassResidualLoopCount: number;
+  readonly controlFlowFirstPassResidualRangeCount: number;
+  readonly controlFlowFirstPassResidualCollectionCount: number;
   readonly typedBindingCount: number;
   readonly typeEqualityCount: number;
   readonly effectRowMembershipCount: number;
@@ -1153,6 +1156,12 @@ async function elaborateDucklangModuleSource(
         controlFlowLoweringPassCount: controlFlowLowering.passCount,
         controlFlowFirstPassResidualCount:
           controlFlowLowering.firstPassResidualControlCount,
+        controlFlowFirstPassResidualLoopCount:
+          controlFlowLowering.firstPassResidualLoopCount,
+        controlFlowFirstPassResidualRangeCount:
+          controlFlowLowering.firstPassResidualRangeCount,
+        controlFlowFirstPassResidualCollectionCount:
+          controlFlowLowering.firstPassResidualCollectionCount,
         typedBindingCount: initialInference.bindings.length,
         typeEqualityCount: initialInference.equalities.length,
         effectRowMembershipCount: initialInference.bindings.reduce(

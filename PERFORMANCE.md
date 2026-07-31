@@ -242,6 +242,15 @@ numeric rejection, proves termination by natural-number descent for supported
 programs, and diagnoses stagnation on the second non-decreasing observation.
 No speedup is claimed.
 
+The residual measure is further decomposed into ordinary, range, and
+collection-loop counts. The six frozen first-pass vectors are `(0,0,0)`,
+`(2,0,0)`, `(0,0,0)`, `(0,0,0)`, `(0,0,0)`, and `(0,0,0)` in target order.
+The components are gathered inside the existing complete residual traversal,
+must sum to the total, and add no syntax-sized allocation. Codex's second pass
+therefore lowers two exposed ordinary loops; neither `for` constructor is on
+the residual frontier. Contemporary CPU control-flow representatives were
+1.609, 57.521, 0.203, 0.382, 0.131, and 0.260 ms.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

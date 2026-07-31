@@ -871,11 +871,15 @@ shows it introduces functions, calls, branches, and blocks but no new
 control. A preserved unsupported position is diagnosed by non-decrease rather
 than consuming 32 arbitrary rounds.
 
-The executable profile currently exposes \(P\), first-pass transformation time,
-first-pass residual count \(r_1\), first-pass transformation time, and
-accumulated later-pass transformation time. Their sum must be contained by the
-enclosing control-flow interval; the residual is search and orchestration. The
-frozen Codex program exercises \(r_1>0\) and asserts the derived pass bound.
+The executable profile currently exposes \(P\), first-pass residual count
+\(r_1\), its disjoint loop, range-loop, and collection-loop components,
+first-pass transformation time, and accumulated later-pass transformation
+time. The components must sum to \(r_1\). The transformation times must be
+contained by the enclosing control-flow interval; the residual is search and
+orchestration. Component counting adds three scalar increments to the existing
+complete residual traversal, so it remains \(O(S_i)\) work and \(O(1)\) state.
+The frozen Codex program exercises \(r_1>0\), asserts both equalities, and
+contains two residual ordinary loops with no residual range or collection loop.
 
 ## 7. Effect closure and the GPU boundary
 
@@ -4404,6 +4408,29 @@ prefers a well-founded semantic restriction over an unexplained numeric cap.
 The 515-test required-GPU gate passed with byte-identical, engine-valid samples
 Editor 239.12/130.66 ms, Codex 657.48/462.22, grep 40.67/40.35, Tar
 139.90/120.23, wav 34.54/32.81, and raytracer 37.57/35.96.
+
+### 2026-07-31: residual control is decomposed by constructor
+
+Review 51 decomposes the first-pass measure without changing it. The residual
+scanner now counts ordinary, range, and collection loops separately while
+performing the already-required complete syntax traversal. The scalar work and
+storage increments are constant per residual constructor and constant per
+compilation respectively; there is no additional pass or allocation
+proportional to syntax size.
+
+The frozen component vectors in `(loop, range, collection)` order are Editor
+`(0,0,0)`, Codex `(2,0,0)`, grep `(0,0,0)`, Tar `(0,0,0)`, wav `(0,0,0)`, and
+raytracer `(0,0,0)`. Thus Codex's second transformation is caused by two
+ordinary loops exposed beneath first-pass source control, not by either `for`
+lowering. The component-sum invariant and zero straight-line vector are
+executable validations; the corpus vector is empirical evidence, not a
+language-wide distribution claim.
+
+The same six-sample run measured CPU control-flow representatives of 1.609,
+57.521, 0.203, 0.382, 0.131, and 0.260 ms. Instrumentation shares the residual
+traversal and is not expected to affect latency beyond three predictable
+branches on residual nodes; these timings are retained as observations, not a
+speed claim.
 
 ## References
 

@@ -19,12 +19,18 @@ export function lowerDucklangControlFlowWithMetrics(
   readonly module: DucklangModule;
   readonly passCount: number;
   readonly firstPassResidualControlCount: number;
+  readonly firstPassResidualLoopCount: number;
+  readonly firstPassResidualRangeCount: number;
+  readonly firstPassResidualCollectionCount: number;
   readonly firstPassMilliseconds: number;
   readonly subsequentPassMilliseconds: number;
 } {
   let lowered = module;
   let passCount = 0;
   let firstPassResidualControlCount = 0;
+  let firstPassResidualLoopCount = 0;
+  let firstPassResidualRangeCount = 0;
+  let firstPassResidualCollectionCount = 0;
   let firstPassMilliseconds = 0;
   let subsequentPassMilliseconds = 0;
   let previousResidualControlCount: number | undefined;
@@ -51,12 +57,18 @@ export function lowerDucklangControlFlowWithMetrics(
     const residual = sourceControlFlowSummary(lowered);
     if (passCount === 1) {
       firstPassResidualControlCount = residual.count;
+      firstPassResidualLoopCount = residual.loopCount;
+      firstPassResidualRangeCount = residual.rangeCount;
+      firstPassResidualCollectionCount = residual.collectionCount;
     }
     if (residual.first === undefined) {
       return {
         module: lowered,
         passCount,
         firstPassResidualControlCount,
+        firstPassResidualLoopCount,
+        firstPassResidualRangeCount,
+        firstPassResidualCollectionCount,
         firstPassMilliseconds,
         subsequentPassMilliseconds,
       };
@@ -77,6 +89,9 @@ function sourceControlFlowSummary(
   module: DucklangModule,
 ): {
   readonly count: number;
+  readonly loopCount: number;
+  readonly rangeCount: number;
+  readonly collectionCount: number;
   readonly first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -91,6 +106,9 @@ function sourceControlFlowSummary(
     ),
   ];
   let count = 0;
+  let loopCount = 0;
+  let rangeCount = 0;
+  let collectionCount = 0;
   let first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -101,8 +119,17 @@ function sourceControlFlowSummary(
     const current = pending.pop()!;
     switch (current.kind) {
       case "loop":
+        loopCount += 1;
+        count += 1;
+        first ??= current;
+        break;
       case "forRange":
+        rangeCount += 1;
+        count += 1;
+        first ??= current;
+        break;
       case "forCollection":
+        collectionCount += 1;
         count += 1;
         first ??= current;
         break;
@@ -221,7 +248,7 @@ function sourceControlFlowSummary(
       }
     }
   }
-  return { count, first };
+  return { count, loopCount, rangeCount, collectionCount, first };
 }
 
 /**
