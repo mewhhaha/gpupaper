@@ -1128,9 +1128,8 @@ P(A, p_A) = 4 ceil((A + 1) / 2)  when p_A <= 65535
 
 The narrow representation adds two shifts, one mask, and one shared word load
 per boundary lookup; the host packing loop is \(O(A)\) and requires no new pass
-or synchronization. The pipeline uses five storage bindings—kind, low word,
-high word, boundaries, and output—and one count uniform. Output capacity is
-exactly \(4\lceil B/4\rceil\), and readback contains only that output.
+or synchronization. Output capacity is exactly \(4\lceil B/4\rceil\), and
+readback contains only that output.
 
 The kind domain has five inhabitants. It is represented as eight four-bit tags
 per `u32`:
@@ -1159,8 +1158,7 @@ lanes perform no high-word lookup. The compiler selects sparse exactly when
 direct indexing has less work. Therefore:
 
 ```text
-H(A, S)      = min(4A, 8S)
-B_atom_input = 4A + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
+H(A, S) = min(4A, 8S)
 ```
 
 This representation is never larger than dense high words. Its additional sparse
@@ -1175,33 +1173,51 @@ three-bit tag packing is denser but makes some tags cross word boundaries or
 restricts each word to ten tags; the nibble representation trades at most one
 bit per tag for one-word, shift-and-mask random access.
 
-A deferred low-word alternative separates byte atoms from all other atoms. Let
-\(B\) be the byte-atom count and \(N=A-B\). Constant-time random access would
-need a packed byte stream, a dense non-byte stream, and an exclusive byte rank
-for each eight-tag word:
+Low words adapt between direct atom indexing and rank/select compression. Let
+\(Q\) be the byte-atom count and \(N=A-Q\). The ranked representation has a
+packed byte stream, a dense non-byte stream, and an exclusive byte rank for each
+eight-tag word:
 
 ```text
-L_ranked(A, B) =
-    4 ceil(B / 4)
-  + 4(A - B)
+L_ranked(A, Q) =
+    4 ceil(Q / 4)
+  + 4(A - Q)
   + 4 ceil(A / 8)
 ```
 
-It beats the current `4A` low-word column exactly when:
+It beats the dense `4A` low-word column exactly when:
 
 ```text
-B - ceil(B / 4) > ceil(A / 8)
+Q - ceil(Q / 4) > ceil(A / 8)
 ```
 
-asymptotically \(B>A/6\). Every frozen target satisfies that capacity condition,
-but lookup requires two additional storage bindings and the count of preceding
-byte tags within the current eight-tag word—up to seven comparisons in every
-emission lane. The predicted total-input saving is only 13.94–16.21% on the
-frozen plans. Because this trades certain extra lane work for capacity after the
-emitter has already become a single pass, it remains an unimplemented hypothesis
-pending counterbalanced latency evidence. A rank-free sparse pair frontier would
-require binary search in most lanes and is strictly less attractive for the
-observed 56.19–62.63% byte density.
+asymptotically \(Q>A/6\). The selector chooses ranked only under this strict
+inequality; dense wins equal-capacity ties because it has less lookup work.
+Within ranked lookup, the rank word supplies the preceding eight-atom groups and
+at most seven nibble comparisons supply the within-group byte count. A byte lane
+indexes its packed stream by that count; a non-byte lane uses
+`atom_id - byte_rank`. Both are exactly the stable ranks of their variants, so
+they recover the same low word as dense indexing.
+
+The pipeline uses seven storage bindings—kind, primary low word, non-byte low
+word, byte rank, high word, boundaries, and output—and one uniform. The logical
+input capacity is:
+
+```text
+L(A, Q)      = min(4A, L_ranked(A, Q))
+B_atom_input = L(A, Q) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
+```
+
+The host already counts signed-64 atoms before choosing their high-word
+representation; byte counting is fused into that pass. Rank construction and
+packing remain \(O(A)\). Every frozen target selects ranked and removes
+3,236–245,336 additional bytes. A 21-pair counterbalanced experiment measured
+ranked/dense median ratios from 0.9907 to 1.0040, so no latency improvement is
+claimed; the representation is admitted because it strictly reduces capacity
+without an observed material latency regression. Forced dense/ranked
+differentials and mixed-layout packed batches validate both paths. A rank-free
+sparse pair frontier would require binary search in most lanes and is strictly
+less attractive for the observed 56.19–62.63% byte density.
 
 For comparison with the superseded hierarchy, let \(K\) be the number of length
 atoms, \(J\) its nonempty dependency levels, \(n_0=A\), \(n_{\ell+1}=\lceil
@@ -2727,6 +2743,33 @@ The first 21-round dense-low-word run measured median/p95 milliseconds of
 five small plans cluster near 27 ms despite a 9.66-fold atom-count range, which
 is empirical evidence of a large fixed boundary cost, not a decomposition of
 that cost. Codex adds roughly 10 ms at 204,099 atoms.
+
+### 2026-07-31: ranked low words pass the paired experiment
+
+Section 7.4 now admits the previously deferred rank/select representation under
+an exact adaptive rule. For \(Q\) byte atoms, ranked storage is selected iff
+\(Q-\lceil Q/4\rceil>\lceil A/8\rceil\); otherwise direct dense indexing
+remains. The strict inequality proves that the adaptive representation never
+increases logical low-word capacity, while dense wins equal-capacity ties.
+
+All six frozen plans select ranked. Complete atom input changes from
+155,504→125,784 bytes for Editor, 1,734,848→1,489,512 for Codex,
+25,336→20,244 for grep, 144,312→117,996 for Tar, 16,104→12,868 for wav, and
+25,036→19,728 for raytracer, reductions of 14.14–21.20%. The profile exposes
+byte-atom count, selected layout, and low-word bytes, making the selector and
+capacity equation executable invariants.
+
+The counterbalanced 21-pair dense/ranked experiment measured median ratios of
+1.0040, 0.9907, 0.9975, 0.9968, 1.0007, and 0.9992 in target order. This is
+evidence of no material latency change on the measured adapter, not evidence of
+a speedup or equivalence on other devices. Forced dense and ranked paths produce
+the same bytes as the independent CPU emitter across all atom variants; packed
+throughput tests mix both layouts in one submission. The required-GPU gate
+passed 500 tests and compiled every target twice. Paired release samples in
+milliseconds were Editor 334.16/229.35, Codex 949.72/788.76, grep
+129.66/125.46, Tar 197.90/183.27, wav 115.33/110.38, and raytracer
+99.43/92.84. They are correctness samples, not a latency comparison with an
+earlier implementation.
 
 ## References
 

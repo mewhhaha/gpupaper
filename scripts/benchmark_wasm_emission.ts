@@ -1,6 +1,9 @@
 import { compileModuleSource } from "../src/compiler.ts";
 import { lowerDucklangCoreToFcgAndWasm } from "../src/ducklang_core_wasm.ts";
-import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
+import {
+  emitWasmPlanOnGpu,
+  type GpuWasmLowWordLayout,
+} from "../src/gpu_wasm.ts";
 import type { WasmBinaryPlan } from "../src/wasm.ts";
 
 const targets = [
@@ -14,45 +17,67 @@ const targets = [
 const sampleCount = requestedSampleCount(Deno.args);
 const preparedTargets = await Promise.all(targets.map(prepareTarget));
 
+const measuredLayouts = ["dense", "ranked"] as const;
 for (const prepared of preparedTargets) {
-  await measureEmission(prepared);
+  for (const lowWordLayout of measuredLayouts) {
+    await measureEmission(prepared, lowWordLayout);
+  }
 }
 
 const samples = new Map(
-  preparedTargets.map((prepared) => [prepared.name, [] as number[]]),
+  preparedTargets.map((prepared) => [
+    prepared.name,
+    { dense: [] as number[], ranked: [] as number[] },
+  ]),
 );
-const work = new Map<string, Awaited<ReturnType<typeof measureEmission>>>();
+const work = new Map<
+  string,
+  Partial<
+    Record<
+      Exclude<GpuWasmLowWordLayout, "adaptive">,
+      Awaited<ReturnType<typeof measureEmission>>
+    >
+  >
+>();
 for (let sample = 0; sample < sampleCount; sample += 1) {
   const orderedTargets = sample % 2 === 0
     ? preparedTargets
     : [...preparedTargets].reverse();
   for (const prepared of orderedTargets) {
-    const measurement = await measureEmission(prepared);
-    samples.get(prepared.name)!.push(measurement.milliseconds);
-    work.set(prepared.name, measurement);
+    const targetIndex = preparedTargets.indexOf(prepared);
+    const orderedLayouts = (sample + targetIndex) % 2 === 0
+      ? measuredLayouts
+      : [...measuredLayouts].reverse();
+    for (const lowWordLayout of orderedLayouts) {
+      const measurement = await measureEmission(prepared, lowWordLayout);
+      samples.get(prepared.name)![lowWordLayout].push(
+        measurement.milliseconds,
+      );
+      const targetWork = work.get(prepared.name) ?? {};
+      targetWork[lowWordLayout] = measurement;
+      work.set(prepared.name, targetWork);
+    }
   }
 }
 
 console.log(JSON.stringify({
   sampleCount,
-  warmupCount: 1,
+  warmupCountPerLayout: 1,
   targetOrder: "alternatingForwardReverse",
+  layoutOrder: "alternatingDenseRanked",
   measuredBoundary: "hostPlanAnalysisThroughMappedGpuReadbackAndByteCopy",
   targets: preparedTargets.map((prepared) => {
     const targetSamples = samples.get(prepared.name)!;
-    const measurement = work.get(prepared.name)!;
+    const targetWork = work.get(prepared.name)!;
+    const denseMedian = median(targetSamples.dense);
+    const rankedMedian = median(targetSamples.ranked);
     return {
       target: prepared.name,
-      medianMilliseconds: median(targetSamples),
-      p95Milliseconds: percentile(targetSamples, 0.95),
-      minimumMilliseconds: Math.min(...targetSamples),
-      maximumMilliseconds: Math.max(...targetSamples),
       atomCount: prepared.plan.atoms.length,
       wasmBytes: prepared.expectedBytes.length,
-      atomInputBytes: measurement.atomInputBytes,
-      resolvedOffsetBytes: measurement.resolvedOffsetBytes,
-      resolvedOffsetBitWidth: measurement.resolvedOffsetBitWidth,
-      dispatchedInvocationCount: measurement.dispatchedInvocationCount,
+      dense: reportLayout(targetSamples.dense, targetWork.dense!),
+      ranked: reportLayout(targetSamples.ranked, targetWork.ranked!),
+      rankedToDenseMedianRatio: rankedMedian / denseMedian,
     };
   }),
 }));
@@ -85,9 +110,12 @@ async function prepareTarget(
   };
 }
 
-async function measureEmission(prepared: PreparedTarget) {
+async function measureEmission(
+  prepared: PreparedTarget,
+  lowWordLayout: Exclude<GpuWasmLowWordLayout, "adaptive">,
+) {
   const start = performance.now();
-  const emitted = await emitWasmPlanOnGpu(prepared.plan);
+  const emitted = await emitWasmPlanOnGpu(prepared.plan, { lowWordLayout });
   const milliseconds = performance.now() - start;
   if (emitted.status === "unavailable") {
     throw new Error(
@@ -99,12 +127,35 @@ async function measureEmission(prepared: PreparedTarget) {
       `${prepared.name} Wasm benchmark disagrees with CPU emission`,
     );
   }
+  if (emitted.lowWordLayout !== lowWordLayout) {
+    throw new Error(
+      `${prepared.name} requested ${lowWordLayout} low words but measured ${emitted.lowWordLayout}`,
+    );
+  }
   return {
     milliseconds,
     atomInputBytes: emitted.atomInputBytes,
     resolvedOffsetBytes: emitted.resolvedOffsetBytes,
     resolvedOffsetBitWidth: emitted.resolvedOffsetBitWidth,
     dispatchedInvocationCount: emitted.dispatchedInvocationCount,
+    lowWordBytes: emitted.lowWordBytes,
+  };
+}
+
+function reportLayout(
+  samples: readonly number[],
+  work: Awaited<ReturnType<typeof measureEmission>>,
+) {
+  return {
+    medianMilliseconds: median(samples),
+    p95Milliseconds: percentile(samples, 0.95),
+    minimumMilliseconds: Math.min(...samples),
+    maximumMilliseconds: Math.max(...samples),
+    atomInputBytes: work.atomInputBytes,
+    lowWordBytes: work.lowWordBytes,
+    resolvedOffsetBytes: work.resolvedOffsetBytes,
+    resolvedOffsetBitWidth: work.resolvedOffsetBitWidth,
+    dispatchedInvocationCount: work.dispatchedInvocationCount,
   };
 }
 

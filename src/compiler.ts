@@ -255,6 +255,9 @@ export type DucklangCompilationWork = {
   readonly gpuWasmLengthAtomCount: number;
   readonly gpuWasmResolvedOffsetBytes: number;
   readonly gpuWasmResolvedOffsetBitWidth: 0 | 16 | 32;
+  readonly gpuWasmRankedLowWords: 0 | 1;
+  readonly gpuWasmLowWordBytes: number;
+  readonly gpuWasmByteAtomCount: number;
   readonly gpuWasmAtomInputBytes: number;
   readonly gpuWasmSigned64AtomCount: number;
   readonly gpuWasmSigned64HighWordBytes: number;
@@ -1186,6 +1189,9 @@ async function elaborateDucklangModuleSource(
         gpuWasmLengthAtomCount: 0,
         gpuWasmResolvedOffsetBytes: 0,
         gpuWasmResolvedOffsetBitWidth: 0,
+        gpuWasmRankedLowWords: 0,
+        gpuWasmLowWordBytes: 0,
+        gpuWasmByteAtomCount: 0,
         gpuWasmAtomInputBytes: 0,
         gpuWasmSigned64AtomCount: 0,
         gpuWasmSigned64HighWordBytes: 0,
@@ -1577,6 +1583,16 @@ async function compileDucklangModuleSource(
         : 0,
       gpuWasmResolvedOffsetBitWidth: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.resolvedOffsetBitWidth
+        : 0,
+      gpuWasmRankedLowWords: gpuWasmResult?.status === "completed" &&
+          gpuWasmResult.lowWordLayout === "ranked"
+        ? 1
+        : 0,
+      gpuWasmLowWordBytes: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.lowWordBytes
+        : 0,
+      gpuWasmByteAtomCount: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.byteAtomCount
         : 0,
       gpuWasmAtomInputBytes: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.atomInputBytes

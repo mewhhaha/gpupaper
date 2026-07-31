@@ -63,13 +63,14 @@ deno task benchmark:peers
 rebuild, trailing and internal comment edits, a one-function edit, and a
 dependency edit. It checks that semantic no-ops emit byte-identical Wasm.
 `benchmark:wasm` constructs each frozen target's final plan once, performs one
-unrecorded warm emission, and measures 21 emissions while alternating forward
-and reverse target order. Its boundary starts before host plan analysis and
-ends after mapped GPU readback and the final byte copy. Every observation must
-equal the independently emitted CPU artifact.
+unrecorded warm emission per low-word layout, and measures 21 dense/ranked pairs
+while alternating both layout order and forward/reverse target order. Its
+boundary starts before host plan analysis and ends after mapped GPU readback and
+the final byte copy. Every observation must equal the independently emitted CPU
+artifact.
 
-The first isolated run established the dense-low-word baseline used by the
-deferred rank/select experiment:
+The first isolated run, before paired layout selection was added, established
+the dense-low-word baseline used to size the rank/select experiment:
 
 | Target    | Median |   p95 | Minimum | Maximum |
 | --------- | -----: | ----: | ------: | ------: |
@@ -371,8 +372,8 @@ parallel emission frontier:
 The preceding hierarchical-scan and compacted-length sections are retained as
 the measured path by which the redundant work was identified; this section
 supersedes their implementation status. Three shader modules and four pipelines
-are deleted. Five storage bindings remain: atom kind, low word, high word,
-resolved offsets, and output.
+are deleted. The later ranked-low-word section supersedes this section's
+five-binding count.
 
 Let `K` be the length-atom count, `H` the total non-root hierarchy words, `J`
 the nonempty length levels, and `h` the hierarchy depth. Relative to the
@@ -464,27 +465,42 @@ reserves the four-byte WebGPU binding minimum. Sparse and dense signed-64
 regressions compare extrema byte-for-byte with CPU emission. No dispatch is
 added.
 
-### Deferred ranked low words
+### Adaptive ranked low words
 
-Packing byte values while retaining random access requires a packed byte stream,
-a non-byte stream, and one exclusive byte rank per eight atom tags. Its exact
-logical size is `4 ceil(B / 4) + 4(A - B) + 4 ceil(A / 8)`, versus the current
+Packing byte values while retaining random access uses a packed byte stream, a
+non-byte stream, and one exclusive byte rank per eight atom tags. Its exact
+logical size is `4 ceil(B / 4) + 4(A - B) + 4 ceil(A / 8)`, versus the dense
 `4A` low-word column.
 
-| Target    | Byte atoms | Dense low bytes | Ranked low bytes | Bytes saved | Total-input reduction |
-| --------- | ---------: | --------------: | ---------------: | ----------: | --------------------: |
-| Editor    |     13,895 |          95,692 |           65,972 |      29,720 |                14.62% |
-| Codex     |    115,797 |         816,396 |          571,060 |     245,336 |                14.14% |
-| grep      |      2,348 |          15,588 |           10,496 |       5,092 |                15.37% |
-| tar       |     12,474 |          88,804 |           62,488 |      26,316 |                13.94% |
-| wav       |      1,493 |           9,908 |            6,672 |       3,236 |                15.37% |
-| raytracer |      2,412 |          15,404 |           10,096 |       5,308 |                16.21% |
+| Target    | Dense input | Ranked input | Bytes saved | Reduction |
+| --------- | ----------: | -----------: | ----------: | --------: |
+| Editor    |     155,504 |      125,784 |      29,720 |    19.11% |
+| Codex     |   1,734,848 |    1,489,512 |     245,336 |    14.14% |
+| grep      |      25,336 |       20,244 |       5,092 |    20.10% |
+| tar       |     144,312 |      117,996 |      26,316 |    18.24% |
+| wav       |      16,104 |       12,868 |       3,236 |    20.09% |
+| raytracer |      25,036 |       19,728 |       5,308 |    21.20% |
 
-The capacity condition is satisfied, but lookup adds two storage bindings and up
-to seven within-word tag comparisons in every emission lane. This alternative is
-not implemented. A counterbalanced kernel benchmark must show that the
-13.94–16.21% total-input reduction pays for the certain extra work before it can
-replace the dense column.
+Adaptive selection uses ranked only when this logical input is strictly smaller;
+dense wins ties. Lookup adds two storage bindings and up to seven within-word
+tag comparisons in every emission lane. A 21-pair real-plan benchmark alternated
+dense-first and ranked-first order:
+
+| Target    | Dense median/p95 | Ranked median/p95 | Ranked/dense median |
+| --------- | ---------------: | ----------------: | ------------------: |
+| Editor    |      27.73/28.81 |       27.84/28.48 |              1.0040 |
+| Codex     |      34.82/36.72 |       34.50/35.18 |              0.9907 |
+| grep      |      27.15/27.62 |       27.08/27.71 |              0.9975 |
+| tar       |      27.76/28.33 |       27.67/28.63 |              0.9968 |
+| wav       |      27.03/27.59 |       27.05/27.46 |              1.0007 |
+| raytracer |      27.10/27.68 |       27.08/27.69 |              0.9992 |
+
+Times are milliseconds. The ratios lie within ±0.40%; this run detects no
+material latency change. Adaptive ranked storage is accepted for its strict
+capacity reduction, not a claimed speedup. Forced-layout byte differentials and
+mixed-layout packed batches retain dense as an executable fallback. The
+post-change required-GPU gate passed 500 tests and compiled all frozen targets
+twice; exact samples are recorded in the continuous paper.
 
 ### Compacted Core rewrite frontier
 

@@ -1019,6 +1019,8 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     Math.ceil(gpu.byteCount / 4) * 4,
   );
   const lengthAtoms = plan.atoms.filter((atom) => atom.kind === "length");
+  const byteAtomCount =
+    plan.atoms.filter((atom) => atom.kind === "byte").length;
   const signed64AtomCount =
     plan.atoms.filter((atom) => atom.kind === "signed64").length;
   const signed64HighWordBytes = signed64AtomCount * 2 < plan.atoms.length
@@ -1028,13 +1030,27 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
     ? Math.ceil((plan.atoms.length + 1) / 2) * 4
     : (plan.atoms.length + 1) * 4;
+  const rankedLowWordBytes = (
+    Math.ceil(byteAtomCount / 4) +
+    plan.atoms.length - byteAtomCount +
+    Math.ceil(plan.atoms.length / 8)
+  ) * 4;
+  const lowWordLayout = rankedLowWordBytes < plan.atoms.length * 4
+    ? "ranked"
+    : "dense";
+  const lowWordBytes = lowWordLayout === "ranked"
+    ? rankedLowWordBytes
+    : plan.atoms.length * 4;
   assertEquals(gpu.lengthAtomCount, lengthAtoms.length);
+  assertEquals(gpu.byteAtomCount, byteAtomCount);
+  assertEquals(gpu.lowWordLayout, lowWordLayout);
+  assertEquals(gpu.lowWordBytes, lowWordBytes);
   assertEquals(gpu.resolvedOffsetBitWidth, resolvedOffsetBitWidth);
   assertEquals(gpu.resolvedOffsetBytes, resolvedOffsetBytes);
   assertEquals(
     gpu.atomInputBytes,
     Math.ceil(plan.atoms.length / 8) * 4 +
-      plan.atoms.length * 4 +
+      lowWordBytes +
       signed64HighWordBytes +
       resolvedOffsetBytes,
   );
@@ -1046,6 +1062,17 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     ),
     true,
   );
+
+  const dense = await emitWasmPlanOnGpu(plan, { lowWordLayout: "dense" });
+  if (dense.status === "unavailable") return;
+  const ranked = await emitWasmPlanOnGpu(plan, { lowWordLayout: "ranked" });
+  if (ranked.status === "unavailable") return;
+  assertEquals(dense.bytes, gpu.bytes);
+  assertEquals(ranked.bytes, gpu.bytes);
+  assertEquals(dense.lowWordLayout, "dense");
+  assertEquals(dense.lowWordBytes, plan.atoms.length * 4);
+  assertEquals(ranked.lowWordLayout, "ranked");
+  assertEquals(ranked.lowWordBytes, rankedLowWordBytes);
 });
 
 Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", async () => {
@@ -1066,6 +1093,8 @@ Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", 
 
   assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
   assertEquals(emitted.lengthAtomCount, 1);
+  assertEquals(emitted.lowWordLayout, "dense");
+  assertEquals(emitted.lowWordBytes, 8);
   assertEquals(emitted.resolvedOffsetBitWidth, 16);
   assertEquals(emitted.resolvedOffsetBytes, 8);
   assertEquals(emitted.dispatchedInvocationCount, 64);
@@ -1081,6 +1110,7 @@ Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
   };
   const narrow = await emitWasmPlanOnGpu(narrowPlan);
   if (narrow.status === "unavailable") return;
+  assertEquals(narrow.lowWordLayout, "ranked");
   assertEquals(narrow.resolvedOffsetBitWidth, 16);
   assertEquals(
     narrow.resolvedOffsetBytes,
@@ -1148,7 +1178,7 @@ Deno.test("WebGPU Wasm emission keeps dense signed64 high words above break-even
   assertEquals(emitted.signed64HighWordBytes, 12);
 });
 
-Deno.test("packed WebGPU Wasm emission is deterministic across shared words", async () => {
+Deno.test("packed WebGPU Wasm layouts are deterministic across shared words", async () => {
   const builder = new WasmModuleBuilder();
   const typeIndex = builder.addFunctionType([], [wasmType.i32]);
   const functionIndex = builder.addFunction(
@@ -1164,9 +1194,23 @@ Deno.test("packed WebGPU Wasm emission is deterministic across shared words", as
   const plan = builder.finishPlan();
   const expected = emitWasmPlanOnCpu(plan);
   for (let iteration = 0; iteration < 3; iteration += 1) {
-    const emitted = await emitWasmPlanOnGpu(plan);
-    if (emitted.status === "unavailable") return;
-    assertEquals(emitted.bytes, expected);
+    const [dense, ranked] = await Promise.all([
+      emitWasmPlanOnGpu(plan, {
+        scheduling: "throughput",
+        lowWordLayout: "dense",
+      }),
+      emitWasmPlanOnGpu(plan, {
+        scheduling: "throughput",
+        lowWordLayout: "ranked",
+      }),
+    ]);
+    if (dense.status === "unavailable" || ranked.status === "unavailable") {
+      return;
+    }
+    assertEquals(dense.bytes, expected);
+    assertEquals(ranked.bytes, expected);
+    assertEquals(dense.payloadBatchSize, 2);
+    assertEquals(ranked.payloadBatchSize, 2);
   }
 });
 

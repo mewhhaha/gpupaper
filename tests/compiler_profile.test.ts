@@ -104,6 +104,17 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
     ? Math.ceil((work.wasmAtomCount + 1) / 2) * 4
     : (work.wasmAtomCount + 1) * 4;
+  const rankedLowWordBytes = (
+    Math.ceil(work.gpuWasmByteAtomCount / 4) +
+    work.wasmAtomCount - work.gpuWasmByteAtomCount +
+    Math.ceil(work.wasmAtomCount / 8)
+  ) * 4;
+  const lowWordLayout = rankedLowWordBytes < work.wasmAtomCount * 4
+    ? "ranked"
+    : "dense";
+  const lowWordBytes = lowWordLayout === "ranked"
+    ? rankedLowWordBytes
+    : work.wasmAtomCount * 4;
   if (
     work.gpuRewriteCandidateCount === 0 ||
     work.gpuRewriteCandidateCount > work.coreOperationCount ||
@@ -116,10 +127,12 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     work.gpuWasmLengthAtomCount === 0 ||
     work.gpuWasmResolvedOffsetBitWidth !== resolvedOffsetBitWidth ||
     work.gpuWasmResolvedOffsetBytes !== resolvedOffsetBytes ||
+    work.gpuWasmRankedLowWords !== (lowWordLayout === "ranked" ? 1 : 0) ||
+    work.gpuWasmLowWordBytes !== lowWordBytes ||
     work.gpuWasmSigned64HighWordBytes !== signed64HighWordBytes ||
     work.gpuWasmAtomInputBytes !==
       Math.ceil(work.wasmAtomCount / 8) * 4 +
-        work.wasmAtomCount * 4 +
+        lowWordBytes +
         signed64HighWordBytes +
         resolvedOffsetBytes ||
     work.gpuWasmDispatchedInvocationCount !==
