@@ -575,6 +575,11 @@ targets produce none. Codex needs each hit to repay at least 26.73 lookups befor
 constant costs. It does not, matching the measured regression. Counters and
 cache were removed.
 
+Retained block metrics show that Codex's scoped mutable environment avoids
+412,890 map-entry copies across 6,828 rewritten blocks (60.47 entries/block).
+Editor avoids 57,311 across 827 and Tar 22,293 across 480. These are saved
+copies, not remaining work; a persistent map has no measured basis here.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

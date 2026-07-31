@@ -5245,6 +5245,28 @@ many bodies are batched; the break-even condition is
 measurements provide no positive right-hand margin, so GPU offload is an
 unverified future hypothesis rather than part of this optimization.
 
+### 2026-07-31: lexical environment copying is already eliminated
+
+Review 84 reads the retained block metrics rather than adding instrumentation.
+Codex rewrites 6,828 blocks while avoiding 412,890 entries that a full map copy
+per block would duplicate, an average of 60.47 entries per block. Editor avoids
+57,311 across 827 (69.30/block); Tar avoids 22,293 across 480 (46.44/block).
+Grep, wav, and raytracer avoid 1,267, 210, and 492 entries respectively.
+
+The current algorithm mutates one lexical value map at the boundary, records
+only overwritten bindings, and restores them in reverse order. If block \(b\)
+introduces \(k_b\) bindings, its environment bookkeeping is \(O(k_b)\), versus
+\(O(|\rho_b|)\) for copying. Unique symbol IDs and reverse restoration preserve
+the functional shadowing model. Replacing this with a persistent map would add
+path-node allocation and \(O(\log |\rho|)\) lookup without removing shared
+mutation, because the mutation is already scoped and unobservable.
+
+Thus the 412,890 figure is avoided work, not a remaining optimization ceiling.
+The live cost is allocation of the small restoration arrays and map operations
+for introduced bindings; it must be measured separately before alteration.
+Environment copying is closed as an explanation for the 32,184-entry encoder
+requests.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
