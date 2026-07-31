@@ -4836,6 +4836,28 @@ allocation. It covers 16,660/31,660 = 52.62% of Codex queries and 406/823 =
 can guard the reverse map search with `scope === parameter`; observable output
 is unchanged because the skipped branch is proved unable to return a value.
 
+### 2026-07-31: non-parameter substitution lookups are discarded
+
+Review 66 implements the scope theorem from Review 65. Reverse substitution-map
+search now runs only while an environment is active and the reference symbol's
+resolver scope is `parameter`. Parameter search order, recursive substitution,
+the ordinary value environment, and reference provenance are unchanged.
+
+Preservation is by case analysis. For a parameter reference, execution is
+identical. For module or local scope, every substitution-map lookup returned
+`undefined` by the domain theorem, so removing those lookups reaches the same
+`values` handling with unchanged state. A new executable example combines a
+substituted parameter, local capture, module capture, and higher-order call and
+still evaluates to 42; the existing two-level capture and full specialization
+suite also pass.
+
+Fifteen direct Codex rewrite samples in A/B/A order measured guarded
+median/MAD 72.626/4.050 ms, unguarded 79.616/8.113, and guarded
+68.083/2.717. Both guarded medians beat the intervening baseline; their
+variation warns against a sharper attributed percentage. The deterministic
+claim is removal of 16,660 proved-negative Codex map queries. The observed
+latency direction supports retaining the guard.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

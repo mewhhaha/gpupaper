@@ -442,6 +442,19 @@ Substitution maps contain only resolver parameter symbols. Module and local
 queries can therefore bypass map search by proof, not heuristic. Temporary
 scope counters were removed before implementing the guard.
 
+The resolver-scope guard is now implemented. Direct Codex rewrite sampling was:
+
+| Sequence | Variant | Samples | Median | MAD |
+| -------: | ------- | ------: | -----: | --: |
+| A | guarded | 15 | 72.626 ms | 4.050 ms |
+| B | unguarded | 15 | 79.616 ms | 8.113 ms |
+| A | guarded | 15 | 68.083 ms | 2.717 ms |
+
+Both guarded medians beat the intervening baseline, while their spread makes a
+precise percentage inappropriate. The exact work reduction is 16,660 Codex and
+406 Editor map queries. A mixed module/local/parameter capture test returns 42,
+and the ten-test specialization suite passes.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

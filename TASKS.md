@@ -1456,6 +1456,9 @@ resource cost, and corpus measurements.
 - [x] Partition substitution queries by resolver scope. Prove module/local IDs
       cannot inhabit parameter substitution maps and measure a 52.62% Codex
       guaranteed-miss ceiling for the next fast path.
+- [x] Skip substitution-map search for resolver-proved module/local symbols.
+      Validate mixed-scope captures and retain the guard only after a 15-sample
+      Codex A/B/A rewrite comparison.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

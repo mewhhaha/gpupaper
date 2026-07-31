@@ -695,16 +695,21 @@ function rewriteExpression(
   specialization: SpecializationContext,
 ): TypedDucklangExpression {
   if (expression.kind === "reference") {
-    for (
-      let index = specialization.substitutionEnvironments.length - 1;
-      index >= 0;
-      index -= 1
+    if (
+      specialization.substitutionEnvironments.length > 0 &&
+      expression.symbol.scope === "parameter"
     ) {
-      const substituted = specialization.substitutionEnvironments[index].get(
-        expression.symbol.id,
-      );
-      if (substituted !== undefined) {
-        return rewriteExpression(substituted, values, specialization);
+      for (
+        let index = specialization.substitutionEnvironments.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        const substituted = specialization.substitutionEnvironments[index].get(
+          expression.symbol.id,
+        );
+        if (substituted !== undefined) {
+          return rewriteExpression(substituted, values, specialization);
+        }
       }
     }
     const value = values.get(expression.symbol.id);

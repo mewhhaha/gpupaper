@@ -96,6 +96,19 @@ Deno.test("Ducklang specialization preserves a capture through two levels", asyn
   assertEquals(await run("captures.duck", source), 123);
 });
 
+Deno.test("Ducklang specialization distinguishes parameters from local and module captures", async () => {
+  const source = `let module_value = 10
+let apply = (f, value) => f(value)
+let outer = parameter => {
+  let local = parameter + module_value
+  apply(value => value + local, 20)
+}
+outer(12)
+`;
+
+  assertEquals(await run("substitution_scopes.duck", source), 42);
+});
+
 Deno.test("Ducklang specialization visits only demanded bindings", async () => {
   const source =
     "let unused = (value: I32) => value * 100\nlet answer = 42\nanswer\n";
