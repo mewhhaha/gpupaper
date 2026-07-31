@@ -550,6 +550,13 @@ eliminate body rewriting. The shared optimization domain is a parametric body
 template, subject to measuring argument-dependent reductions; temporary
 identity counters were removed.
 
+Temporary entry classification strengthens the template hypothesis. The seven
+large requests return 71,647 of 90,688 entry objects unchanged (79.00%) and
+perform 940 direct substitutions (1.04%). Each dominant encoder request returns
+26,663 of 32,184 entries unchanged and performs six substitutions. This is a
+reuse ceiling, not a dependency proof; the counters were removed before the
+next subtree-dependency measurement.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

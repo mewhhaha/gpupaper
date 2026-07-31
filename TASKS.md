@@ -1489,6 +1489,9 @@ resource cost, and corpus measurements.
 - [x] Compare the two dominant encoder requests' complete identity components.
       Reject result-cache merging because their static payload references differ
       and define the parametric-template proof obligation instead.
+- [x] Classify unchanged entries and parameter substitutions in large requests.
+      Establish a 79.00% identity-preserving lower bound and require a subtree
+      free-symbol proof before introducing template reuse.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

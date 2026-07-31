@@ -5074,6 +5074,33 @@ current rewriting performs context-sensitive reductions while traversing, so a
 template is viable only after classifying how much of the 32,184 entries is
 structurally invariant versus argument-dependent.
 
+### 2026-07-31: most heavy-request entries prove no change
+
+Review 77 wraps the recursive rewriter temporarily and classifies each entry by
+object-identity preservation and direct parameter-substitution hits. Across the
+seven large Codex requests, 71,647 of 90,688 entries return the input object,
+79.00%, while only 940 entries, 1.04%, directly hit a substitution. Each
+32,184-entry encoder request has exactly 26,663 unchanged entries (82.84%) and
+six direct substitution hits. The other requests preserve between 63.80% and
+82.77% of their entry objects.
+
+Identity preservation is a lower bound on reusable work, not a complete
+dependency proof: a changed parent may only reconstruct around a changed child,
+and an unchanged node may still have required inspection. Nevertheless, the
+measurement rejects a model in which distinct arguments make most encoder work
+intrinsically request-specific. The dominant cost repeatedly establishes that
+subtrees do not change.
+
+For two requests with the same function body and captured environment but
+substitutions \(\sigma_1\) and \(\sigma_2\), a subtree is reusable when its free
+symbol set is disjoint from the parameters on which the substitutions differ,
+and its reductions consult no request-varying value. This follows by structural
+induction over the pure expression tree. Calls that launch nested
+specialization, static lookup through varying values, and binding scopes are
+the induction boundaries and must be represented explicitly. The temporary
+counters were removed. The next review should measure free-parameter dependency
+at subtree granularity rather than infer it from final object identity.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
