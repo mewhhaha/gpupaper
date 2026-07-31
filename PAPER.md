@@ -5379,6 +5379,36 @@ The counters were removed. This measurement justifies implementing one capture
 summary per function, but correctness still requires nested-binder subtraction
 and direct-function treatment to match `collectDefinedSymbols` exactly.
 
+### 2026-07-31: capture summaries derive from lexical ownership
+
+Review 91 rejects caching `collectFunctionCaptures(functionObject)` as the
+algorithmic solution. Lifting appends capture parameters, rewrites call sites,
+and may rename duplicate function symbols, producing new function objects before
+recursive lifting. Object-keyed summaries would miss precisely along that
+transformation path.
+
+The stable formulation assigns every non-module symbol a lexical owner function
+before lifting. During one source-order traversal, maintain the function-owner
+stack. A reference from current function \(f\) to symbol owned by ancestor
+\(g\) is added once to every function on the stack from \(f\) up to but
+excluding \(g\). A reference whose owner is outside the outermost current
+function propagates through the whole stack. Parameters and block bindings
+establish owners; module and direct-function symbols require no capture.
+
+This is equivalent to independent free-variable scans: every function between a
+use and its definition must transport the value, and no function outside that
+lexical path may observe it. A sibling reference is impossible after name
+resolution. Stable first-use order follows the traversal order; a per-function
+seen set prevents duplicates. Work is \(O(V+C\cdot d)\) in the direct stack
+form, where \(d\) is propagation depth, and storage is \(O(S+F+C)\). A parent
+pointer plus path-difference accumulation can reduce propagation toward
+\(O(V+C)\) if measured depth warrants it.
+
+The implementation prerequisite is a stable mapping from each nested function
+binding to its pre-lift summary, preserved across deterministic renaming. This
+is naturally the binding symbol ID plus an occurrence ordinal for duplicated
+IDs; function object identity is not the proof key.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

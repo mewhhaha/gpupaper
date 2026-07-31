@@ -1531,6 +1531,9 @@ resource cost, and corpus measurements.
 - [x] Measure capture output density. Establish 418 records from 107,069 Codex
       visits, estimate summary storage, and preserve nested-binder and stable
       ordering obligations for implementation.
+- [x] Derive one-pass capture summaries from lexical symbol ownership and
+      function-stack propagation. Reject transformed function-object caching and
+      state the stable pre-lift binding key requirement.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
