@@ -12,9 +12,9 @@ import {
   submitCompilerGpuCommand,
 } from "./gpu_device.ts";
 import {
-  validateWasmBinaryPlan,
   type WasmAtom,
   type WasmBinaryPlan,
+  wasmBinaryPlanByteLength,
 } from "./wasm.ts";
 
 export type GpuWasmEmissionResult =
@@ -277,8 +277,8 @@ export async function emitWasmPlanOnGpu(
 type PreparedWasmGpuJob = {
   readonly plan: WasmBinaryPlan;
   readonly columns: ReturnType<typeof atomColumns>;
-  readonly maximumByteCount: number;
-  readonly maximumOutputWordCount: number;
+  readonly expectedByteCount: number;
+  readonly outputWordCount: number;
   readonly workgroupCount: number;
   readonly scanDistances: readonly number[];
 };
@@ -371,7 +371,7 @@ async function emitPackedWasmPlanBatch(
     storageAlignment,
   );
   const outputs = packWasmColumns(
-    jobs.map((job) => new Uint32Array(job.maximumOutputWordCount)),
+    jobs.map((job) => new Uint32Array(job.outputWordCount)),
     4,
     storageAlignment,
   );
@@ -406,7 +406,7 @@ async function emitPackedWasmPlanBatch(
     uniformAlignment,
   );
   const readbacks = packWasmColumns(
-    jobs.map((job) => new Uint32Array(1 + job.maximumOutputWordCount)),
+    jobs.map((job) => new Uint32Array(1 + job.outputWordCount)),
     4,
     4,
   );
@@ -711,7 +711,7 @@ async function emitPackedWasmPlanBatch(
         outputs.regions[index].offset,
         readbackBuffer,
         readbacks.regions[index].offset + 4,
-        job.maximumOutputWordCount * 4,
+        job.outputWordCount * 4,
       );
     }
 
@@ -731,9 +731,9 @@ async function emitPackedWasmPlanBatch(
     return jobs.map((job, index) => {
       const readbackOffset = readbacks.regions[index].offset;
       const byteCount = new Uint32Array(mapped, readbackOffset, 1)[0];
-      if (byteCount > job.maximumByteCount) {
-        throw new RangeError(
-          `WebGPU Wasm batch job ${index} returned ${byteCount} bytes; plan maximum is ${job.maximumByteCount}`,
+      if (byteCount !== job.expectedByteCount) {
+        throw new Error(
+          `WebGPU Wasm batch job ${index} returned ${byteCount} bytes; CPU plan measure is ${job.expectedByteCount}`,
         );
       }
       return {
@@ -741,7 +741,7 @@ async function emitPackedWasmPlanBatch(
         bytes: new Uint8Array(mapped, readbackOffset + 4, byteCount).slice(),
         atomCount: job.plan.atoms.length,
         byteCount,
-        outputBufferBytes: job.maximumOutputWordCount * 4,
+        outputBufferBytes: job.outputWordCount * 4,
         lengthRounds: job.plan.maximumDependencyLevel,
         scanRounds: job.scanDistances.length,
         submissionBatchSize: submission.submissionBatchSize,
@@ -756,8 +756,7 @@ async function emitPackedWasmPlanBatch(
 }
 
 function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
-  validateWasmBinaryPlan(plan);
-  const maximumByteCount = maximumWasmPlanByteCount(plan);
+  const expectedByteCount = wasmBinaryPlanByteLength(plan);
   const scanDistances: number[] = [];
   for (let distance = 1; distance < plan.atoms.length; distance *= 2) {
     scanDistances.push(distance);
@@ -765,8 +764,8 @@ function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   return {
     plan,
     columns: atomColumns(plan.atoms),
-    maximumByteCount,
-    maximumOutputWordCount: Math.ceil(maximumByteCount / 4),
+    expectedByteCount,
+    outputWordCount: Math.ceil(expectedByteCount / 4),
     workgroupCount: Math.ceil(plan.atoms.length / 64),
     scanDistances,
   };
@@ -840,7 +839,7 @@ async function emitWasmPlanWithGpu(
   plan: WasmBinaryPlan,
   scheduling: CompilerGpuSchedulingPolicy,
 ): Promise<GpuWasmEmissionResult> {
-  validateWasmBinaryPlan(plan);
+  const expectedByteCount = wasmBinaryPlanByteLength(plan);
   const columns = atomColumns(plan.atoms);
   const context = await requestGpuWasmContext();
   if (context.status === "unavailable") return context;
@@ -851,10 +850,9 @@ async function emitWasmPlanWithGpu(
     scanPipeline,
     sizePipeline,
   } = context;
-  const maximumByteCount = maximumWasmPlanByteCount(plan);
-  const maximumOutputWordCount = Math.ceil(maximumByteCount / 4);
+  const outputWordCount = Math.ceil(expectedByteCount / 4);
   const atomBytes = Math.max(4, columns.kinds.byteLength);
-  const outputBytes = maximumOutputWordCount * 4;
+  const outputBytes = outputWordCount * 4;
   const capacityRequests = [
     ["atom kinds", atomBytes, "storage"],
     ["atom low words", atomBytes, "storage"],
@@ -1129,7 +1127,7 @@ async function emitWasmPlanWithGpu(
       0,
       readback,
       4,
-      maximumOutputWordCount * 4,
+      outputWordCount * 4,
     );
     const submission = await submitCompilerGpuCommand(
       device,
@@ -1145,9 +1143,9 @@ async function emitWasmPlanWithGpu(
     readbackMapped = true;
     const mapped = readback.getMappedRange();
     const byteCount = new Uint32Array(mapped, 0, 1)[0];
-    if (byteCount > maximumByteCount) {
-      throw new RangeError(
-        `WebGPU Wasm emitter returned ${byteCount} bytes; plan maximum is ${maximumByteCount}`,
+    if (byteCount !== expectedByteCount) {
+      throw new Error(
+        `WebGPU Wasm emitter returned ${byteCount} bytes; CPU plan measure is ${expectedByteCount}`,
       );
     }
     const bytes = new Uint8Array(mapped, 4, byteCount).slice();
@@ -1156,7 +1154,7 @@ async function emitWasmPlanWithGpu(
       bytes,
       atomCount: plan.atoms.length,
       byteCount,
-      outputBufferBytes: maximumOutputWordCount * 4,
+      outputBufferBytes: outputWordCount * 4,
       lengthRounds: plan.maximumDependencyLevel,
       scanRounds,
       submissionBatchSize: submission.submissionBatchSize,
@@ -1173,27 +1171,6 @@ async function emitWasmPlanWithGpu(
       buffer.destroy();
     }
   }
-}
-
-function maximumWasmPlanByteCount(plan: WasmBinaryPlan): number {
-  let maximumByteCount = 0;
-  for (const atom of plan.atoms) {
-    const maximumAtomBytes = atom.kind === "byte"
-      ? 1
-      : atom.kind === "signed64"
-      ? 10
-      : 5;
-    maximumByteCount += maximumAtomBytes;
-    if (
-      !Number.isSafeInteger(maximumByteCount) ||
-      maximumByteCount > 0xffff_ffff
-    ) {
-      throw new RangeError(
-        `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
-      );
-    }
-  }
-  return maximumByteCount;
 }
 
 function atomColumns(atoms: readonly WasmAtom[]): {

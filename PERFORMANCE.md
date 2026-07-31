@@ -226,10 +226,24 @@ and length atoms, and 10 bytes for 64-bit atoms:
 | raytracer |        38,512 |      9,608 |    75.05% |             2.49× |
 
 Codex saves 1,483,684 bytes in each of the output and readback buffers, or
-2,967,368 bytes across both, without changing dispatches or emitted bytes. The
-remaining 2.34–2.62× slack is the gap between type-maximum and actual LEB128
-widths. Eliminating it would require either a size readback/allocation barrier
-or GPU-side suballocation from the resolved prefix, so it is not free.
+2,967,368 bytes across both, without changing dispatches or emitted bytes.
+
+The atom DAG is already available on the host, so a width-only level evaluation
+can compute exact capacity without emitting bytes or synchronizing with the
+device:
+
+| Target    | Kind bound | Exact rounded | Further reduction | Padding |
+| --------- | ---------: | ------------: | ----------------: | ------: |
+| Editor    |     64,036 |        24,460 |            61.80% |       0 |
+| Codex     |    557,308 |       226,136 |            59.42% |       2 |
+| grep      |     10,096 |         3,912 |            61.25% |       1 |
+| tar       |     61,112 |        26,108 |            57.28% |       2 |
+| wav       |      6,416 |         2,520 |            60.72% |       0 |
+| raytracer |      9,608 |         3,864 |            59.78% |       0 |
+
+The GPU independently computes its final prefix and must match the exact host
+measure. The six-target required-GPU gate passed byte differential and engine
+validation. This changes capacity and host width work, not scan dispatches.
 
 ### Scalar comptime stack capacity
 

@@ -1,6 +1,7 @@
 import {
   emitWasmPlanOnCpu,
   validateWasmBinaryPlan,
+  wasmBinaryPlanByteLength,
   wasmInstruction,
   WasmModuleBuilder,
   wasmType,
@@ -68,6 +69,12 @@ Deno.test("Ducklang Wasm emission is byte-identical for the same plan", () => {
   const plan = buildModule(4).finishPlan();
 
   assertEquals([...emitWasmPlanOnCpu(plan)], [...emitWasmPlanOnCpu(plan)]);
+});
+
+Deno.test("Ducklang Wasm plan byte length equals emitted length", () => {
+  const plan = buildModule(4).finishPlan();
+
+  assertEquals(wasmBinaryPlanByteLength(plan), emitWasmPlanOnCpu(plan).length);
 });
 
 function assertEquals(actual: unknown, expected: unknown): void {

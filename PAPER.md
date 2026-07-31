@@ -961,19 +961,28 @@ Their shifted byte masks are disjoint; therefore the atomic operations commute
 and the final word equals the source-ordered byte concatenation independently of
 invocation order.
 
-Let `A₁`, `A₅`, and `A₁₀` count byte atoms, 32-bit or length atoms, and 64-bit
-atoms. Their maximum LEB128 widths give the bound:
+Before allocation, the CPU evaluates encoded widths without emitting bytes. For
+non-length atoms, \(s_i\) is the exact LEB128 width of the atom value. Length
+atoms are visited in dependency-level order:
 
 ```text
-B_max = A₁ + 5A₅ + 10A₁₀
-B_output = 4 ceil(B_max / 4)
+s_i = unsigned_width(Σ[j in range(i)] s_j)
+B_exact = Σi s_i
+B_output = 4 ceil(B_exact / 4)
 ```
 
-This is safe by case analysis over the complete atom kind. It replaced the
-initial uniform `10A` bound, which was safe but reserved roughly nine times the
-frozen applications' final bytes. The bound remains conservative because most
-LEB128 values use fewer than their type maximum. It is recorded separately from
-the actual emitted byte count. The scan uses two `4A`-byte prefix buffers, and
+The plan validator has already proved that every referenced dependency has a
+lower level, so induction on levels makes every \(s_j\) available. This takes
+\(O(A + \sum_i range_count_i)\) work and one byte of host memory per atom
+because all admitted widths are at most 10. It is not CPU emission: no encoded
+byte or offset is constructed. The GPU independently executes its size, length,
+scan, and write passes, and the returned final prefix must equal
+\(B_\text{exact}\).
+
+An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
+case analysis but conservative. Exact host sizing removes their slack without a
+device readback or an additional submission because the immutable atom DAG is
+already a host payload. The scan still uses two `4A`-byte prefix buffers, and
 the size column uses another `4A` bytes. Packed batches add device-required
 alignment between job regions but do not change per-job atom semantics.
 
@@ -1784,6 +1793,22 @@ submission, or introducing a larger shared device arena with its own allocation
 proof. The smaller static bound is selected because it improves capacity with
 zero new synchronization. CPU/GPU byte differentials, the full-width signed
 `i64` fixture, and all frozen outputs remain the executable evidence.
+
+### 2026-07-31: the host atom DAG gives exact Wasm capacity
+
+The preceding conclusion was false: the immutable atom DAG and all scalar values
+already exist on the host. A width-only evaluator now resolves that DAG without
+emitting bytes and allocates the exact byte length rounded to a word. The GPU
+still independently calculates sizes and lengths; its final prefix must equal
+the host measure before bytes are accepted.
+
+Across the frozen applications, output buffers are Editor 24,460, Codex 226,136,
+grep 3,912, tar 26,108, wav 2,520, and raytracer 3,864 bytes. Each is the module
+length rounded upward by at most three bytes. Relative to the kind bound, this
+removes another 57.28–61.80% from both output and readback buffers with no
+device synchronization; Codex saves 331,172 bytes in each buffer. The full
+six-target required-GPU gate, CPU byte differentials, and engine validation
+passed.
 
 ### 2026-07-31: type closure gains a semantic oracle
 

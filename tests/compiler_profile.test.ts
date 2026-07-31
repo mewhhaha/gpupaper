@@ -103,7 +103,7 @@ Deno.test("GPU Wasm profile exposes every full-array dispatch round", async () =
     work.gpuWasmScanRoundCount === 0 ||
     work.gpuWasmDispatchedInvocationCount !== expectedInvocations ||
     work.wasmOutputBufferBytes < work.wasmBytes ||
-    work.wasmOutputBufferBytes >= work.wasmAtomCount * 10
+    work.wasmOutputBufferBytes >= work.wasmBytes + 4
   ) {
     throw new Error(
       `GPU Wasm profile omitted dispatch work: ${JSON.stringify(work)}`,

@@ -375,6 +375,91 @@ export function validateWasmBinaryPlan(plan: WasmBinaryPlan): void {
   }
 }
 
+export function wasmBinaryPlanByteLength(plan: WasmBinaryPlan): number {
+  validateWasmBinaryPlan(plan);
+  const sizes = new Uint8Array(plan.atoms.length);
+  for (let level = 0; level <= plan.maximumDependencyLevel; level += 1) {
+    for (const [atomIndex, atom] of plan.atoms.entries()) {
+      if (atom.kind === "length") {
+        if (atom.dependencyLevel !== level) continue;
+        let byteLength = 0;
+        for (
+          let dependencyIndex = atom.rangeStart;
+          dependencyIndex < atom.rangeStart + atom.rangeCount;
+          dependencyIndex += 1
+        ) {
+          byteLength += sizes[dependencyIndex];
+        }
+        if (byteLength > 0xffff_ffff) {
+          throw new RangeError(
+            `Wasm length atom ${atomIndex} encodes ${byteLength} bytes; maximum is 4294967295`,
+          );
+        }
+        sizes[atomIndex] = unsignedEncodingByteLength(byteLength);
+        continue;
+      }
+      if (level !== 0) continue;
+      sizes[atomIndex] = atom.kind === "byte"
+        ? 1
+        : atom.kind === "unsigned"
+        ? unsignedEncodingByteLength(atom.value)
+        : atom.kind === "signed32"
+        ? signed32EncodingByteLength(atom.value)
+        : signed64EncodingByteLength(atom.value);
+    }
+  }
+  let byteLength = 0;
+  for (const [atomIndex, size] of sizes.entries()) {
+    byteLength += size;
+    if (byteLength > 0xffff_ffff) {
+      throw new RangeError(
+        `Wasm plan byte length exceeds u32 at atom ${atomIndex}; partial length ${byteLength}`,
+      );
+    }
+  }
+  return byteLength;
+}
+
+function unsignedEncodingByteLength(value: number): number {
+  let remaining = value;
+  let byteLength = 1;
+  while (remaining >= 128) {
+    remaining = Math.floor(remaining / 128);
+    byteLength += 1;
+  }
+  return byteLength;
+}
+
+function signed32EncodingByteLength(value: number): number {
+  let remaining = value | 0;
+  let byteLength = 0;
+  while (true) {
+    const encodedByte = remaining & 0x7f;
+    remaining >>= 7;
+    byteLength += 1;
+    const signSet = (encodedByte & 0x40) !== 0;
+    if (
+      (remaining === 0 && !signSet) ||
+      (remaining === -1 && signSet)
+    ) return byteLength;
+  }
+}
+
+function signed64EncodingByteLength(value: bigint): number {
+  let remaining = value;
+  let byteLength = 0;
+  while (true) {
+    const encodedByte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    byteLength += 1;
+    const signSet = (encodedByte & 0x40) !== 0;
+    if (
+      (remaining === 0n && !signSet) ||
+      (remaining === -1n && signSet)
+    ) return byteLength;
+  }
+}
+
 export const wasmType = {
   i32: 0x7f,
   i64: 0x7e,

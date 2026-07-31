@@ -966,14 +966,9 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
 
   assertEquals([...gpu.bytes], [...builder.finish()]);
   assertEquals(gpu.atomCount, plan.atoms.length);
-  const maximumByteCount = plan.atoms.reduce(
-    (total, atom) =>
-      total + (atom.kind === "byte" ? 1 : atom.kind === "signed64" ? 10 : 5),
-    0,
-  );
   assertEquals(
     gpu.outputBufferBytes,
-    Math.ceil(maximumByteCount / 4) * 4,
+    Math.ceil(gpu.byteCount / 4) * 4,
   );
   assertEquals(gpu.lengthRounds, plan.maximumDependencyLevel);
   assertEquals(
