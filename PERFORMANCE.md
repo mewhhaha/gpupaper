@@ -178,6 +178,29 @@ differential comparison, engine validation, and byte determinism:
 These two release samples are a correctness gate, not a latency distribution.
 All device-capacity preflights and the malformed-input rejection gate passed.
 
+### Wasm emission work audit
+
+The 2026-07-31 required-GPU audit exposes the exact current Hillis–Steele scan
+cost. `length` is the number of full-array length-dependency rounds, `scan` is
+the number of full-array prefix rounds, and invocations include workgroup
+padding across size, length, scan, and emission passes:
+
+| Target    |   Atoms | Length | Scan | Invocations | Output buffer | Wasm bytes |
+| --------- | ------: | -----: | ---: | ----------: | ------------: | ---------: |
+| Editor    |  23,923 |      2 |   15 |     454,784 |       239,232 |     24,460 |
+| Codex     | 204,099 |      2 |   18 |   4,491,520 |     2,040,992 |    226,134 |
+| grep      |   3,897 |      2 |   12 |      62,464 |        38,972 |      3,911 |
+| tar       |  22,201 |      2 |   15 |     421,952 |       222,012 |     26,106 |
+| wav       |   2,477 |      2 |   12 |      39,936 |        24,772 |      2,520 |
+| raytracer |   3,851 |      2 |   12 |      62,464 |        38,512 |      3,864 |
+
+The output buffer reserves ten bytes per atom even though actual modules use
+only 10.03–11.76% of that capacity. Codex schedules 22 full-width passes and
+reserves 9.03× its final byte count. These are deterministic work and capacity
+counts. They identify two independent optimization candidates: a work-efficient
+hierarchical scan reduces scheduled arithmetic, while kind-sensitive atom bounds
+reduce memory without changing dispatch count.
+
 ## Incremental rebuild
 
 Each target and backend receives one explicit compilation session. The session

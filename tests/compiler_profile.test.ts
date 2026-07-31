@@ -82,6 +82,33 @@ add(20, 22)
   }
 });
 
+Deno.test("GPU Wasm profile exposes every full-array dispatch round", async () => {
+  const artifact = await compileModuleSource(
+    "gpu_wasm_profile.duck",
+    "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
+    {
+      gpuMode: "required",
+      gpuWasmVerification: "differential",
+    },
+  );
+  const work = artifact.profile.work;
+  const dispatchedWidth = Math.ceil(work.wasmAtomCount / 64) * 64;
+  const expectedInvocations = dispatchedWidth *
+    (
+      2 + work.gpuWasmLengthRoundCount +
+      work.gpuWasmScanRoundCount
+    );
+  if (
+    work.gpuWasmLengthRoundCount === 0 ||
+    work.gpuWasmScanRoundCount === 0 ||
+    work.gpuWasmDispatchedInvocationCount !== expectedInvocations
+  ) {
+    throw new Error(
+      `GPU Wasm profile omitted dispatch work: ${JSON.stringify(work)}`,
+    );
+  }
+});
+
 Deno.test("Ducklang post-comptime specialization skips a clean module", async () => {
   const artifact = await compileModuleSource(
     "clean_frontier.duck",

@@ -885,6 +885,84 @@ structurally valid but semantically false certificate. A general optimization
 framework would require a preservation proof and certificate checker for every
 additional rule.
 
+### 7.4 Wasm count, scan, and write
+
+The binary plan is a nonempty source-ordered atom sequence:
+
+```text
+atom ::= byte(u8)
+       | unsigned(u32)
+       | signed32(i32)
+       | signed64(i64_bits)
+       | length(range_start, range_count, dependency_level)
+```
+
+A length atom encodes the byte length of a contiguous atom range. Its dependency
+level is strictly greater than every length atom in that range, so the relation
+is acyclic. CPU validation checks atom domains, ranges, levels, and the declared
+maximum level before GPU allocation.
+
+For `A` atoms and maximum length level `D`, emission performs:
+
+1. one full-array pass computing the encoded size of non-length atoms;
+2. `D` full-array passes, in increasing level order, resolving length atoms;
+3. an inclusive prefix sum of all resolved sizes;
+4. one full-array pass writing each atom into its assigned byte interval.
+
+The current prefix implementation is Hillis–Steele. For distances
+`1, 2, 4, … < A`, round `r` computes:
+
+```text
+pᵣ[i] = pᵣ₋₁[i] + (i ≥ 2ʳ ? pᵣ₋₁[i - 2ʳ] : 0)
+```
+
+After round `r`, `pᵣ[i]` is the sum of the last at most `2ʳ⁺¹` input sizes
+ending at `i`; induction yields the complete inclusive prefix after:
+
+```text
+R = ceil(log₂ A)
+```
+
+This is not the work-efficient Blelloch scan discussed by the historical design
+paper. With workgroup width 64, the exact scheduled lane count for one plan is:
+
+```text
+L = 64 ceil(A / 64)
+dispatches = 2 + D + R
+scheduled_invocations = L(2 + D + R)
+work = Θ(A(D + log A))
+span = Θ(D + log A) dispatch rounds
+```
+
+Only length atoms at the active level do useful work during a length pass, so
+the formula includes inactive lanes. The profile reports `A`, `D`, `R`, and the
+scheduled invocation count. This makes a future hierarchical or level-compacted
+implementation comparable without changing the semantic plan.
+
+Each atom owns a disjoint byte interval from the prefix result. Adjacent atoms
+may share a `u32` output word, so writers use `atomicOr` into a zeroed buffer.
+Their shifted byte masks are disjoint; therefore the atomic operations commute
+and the final word equals the source-ordered byte concatenation independently of
+invocation order.
+
+The current output allocation uses the uniform bound of ten bytes per atom:
+
+```text
+B_output = 4 ceil(10A / 4)
+```
+
+This is safe because signed `i64` LEB128 is the largest atom encoding. It is
+conservative for byte and 32-bit atoms and is recorded separately from the
+actual emitted byte count. The scan uses two `4A`-byte prefix buffers, and the
+size column uses another `4A` bytes. Packed batches add device-required
+alignment between job regions but do not change per-job atom semantics.
+
+The default CPU differential independently evaluates the length DAG, encodes
+LEB128 values, concatenates atoms, and compares every byte. Engine validation
+then checks the selected module. With differential verification disabled, engine
+validity does not prove semantic equality to the plan; that mode deliberately
+trades away the independent byte oracle.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -1483,6 +1561,24 @@ byte-identical bytes. All six targets passed GPU type validation, authoritative
 Core rewriting and Wasm emission, CPU differential comparison, engine
 validation, device-capacity preflight, and their time budgets. These two samples
 are correctness evidence, not a latency distribution.
+
+### 2026-07-31: Wasm scan work becomes observable
+
+The implementation uses the Hillis–Steele scan specified in Section 7.4 rather
+than the work-efficient scan proposed historically. New profile counters expose
+length rounds, scan rounds, and scheduled invocations including workgroup
+padding. Codex contains 204,099 atoms, requires 2 length rounds and 18 scan
+rounds, and schedules 4,491,520 invocations across 22 full-width passes. Its
+2,040,992-byte output buffer is 9.03 times the 226,134-byte result. These are
+exact work counts from a required-GPU differential compilation; the associated
+single timing observation is not promoted to a distribution.
+
+The measurement separates two hypotheses. Replacing Hillis–Steele with a
+hierarchical work-efficient scan should reduce arithmetic from `Θ(A log A)` to
+`Θ(A)` but adds workgroup sums and another hierarchy. Computing a per-atom
+maximum encoded size should reduce the output and readback buffers without
+changing scan work. Neither optimization is justified by the count alone; each
+requires an end-to-end before/after distribution and identical bytes.
 
 ## References
 
