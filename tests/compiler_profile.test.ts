@@ -82,6 +82,27 @@ add(20, 22)
   }
 });
 
+Deno.test("Core identity reuses its structured round-trip witness", async () => {
+  const artifact = await compileModuleSource(
+    "core_identity_profile.duck",
+    "let left = 20\nlet right = 22\nleft + right\n",
+    { gpuMode: "off" },
+  );
+  const { stages, work } = artifact.profile;
+
+  if (
+    work.coreRewriteProposalCount !== 0 ||
+    work.coreRewriteAcceptedCount !== 0 ||
+    stages.coreInflationMilliseconds !== 0
+  ) {
+    throw new Error(
+      `Core identity repeated flat inflation: ${
+        JSON.stringify({ stages, work })
+      }`,
+    );
+  }
+});
+
 Deno.test("Ducklang profile reports specialization environment work", async () => {
   const artifact = await compileModuleSource(
     "specialization_environment_profile.duck",

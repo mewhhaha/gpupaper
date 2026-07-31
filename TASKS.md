@@ -1366,6 +1366,9 @@ resource cost, and corpus measurements.
       CPU and validated GPU commit preserve the input object, backend-neutral
       profiles expose proposal and acceptance counts, and a 21-pair Codex
       experiment isolates the removed rebuild and second validation.
+- [x] Reuse the retained structured Core round-trip witness when rewrite returns
+      the exact package produced by flattening. Identity profiles report zero
+      inflation; transformed packages remain on the validated inflation path.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

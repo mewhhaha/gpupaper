@@ -937,6 +937,32 @@ closures, control flow, values, and layouts and separately checks deterministic
 columns. This is executable conformance evidence, not a universal proof of the
 serializer.
 
+The compiler retains the structured input \(M\) as a round-trip witness while
+its flat image \(P=\operatorname{flatten}(M)\) passes through rewrite. Under the
+immutable commit contract, reference identity of the returned package proves
+that no rewrite constructed a successor snapshot. In that case:
+
+```text
+optimized_flat === P
+implies optimized_core = M
+because inflate(flatten(M)) = M
+```
+
+The implication depends on both properties: flatten/inflate round-trip
+conformance and the prohibition on in-place rewrite mutation. Column equality
+alone would require an \(O(B_{\mathrm{flat}})\) comparison; reference identity
+is a constant-work certificate supplied by the empty-commit law in Section
+7.3. A nonempty accepted batch returns a new package and still requires
+inflation and validation.
+
+Reusing \(M\) removes one complete traversal and allocation of the structured
+Core graph. It also avoids source-provenance, type, layout, block, operation,
+and value reconstruction. The exact saved byte count is engine-dependent
+because the structured graph uses JavaScript objects and arrays, so the
+implementation reports the inflation stage as exactly zero work rather than
+claiming a portable allocation formula. This does not remove flat-package
+validation or rewrite matching.
+
 Let `U(P)` be the multiset of `Uint32Array` columns and `S(P)` the string-byte
 column. The exact payload storage occupied by the flat package, excluding
 JavaScript object headers, is:
@@ -3628,6 +3654,29 @@ The required-GPU gate passed all 507 tests and compiled every frozen target
 twice with byte-identical CPU/GPU emission and engine validation. Its advisory
 samples in milliseconds were Editor 300.63/182.64, Codex 841.02/589.22, grep
 72.53/69.16, Tar 139.02/134.32, wav 63.49/63.24, and raytracer 44.92/41.65.
+
+### 2026-07-31: unchanged flat Core reuses its structured witness
+
+After empty commit began preserving object identity, the compiler still
+inflated the unchanged flat package immediately after validation had already
+inflated it once. Section 7.2 derives a constant-work certificate from the
+round-trip and immutability laws: if rewrite returns the exact package produced
+by `flatten(M)`, the next structured Core is \(M\). A non-identical package
+continues through ordinary inflation.
+
+A public profile regression requires zero Core-inflation time together with
+zero proposals and acceptances. An alternating 21-pair Codex CPU experiment
+against detached commit `2511932` changed median inflation from 31.863 ms to
+exactly 0 and complete compilation from 451.776 to 424.521 ms (-6.03%). Core
+rewrite was stable at 33.367 versus 33.261 ms, and downstream Wasm planning
+moved from 50.852 to 52.447 ms. The identical 226,134-byte output and unchanged
+rewrite stage are negative controls; the full gate remains the integration
+boundary.
+
+The required-GPU gate passed all 508 tests. Its two byte-identical, validated
+samples in milliseconds were Editor 283.09/170.11, Codex 754.22/536.71, grep
+70.24/70.17, Tar 140.31/129.36, wav 62.45/60.98, and raytracer 44.21/42.18.
+They are correctness observations rather than a second timing experiment.
 
 ## References
 

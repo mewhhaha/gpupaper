@@ -1189,6 +1189,34 @@ Codex's two correctness samples were 841.02 and 589.22 ms; Editor's were
 300.63 and 182.64 ms. These are release observations, not an additional
 controlled latency comparison.
 
+### Structured Core round-trip witness
+
+When rewrite returns the exact package produced by flattening structured Core,
+the immutable snapshot and round-trip laws prove that inflating it would recover
+the structured value already retained by the compiler. The identity path now
+reuses that value. Any accepted rewrite constructs a distinct package and
+continues to inflate normally.
+
+An alternating 21-pair Codex CPU experiment after one unrecorded warmup compared
+the current tree with detached commit `2511932`:
+
+| Measurement | Before | After | Change |
+| ----------- | -----: | ----: | -----: |
+| Core inflation | 31.863 ms | 0 ms | -100% |
+| Complete compilation | 451.776 ms | 424.521 ms | -6.03% |
+| Core rewrite | 33.367 ms | 33.261 ms | -0.32% |
+| Wasm planning and CPU emission | 50.852 ms | 52.447 ms | +3.14% |
+
+All samples emitted the same 226,134-byte Codex module. The exact result is the
+zero inflation stage; end-to-end timing remains advisory. Five frozen targets
+accept no Core rewrite and use this path. Tar's 24 accepted rewrites still
+require inflation.
+
+The 508-test required-GPU gate passed and compiled every frozen target twice.
+Codex's correctness samples were 754.22 and 536.71 ms; Tar's transformed path
+was 140.31 and 129.36 ms. Both outputs remained byte-identical to CPU emission
+and passed engine validation.
+
 ### Rejected Core rule expansion
 
 The Wasm integer laws also justify `x * 0 → 0`, `x - 0 → x`, and

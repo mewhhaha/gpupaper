@@ -1480,9 +1480,13 @@ async function compileDucklangModuleSource(
     cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
   }
 
-  const coreInflationStart = performance.now();
-  const optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
-  const coreInflationMilliseconds = performance.now() - coreInflationStart;
+  let optimizedCore = core;
+  let coreInflationMilliseconds = 0;
+  if (optimizedFlatCore !== flatCore) {
+    const coreInflationStart = performance.now();
+    optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
+    coreInflationMilliseconds = performance.now() - coreInflationStart;
+  }
 
   const wasmStart = performance.now();
   const backendFunctions = options.session?.backendFunctions;
