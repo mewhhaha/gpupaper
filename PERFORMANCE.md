@@ -251,6 +251,13 @@ therefore lowers two exposed ordinary loops; neither `for` constructor is on
 the residual frontier. Contemporary CPU control-flow representatives were
 1.609, 57.521, 0.203, 0.382, 0.131, and 0.260 ms.
 
+Residual instances are also quotiented by `(kind, file, start, end)`. Codex's
+two physical residuals have one distinct provenance; temporary diagnostic
+inspection identifies the same `prelude_runtime.duck:1424..1632` loop twice.
+The other targets remain 0/0 physical/distinct. The expected set cost is
+\(O(r_1)\) work and \(O(d_1)\) storage—two insertions and one key for Codex.
+This is diagnostic evidence for repeated linked-module work, not a speedup.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

@@ -22,6 +22,7 @@ export function lowerDucklangControlFlowWithMetrics(
   readonly firstPassResidualLoopCount: number;
   readonly firstPassResidualRangeCount: number;
   readonly firstPassResidualCollectionCount: number;
+  readonly firstPassResidualDistinctSourceCount: number;
   readonly firstPassMilliseconds: number;
   readonly subsequentPassMilliseconds: number;
 } {
@@ -31,6 +32,7 @@ export function lowerDucklangControlFlowWithMetrics(
   let firstPassResidualLoopCount = 0;
   let firstPassResidualRangeCount = 0;
   let firstPassResidualCollectionCount = 0;
+  let firstPassResidualDistinctSourceCount = 0;
   let firstPassMilliseconds = 0;
   let subsequentPassMilliseconds = 0;
   let previousResidualControlCount: number | undefined;
@@ -60,6 +62,7 @@ export function lowerDucklangControlFlowWithMetrics(
       firstPassResidualLoopCount = residual.loopCount;
       firstPassResidualRangeCount = residual.rangeCount;
       firstPassResidualCollectionCount = residual.collectionCount;
+      firstPassResidualDistinctSourceCount = residual.distinctSourceCount;
     }
     if (residual.first === undefined) {
       return {
@@ -69,6 +72,7 @@ export function lowerDucklangControlFlowWithMetrics(
         firstPassResidualLoopCount,
         firstPassResidualRangeCount,
         firstPassResidualCollectionCount,
+        firstPassResidualDistinctSourceCount,
         firstPassMilliseconds,
         subsequentPassMilliseconds,
       };
@@ -92,6 +96,7 @@ function sourceControlFlowSummary(
   readonly loopCount: number;
   readonly rangeCount: number;
   readonly collectionCount: number;
+  readonly distinctSourceCount: number;
   readonly first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -109,6 +114,7 @@ function sourceControlFlowSummary(
   let loopCount = 0;
   let rangeCount = 0;
   let collectionCount = 0;
+  const distinctSources = new Set<string>();
   let first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -119,16 +125,19 @@ function sourceControlFlowSummary(
     const current = pending.pop()!;
     switch (current.kind) {
       case "loop":
+        distinctSources.add(sourceControlIdentity(current));
         loopCount += 1;
         count += 1;
         first ??= current;
         break;
       case "forRange":
+        distinctSources.add(sourceControlIdentity(current));
         rangeCount += 1;
         count += 1;
         first ??= current;
         break;
       case "forCollection":
+        distinctSources.add(sourceControlIdentity(current));
         collectionCount += 1;
         count += 1;
         first ??= current;
@@ -248,7 +257,23 @@ function sourceControlFlowSummary(
       }
     }
   }
-  return { count, loopCount, rangeCount, collectionCount, first };
+  return {
+    count,
+    loopCount,
+    rangeCount,
+    collectionCount,
+    distinctSourceCount: distinctSources.size,
+    first,
+  };
+}
+
+function sourceControlIdentity(
+  expression: {
+    readonly kind: "loop" | "forRange" | "forCollection";
+    readonly span: DucklangExpression["span"];
+  },
+): string {
+  return `${expression.kind}\u0000${expression.span.file}\u0000${expression.span.start}\u0000${expression.span.end}`;
 }
 
 /**

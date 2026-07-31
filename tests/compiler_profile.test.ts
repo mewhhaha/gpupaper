@@ -128,7 +128,8 @@ Deno.test("independent compilation skips session identity work", async () => {
   if (
     work.controlFlowFirstPassResidualLoopCount !== 0 ||
     work.controlFlowFirstPassResidualRangeCount !== 0 ||
-    work.controlFlowFirstPassResidualCollectionCount !== 0
+    work.controlFlowFirstPassResidualCollectionCount !== 0 ||
+    work.controlFlowFirstPassResidualDistinctSourceCount !== 0
   ) {
     throw new Error(
       `straight-line compilation retained source-control components: ${
@@ -160,6 +161,7 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
   const {
     controlFlowFirstPassResidualCollectionCount,
     controlFlowFirstPassResidualCount,
+    controlFlowFirstPassResidualDistinctSourceCount,
     controlFlowFirstPassResidualLoopCount,
     controlFlowFirstPassResidualRangeCount,
     controlFlowLoweringPassCount,
@@ -177,6 +179,14 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
     );
   }
   if (
+    controlFlowFirstPassResidualDistinctSourceCount >
+      controlFlowFirstPassResidualCount
+  ) {
+    throw new Error(
+      `Codex has ${controlFlowFirstPassResidualDistinctSourceCount} distinct residual sources for ${controlFlowFirstPassResidualCount} physical nodes`,
+    );
+  }
+  if (
     controlFlowFirstPassResidualLoopCount !== 2 ||
     controlFlowFirstPassResidualRangeCount !== 0 ||
     controlFlowFirstPassResidualCollectionCount !== 0
@@ -189,6 +199,11 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
           collection: controlFlowFirstPassResidualCollectionCount,
         })
       }`,
+    );
+  }
+  if (controlFlowFirstPassResidualDistinctSourceCount !== 1) {
+    throw new Error(
+      `Codex residual source control has ${controlFlowFirstPassResidualDistinctSourceCount} distinct source identities`,
     );
   }
   if (

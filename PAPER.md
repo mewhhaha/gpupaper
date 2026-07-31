@@ -881,6 +881,16 @@ complete residual traversal, so it remains \(O(S_i)\) work and \(O(1)\) state.
 The frozen Codex program exercises \(r_1>0\), asserts both equalities, and
 contains two residual ordinary loops with no residual range or collection loop.
 
+Physical residual instances and source constructors are different domains. Let
+\(q(n)=(kind,file,start,end)\) be a residual node's provenance and
+\(d_i=|\{q(n):n\in residual(M_i)\}|\). Necessarily
+\(0\leq d_i\leq r_i\), but neither number determines the other. Counting
+\(d_i\) uses expected \(O(r_i)\) set work and \(O(d_i)\) transient storage in
+the existing scan. Codex has \(r_1=2\) and \(d_1=1\): two linked instances of
+one source loop. This is evidence for duplicated module transformation, not
+evidence that either physical node may be discarded without an independent
+module-sharing proof.
+
 ## 7. Effect closure and the GPU boundary
 
 After capability/direct/CPS lowering, Core contains no source `perform`,
@@ -4431,6 +4441,27 @@ The same six-sample run measured CPU control-flow representatives of 1.609,
 traversal and is not expected to affect latency beyond three predictable
 branches on residual nodes; these timings are retained as observations, not a
 speed claim.
+
+### 2026-07-31: residual multiplicity is separated from provenance
+
+Review 52 adds the distinct source-provenance count \(d_1\) to the residual
+measure report. Identity is the tuple `(kind, file, start, end)`, which is
+stable under linked AST copying and separates different constructors within a
+file. The executable bounds are \(0\leq d_1\leq r_1\); straight-line syntax
+pins both to zero.
+
+Codex reports two physical ordinary-loop residuals but one distinct source
+identity. Temporary diagnostic inspection located both at
+`prelude_runtime.duck:1424..1632`, the loop in `text_starts_with_at`. The
+committed profile deliberately retains only counts rather than source paths;
+source spans remain compiler diagnostic evidence, while benchmark work remains
+numeric. The result redirects the next review toward why this prelude function
+is linked twice and transformed twice.
+
+The distinctness set costs expected \(O(r_1)\) work and \(O(d_1)\) transient
+storage. Here that is two insertions and one retained key. It is measurement
+instrumentation, not a performance optimization; no timing improvement is
+claimed.
 
 ## References
 
