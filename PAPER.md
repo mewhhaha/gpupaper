@@ -688,6 +688,93 @@ The GPU receives effect-closed monomorphic SSA and immutable provenance. It does
 not solve source rows, select handlers, capture continuations, or decide
 ownership policy.
 
+### 7.1 Compiler-execution semantics
+
+Payload IR and compiler-execution state are distinct. Let `P` be a CPU-validated
+immutable flat payload, `L` the selected device limits, `K` a fixed compiler
+kernel, and `Q` a candidate result. One GPU stage has the observable result:
+
+```text
+gpu_stage(K, P, L) =
+  unavailable(reason)
+  | invalid(diagnostic)
+  | completed(Q, measurements)
+```
+
+The host performs these transitions in order:
+
+```text
+validate_cpu(P)
+  -> calculate_exact_capacity(P, K)
+  -> require_capacity(capacity, L)
+  -> enqueue(P)
+  -> encode_and_submit(K, P)
+  -> race_completion_against_device_loss
+  -> readback(Q)
+  -> validate_candidate(P, Q)
+  -> commit(Q)
+```
+
+No buffer is created and no dispatch is encoded before the capacity judgment. An
+out-of-memory error, unavailable adapter, or lost device yields `unavailable`;
+malformed payload or CPU/GPU disagreement yields `invalid`. Only unavailability
+may select a CPU fallback, and only under the `auto` policy. The queue,
+error-scope, device-loss, buffer-mapping, and device-limit mechanisms used for
+these transitions are defined by the WebGPU specification; the failure
+classification itself is this compiler's policy. The public policies are:
+
+| Policy     | GPU unavailable                         | GPU semantic failure |
+| ---------- | --------------------------------------- | -------------------- |
+| `off`      | GPU is not requested                    | not applicable       |
+| `auto`     | execute the corresponding CPU stage     | fail compilation     |
+| `required` | fail compilation with the device reason | fail compilation     |
+
+Authority is stage-specific. Type equality and scalar comptime always retain a
+CPU semantic oracle; a completed GPU result adds differential evidence. Core
+input is CPU-validated, the GPU authoritatively selects rewrite proposals, and
+the CPU validates and deterministically commits those proposals. Wasm bytes are
+GPU-authoritative when GPU emission completes. The default additionally emits
+CPU bytes and requires byte-for-byte equality; `gpuWasmVerification: "none"`
+omits that oracle but still performs engine and managed-artifact validation.
+
+Batching changes scheduling, not meaning. A payload belongs to exactly one
+logical job, offsets are assigned in enqueue order, and every returned slice is
+validated against that job's input. A failed physical batch fails every payload
+in that batch rather than returning partially trusted results. The latency
+policy flushes ready work on the next scheduler turn; the throughput policy
+waits for the first of a 2 ms deadline, 16 queued jobs, or a device-capacity
+boundary.
+
+For one dirty compilation, the measured GPU-stage time must be decomposed as:
+
+```text
+T_gpu_stage =
+  T_queue
+  + T_pipeline_initialization
+  + T_capacity_and_packing
+  + T_upload
+  + Σdispatch T_kernel
+  + T_readback
+  + T_candidate_validation
+  + T_commit
+```
+
+Whole compilation also includes CPU parsing, semantic lowering, flattening, Wasm
+planning, ABI construction, and final validation. Consequently a faster kernel
+does not imply a faster compilation. `gpu_*_queue_wait`,
+`gpuCoreExecutionMilliseconds`, `gpuCoreTransferMilliseconds`, payload and
+submission batch sizes, validation records, proposal counts, Wasm atoms, and
+output-buffer bytes expose the terms that the current implementation can
+measure. Pipeline initialization and capacity/packing are currently combined
+with their containing stage except where Core initialization is reported
+separately; this is a stated instrumentation limit.
+
+Executable evidence consists of capacity-boundary tests, device-loss recovery,
+physical-batch isolation tests, generated CPU/GPU differentials for type
+closure, Core rewrites and Wasm plans, and the six-target required-GPU release
+gate. These establish implementation behavior for tested inputs; they do not
+prove arbitrary kernels correct.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -709,6 +796,10 @@ The implementation must establish:
 8. **Boundary equality**: the inferred, Core, and ABI rows are identical.
 9. **Determinism**: source order, row order, capability IDs, diagnostics, Core,
    Flat Core, and Wasm bytes do not depend on map order or GPU scheduling.
+10. **Failure monotonicity**: a device or semantic failure cannot be converted
+    into a successful artifact by partial fallback.
+11. **Job isolation**: batching cannot make one job observe another job's
+    payload, diagnostics, or output bytes.
 
 ## 9. Cost model
 
@@ -1315,3 +1406,5 @@ are correctness evidence, not a latency distribution.
 13. Zoe Paraskevopoulou and Andrew W. Appel. “Closure Conversion Is Safe for
     Space.” ICFP 2019.
     <https://www.cs.princeton.edu/~appel/papers/safe-closure.pdf>
+14. W3C GPU for the Web Working Group. “WebGPU.”
+    <https://gpuweb.github.io/gpuweb/>
