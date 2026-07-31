@@ -489,6 +489,11 @@ Current CPU/GPU medians are Editor 74.531/102.646 ms, Codex
 positive. Wasm sizes are unchanged at 24,460, 226,134, 3,911, 26,106, 2,520,
 and 3,864 bytes.
 
+The subsequent 519-test required-GPU release gate passed. Cold/repeated release
+samples were Editor 240.61/128.83 ms, Codex 673.86/477.54, grep 41.51/40.53,
+Tar 137.24/125.43, wav 34.41/33.48, and raytracer 38.88/39.13. Every CPU/GPU
+pair was byte-identical and engine-valid at the unchanged recorded Wasm sizes.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

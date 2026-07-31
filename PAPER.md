@@ -4902,6 +4902,26 @@ Deterministic Wasm sizes remain 24,460, 226,134, 3,911, 26,106, 2,520, and
 specialization keys, demanded bindings, residual structure, or emitted bytes.
 This checkpoint is empirical evidence, not yet the full release gate.
 
+### 2026-07-31: specialization fast paths pass the release gate
+
+Review 69 closes the checkpoint with `deno task release:gpu`. Formatting,
+linting, and type checking passed across 133 formatted and 117 linted files.
+All 519 tests passed. This includes the complete corpus, deterministic frozen
+binaries, specialization semantics, effects, ownership, Core validation,
+generated GPU differential properties, concurrency, and device-failure paths.
+
+The required-GPU release adapter reported 256 MiB maximum buffer size and
+128 MiB maximum storage binding size. Malformed input retained the expected
+source diagnostic. Cold/repeated target samples in milliseconds were Editor
+240.61/128.83, Codex 673.86/477.54, grep 41.51/40.53, Tar 137.24/125.43,
+wav 34.41/33.48, and raytracer 38.88/39.13. Wasm sizes matched the checkpoint:
+24,460, 226,134, 3,911, 26,106, 2,520, and 3,864 bytes.
+
+Every GPU artifact matched the independently emitted CPU bytes and passed
+engine and artifact validation. These are executable validations. The latency
+samples are release observations, not distribution estimates; the six-sample
+paired benchmark remains the performance evidence.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
