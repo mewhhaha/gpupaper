@@ -1471,6 +1471,9 @@ resource cost, and corpus measurements.
 - [x] Re-rank Codex and test hoisting canonical captured-symbol candidates into
       function analysis. Reject the valid but unprofitable hoist with a
       15-sample A/B/A rewrite comparison.
+- [x] Measure captured-environment key arity. Close the branch after finding
+      only 26 Codex entries across 703 keys with maximum arity two, and remove
+      the hot counters.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

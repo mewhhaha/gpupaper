@@ -4942,6 +4942,25 @@ implementation was removed. Candidate sorting is not the material cost at
 current referenced-set sizes; request-specific membership and value identity
 remain possible costs, but require their own work measurement.
 
+### 2026-07-31: captured-environment keys are negligible
+
+Review 71 temporarily counts entries that survive parameter removal and current
+environment membership into specialization result keys. Editor constructs 26
+entries across 47 distinct keys with maximum key arity seven. Codex constructs
+26 entries across 703 keys with maximum arity two. Grep and the three remaining
+targets construct none.
+
+Thus Codex averages 0.037 captured entries per distinct key; at least 677 keys
+have an empty captured-environment component. Sorting at most two entries and
+serializing 26 entries total cannot account for a 64 ms rewrite stage. This
+explains the rejected hoist and closes environment identity as a material
+frontier on the frozen corpus.
+
+The hot counters were removed. Static-argument identity and the 114,281 body
+rewrite entries remain the two request-domain costs. Any environment
+optimization must wait for a corpus whose measured key arity crosses a stated
+break-even point.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

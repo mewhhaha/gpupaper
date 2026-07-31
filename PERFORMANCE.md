@@ -508,6 +508,13 @@ tested and rejected:
 The valid hoist does not improve latency and was removed. Sorting the small
 candidate sets is not the current specialization frontier.
 
+Temporary environment-key instrumentation found only 26 retained captured
+entries for Editor and 26 for Codex. Maximum arity was seven and two
+respectively; grep, Tar, wav, and raytracer retained none. Codex therefore has
+at least 677/703 keys with an empty captured environment. The counters were
+removed, and captured-environment sorting/serialization is closed as a
+negligible frontier for this corpus.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
