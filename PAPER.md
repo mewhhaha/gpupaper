@@ -4721,6 +4721,32 @@ A focused non-recursive two-call test pins positive analysis-cache reuse and
 zero pending result cycles. The next review must inspect argument/environment
 identity dispersion rather than call-site spans.
 
+### 2026-07-31: final-expression identity memoization is rejected
+
+Review 61 tested a WeakMap from immutable static-expression object identity to
+its fully serialized specialization identity. This is semantically sound within
+one specialization run: typed expressions and types are immutable, assigned
+function/value IDs are stable in the context, and the identity function has no
+substitution-environment input after `staticValue` selects its argument.
+
+The cache observed 20 Editor hits and 223 Codex hits; the other four targets had
+none. Its cost inequality is
+
+\[
+Hc_{serialize} > Qc_{lookup}+Uc_{insert},
+\]
+
+for \(Q\) identity requests, \(H\) hits, and \(U\) misses. A first consecutive
+representative suggested a Codex improvement, but a second produced an 84.506
+ms outlier. This exposed that the profile nearest the end-to-end median is not
+an estimator for an individual substage.
+
+Fifteen direct Codex rewrite samples per variant then measured median/MAD
+65.263/2.175 ms cached and 65.000/1.825 ms baseline. The +0.41% median change is
+smaller than either MAD and rejects the mechanism. The implementation and its
+metric were removed before commit. Future substage decisions use samples and
+statistics for that substage directly, not the total-median representative.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

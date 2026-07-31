@@ -368,6 +368,21 @@ counter gives exact Codex result-cache requests `(distinct, complete hit,
 pending) = (703,4,0)`, a 0.566% complete-hit rate; Editor is `(47,2,0)`, or
 4.082%.
 
+Final serialized expression identities were then memoized by immutable object
+identity. The cache observed 20 Editor hits and 223 Codex hits, but stage-direct
+Codex sampling rejected it:
+
+| Variant | Samples | Rewrite median | MAD | Range |
+| ------- | ------: | -------------: | --: | ----: |
+| WeakMap cache | 15 | 65.263 ms | 2.175 ms | 61.937–71.135 ms |
+| Baseline | 15 | 65.000 ms | 1.825 ms | 60.030–69.279 ms |
+
+The +0.41% change is unresolved and the cache was removed. This review also
+changes measurement policy: a profile selected by proximity to total median is
+descriptive of a whole compilation, not an estimator of every contained stage.
+Optimization decisions for a substage now use that substage's own sample median
+and MAD.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
