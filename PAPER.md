@@ -881,15 +881,23 @@ complete residual traversal, so it remains \(O(S_i)\) work and \(O(1)\) state.
 The frozen Codex program exercises \(r_1>0\), asserts both equalities, and
 contains two residual ordinary loops with no residual range or collection loop.
 
-Physical residual instances and source constructors are different domains. Let
-\(q(n)=(kind,file,start,end)\) be a residual node's provenance and
-\(d_i=|\{q(n):n\in residual(M_i)\}|\). Necessarily
-\(0\leq d_i\leq r_i\), but neither number determines the other. Counting
-\(d_i\) uses expected \(O(r_i)\) set work and \(O(d_i)\) transient storage in
-the existing scan. Codex has \(r_1=2\) and \(d_1=1\): two linked instances of
-one source loop. This is evidence for duplicated module transformation, not
-evidence that either physical node may be discarded without an independent
-module-sharing proof.
+Residual occurrences, AST vertices, and source constructors are different
+domains. The immutable syntax representation is a rooted DAG, not necessarily
+a tree. Let \(r_i\) count root-to-target occurrence paths, \(u_i\) count unique
+target object identities, and
+\(d_i=|\{(kind,file,start,end):n\in residual(M_i)\}|\) count source
+provenances. Then
+
+\[
+0\leq d_i\leq u_i\leq r_i.
+\]
+
+The converses fail: copied nodes can share provenance, while one shared vertex
+can be reached by multiple paths. Counting the two quotients uses expected
+\(O(r_i)\) set work and \(O(u_i+d_i)\) transient storage in the existing scan.
+Codex has \((r_1,u_1,d_1)=(2,1,1)\): two traversal occurrences reach one shared
+AST vertex from one source loop. The termination measure remains \(r_i\), since
+the lowering currently maps occurrences rather than preserving DAG identity.
 
 ## 7. Effect closure and the GPU boundary
 
@@ -4450,18 +4458,39 @@ stable under linked AST copying and separates different constructors within a
 file. The executable bounds are \(0\leq d_1\leq r_1\); straight-line syntax
 pins both to zero.
 
-Codex reports two physical ordinary-loop residuals but one distinct source
-identity. Temporary diagnostic inspection located both at
+Codex reports two ordinary-loop occurrences but one distinct source identity.
+Temporary diagnostic inspection located both at
 `prelude_runtime.duck:1424..1632`, the loop in `text_starts_with_at`. The
 committed profile deliberately retains only counts rather than source paths;
 source spans remain compiler diagnostic evidence, while benchmark work remains
-numeric. The result redirects the next review toward why this prelude function
-is linked twice and transformed twice.
+numeric. This initially suggested two linked instances; the following review's
+object-identity counterexample rejects that interpretation.
 
 The distinctness set costs expected \(O(r_1)\) work and \(O(d_1)\) transient
 storage. Here that is two insertions and one retained key. It is measurement
 instrumentation, not a performance optimization; no timing improvement is
 claimed.
+
+### 2026-07-31: shared residual vertices are distinguished from occurrences
+
+Review 53 tests the duplicate-instance hypothesis from Review 52. An identity
+set over residual syntax objects shows Codex's vector is
+`(occurrences, vertices, sources) = (2,1,1)`. Both root paths reach the exact
+same immutable loop object. The linker has therefore retained structural
+sharing; there are not two allocated or separately hygienised loop nodes at
+this point. This is the counterexample that changes the design.
+
+The executable inequalities are \(d_1\leq u_1\leq r_1\), and the frozen Codex
+test pins all three observations. The scanner adds one expected-constant object
+identity insertion per residual occurrence and \(O(u_1)\) transient storage.
+For Codex that is two insertions retaining one reference.
+
+Memoizing the transformation by input object identity is now theoretically
+admissible only for context-free lowering rules. The control-flow pass also has
+context-sensitive operations—visible bindings, expected result types, and loop
+continuations—so global memoization by object alone would be unsound. The next
+review must derive the smallest context key or locate a context-free subtree
+boundary before sharing transformed output.
 
 ## References
 

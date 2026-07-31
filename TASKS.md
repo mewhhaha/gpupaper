@@ -1414,9 +1414,12 @@ resource cost, and corpus measurements.
 - [x] Decompose the residual source-control measure by constructor without an
       additional traversal. Prove the component sum and identify Codex's two
       residual nodes as ordinary loops.
-- [x] Separate physical residual multiplicity from distinct source provenance.
-      Prove the quotient bounds and identify Codex's two residuals as linked
-      instances of one prelude-runtime loop.
+- [x] Separate residual occurrence multiplicity from source provenance.
+      Prove the quotient bounds and identify Codex's two residual occurrences
+      as one prelude-runtime source constructor.
+- [x] Separate residual occurrence paths from AST object identity. Reject the
+      duplicate-instance hypothesis with Codex's `(2,1,1)`
+      occurrence/vertex/source vector and bound safe memoization by context.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

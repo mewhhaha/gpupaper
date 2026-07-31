@@ -251,12 +251,20 @@ therefore lowers two exposed ordinary loops; neither `for` constructor is on
 the residual frontier. Contemporary CPU control-flow representatives were
 1.609, 57.521, 0.203, 0.382, 0.131, and 0.260 ms.
 
-Residual instances are also quotiented by `(kind, file, start, end)`. Codex's
-two physical residuals have one distinct provenance; temporary diagnostic
+Residual occurrences are also quotiented by `(kind, file, start, end)`. Codex's
+two occurrences have one distinct provenance; temporary diagnostic
 inspection identifies the same `prelude_runtime.duck:1424..1632` loop twice.
 The other targets remain 0/0 physical/distinct. The expected set cost is
 \(O(r_1)\) work and \(O(d_1)\) storage—two insertions and one key for Codex.
-This is diagnostic evidence for repeated linked-module work, not a speedup.
+This initially suggested repeated linked-module work; the object-identity
+measurement below rejects that interpretation.
+
+An object-identity quotient rejects the repeated-instance interpretation:
+Codex's residual vector is `(occurrences, vertices, sources) = (2,1,1)`. Two
+syntax paths reach one shared immutable AST object. The additional identity set
+costs expected \(O(r_1)\) work and \(O(u_1)\) storage. It supplies the boundary
+for a possible memoized homomorphism; object-only memoization is not yet valid
+for context-sensitive control lowering.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,

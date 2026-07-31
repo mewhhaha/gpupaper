@@ -225,6 +225,7 @@ export type DucklangCompilationWork = {
   readonly controlFlowFirstPassResidualRangeCount: number;
   readonly controlFlowFirstPassResidualCollectionCount: number;
   readonly controlFlowFirstPassResidualDistinctSourceCount: number;
+  readonly controlFlowFirstPassResidualDistinctNodeCount: number;
   readonly typedBindingCount: number;
   readonly typeEqualityCount: number;
   readonly effectRowMembershipCount: number;
@@ -1165,6 +1166,8 @@ async function elaborateDucklangModuleSource(
           controlFlowLowering.firstPassResidualCollectionCount,
         controlFlowFirstPassResidualDistinctSourceCount:
           controlFlowLowering.firstPassResidualDistinctSourceCount,
+        controlFlowFirstPassResidualDistinctNodeCount:
+          controlFlowLowering.firstPassResidualDistinctNodeCount,
         typedBindingCount: initialInference.bindings.length,
         typeEqualityCount: initialInference.equalities.length,
         effectRowMembershipCount: initialInference.bindings.reduce(

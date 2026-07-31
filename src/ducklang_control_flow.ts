@@ -23,6 +23,7 @@ export function lowerDucklangControlFlowWithMetrics(
   readonly firstPassResidualRangeCount: number;
   readonly firstPassResidualCollectionCount: number;
   readonly firstPassResidualDistinctSourceCount: number;
+  readonly firstPassResidualDistinctNodeCount: number;
   readonly firstPassMilliseconds: number;
   readonly subsequentPassMilliseconds: number;
 } {
@@ -33,6 +34,7 @@ export function lowerDucklangControlFlowWithMetrics(
   let firstPassResidualRangeCount = 0;
   let firstPassResidualCollectionCount = 0;
   let firstPassResidualDistinctSourceCount = 0;
+  let firstPassResidualDistinctNodeCount = 0;
   let firstPassMilliseconds = 0;
   let subsequentPassMilliseconds = 0;
   let previousResidualControlCount: number | undefined;
@@ -63,6 +65,7 @@ export function lowerDucklangControlFlowWithMetrics(
       firstPassResidualRangeCount = residual.rangeCount;
       firstPassResidualCollectionCount = residual.collectionCount;
       firstPassResidualDistinctSourceCount = residual.distinctSourceCount;
+      firstPassResidualDistinctNodeCount = residual.distinctNodeCount;
     }
     if (residual.first === undefined) {
       return {
@@ -73,6 +76,7 @@ export function lowerDucklangControlFlowWithMetrics(
         firstPassResidualRangeCount,
         firstPassResidualCollectionCount,
         firstPassResidualDistinctSourceCount,
+        firstPassResidualDistinctNodeCount,
         firstPassMilliseconds,
         subsequentPassMilliseconds,
       };
@@ -97,6 +101,7 @@ function sourceControlFlowSummary(
   readonly rangeCount: number;
   readonly collectionCount: number;
   readonly distinctSourceCount: number;
+  readonly distinctNodeCount: number;
   readonly first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -115,6 +120,7 @@ function sourceControlFlowSummary(
   let rangeCount = 0;
   let collectionCount = 0;
   const distinctSources = new Set<string>();
+  const distinctNodes = new Set<DucklangExpression | DucklangStatement>();
   let first:
     | {
       readonly kind: "loop" | "forRange" | "forCollection";
@@ -125,18 +131,21 @@ function sourceControlFlowSummary(
     const current = pending.pop()!;
     switch (current.kind) {
       case "loop":
+        distinctNodes.add(current);
         distinctSources.add(sourceControlIdentity(current));
         loopCount += 1;
         count += 1;
         first ??= current;
         break;
       case "forRange":
+        distinctNodes.add(current);
         distinctSources.add(sourceControlIdentity(current));
         rangeCount += 1;
         count += 1;
         first ??= current;
         break;
       case "forCollection":
+        distinctNodes.add(current);
         distinctSources.add(sourceControlIdentity(current));
         collectionCount += 1;
         count += 1;
@@ -263,6 +272,7 @@ function sourceControlFlowSummary(
     rangeCount,
     collectionCount,
     distinctSourceCount: distinctSources.size,
+    distinctNodeCount: distinctNodes.size,
     first,
   };
 }

@@ -129,7 +129,8 @@ Deno.test("independent compilation skips session identity work", async () => {
     work.controlFlowFirstPassResidualLoopCount !== 0 ||
     work.controlFlowFirstPassResidualRangeCount !== 0 ||
     work.controlFlowFirstPassResidualCollectionCount !== 0 ||
-    work.controlFlowFirstPassResidualDistinctSourceCount !== 0
+    work.controlFlowFirstPassResidualDistinctSourceCount !== 0 ||
+    work.controlFlowFirstPassResidualDistinctNodeCount !== 0
   ) {
     throw new Error(
       `straight-line compilation retained source-control components: ${
@@ -162,6 +163,7 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
     controlFlowFirstPassResidualCollectionCount,
     controlFlowFirstPassResidualCount,
     controlFlowFirstPassResidualDistinctSourceCount,
+    controlFlowFirstPassResidualDistinctNodeCount,
     controlFlowFirstPassResidualLoopCount,
     controlFlowFirstPassResidualRangeCount,
     controlFlowLoweringPassCount,
@@ -187,6 +189,14 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
     );
   }
   if (
+    controlFlowFirstPassResidualDistinctNodeCount >
+      controlFlowFirstPassResidualCount
+  ) {
+    throw new Error(
+      `Codex has ${controlFlowFirstPassResidualDistinctNodeCount} residual AST vertices for ${controlFlowFirstPassResidualCount} occurrences`,
+    );
+  }
+  if (
     controlFlowFirstPassResidualLoopCount !== 2 ||
     controlFlowFirstPassResidualRangeCount !== 0 ||
     controlFlowFirstPassResidualCollectionCount !== 0
@@ -204,6 +214,11 @@ Deno.test("residual source control bounds fixed-point passes", async () => {
   if (controlFlowFirstPassResidualDistinctSourceCount !== 1) {
     throw new Error(
       `Codex residual source control has ${controlFlowFirstPassResidualDistinctSourceCount} distinct source identities`,
+    );
+  }
+  if (controlFlowFirstPassResidualDistinctNodeCount !== 1) {
+    throw new Error(
+      `Codex residual source control has ${controlFlowFirstPassResidualDistinctNodeCount} distinct AST vertices`,
     );
   }
   if (
