@@ -120,6 +120,45 @@ Deno.test("independent compilation skips session identity work", async () => {
       `straight-line compilation used ${work.controlFlowLoweringPassCount} control-flow passes`,
     );
   }
+  if (work.controlFlowFirstPassResidualCount !== 0) {
+    throw new Error(
+      `straight-line compilation retained ${work.controlFlowFirstPassResidualCount} source-control nodes`,
+    );
+  }
+});
+
+Deno.test("residual source control bounds fixed-point passes", async () => {
+  const file = new URL(
+    "../examples/binned/live/case-studies/codex/codex.duck",
+    import.meta.url,
+  );
+  const hostInterface = new URL(
+    "../examples/binned/live/case-studies/codex/host.duck",
+    import.meta.url,
+  ).pathname;
+  const artifact = await compileModuleSource(
+    file.pathname,
+    await Deno.readTextFile(file),
+    { gpuMode: "off", hostInterface },
+  );
+  if (artifact.language !== "ducklang") {
+    throw new Error(
+      `expected Ducklang artifact; received ${artifact.language}`,
+    );
+  }
+  const { controlFlowFirstPassResidualCount, controlFlowLoweringPassCount } =
+    artifact.profile.work;
+
+  if (controlFlowFirstPassResidualCount === 0) {
+    throw new Error("Codex did not exercise a residual source-control pass");
+  }
+  if (
+    controlFlowLoweringPassCount > controlFlowFirstPassResidualCount + 1
+  ) {
+    throw new Error(
+      `Codex used ${controlFlowLoweringPassCount} passes after retaining ${controlFlowFirstPassResidualCount} controls`,
+    );
+  }
 });
 
 Deno.test("Core identity reuses its structured round-trip witness", async () => {

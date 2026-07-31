@@ -845,28 +845,37 @@ with \(O(\sum_i N_i)\) total reconstructed allocation and
 \(O(\max_i N_i)\) live round storage when prior snapshots become unreachable.
 Typed search changes \(S_i\) from the complete enumerable object graph to the
 source-syntax graph and removes one `Object.values` allocation per inspected
-object; it does not change the asymptotic bound or pass schedule.
-The implementation currently rejects after 32 rounds. No semantic theorem
-derives 32; a valid program with more than 32 successively exposed nested
-source-control layers is the counterexample. This is an admitted implementation
-restriction and must not be described as a language bound.
+object; it does not change the asymptotic bound.
 
-The desired termination argument is a natural-number measure
-\(\mu(M)\), the count of residual source-control constructors, with the
-obligation
+Termination uses the natural-number measure \(\mu(M)\), the count of residual
+source-control constructors, with the obligation
 
 \[
 \mu(M)>0 \Longrightarrow \mu(L(M))<\mu(M).
 \]
 
-If lowering returns the exact successor measure while it constructs \(L(M)\),
-then \(\mu=0\) replaces the separate terminal search and strict decrease
-replaces the numeric cap. That fused measure is an unverified design obligation,
-not current behavior.
+The first pass establishes \(r_1=\mu(M_1)\). If \(r_1=0\), lowering finishes in
+one pass. Otherwise every later nonterminal result must satisfy
+\(r_{i+1}<r_i\); equality or increase fails immediately with the first residual
+constructor's kind and span plus both counts. Well-foundedness of natural-number
+descent then gives
+
+\[
+P\leq r_1+1.
+\]
+
+There is no numeric pass cap. More than 32 successively exposed layers are
+admitted when the measure decreases. Inspection of every lowering constructor
+shows it introduces functions, calls, branches, and blocks but no new
+`loop`, `forRange`, or `forCollection`; it either removes or preserves source
+control. A preserved unsupported position is diagnosed by non-decrease rather
+than consuming 32 arbitrary rounds.
 
 The executable profile currently exposes \(P\), first-pass transformation time,
-and accumulated later-pass transformation time. Their sum must be contained by
-the enclosing control-flow interval; the residual is search and orchestration.
+first-pass residual count \(r_1\), first-pass transformation time, and
+accumulated later-pass transformation time. Their sum must be contained by the
+enclosing control-flow interval; the residual is search and orchestration. The
+frozen Codex program exercises \(r_1>0\) and asserts the derived pass bound.
 
 ## 7. Effect closure and the GPU boundary
 
@@ -4370,6 +4379,31 @@ The 514-test required-GPU gate passed after the typed search. Its byte-identical
 engine-valid samples in milliseconds were Editor 267.58/151.45, Codex
 775.22/576.47, grep 44.68/40.95, Tar 151.32/131.86, wav 34.86/34.18, and
 raytracer 39.86/37.84.
+
+### 2026-07-31: residual control proves fixed-point termination
+
+The final control-flow audit removes the arbitrary 32-pass failure. The typed
+search now counts every residual source-control constructor and retains the
+first as diagnostic evidence. After the first pass establishes \(r_1\), each
+later nonterminal pass must strictly decrease the count. Section 6.5 derives
+the bound \(P\leq r_1+1\).
+
+The frozen residual-count/pass pairs are Editor 0/1, Codex 2/2, grep 0/1, Tar
+0/1, wav 0/1, and raytracer 0/1. A new Codex profile regression requires a
+positive residual frontier and the derived pass bound; a straight-line
+regression requires zero residual control. Stagnation reports the first
+constructor's source span and kind plus prior and successor counts.
+
+Because counting traverses the complete typed syntax graph rather than
+returning at the first residual node, consecutive control-flow representatives
+changed from 1.276→1.987 ms Editor, 57.031→56.020 Codex, 0.200→0.190 grep,
+0.292→0.301 Tar, 0.130→0.181 wav, and 0.260→0.417 raytracer. This is a mixed
+empirical performance result and no speedup is claimed. The selected design
+prefers a well-founded semantic restriction over an unexplained numeric cap.
+
+The 515-test required-GPU gate passed with byte-identical, engine-valid samples
+Editor 239.12/130.66 ms, Codex 657.48/462.22, grep 40.67/40.35, Tar
+139.90/120.23, wav 34.54/32.81, and raytracer 37.57/35.96.
 
 ## References
 

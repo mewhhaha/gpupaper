@@ -18,13 +18,17 @@ export function lowerDucklangControlFlowWithMetrics(
 ): {
   readonly module: DucklangModule;
   readonly passCount: number;
+  readonly firstPassResidualControlCount: number;
   readonly firstPassMilliseconds: number;
   readonly subsequentPassMilliseconds: number;
 } {
   let lowered = module;
+  let passCount = 0;
+  let firstPassResidualControlCount = 0;
   let firstPassMilliseconds = 0;
   let subsequentPassMilliseconds = 0;
-  for (let iteration = 0; iteration < 32; iteration += 1) {
+  let previousResidualControlCount: number | undefined;
+  while (true) {
     const passStart = performance.now();
     lowered = {
       ...lowered,
@@ -38,48 +42,70 @@ export function lowerDucklangControlFlowWithMetrics(
       })),
     };
     const passMilliseconds = performance.now() - passStart;
-    if (iteration === 0) {
+    passCount += 1;
+    if (passCount === 1) {
       firstPassMilliseconds = passMilliseconds;
     } else {
       subsequentPassMilliseconds += passMilliseconds;
     }
-    const remaining = firstSourceControlFlow(lowered);
-    if (remaining === undefined) {
+    const residual = sourceControlFlowSummary(lowered);
+    if (passCount === 1) {
+      firstPassResidualControlCount = residual.count;
+    }
+    if (residual.first === undefined) {
       return {
         module: lowered,
-        passCount: iteration + 1,
+        passCount,
+        firstPassResidualControlCount,
         firstPassMilliseconds,
         subsequentPassMilliseconds,
       };
     }
-    if (iteration === 31) {
+    if (
+      previousResidualControlCount !== undefined &&
+      residual.count >= previousResidualControlCount
+    ) {
       throw new TypeError(
-        `${remaining.span.file}:${remaining.span.start}: Ducklang control-flow lowering did not converge for ${remaining.kind}`,
+        `${residual.first.span.file}:${residual.first.span.start}: Ducklang control-flow lowering did not decrease residual ${residual.first.kind} count from ${previousResidualControlCount} to ${residual.count}`,
       );
     }
+    previousResidualControlCount = residual.count;
   }
-  throw new Error(`${module.file}: unreachable control-flow lowering state`);
 }
 
-function firstSourceControlFlow(
+function sourceControlFlowSummary(
   module: DucklangModule,
 ): {
-  readonly kind: "loop" | "forRange" | "forCollection";
-  readonly span: DucklangExpression["span"];
-} | undefined {
+  readonly count: number;
+  readonly first:
+    | {
+      readonly kind: "loop" | "forRange" | "forCollection";
+      readonly span: DucklangExpression["span"];
+    }
+    | undefined;
+} {
   const pending: (DucklangExpression | DucklangStatement)[] = [
     ...module.statements,
     ...module.extensions.flatMap((extension) =>
       extension.methods.map((method) => method.value)
     ),
   ];
+  let count = 0;
+  let first:
+    | {
+      readonly kind: "loop" | "forRange" | "forCollection";
+      readonly span: DucklangExpression["span"];
+    }
+    | undefined;
   while (pending.length > 0) {
     const current = pending.pop()!;
     switch (current.kind) {
       case "loop":
       case "forRange":
       case "forCollection":
-        return current;
+        count += 1;
+        first ??= current;
+        break;
       case "binding":
       case "assignment":
       case "productBinding":
@@ -195,7 +221,7 @@ function firstSourceControlFlow(
       }
     }
   }
-  return undefined;
+  return { count, first };
 }
 
 /**

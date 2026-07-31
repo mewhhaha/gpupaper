@@ -1408,6 +1408,9 @@ resource cost, and corpus measurements.
 - [x] Replace reflective source-control search with an exhaustive typed syntax
       walk. Preserve physical pass counts and record the six-target scan and
       whole-compiler reductions.
+- [x] Replace the unexplained 32-pass control-flow cap with an exact residual
+      constructor count and strict natural-number descent. Pin the positive
+      Codex frontier, derived pass bound, and mixed performance result.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

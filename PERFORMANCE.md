@@ -115,30 +115,30 @@ The current 2026-07-31 six-sample warm medians are:
 
 | Target    |       CPU |       GPU | Wasm bytes |
 | --------- | --------: | --------: | ---------: |
-| Editor    |  79.42 ms | 107.41 ms |     24,460 |
-| Codex     | 396.69 ms | 434.39 ms |    226,134 |
-| grep      |  10.60 ms |  38.33 ms |      3,911 |
-| tar       |  57.46 ms | 112.82 ms |     26,106 |
-| wav       |   5.14 ms |  32.93 ms |      2,520 |
-| raytracer |   8.50 ms |  37.02 ms |      3,864 |
+| Editor    |  75.33 ms | 103.29 ms |     24,460 |
+| Codex     | 395.15 ms | 439.60 ms |    226,134 |
+| grep      |  10.21 ms |  37.68 ms |      3,911 |
+| tar       |  62.07 ms | 112.88 ms |     26,106 |
+| wav       |   5.54 ms |  33.16 ms |      2,520 |
+| raytracer |   9.57 ms |  36.73 ms |      3,864 |
 
 The corresponding paired GPU-minus-CPU measurements are:
 
 | Target    | Median difference | MAD | Dominant required-GPU stage |
 | --------- | ----------------: | --: | --------------------------- |
-| Editor    |          29.26 ms | 3.51 ms | Wasm emission, 30.91 ms |
-| Codex     |          40.13 ms | 8.46 ms | specialization, 100.43 ms |
-| grep      |          26.72 ms | 0.97 ms | Wasm emission, 27.81 ms |
-| tar       |          55.45 ms | 1.85 ms | Core pass, 31.89 ms |
-| wav       |          27.73 ms | 0.60 ms | Wasm emission, 27.44 ms |
-| raytracer |          28.87 ms | 1.06 ms | Wasm emission, 28.20 ms |
+| Editor    |          26.83 ms | 4.29 ms | Wasm emission, 29.76 ms |
+| Codex     |          49.08 ms | 7.78 ms | specialization, 96.25 ms |
+| grep      |          27.05 ms | 0.60 ms | Wasm emission, 27.21 ms |
+| tar       |          52.92 ms | 4.80 ms | Core pass, 34.49 ms |
+| wav       |          27.96 ms | 0.21 ms | Wasm emission, 28.31 ms |
+| raytracer |          27.33 ms | 1.50 ms | Wasm emission, 28.15 ms |
 
 These are one six-observation run, not confidence intervals. Five targets have
 an exact Core identity frontier, so their required-GPU latency premium is close
 to the isolated 27 ms Wasm boundary. Tar alone has 24 physical Core rewrites
-and pays both a 31.89 ms Core pass and a 28.41 ms Wasm pass. Codex's marginal
-median difference is 37.70 ms, while its median paired difference is 40.13 ms;
-this 2.44 ms discrepancy is a concrete counterexample to treating a difference
+and pays both a 34.49 ms Core pass and a 28.21 ms Wasm pass. Codex's marginal
+median difference is 44.45 ms, while its median paired difference is 49.08 ms;
+this 4.62 ms discrepancy is a concrete counterexample to treating a difference
 of marginal medians as the paired effect.
 
 An immediately preceding run reported a 352.97 ms Editor GPU median and a
@@ -227,6 +227,20 @@ Consecutive representative measurements before→after the typed search were:
 Pass counts remain exactly `[1, 2, 1, 1, 1, 1]`, so the faster search does not
 change fixed-point scheduling. All total medians moved downward, but only the
 stage mechanism and unchanged pass counts are directly attributed.
+
+The termination audit then replaced the arbitrary 32-pass cap with a counted
+residual measure. Counting must finish the typed search instead of returning at
+the first residual constructor. The measured first-pass residual counts are
+zero for five targets and two for Codex; pass counts remain
+`[1, 2, 1, 1, 1, 1]`. Codex therefore satisfies the derived bound
+\(2\leq2+1\).
+
+The consecutive control-flow medians changed by +0.711 ms Editor, -1.011 Codex,
+-0.010 grep, +0.009 Tar, +0.051 wav, and +0.157 raytracer. This is a mixed
+performance result. The change is retained because it removes a non-semantic
+numeric rejection, proves termination by natural-number descent for supported
+programs, and diagnoses stagnation on the second non-decreasing observation.
+No speedup is claimed.
 
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
