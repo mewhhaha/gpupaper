@@ -84,16 +84,17 @@ const opcode = {
   subtract: 3,
   multiply: 4,
   equal: 5,
-  select: 6,
-  divide: 7,
-  remainder: 8,
-  lessThan: 9,
-  greaterThan: 10,
-  and: 11,
-  notEqual: 12,
-  lessThanOrEqual: 13,
-  greaterThanOrEqual: 14,
-  or: 15,
+  divide: 6,
+  remainder: 7,
+  lessThan: 8,
+  greaterThan: 9,
+  and: 10,
+  notEqual: 11,
+  lessThanOrEqual: 12,
+  greaterThanOrEqual: 13,
+  or: 14,
+  jumpIfFalse: 15,
+  jump: 16,
 } as const;
 
 const comptimeStackCapacity = 64;
@@ -139,14 +140,19 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
       pc += 1u;
       continue;
     }
-    if (operation == 6u) {
-      if (stack_size < 3u) { statuses[job] = 2u; return; }
-      let otherwise_value = stacks[stack_start + stack_size - 1u];
-      let then_value = stacks[stack_start + stack_size - 2u];
-      let condition = stacks[stack_start + stack_size - 3u];
-      stack_size -= 2u;
-      stacks[stack_start + stack_size - 1u] = select(otherwise_value, then_value, condition != 0);
-      pc += 1u;
+    if (operation == 15u) {
+      if (stack_size < 1u) { statuses[job] = 2u; return; }
+      let condition = stacks[stack_start + stack_size - 1u];
+      stack_size -= 1u;
+      if (condition == 0) {
+        pc = starts[job] + bitcast<u32>(operands[pc]);
+      } else {
+        pc += 1u;
+      }
+      continue;
+    }
+    if (operation == 16u) {
+      pc = starts[job] + bitcast<u32>(operands[pc]);
       continue;
     }
     if (stack_size < 2u) { statuses[job] = 2u; return; }
@@ -157,7 +163,7 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
     else if (operation == 3u) { stacks[stack_start + stack_size - 1u] = left - right; }
     else if (operation == 4u) { stacks[stack_start + stack_size - 1u] = left * right; }
     else if (operation == 5u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left == right); }
-    else if (operation == 7u) {
+    else if (operation == 6u) {
       if (right == 0) { statuses[job] = 5u; return; }
       if (left == bitcast<i32>(0x80000000u) && right == -1) {
         statuses[job] = 6u;
@@ -165,17 +171,17 @@ fn evaluate(@builtin(global_invocation_id) invocation: vec3<u32>) {
       }
       stacks[stack_start + stack_size - 1u] = left / right;
     }
-    else if (operation == 8u) {
+    else if (operation == 7u) {
       if (right == 0) { statuses[job] = 5u; return; }
       stacks[stack_start + stack_size - 1u] = left % right;
     }
-    else if (operation == 9u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left < right); }
-    else if (operation == 10u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left > right); }
-    else if (operation == 11u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 && right != 0); }
-    else if (operation == 12u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != right); }
-    else if (operation == 13u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left <= right); }
-    else if (operation == 14u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left >= right); }
-    else if (operation == 15u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 || right != 0); }
+    else if (operation == 8u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left < right); }
+    else if (operation == 9u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left > right); }
+    else if (operation == 10u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 && right != 0); }
+    else if (operation == 11u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != right); }
+    else if (operation == 12u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left <= right); }
+    else if (operation == 13u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left >= right); }
+    else if (operation == 14u) { stacks[stack_start + stack_size - 1u] = select(0, 1, left != 0 || right != 0); }
     else { statuses[job] = 2u; return; }
     pc += 1u;
   }
@@ -241,15 +247,21 @@ export function compileScalarComptimeExpression(
           : "integer";
       case "if": {
         emit(node.condition);
+        const alternativeJump = opcodes.length;
+        opcodes.push(opcode.jumpIfFalse);
+        operands.push(0);
         const thenKind = emit(node.thenBranch);
+        const endJump = opcodes.length;
+        opcodes.push(opcode.jump);
+        operands.push(0);
+        operands[alternativeJump] = opcodes.length;
         const elseKind = emit(node.elseBranch);
+        operands[endJump] = opcodes.length;
         if (thenKind !== elseKind) {
           throw new TypeError(
             `${node.span.file}:${node.span.start}: comptime branches return unlike scalar kinds`,
           );
         }
-        opcodes.push(opcode.select);
-        operands.push(0);
         return thenKind;
       }
     }
@@ -301,7 +313,8 @@ export function evaluateBytecodeOnCpu(
   }
   const values: ComptimeValue[] = programs.map((program): ComptimeValue => {
     const stack: number[] = [];
-    for (let pc = 0; pc < program.opcodes.length && pc < fuel; pc += 1) {
+    let pc = 0;
+    for (let step = 0; step < fuel; step += 1) {
       const operation = program.opcodes[pc];
       if (operation === opcode.halt) {
         if (stack.length !== 1) {
@@ -320,18 +333,21 @@ export function evaluateBytecodeOnCpu(
           );
         }
         stack.push(program.operands[pc]);
+        pc += 1;
         continue;
       }
-      if (operation === opcode.select) {
-        if (stack.length < 3) {
+      if (operation === opcode.jumpIfFalse) {
+        if (stack.length < 1) {
           throw new Error(
             `comptime program at ${program.sourceStart} underflowed its stack`,
           );
         }
-        const otherwiseValue = stack.pop()!;
-        const thenValue = stack.pop()!;
         const condition = stack.pop()!;
-        stack.push(condition !== 0 ? thenValue : otherwiseValue);
+        pc = condition === 0 ? program.operands[pc] : pc + 1;
+        continue;
+      }
+      if (operation === opcode.jump) {
+        pc = program.operands[pc];
         continue;
       }
       if (stack.length < 2) {
@@ -385,6 +401,7 @@ export function evaluateBytecodeOnCpu(
           `comptime program at ${program.sourceStart} has unknown opcode ${operation}`,
         );
       }
+      pc += 1;
     }
     throw new Error(
       `comptime program at ${program.sourceStart} exceeded fuel ${fuel}`,

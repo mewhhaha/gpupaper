@@ -1037,6 +1037,22 @@ WGSL expression, so shader-language overflow behavior cannot silently define
 source comptime behavior. Comparisons and Boolean results are canonicalized to
 zero or one.
 
+Conditionals are branch-selective:
+
+```text
+if true  then e₁ else e₂ -> e₁
+if false then e₁ else e₂ -> e₂
+```
+
+The unselected expression takes no steps and cannot trap. Bytecode lowering
+emits a conditional forward jump around one branch and an unconditional forward
+jump around the other. If branch instruction counts are \(N_t\) and \(N_f\),
+eager selection performed \(N_t + N_f\) branch instructions per job;
+control-flow lowering performs only \(N_t + 2\) or \(N_f + 2\). GPU jobs still
+execute one interpreter invocation each. Jobs in the same workgroup that choose
+different branches may diverge, so the saving depends on branch coherence, but
+dead-branch arithmetic is no longer performed under any schedule.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -1069,6 +1085,8 @@ The implementation must establish:
     quotient graph is acyclic.
 14. **Comptime/runtime agreement**: every accepted scalar comptime operation has
     the same value or trap as its residual Wasm `i32` operation.
+15. **Branch noninterference**: an unselected comptime branch contributes
+    neither a value, a trap, nor executed arithmetic.
 
 ## 9. Cost model
 
@@ -1703,6 +1721,20 @@ domain; the latter reflected shader arithmetic rather than the residual Wasm
 trap. Both evaluators now implement the Section 7.6 overflow judgment, and a
 CPU/GPU regression checks the trap. This is executable conformance for the
 identified boundary, not a proof for all bytecode sequences.
+
+### 2026-07-31: comptime conditionals discard dead work
+
+The prior bytecode lowering evaluated the condition and both branches before an
+eager `select`. The counterexample `if 1 == 1 then 42 else 1 / 0` therefore
+trapped in an expression whose source semantics returns 42. Forward branch
+instructions now implement the Section 7.6 judgment on both CPU and GPU, the
+obsolete eager-select opcode has been removed, and the counterexample completes
+with 42 on both backends.
+
+This also removes all arithmetic from the unselected branch. Static bytecode
+size is unchanged up to two control instructions, while dynamic work changes
+from the sum of both branch sizes to the selected branch size plus two. No
+speedup is claimed without a branch-coherence distribution.
 
 ## References
 

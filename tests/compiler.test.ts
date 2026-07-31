@@ -593,6 +593,33 @@ Deno.test("comptime signed division traps on i32 overflow on both backends", asy
   );
 });
 
+Deno.test("comptime if does not evaluate its unselected branch", async () => {
+  const span = { file: "test.hs", start: 0, end: 1 };
+  const program = compileScalarComptimeExpression({
+    kind: "if",
+    condition: { kind: "boolean", value: true, span },
+    thenBranch: { kind: "integer", value: 42, span },
+    elseBranch: {
+      kind: "binary",
+      operator: "/",
+      left: { kind: "integer", value: 1, span },
+      right: { kind: "integer", value: 0, span },
+      span,
+    },
+    span,
+  });
+
+  const cpu = evaluateBytecodeOnCpu([program]);
+  assertEquals(cpu, {
+    status: "completed",
+    values: [{ kind: "integer", value: 42 }],
+    backend: "cpu",
+  });
+  const gpu = await evaluateBytecodeOnGpu([program]);
+  if (gpu.status === "unavailable") return;
+  assertEquals(gpu.values, [{ kind: "integer", value: 42 }]);
+});
+
 Deno.test("CPU comptime enforces the WebGPU stack capacity", () => {
   let sourceExpression = "1";
   for (let depth = 1; depth < 65; depth += 1) {
