@@ -116,12 +116,12 @@ const recordedWasmBytes:
     [
       "examples/binned/live/case-studies/editor/editor.duck",
       "examples/binned/live/case-studies/editor/host.duck",
-      22382,
+      24460,
     ],
     [
       "examples/binned/live/case-studies/codex/codex.duck",
       "examples/binned/live/case-studies/codex/host.duck",
-      283648,
+      226134,
     ],
     [
       "examples/binned/live/case-studies/grep/grep.duck",

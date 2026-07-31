@@ -300,6 +300,10 @@ class DucklangConstEvaluator {
   ): DucklangConstValue {
     this.#consumeFuel(expression);
     switch (expression.kind) {
+      case "effectHandler":
+      case "handle":
+      case "resume":
+        throw this.#unsupported(expression, "effect computation");
       case "integer":
         return scalar({ kind: "i32", value: expression.value });
       case "integer64":

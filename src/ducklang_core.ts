@@ -863,6 +863,12 @@ class CoreFunctionLowerer {
     environment: Map<number, CoreValueId>,
   ): LoweredExpression {
     switch (expression.kind) {
+      case "effectHandler":
+      case "handle":
+      case "resume":
+        throw new Error(
+          `${expression.span.file}:${expression.span.start}: typed Ducklang effect syntax reached Core before structural effect lowering`,
+        );
       case "integer":
       case "integer64":
       case "float32":
@@ -1839,7 +1845,7 @@ function validateCoreCallOperation(
     const closureType = module.types[operation.type];
     if (closureType.kind !== "function") {
       throw new TypeError(
-        `Core closure ${function_.name}:${operation.result} has non-function type ${operation.type}`,
+        `Core closure ${function_.name}:${operation.result} for ${target.name} has non-function type ${operation.type} (${closureType.kind})`,
       );
     }
     const closureSignature = module.signatures[closureType.signature];
@@ -2158,7 +2164,7 @@ function functionParameterTypes(type: Type): readonly Type[] {
   const parameters: Type[] = [];
   let current = type;
   while (current.kind === "function") {
-    parameters.push(current.parameter);
+    if (current.nullary !== true) parameters.push(current.parameter);
     current = current.result;
   }
   return parameters;

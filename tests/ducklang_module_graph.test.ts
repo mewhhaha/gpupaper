@@ -3,6 +3,7 @@ import {
   buildDucklangModuleGraph,
   createDucklangFilesystemSourceProvider,
   createDucklangModuleInstanceCache,
+  createDucklangModuleSyntaxCache,
   ducklangModuleInstanceKey,
   type DucklangModuleSource,
   type DucklangSourceProvider,
@@ -181,6 +182,69 @@ left.value + right.value
   );
 });
 
+Deno.test("Ducklang module caches reuse syntax and invalidate transitive analyses", async () => {
+  const sources = new Map([
+    [
+      "memory:/root.duck",
+      'const parent = import "./parent.duck"\nparent.value\n',
+    ],
+    [
+      "memory:/parent.duck",
+      'const child = import "./child.duck"\nreturn { .value = child.value }\n',
+    ],
+    [
+      "memory:/child.duck",
+      "let value = 41\nreturn { .value = value }\n",
+    ],
+  ]);
+  const instances = createDucklangModuleInstanceCache<DucklangModule>();
+  const syntax = createDucklangModuleSyntaxCache();
+  const root = moduleSource("memory:/root.duck", sources);
+
+  const first = await resolveDucklangLocalImports(
+    await parseRoot(root),
+    root.source,
+    {
+      sourceProvider: memorySourceProvider(sources),
+      instances,
+      syntaxCache: syntax,
+    },
+  );
+  const firstAnalysisCount = instances.analyses;
+  const firstSyntaxAnalysisCount = syntax.analyses;
+
+  const repeated = await resolveDucklangLocalImports(
+    await parseRoot(root),
+    root.source,
+    {
+      sourceProvider: memorySourceProvider(sources),
+      instances,
+      syntaxCache: syntax,
+    },
+  );
+  assertEquals(repeated, first);
+  assertEquals(instances.analyses, firstAnalysisCount);
+  assertEquals(syntax.analyses, firstSyntaxAnalysisCount);
+  assertEquals(syntax.reuses > 0, true);
+
+  sources.set(
+    "memory:/child.duck",
+    "let value = 42\nreturn { .value = value }\n",
+  );
+  const changedRoot = moduleSource("memory:/root.duck", sources);
+  await resolveDucklangLocalImports(
+    await parseRoot(changedRoot),
+    changedRoot.source,
+    {
+      sourceProvider: memorySourceProvider(sources),
+      instances,
+      syntaxCache: syntax,
+    },
+  );
+  assertEquals(instances.analyses > firstAnalysisCount, true);
+  assertEquals(syntax.analyses, firstSyntaxAnalysisCount + 1);
+});
+
 Deno.test("Ducklang import aliases resolve to the exported symbol identity", async () => {
   const sources = new Map([
     [
@@ -248,7 +312,7 @@ Deno.test("Ducklang namespaces are compile-time module projections", async () =>
 Deno.test("Ducklang module instance keys separate contents parameters and arguments", () => {
   const base = {
     moduleId: moduleId("memory:/score.duck"),
-    sourceHash: "a".repeat(64),
+    analysisHash: "a".repeat(64),
     parameterNames: ["capabilities"],
     argumentKeys: [] as readonly string[],
   };
@@ -256,7 +320,8 @@ Deno.test("Ducklang module instance keys separate contents parameters and argume
 
   assertEquals(key, ducklangModuleInstanceKey({ ...base }));
   assertEquals(
-    key === ducklangModuleInstanceKey({ ...base, sourceHash: "b".repeat(64) }),
+    key ===
+      ducklangModuleInstanceKey({ ...base, analysisHash: "b".repeat(64) }),
     false,
   );
   assertEquals(
@@ -291,7 +356,7 @@ Deno.test("Ducklang module instance keys reject over-applied parameters", () => 
   try {
     ducklangModuleInstanceKey({
       moduleId: moduleId("memory:/score.duck"),
-      sourceHash: "a".repeat(64),
+      analysisHash: "a".repeat(64),
       parameterNames: [],
       argumentKeys: ["base=1"],
     });

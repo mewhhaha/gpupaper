@@ -1,5 +1,8 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
-import { specializeStaticDucklangClosures } from "../src/ducklang_closures.ts";
+import {
+  rewriteChildren,
+  specializeStaticDucklangClosures,
+} from "../src/ducklang_closures.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
 import { inferDucklangModule } from "../src/ducklang_types.ts";
@@ -93,6 +96,55 @@ Deno.test("Ducklang specialization preserves a capture through two levels", asyn
   assertEquals(await run("captures.duck", source), 123);
 });
 
+Deno.test("Ducklang specialization visits only demanded bindings", async () => {
+  const source =
+    "let unused = (value: I32) => value * 100\nlet answer = 42\nanswer\n";
+  const typed = inferDucklangModule(
+    resolveDucklangModule(await parseDucklangModule("demand.duck", source)),
+  );
+  const specialized = specializeStaticDucklangClosures(typed);
+
+  assertEquals(
+    specialized.module.bindings.map((binding) => binding.symbol.text),
+    ["answer"],
+  );
+  assertEquals(specialized.metrics.inputBindingCount, 2);
+  assertEquals(specialized.metrics.demandedBindingCount, 1);
+  assertEquals(specialized.metrics.rewrittenBindingCount, 1);
+  assertEquals(
+    specialized.metrics.demandedInputNodeCount <
+      specialized.metrics.inputNodeCount,
+    true,
+  );
+});
+
+Deno.test("Ducklang child rewriting preserves an unchanged expression", async () => {
+  const typed = inferDucklangModule(
+    resolveDucklangModule(
+      await parseDucklangModule(
+        "sharing.duck",
+        "let add = value => value + 1\nadd(41)\n",
+      ),
+    ),
+  );
+  const expression = typed.bindings[0].value;
+
+  assertEquals(
+    rewriteChildren(expression, (child) => child) === expression,
+    true,
+  );
+});
+
+Deno.test("Ducklang specialization does not evaluate an unselected branch", async () => {
+  assertEquals(
+    await run(
+      "static_branch.duck",
+      'if false { "x"[99] } else { 42 }\n',
+    ),
+    42,
+  );
+});
+
 async function specialize(
   source: string,
 ): Promise<{ readonly before: string[]; readonly after: string[] }> {
@@ -105,7 +157,7 @@ async function specialize(
     );
   return {
     before: describe(typed),
-    after: describe(specializeStaticDucklangClosures(typed)),
+    after: describe(specializeStaticDucklangClosures(typed).module),
   };
 }
 

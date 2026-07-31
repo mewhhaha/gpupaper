@@ -3,6 +3,25 @@ export type CompilerGpuDeviceRequest =
   | { readonly status: "unavailable"; readonly reason: string };
 
 export type CompilerGpuBinding = "storage" | "uniform" | "copy";
+export type CompilerGpuSchedulingPolicy = "latency" | "throughput";
+
+export type CompilerGpuSubmissionMetrics = {
+  readonly submissionBatchSize: number;
+  readonly queueWaitMilliseconds: number;
+};
+
+export type CompilerGpuBatchResult<Output> = {
+  readonly output: Output;
+  readonly payloadBatchSize: number;
+  readonly queueWaitMilliseconds: number;
+};
+
+export type CompilerGpuBatchQueue<Input, Output> = {
+  enqueue(
+    input: Input,
+    scheduling?: CompilerGpuSchedulingPolicy,
+  ): Promise<CompilerGpuBatchResult<Output>>;
+};
 
 export type CompilerGpuLimits = {
   readonly maxBufferSize: number;
@@ -35,6 +54,102 @@ export type CompilerGpuCapacityRequest =
 
 let devicePromise: Promise<CompilerGpuDeviceRequest> | undefined;
 let previousErrorScope = Promise.resolve();
+const pendingSubmissions = new WeakMap<GPUDevice, CompilerGpuSubmission[]>();
+const scheduledSubmissionFlushes = new WeakMap<
+  GPUDevice,
+  ReturnType<typeof setTimeout>
+>();
+const maximumThroughputSubmissionBatchSize = 16;
+const maximumThroughputQueueDelayMilliseconds = 2;
+
+type CompilerGpuSubmission = {
+  readonly subject: string;
+  readonly command: GPUCommandBuffer;
+  readonly enqueuedAt: number;
+  readonly scheduling: CompilerGpuSchedulingPolicy;
+  readonly resolve: (metrics: CompilerGpuSubmissionMetrics) => void;
+  readonly reject: (cause: unknown) => void;
+};
+
+type CompilerGpuBatchJob<Input, Output> = {
+  readonly input: Input;
+  readonly enqueuedAt: number;
+  readonly scheduling: CompilerGpuSchedulingPolicy;
+  readonly resolve: (result: CompilerGpuBatchResult<Output>) => void;
+  readonly reject: (cause: unknown) => void;
+};
+
+export function createCompilerGpuBatchQueue<Input, Output>(
+  executeBatch: (inputs: readonly Input[]) => Promise<readonly Output[]>,
+): CompilerGpuBatchQueue<Input, Output> {
+  let pending: CompilerGpuBatchJob<Input, Output>[] = [];
+  let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
+
+  const flush = async (): Promise<void> => {
+    if (scheduledFlush !== undefined) {
+      clearTimeout(scheduledFlush);
+      scheduledFlush = undefined;
+    }
+    const jobs = pending;
+    pending = [];
+    if (jobs.length === 0) return;
+    const executionStart = performance.now();
+    try {
+      const outputs = await executeBatch(jobs.map((job) => job.input));
+      if (outputs.length !== jobs.length) {
+        throw new Error(
+          `GPU batch returned ${outputs.length} results for ${jobs.length} jobs`,
+        );
+      }
+      for (const [index, job] of jobs.entries()) {
+        job.resolve({
+          output: outputs[index]!,
+          payloadBatchSize: jobs.length,
+          queueWaitMilliseconds: Math.max(
+            0,
+            executionStart - job.enqueuedAt,
+          ),
+        });
+      }
+    } catch (cause) {
+      for (const job of jobs) job.reject(cause);
+    }
+  };
+
+  const schedule = (): void => {
+    const requiresLatencyFlush = pending.some((job) =>
+      job.scheduling === "latency"
+    );
+    if (
+      pending.length >= maximumThroughputSubmissionBatchSize ||
+      requiresLatencyFlush
+    ) {
+      if (scheduledFlush !== undefined) clearTimeout(scheduledFlush);
+      scheduledFlush = setTimeout(() => void flush(), 0);
+      return;
+    }
+    if (scheduledFlush !== undefined) return;
+    scheduledFlush = setTimeout(
+      () => void flush(),
+      maximumThroughputQueueDelayMilliseconds,
+    );
+  };
+
+  return {
+    enqueue(input, scheduling = "latency") {
+      return new Promise<CompilerGpuBatchResult<Output>>((resolve, reject) => {
+        pending.push({
+          input,
+          enqueuedAt: performance.now(),
+          scheduling,
+          resolve,
+          reject,
+        });
+        schedule();
+      });
+    },
+  };
+}
 
 export function requestCompilerGpuDevice(): Promise<CompilerGpuDeviceRequest> {
   if (devicePromise !== undefined) return devicePromise;
@@ -106,6 +221,107 @@ export async function awaitCompilerGpuCommand<T>(
       throw new CompilerGpuUnavailableError(reason);
     }
     throw error;
+  }
+}
+
+export function submitCompilerGpuCommand(
+  device: GPUDevice,
+  subject: string,
+  command: GPUCommandBuffer,
+  scheduling: CompilerGpuSchedulingPolicy = "latency",
+): Promise<CompilerGpuSubmissionMetrics> {
+  return new Promise<CompilerGpuSubmissionMetrics>((resolve, reject) => {
+    const pending = pendingSubmissions.get(device);
+    const submission = {
+      subject,
+      command,
+      enqueuedAt: performance.now(),
+      scheduling,
+      resolve,
+      reject,
+    };
+    if (pending !== undefined) {
+      pending.push(submission);
+      scheduleCompilerGpuSubmissionFlush(device, pending);
+      return;
+    }
+    const submissions = [submission];
+    pendingSubmissions.set(device, submissions);
+    scheduleCompilerGpuSubmissionFlush(device, submissions);
+  });
+}
+
+function scheduleCompilerGpuSubmissionFlush(
+  device: GPUDevice,
+  submissions: readonly CompilerGpuSubmission[],
+): void {
+  const scheduledFlush = scheduledSubmissionFlushes.get(device);
+  const requiresLatencyFlush = submissions.some((submission) =>
+    submission.scheduling === "latency"
+  );
+  if (
+    submissions.length >= maximumThroughputSubmissionBatchSize ||
+    requiresLatencyFlush
+  ) {
+    if (scheduledFlush !== undefined) clearTimeout(scheduledFlush);
+    const timeout = setTimeout(() => {
+      scheduledSubmissionFlushes.delete(device);
+      void flushCompilerGpuSubmissions(device);
+    }, 0);
+    scheduledSubmissionFlushes.set(device, timeout);
+    return;
+  }
+  if (scheduledFlush !== undefined) return;
+  const timeout = setTimeout(() => {
+    scheduledSubmissionFlushes.delete(device);
+    void flushCompilerGpuSubmissions(device);
+  }, maximumThroughputQueueDelayMilliseconds);
+  scheduledSubmissionFlushes.set(device, timeout);
+}
+
+async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
+  const submissions = pendingSubmissions.get(device);
+  if (submissions === undefined) return;
+  pendingSubmissions.delete(device);
+  const scheduledFlush = scheduledSubmissionFlushes.get(device);
+  if (scheduledFlush !== undefined) {
+    clearTimeout(scheduledFlush);
+    scheduledSubmissionFlushes.delete(device);
+  }
+
+  const release = await acquireCompilerGpuErrorScope();
+  let validationScopePending = false;
+  try {
+    const submissionStart = performance.now();
+    const queueWaits = submissions.map((submission) =>
+      Math.max(0, submissionStart - submission.enqueuedAt)
+    );
+    device.pushErrorScope("validation");
+    validationScopePending = true;
+    device.queue.submit(submissions.map((submission) => submission.command));
+    await awaitCompilerGpuCommand(
+      device,
+      submissions.map((submission) => submission.subject).join(", "),
+      device.queue.onSubmittedWorkDone(),
+    );
+    const validationError = await device.popErrorScope();
+    validationScopePending = false;
+    if (validationError !== null) {
+      throw new Error(
+        `WebGPU compiler submission validation failed: ${validationError.message}`,
+      );
+    }
+    for (const [index, submission] of submissions.entries()) {
+      submission.resolve({
+        submissionBatchSize: submissions.length,
+        queueWaitMilliseconds: queueWaits[index]!,
+      });
+    }
+  } catch (cause) {
+    for (const submission of submissions) submission.reject(cause);
+  } finally {
+    if (validationScopePending) await device.popErrorScope();
+    release();
   }
 }
 

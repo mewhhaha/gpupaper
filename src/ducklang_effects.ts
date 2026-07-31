@@ -1,23 +1,35 @@
 import type {
   DucklangEffectReference,
   DucklangEffectRow,
+  DucklangTypeReference,
 } from "./ducklang_ast.ts";
 import type {
+  ResolvedDucklangBinding,
   ResolvedDucklangExpression,
   ResolvedDucklangModule,
 } from "./ducklang_resolution.ts";
 
+export type DucklangEffectRowType = {
+  readonly operations: readonly DucklangEffectReference[];
+  readonly parameterEffects: readonly number[];
+};
+
 export type DucklangEffectAnalysis = {
-  readonly bindingEffects: ReadonlyMap<
-    number,
-    readonly DucklangEffectReference[]
-  >;
+  readonly bindingEffects: ReadonlyMap<number, DucklangEffectRowType>;
   readonly moduleEffects: readonly DucklangEffectReference[];
+};
+
+type EffectSummary = {
+  readonly operations: Map<string, DucklangEffectReference>;
+  readonly parameterEffects: Set<number>;
 };
 
 export function analyzeDucklangEffects(
   module: ResolvedDucklangModule,
 ): DucklangEffectAnalysis {
+  const bindingsBySymbol = new Map(
+    module.bindings.map((binding) => [binding.symbol.id, binding]),
+  );
   const functionBindings = new Map(
     module.bindings.flatMap((binding) =>
       binding.value.kind === "function"
@@ -41,23 +53,30 @@ export function analyzeDucklangEffects(
     }
     if (!changed) break;
   }
-  const bindingEffects = new Map<
-    number,
-    ReadonlyMap<string, DucklangEffectReference>
-  >(
-    [...functionBindings.keys()].map((symbolId) => [symbolId, new Map()]),
-  );
 
+  const bindingEffects = new Map<number, EffectSummary>(
+    [...functionBindings.keys()].map((symbolId) => [
+      symbolId,
+      emptyEffectSummary(),
+    ]),
+  );
   for (let iteration = 0; iteration <= functionBindings.size; iteration += 1) {
     let changed = false;
     for (const [symbolId, binding] of functionBindings) {
       if (binding.value.kind !== "function") continue;
       const effects = collectExpressionEffects(
         binding.value.body,
+        bindingsBySymbol,
         functionTargets,
         bindingEffects,
+        new Map(
+          binding.value.parameters.map((parameter, index) => [
+            parameter.id,
+            index,
+          ]),
+        ),
       );
-      if (sameEffects(effects, bindingEffects.get(symbolId))) continue;
+      if (sameEffectSummary(effects, bindingEffects.get(symbolId))) continue;
       bindingEffects.set(symbolId, effects);
       changed = true;
     }
@@ -70,59 +89,83 @@ export function analyzeDucklangEffects(
   }
 
   for (const [symbolId, binding] of functionBindings) {
-    if (binding.symbol.declaredEffectRow === undefined) continue;
+    if (
+      binding.value.kind !== "function" ||
+      binding.symbol.declaredEffectRow === undefined
+    ) {
+      continue;
+    }
+    const effectVariables = functionEffectVariables(
+      binding.value.parameters.map((parameter) => parameter.declaredType),
+    );
     const declared = binding.symbol.declaredEffectRow === null
-      ? new Map<string, DucklangEffectReference>()
+      ? emptyEffectSummary()
       : resolveDeclaredEffectRow(
         module,
         binding.symbol.declaredEffectRow,
+        effectVariables,
       );
-    for (const effect of bindingEffects.get(symbolId)?.values() ?? []) {
-      if (declared.has(effectKey(effect))) continue;
+    const inferred = bindingEffects.get(symbolId) ?? emptyEffectSummary();
+    for (const effect of inferred.operations.values()) {
+      if (declared.operations.has(effectKey(effect))) continue;
       throw new TypeError(
         `${module.file}:${binding.span.start}: Ducklang function ${binding.symbol.text} exceeds its declared effect row with ${effect.effectName}.${effect.operationName}`,
       );
     }
+    for (const parameterIndex of inferred.parameterEffects) {
+      if (declared.parameterEffects.has(parameterIndex)) continue;
+      const parameter = binding.value.parameters[parameterIndex];
+      throw new TypeError(
+        `${module.file}:${binding.span.start}: Ducklang function ${binding.symbol.text} exceeds its declared effect row with effects from parameter ${
+          parameter?.text ?? parameterIndex
+        }`,
+      );
+    }
   }
 
-  const moduleEffects = new Map<string, DucklangEffectReference>();
+  const moduleEffects = emptyEffectSummary();
   for (const binding of module.bindings) {
     if (binding.value.kind === "function") continue;
-    mergeEffects(
+    mergeEffectSummaries(
       moduleEffects,
       collectExpressionEffects(
         binding.value,
+        bindingsBySymbol,
         functionTargets,
         bindingEffects,
+        new Map(),
       ),
     );
   }
-  mergeEffects(
+  mergeEffectSummaries(
     moduleEffects,
-    collectExpressionEffects(module.result, functionTargets, bindingEffects),
+    collectExpressionEffects(
+      module.result,
+      bindingsBySymbol,
+      functionTargets,
+      bindingEffects,
+      new Map(),
+    ),
   );
 
   return {
     bindingEffects: new Map(
-      module.bindings.map((binding) => [
-        binding.symbol.id,
-        [
-          ...(
-            bindingEffects.get(
-              functionTargets.get(binding.symbol.id) ?? binding.symbol.id,
-            )?.values() ?? []
-          ),
-        ],
-      ]),
+      module.bindings.map((binding) => {
+        const summary = bindingEffects.get(
+          functionTargets.get(binding.symbol.id) ?? binding.symbol.id,
+        ) ?? emptyEffectSummary();
+        return [binding.symbol.id, freezeEffectSummary(summary)];
+      }),
     ),
-    moduleEffects: [...moduleEffects.values()],
+    moduleEffects: [...moduleEffects.operations.values()],
   };
 }
 
 function resolveDeclaredEffectRow(
   module: ResolvedDucklangModule,
   row: DucklangEffectRow,
-): Map<string, DucklangEffectReference> {
+  effectVariables: ReadonlyMap<string, number>,
+): EffectSummary {
   if (row.kind === "family") {
     const operations = module.effects.get(row.effectName);
     if (operations === undefined) {
@@ -130,16 +173,16 @@ function resolveDeclaredEffectRow(
         `${module.file}:${row.span.start}: unknown Ducklang effect ${row.effectName} in effect row`,
       );
     }
-    return new Map(
-      operations.map((operation) => {
-        const reference = {
-          effectName: row.effectName,
-          operationName: operation.name,
-          span: row.span,
-        };
-        return [effectKey(reference), reference];
-      }),
-    );
+    const summary = emptyEffectSummary();
+    for (const operation of operations) {
+      const reference = {
+        effectName: row.effectName,
+        operationName: operation.name,
+        span: row.span,
+      };
+      summary.operations.set(effectKey(reference), reference);
+    }
+    return summary;
   }
   if (row.kind === "operation") {
     const operation = module.effects.get(row.effectName)?.find((candidate) =>
@@ -155,44 +198,209 @@ function resolveDeclaredEffectRow(
       operationName: row.operationName,
       span: row.span,
     };
-    return new Map([[effectKey(reference), reference]]);
+    const summary = emptyEffectSummary();
+    summary.operations.set(effectKey(reference), reference);
+    return summary;
   }
   if (row.kind === "variable") {
-    throw new TypeError(
-      `${module.file}:${row.span.start}: cannot infer unbound Ducklang effect row variable ${row.name}`,
-    );
+    const parameterIndex = effectVariables.get(row.name);
+    if (parameterIndex === undefined) {
+      throw new TypeError(
+        `${module.file}:${row.span.start}: unbound Ducklang effect row variable ${row.name}`,
+      );
+    }
+    const summary = emptyEffectSummary();
+    summary.parameterEffects.add(parameterIndex);
+    return summary;
   }
 
-  const left = resolveDeclaredEffectRow(module, row.left);
-  const right = resolveDeclaredEffectRow(module, row.right);
+  const left = resolveDeclaredEffectRow(module, row.left, effectVariables);
+  const right = resolveDeclaredEffectRow(module, row.right, effectVariables);
   if (row.kind === "union") {
-    mergeEffects(left, right);
+    mergeEffectSummaries(left, right);
     return left;
   }
   if (row.kind === "intersection") {
-    for (const key of left.keys()) {
-      if (!right.has(key)) left.delete(key);
+    for (const key of left.operations.keys()) {
+      if (!right.operations.has(key)) left.operations.delete(key);
+    }
+    for (const parameterIndex of left.parameterEffects) {
+      if (!right.parameterEffects.has(parameterIndex)) {
+        left.parameterEffects.delete(parameterIndex);
+      }
     }
     return left;
   }
-  for (const key of right.keys()) left.delete(key);
+  for (const key of right.operations.keys()) left.operations.delete(key);
+  for (const parameterIndex of right.parameterEffects) {
+    left.parameterEffects.delete(parameterIndex);
+  }
   return left;
+}
+
+function functionEffectVariables(
+  parameterTypes: readonly (DucklangTypeReference | undefined)[],
+): ReadonlyMap<string, number> {
+  const variables = new Map<string, number>();
+  for (const [parameterIndex, type] of parameterTypes.entries()) {
+    if (type === undefined) continue;
+    collectTypeEffectVariables(type, parameterIndex, variables);
+  }
+  return variables;
+}
+
+function collectTypeEffectVariables(
+  type: DucklangTypeReference,
+  parameterIndex: number,
+  variables: Map<string, number>,
+): void {
+  if (type.effectRow !== undefined && type.effectRow !== null) {
+    collectRowVariables(type.effectRow, parameterIndex, variables);
+  }
+  for (const argument of type.arguments) {
+    collectTypeEffectVariables(argument, parameterIndex, variables);
+  }
+}
+
+function collectRowVariables(
+  row: DucklangEffectRow,
+  parameterIndex: number,
+  variables: Map<string, number>,
+): void {
+  if (row.kind === "variable") {
+    const existing = variables.get(row.name);
+    if (existing !== undefined && existing !== parameterIndex) {
+      throw new TypeError(
+        `${row.span.file}:${row.span.start}: Ducklang effect row variable ${row.name} belongs to parameters ${existing} and ${parameterIndex}`,
+      );
+    }
+    variables.set(row.name, parameterIndex);
+    return;
+  }
+  if ("left" in row) {
+    collectRowVariables(row.left, parameterIndex, variables);
+    collectRowVariables(row.right, parameterIndex, variables);
+  }
 }
 
 function collectExpressionEffects(
   expression: ResolvedDucklangExpression,
+  bindingsBySymbol: ReadonlyMap<number, ResolvedDucklangBinding>,
   functionTargets: ReadonlyMap<number, number>,
-  bindingEffects: ReadonlyMap<
-    number,
-    ReadonlyMap<string, DucklangEffectReference>
-  >,
-): Map<string, DucklangEffectReference> {
-  const effects = new Map<string, DucklangEffectReference>();
+  bindingEffects: ReadonlyMap<number, EffectSummary>,
+  effectParameters: ReadonlyMap<number, number>,
+): EffectSummary {
+  const effects = emptyEffectSummary();
   const localFunctions = new Map<
     number,
     Extract<ResolvedDucklangExpression, { readonly kind: "function" }>
   >();
   const activeLocalFunctions = new Set<number>();
+  const activeCallableBindings = new Set<number>();
+
+  const callableEffects = (
+    callable: ResolvedDucklangExpression,
+  ): EffectSummary => {
+    if (callable.kind === "reference") {
+      const parameterIndex = effectParameters.get(callable.symbol.id);
+      if (parameterIndex !== undefined) {
+        const summary = emptyEffectSummary();
+        summary.parameterEffects.add(parameterIndex);
+        return summary;
+      }
+      const target = functionTargets.get(callable.symbol.id);
+      if (target !== undefined) {
+        return cloneEffectSummary(
+          bindingEffects.get(target) ?? emptyEffectSummary(),
+        );
+      }
+      const localFunction = localFunctions.get(callable.symbol.id);
+      if (
+        localFunction !== undefined &&
+        !activeLocalFunctions.has(callable.symbol.id)
+      ) {
+        activeLocalFunctions.add(callable.symbol.id);
+        const summary = collectExpressionEffects(
+          localFunction.body,
+          bindingsBySymbol,
+          functionTargets,
+          bindingEffects,
+          new Map(
+            localFunction.parameters.map((parameter, index) => [
+              parameter.id,
+              index,
+            ]),
+          ),
+        );
+        activeLocalFunctions.delete(callable.symbol.id);
+        return summary;
+      }
+      const binding = bindingsBySymbol.get(callable.symbol.id);
+      if (
+        binding !== undefined &&
+        !activeCallableBindings.has(callable.symbol.id)
+      ) {
+        activeCallableBindings.add(callable.symbol.id);
+        const summary = callableEffects(binding.value);
+        activeCallableBindings.delete(callable.symbol.id);
+        return summary;
+      }
+      return emptyEffectSummary();
+    }
+    if (callable.kind === "function") {
+      return collectExpressionEffects(
+        callable.body,
+        bindingsBySymbol,
+        functionTargets,
+        bindingEffects,
+        new Map(
+          callable.parameters.map((parameter, index) => [parameter.id, index]),
+        ),
+      );
+    }
+    if (callable.kind === "if") {
+      const summary = callableEffects(callable.consequence);
+      if (callable.alternative !== undefined) {
+        mergeEffectSummaries(summary, callableEffects(callable.alternative));
+      }
+      return summary;
+    }
+    if (callable.kind === "ifUnion") {
+      const summary = callableEffects(callable.consequence);
+      if (callable.alternative !== undefined) {
+        mergeEffectSummaries(summary, callableEffects(callable.alternative));
+      }
+      return summary;
+    }
+    if (callable.kind === "block") return callableEffects(callable.result);
+    if (callable.kind === "field") {
+      const field = callableFieldValue(
+        callable.product,
+        callable.fieldName,
+        bindingsBySymbol,
+        functionTargets,
+      );
+      return field === undefined
+        ? emptyEffectSummary()
+        : callableEffects(field);
+    }
+    return emptyEffectSummary();
+  };
+
+  const mergeInstantiatedCall = (
+    summary: EffectSummary,
+    arguments_: readonly ResolvedDucklangExpression[],
+  ): void => {
+    for (const operation of summary.operations.values()) {
+      effects.operations.set(effectKey(operation), operation);
+    }
+    for (const parameterIndex of summary.parameterEffects) {
+      const argument = arguments_[parameterIndex];
+      if (argument === undefined) continue;
+      mergeEffectSummaries(effects, callableEffects(argument));
+    }
+  };
+
   const visit = (current: ResolvedDucklangExpression): void => {
     switch (current.kind) {
       case "integer":
@@ -203,6 +411,7 @@ function collectExpressionEffects(
       case "unit":
       case "string":
       case "intrinsic":
+      case "primitive":
       case "reference":
         return;
       case "hostCall": {
@@ -211,39 +420,80 @@ function collectExpressionEffects(
           operationName: current.operationName,
           span: current.span,
         };
-        effects.set(effectKey(reference), reference);
+        effects.operations.set(effectKey(reference), reference);
         for (const argument of current.arguments) visit(argument);
         return;
       }
+      case "effectHandler":
+        return;
+      case "handle": {
+        const handled = collectExpressionEffects(
+          current.body,
+          bindingsBySymbol,
+          functionTargets,
+          bindingEffects,
+          effectParameters,
+        );
+        const effectName = resolvedHandlerEffectName(
+          current.handler,
+          bindingsBySymbol,
+          functionTargets,
+          new Set(),
+        );
+        if (effectName !== undefined) {
+          for (const [key, operation] of handled.operations) {
+            if (operation.effectName === effectName) {
+              handled.operations.delete(key);
+            }
+          }
+        }
+        mergeEffectSummaries(effects, handled);
+        const handler = resolvedHandlerExpression(
+          current.handler,
+          bindingsBySymbol,
+          functionTargets,
+          new Set(),
+        );
+        if (handler !== undefined) {
+          for (const field of handler.fields) {
+            if (field.value.kind !== "function") continue;
+            const clause = collectExpressionEffects(
+              field.value.body,
+              bindingsBySymbol,
+              functionTargets,
+              bindingEffects,
+              new Map(),
+            );
+            for (const [key, operation] of clause.operations) {
+              if (operation.effectName !== handler.effectName) {
+                effects.operations.set(key, operation);
+              }
+            }
+          }
+        }
+        return;
+      }
+      case "resume":
+        visit(current.value);
+        return;
       case "function":
         return;
       case "call":
         visit(current.callee);
         for (const argument of current.arguments) visit(argument);
-        if (
-          current.callee.kind === "reference" &&
-          functionTargets.has(current.callee.symbol.id)
-        ) {
-          const target = functionTargets.get(current.callee.symbol.id);
-          mergeEffects(
-            effects,
-            target === undefined
-              ? new Map()
-              : bindingEffects.get(target) ?? new Map(),
+        if (current.callee.kind === "reference") {
+          const parameterIndex = effectParameters.get(
+            current.callee.symbol.id,
           );
-        } else if (
-          current.callee.kind === "reference" &&
-          localFunctions.has(current.callee.symbol.id) &&
-          !activeLocalFunctions.has(current.callee.symbol.id)
-        ) {
-          const symbolId = current.callee.symbol.id;
-          const localFunction = localFunctions.get(symbolId)!;
-          activeLocalFunctions.add(symbolId);
-          visit(localFunction.body);
-          activeLocalFunctions.delete(symbolId);
-        } else if (current.callee.kind === "function") {
-          visit(current.callee.body);
+          if (parameterIndex !== undefined) {
+            effects.parameterEffects.add(parameterIndex);
+            return;
+          }
         }
+        mergeInstantiatedCall(
+          callableEffects(current.callee),
+          current.arguments,
+        );
         return;
       case "unionCase":
         visit(current.value);
@@ -320,24 +570,168 @@ function collectExpressionEffects(
   return effects;
 }
 
+function emptyEffectSummary(): EffectSummary {
+  return { operations: new Map(), parameterEffects: new Set() };
+}
+
+function callableFieldValue(
+  product: ResolvedDucklangExpression,
+  fieldName: string,
+  bindingsBySymbol: ReadonlyMap<number, ResolvedDucklangBinding>,
+  functionTargets: ReadonlyMap<number, number>,
+): ResolvedDucklangExpression | undefined {
+  if (product.kind === "block") {
+    return callableFieldValue(
+      product.result,
+      fieldName,
+      bindingsBySymbol,
+      functionTargets,
+    );
+  }
+  if (product.kind === "record") {
+    return product.fields.find((field) => field.name === fieldName)?.value;
+  }
+  if (product.kind === "reference") {
+    const binding = bindingsBySymbol.get(product.symbol.id);
+    return binding === undefined ? undefined : callableFieldValue(
+      binding.value,
+      fieldName,
+      bindingsBySymbol,
+      functionTargets,
+    );
+  }
+  if (
+    product.kind !== "call" || product.callee.kind !== "reference"
+  ) {
+    return undefined;
+  }
+  const target = functionTargets.get(product.callee.symbol.id) ??
+    product.callee.symbol.id;
+  const binding = bindingsBySymbol.get(target);
+  if (binding?.value.kind !== "function") return undefined;
+  return callableFieldValue(
+    binding.value.body,
+    fieldName,
+    bindingsBySymbol,
+    functionTargets,
+  );
+}
+
+function resolvedHandlerEffectName(
+  expression: ResolvedDucklangExpression,
+  bindingsBySymbol: ReadonlyMap<number, ResolvedDucklangBinding>,
+  functionTargets: ReadonlyMap<number, number>,
+  visiting: Set<number>,
+): string | undefined {
+  return resolvedHandlerExpression(
+    expression,
+    bindingsBySymbol,
+    functionTargets,
+    visiting,
+  )?.effectName;
+}
+
+function resolvedHandlerExpression(
+  expression: ResolvedDucklangExpression,
+  bindingsBySymbol: ReadonlyMap<number, ResolvedDucklangBinding>,
+  functionTargets: ReadonlyMap<number, number>,
+  visiting: Set<number>,
+):
+  | Extract<
+    ResolvedDucklangExpression,
+    { readonly kind: "effectHandler" }
+  >
+  | undefined {
+  if (expression.kind === "effectHandler") return expression;
+  if (expression.kind === "block") {
+    return resolvedHandlerExpression(
+      expression.result,
+      bindingsBySymbol,
+      functionTargets,
+      visiting,
+    );
+  }
+  if (expression.kind === "call" && expression.callee.kind === "reference") {
+    const target = functionTargets.get(expression.callee.symbol.id) ??
+      expression.callee.symbol.id;
+    if (visiting.has(target)) return undefined;
+    const binding = bindingsBySymbol.get(target);
+    if (binding?.value.kind !== "function") return undefined;
+    visiting.add(target);
+    const handler = resolvedHandlerExpression(
+      binding.value.body,
+      bindingsBySymbol,
+      functionTargets,
+      visiting,
+    );
+    visiting.delete(target);
+    return handler;
+  }
+  if (expression.kind !== "reference") return undefined;
+  const target = functionTargets.get(expression.symbol.id) ??
+    expression.symbol.id;
+  if (visiting.has(target)) return undefined;
+  const binding = bindingsBySymbol.get(target);
+  if (binding === undefined) return undefined;
+  visiting.add(target);
+  const handler = resolvedHandlerExpression(
+    binding.value,
+    bindingsBySymbol,
+    functionTargets,
+    visiting,
+  );
+  visiting.delete(target);
+  return handler;
+}
+
+function cloneEffectSummary(summary: EffectSummary): EffectSummary {
+  return {
+    operations: new Map(summary.operations),
+    parameterEffects: new Set(summary.parameterEffects),
+  };
+}
+
+function freezeEffectSummary(summary: EffectSummary): DucklangEffectRowType {
+  return {
+    operations: [...summary.operations.values()].toSorted((left, right) =>
+      effectKey(left).localeCompare(effectKey(right))
+    ),
+    parameterEffects: [...summary.parameterEffects].toSorted((a, b) => a - b),
+  };
+}
+
 function effectKey(effect: DucklangEffectReference): string {
   return `${effect.effectName}.${effect.operationName}`;
 }
 
-function mergeEffects(
-  target: Map<string, DucklangEffectReference>,
-  source: ReadonlyMap<string, DucklangEffectReference>,
+function mergeEffectSummaries(
+  target: EffectSummary,
+  source: EffectSummary,
 ): void {
-  for (const [key, effect] of source) target.set(key, effect);
+  for (const [key, effect] of source.operations) {
+    target.operations.set(key, effect);
+  }
+  for (const parameterIndex of source.parameterEffects) {
+    target.parameterEffects.add(parameterIndex);
+  }
 }
 
-function sameEffects(
-  left: ReadonlyMap<string, DucklangEffectReference>,
-  right: ReadonlyMap<string, DucklangEffectReference> | undefined,
+function sameEffectSummary(
+  left: EffectSummary,
+  right: EffectSummary | undefined,
 ): boolean {
-  if (right === undefined || left.size !== right.size) return false;
-  for (const key of left.keys()) {
-    if (!right.has(key)) return false;
+  if (
+    right === undefined ||
+    left.operations.size !== right.operations.size ||
+    left.parameterEffects.size !== right.parameterEffects.size
+  ) {
+    return false;
+  }
+  for (const key of left.operations.keys()) {
+    if (!right.operations.has(key)) return false;
+  }
+  for (const parameterIndex of left.parameterEffects) {
+    if (!right.parameterEffects.has(parameterIndex)) return false;
   }
   return true;
 }

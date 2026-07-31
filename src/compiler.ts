@@ -1,3 +1,4 @@
+import { contentIdentity } from "./content_identity.ts";
 import {
   type ComptimeBatchResult,
   type ComptimeValue,
@@ -17,13 +18,16 @@ import {
   createDucklangManagedAbi,
   type DucklangManagedAbi,
 } from "./ducklang_abi.ts";
+import type { DucklangModule } from "./ducklang_ast.ts";
 import {
   lowerDucklangControlFlow,
   requireConsistentDucklangLoopExits,
 } from "./ducklang_control_flow.ts";
 import { elaborateDucklangDerivations } from "./ducklang_derivations.ts";
 import { elaborateDucklangExtensions } from "./ducklang_extensions.ts";
-import { elaborateDucklangHandlers } from "./ducklang_handlers.ts";
+import { lowerDucklangEffectsStructurally } from "./ducklang_effect_cps.ts";
+import { closeDucklangEffectBoundary } from "./ducklang_effect_boundary.ts";
+import { validateDucklangEffectOwnership } from "./ducklang_effect_validation.ts";
 import { validateDucklangOwnership } from "./ducklang_ownership.ts";
 import { specializeStaticDucklangClosures } from "./ducklang_closures.ts";
 import {
@@ -37,6 +41,8 @@ import {
   inflateFlatDucklangCore,
 } from "./flat_ducklang_core.ts";
 import {
+  createDucklangBackendFunctionCache,
+  type DucklangBackendFunctionCache,
   ducklangTextLiteralsSectionName,
   lowerDucklangCoreToFcgAndWasm,
 } from "./ducklang_core_wasm.ts";
@@ -45,7 +51,16 @@ import {
   lowerDucklangModuleExports,
   resolveDucklangLocalImports,
 } from "./ducklang_modules.ts";
-import { expandDucklangIncludes } from "./ducklang_module_graph.ts";
+import {
+  createDucklangFilesystemSourceProvider,
+  createDucklangModuleInstanceCache,
+  createDucklangModuleSyntaxCache,
+  type DucklangModuleGraph,
+  type DucklangModuleInstances,
+  type DucklangModuleSyntaxCache,
+  ducklangSourceHash,
+  expandDucklangIncludes,
+} from "./ducklang_module_graph.ts";
 import { parseDucklangModuleWithTimings } from "./ducklang_parser.ts";
 import { qualifyDucklangTypeCollisions } from "./ducklang_type_identity.ts";
 import { reflectDucklangTypes } from "./ducklang_reflection.ts";
@@ -59,7 +74,8 @@ import {
 import { ducklangRuntimeImportModule } from "./ducklang_primitives.ts";
 import {
   formatDucklangType,
-  inferDucklangModule,
+  inferDucklangEffectModule,
+  type TypedDucklangEffectModule,
   type TypedDucklangModule,
 } from "./ducklang_types.ts";
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
@@ -70,6 +86,7 @@ import {
   runDucklangCoreGpuPass,
 } from "./gpu_ducklang_core.ts";
 import { emitWasmPlanOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
+import type { CompilerGpuSchedulingPolicy } from "./gpu_device.ts";
 import {
   evaluateModuleInteractionComptime,
   type InteractionResult,
@@ -81,11 +98,14 @@ import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "./wasm.ts";
 
 export type GpuMode = "auto" | "off" | "required";
 export type GpuWasmVerification = "differential" | "none";
+export type GpuSchedulingPolicy = CompilerGpuSchedulingPolicy;
 
 export type CompilationOptions = {
   readonly gpuMode?: GpuMode;
   readonly gpuWasmVerification?: GpuWasmVerification;
+  readonly gpuScheduling?: GpuSchedulingPolicy;
   readonly hostInterface?: string;
+  readonly session?: DucklangCompilationSession;
 };
 
 export type CompilationBackends = {
@@ -120,6 +140,144 @@ export type CompilationTimings = {
   readonly gpuWasmMilliseconds: number;
 };
 
+export type DucklangCompilationStageTimings = {
+  readonly sourceExpansionMilliseconds: number;
+  readonly semanticContextMilliseconds: number;
+  readonly parsingMilliseconds: number;
+  readonly semanticFingerprintMilliseconds: number;
+  readonly semanticReuseValidationMilliseconds: number;
+  readonly elaborationMilliseconds: number;
+  readonly resolutionMilliseconds: number;
+  readonly typeAnalysisMilliseconds: number;
+  readonly gpuTypeSolveMilliseconds: number;
+  readonly preComptimeSpecializationMilliseconds: number;
+  readonly comptimeMilliseconds: number;
+  readonly postComptimeSpecializationMilliseconds: number;
+  readonly coreLoweringMilliseconds: number;
+  readonly coreFlatteningMilliseconds: number;
+  readonly gpuCorePassMilliseconds: number;
+  readonly cpuCoreRewriteMilliseconds: number;
+  readonly coreInflationMilliseconds: number;
+  readonly wasmPlanningAndCpuEmissionMilliseconds: number;
+  readonly gpuWasmEmissionMilliseconds: number;
+  readonly wasmSelectionMilliseconds: number;
+  readonly abiConstructionMilliseconds: number;
+  readonly wasmValidationMilliseconds: number;
+  readonly artifactValidationMilliseconds: number;
+};
+
+export type DucklangCompilationTimingDetails = {
+  readonly parserInitializationMilliseconds: number;
+  readonly contextualClassificationMilliseconds: number;
+  readonly parserExecutionMilliseconds: number;
+  readonly syntaxMilliseconds: number;
+  readonly astLoweringMilliseconds: number;
+  readonly hostInterfaceMilliseconds: number;
+  readonly sourceTestElaborationMilliseconds: number;
+  readonly localImportResolutionMilliseconds: number;
+  readonly typeQualificationMilliseconds: number;
+  readonly loopExitValidationMilliseconds: number;
+  readonly moduleExportLoweringMilliseconds: number;
+  readonly ownershipValidationMilliseconds: number;
+  readonly handlerElaborationMilliseconds: number;
+  readonly derivationElaborationMilliseconds: number;
+  readonly extensionElaborationMilliseconds: number;
+  readonly staticLoopExpansionMilliseconds: number;
+  readonly controlFlowLoweringMilliseconds: number;
+  readonly typeInferenceMilliseconds: number;
+  readonly typeReflectionMilliseconds: number;
+  readonly preSpecializationDemandMilliseconds: number;
+  readonly preSpecializationFrontierMilliseconds: number;
+  readonly preSpecializationRewriteMilliseconds: number;
+  readonly preSpecializationLiftingMilliseconds: number;
+  readonly preSpecializationReachabilityMilliseconds: number;
+  readonly preSpecializationAccountingMilliseconds: number;
+  readonly postSpecializationDemandMilliseconds: number;
+  readonly postSpecializationFrontierMilliseconds: number;
+  readonly postSpecializationRewriteMilliseconds: number;
+  readonly postSpecializationLiftingMilliseconds: number;
+  readonly postSpecializationReachabilityMilliseconds: number;
+  readonly postSpecializationAccountingMilliseconds: number;
+  readonly gpuCoreInitializationMilliseconds: number;
+  readonly gpuTypeQueueWaitMilliseconds: number;
+  readonly gpuCoreQueueWaitMilliseconds: number;
+  readonly gpuWasmQueueWaitMilliseconds: number;
+  readonly gpuCoreExecutionMilliseconds: number;
+  readonly gpuCoreTransferMilliseconds: number;
+  readonly gpuCoreCommitMilliseconds: number;
+};
+
+export type DucklangCompilationWork = {
+  readonly sourceBytes: number;
+  readonly expandedSourceBytes: number;
+  readonly parsedStatementCount: number;
+  readonly linkedStatementCount: number;
+  readonly moduleAnalysisCount: number;
+  readonly moduleReuseCount: number;
+  readonly moduleSyntaxAnalysisCount: number;
+  readonly moduleSyntaxReuseCount: number;
+  readonly semanticArtifactReuseCount: number;
+  readonly exactSourceRevisionReuseCount: number;
+  readonly trailingTriviaRevisionReuseCount: number;
+  readonly syntaxAnalysisCount: number;
+  readonly semanticFingerprintReuseCount: number;
+  readonly typedBindingCount: number;
+  readonly typeEqualityCount: number;
+  readonly effectRowMembershipCount: number;
+  readonly capabilityOperandCount: number;
+  readonly rootCapabilityCount: number;
+  readonly directStatePassingRegionCount: number;
+  readonly directStatePassingFunctionCount: number;
+  readonly cpsTransformedRegionCount: number;
+  readonly cpsTransformedFunctionCount: number;
+  readonly handledPerformanceCount: number;
+  readonly continuationCaptureCount: number;
+  readonly comptimeExpressionCount: number;
+  readonly functionComptimeExpressionCount: number;
+  readonly scalarComptimeJobCount: number;
+  readonly deferredComptimeExpressionCount: number;
+  readonly comptimeChangedBindingCount: number;
+  readonly specializationInputBindingCount: number;
+  readonly specializationDemandedBindingCount: number;
+  readonly specializationDiscardedBindingCount: number;
+  readonly specializationInputNodeCount: number;
+  readonly specializationDemandedInputNodeCount: number;
+  readonly specializationResidualNodeCount: number;
+  readonly specializationDistinctKeyCount: number;
+  readonly specializationCacheHitCount: number;
+  readonly specializationDistinctFunctionAnalysisCount: number;
+  readonly specializationRepeatedFunctionAnalysisCount: number;
+  readonly postSpecializationFrontierBindingCount: number;
+  readonly postSpecializationFrontierNodeCount: number;
+  readonly downstreamParallelFunctionCount: number;
+  readonly coreFunctionCount: number;
+  readonly coreBlockCount: number;
+  readonly coreOperationCount: number;
+  readonly flatCoreValueCount: number;
+  readonly gpuValidationRecordCount: number;
+  readonly gpuRewriteProposalCount: number;
+  readonly wasmAtomCount: number;
+  readonly wasmOutputBufferBytes: number;
+  readonly wasmBytes: number;
+  readonly backendFunctionAnalysisCount: number;
+  readonly backendFunctionReuseCount: number;
+  readonly gpuTypeSubmissionBatchSize: number;
+  readonly gpuTypePayloadBatchSize: number;
+  readonly gpuCoreSubmissionBatchSize: number;
+  readonly gpuCorePayloadBatchSize: number;
+  readonly gpuWasmSubmissionBatchSize: number;
+  readonly gpuWasmPayloadBatchSize: number;
+};
+
+export type DucklangCompilationProfile = {
+  readonly totalMilliseconds: number;
+  readonly accountedMilliseconds: number;
+  readonly unattributedMilliseconds: number;
+  readonly stages: DucklangCompilationStageTimings;
+  readonly details: DucklangCompilationTimingDetails;
+  readonly work: DucklangCompilationWork;
+};
+
 type SharedCompilationArtifact = {
   readonly wasm: Uint8Array;
   readonly fcg: FcgModule;
@@ -144,17 +302,59 @@ export type HaskellCompilationArtifact = SharedCompilationArtifact & {
 export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly language: "ducklang";
   readonly inferred: TypedDucklangModule;
+  readonly effectHir: TypedDucklangEffectModule;
   readonly core: DucklangCoreModule;
   readonly flatCore: FlatDucklangCore;
   readonly optimizedFlatCore: FlatDucklangCore;
   readonly optimizedCore: DucklangCoreModule;
   readonly gpuCoreResult: GpuDucklangCoreResult | undefined;
   readonly abi: DucklangManagedAbi;
+  readonly profile: DucklangCompilationProfile;
 };
 
 export type CompilationArtifact =
   | HaskellCompilationArtifact
   | DucklangCompilationArtifact;
+
+type DucklangDependencyIdentity = {
+  readonly importer: string;
+  readonly path: string;
+  readonly canonicalSource: string;
+  readonly sourceHash: string;
+};
+
+type CachedDucklangCompilation = {
+  readonly artifact: DucklangCompilationArtifact;
+  readonly dependencies: readonly DucklangDependencyIdentity[];
+};
+
+type CachedDucklangSourceRevision = {
+  expandedSource: string;
+  readonly parsedResult: Awaited<
+    ReturnType<typeof parseDucklangModuleWithTimings>
+  >;
+  readonly syntaxDependencyEnd: number;
+  readonly syntaxIdentity: unknown;
+  readonly semanticIdentities: Map<string, string>;
+};
+
+export type DucklangCompilationSession = {
+  readonly moduleInstances: DucklangModuleInstances<DucklangModule>;
+  readonly moduleSyntax: DucklangModuleSyntaxCache;
+  readonly backendFunctions: DucklangBackendFunctionCache;
+  readonly compilations: Map<string, CachedDucklangCompilation>;
+  readonly sourceRevisions: Map<string, CachedDucklangSourceRevision>;
+};
+
+export function createDucklangCompilationSession(): DucklangCompilationSession {
+  return {
+    moduleInstances: createDucklangModuleInstanceCache<DucklangModule>(),
+    moduleSyntax: createDucklangModuleSyntaxCache(),
+    backendFunctions: createDucklangBackendFunctionCache(),
+    compilations: new Map(),
+    sourceRevisions: new Map(),
+  };
+}
 
 export type DucklangModuleNormalizationArtifact = {
   readonly language: "ducklang";
@@ -191,6 +391,11 @@ export async function compileModuleSource(
       `hostInterface is available only for Ducklang compilation; received ${file}`,
     );
   }
+  if (options.session !== undefined) {
+    throw new TypeError(
+      `session is available only for Ducklang compilation; received ${file}`,
+    );
+  }
   return await compileHaskellModuleSource(file, source, options);
 }
 
@@ -216,7 +421,9 @@ async function compileHaskellModuleSource(
   const gpuTypeStart = performance.now();
   const gpuTypeResult = gpuMode === "off"
     ? undefined
-    : await solveTypeEqualitiesOnGpu(initialInference.equalities);
+    : await solveTypeEqualitiesOnGpu(initialInference.equalities, {
+      scheduling: options.gpuScheduling,
+    });
   const gpuTypeMilliseconds = performance.now() - gpuTypeStart;
   if (gpuTypeResult?.status === "constructorClash") {
     throw new TypeError(
@@ -257,7 +464,9 @@ async function compileHaskellModuleSource(
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
-    : await emitWasmPlanOnGpu(lowered.wasmPlan);
+    : await emitWasmPlanOnGpu(lowered.wasmPlan, {
+      scheduling: options.gpuScheduling,
+    });
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
   const wasm = selectWasmOutput(
     file,
@@ -331,7 +540,8 @@ export async function normalizeDucklangModuleSource(
   source: string,
   options: CompilationOptions = {},
 ): Promise<DucklangModuleNormalizationArtifact> {
-  const frontend = await elaborateDucklangModuleSource(file, source, options);
+  const prepared = await prepareDucklangModuleSource(file, source, options);
+  const frontend = await elaborateDucklangModuleSource(prepared, options);
   return {
     language: "ducklang",
     stage: "compileTimeModule",
@@ -342,14 +552,44 @@ export async function normalizeDucklangModuleSource(
   };
 }
 
+type PreparedDucklangSource = {
+  readonly file: string;
+  readonly source: string;
+  readonly expandedSource: string;
+  readonly parsedResult: Awaited<
+    ReturnType<typeof parseDucklangModuleWithTimings>
+  >;
+  readonly semanticIdentity: string;
+  readonly semanticFingerprintReused: boolean;
+  readonly revisionReuse: "none" | "exact" | "trailingTrivia";
+  readonly sourceExpansionMilliseconds: number;
+  readonly semanticContextMilliseconds: number;
+  readonly parsingMilliseconds: number;
+  readonly semanticFingerprintMilliseconds: number;
+  readonly parseMilliseconds: number;
+};
+
 type DucklangFrontendResult = {
   readonly module: TypedDucklangModule;
+  readonly effectHir: TypedDucklangEffectModule;
   readonly initialTypes: readonly string[];
   readonly gpuTypeResult: GpuSolveResult | undefined;
   readonly comptime: {
     readonly cpuValues: readonly ComptimeValue[];
     readonly gpu: ComptimeBatchResult | undefined;
+    readonly metrics: {
+      readonly expressionCount: number;
+      readonly functionExpressionCount: number;
+      readonly scalarJobCount: number;
+      readonly deferredExpressionCount: number;
+    };
   };
+  readonly profile: {
+    readonly stages: DucklangCompilationStageTimings;
+    readonly details: DucklangCompilationTimingDetails;
+    readonly work: DucklangCompilationWork;
+  };
+  readonly dependencies: readonly DucklangDependencyIdentity[];
   readonly timings: {
     readonly parseMilliseconds: number;
     readonly includeMilliseconds: number;
@@ -364,58 +604,405 @@ type DucklangFrontendResult = {
   };
 };
 
-async function elaborateDucklangModuleSource(
+async function prepareDucklangModuleSource(
   file: string,
   source: string,
   options: CompilationOptions,
-): Promise<DucklangFrontendResult> {
-  const gpuMode = options.gpuMode ?? "auto";
+): Promise<PreparedDucklangSource> {
   const parseStart = performance.now();
   const includeStart = performance.now();
   const expandedSource = await expandDucklangIncludes(file, source);
-  const includeMilliseconds = performance.now() - includeStart;
-  const parsedResult = await parseDucklangModuleWithTimings(
+  const sourceExpansionMilliseconds = performance.now() - includeStart;
+
+  const semanticContextStart = performance.now();
+  let hostInterfaceIdentity: unknown;
+  if (options.hostInterface !== undefined) {
+    try {
+      const canonicalHost = await Deno.realPath(options.hostInterface);
+      const hostSource = await expandDucklangIncludes(
+        canonicalHost,
+        await Deno.readTextFile(canonicalHost),
+      );
+      hostInterfaceIdentity = {
+        canonicalHost,
+        sourceHash: await ducklangSourceHash(hostSource),
+      };
+    } catch (cause) {
+      throw new TypeError(
+        `${file}: cannot resolve Ducklang host interface ${
+          JSON.stringify(options.hostInterface)
+        }`,
+        { cause },
+      );
+    }
+  }
+  const semanticContextIdentity = contentIdentity({
+    schema: 1,
     file,
+    hostInterface: hostInterfaceIdentity,
+    gpuMode: options.gpuMode ?? "auto",
+    gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+  });
+  const semanticContextMilliseconds = performance.now() -
+    semanticContextStart;
+
+  const parsingStart = performance.now();
+  const previousRevision = options.session?.sourceRevisions.get(file);
+  const revisionReuse = previousRevision === undefined
+    ? "none"
+    : ducklangRevisionReuse(previousRevision, expandedSource);
+  const parsedResult = revisionReuse === "none"
+    ? await parseDucklangModuleWithTimings(file, expandedSource)
+    : {
+      module: previousRevision!.parsedResult.module,
+      timings: {
+        parserInitializationMilliseconds: 0,
+        contextualClassificationMilliseconds: 0,
+        parserExecutionMilliseconds: 0,
+        syntaxMilliseconds: 0,
+        astLoweringMilliseconds: 0,
+      },
+    };
+  const parsingMilliseconds = revisionReuse === "none"
+    ? performance.now() - parsingStart
+    : 0;
+
+  const semanticFingerprintStart = performance.now();
+  const syntaxFingerprint = revisionReuse === "none"
+    ? ducklangSyntaxFingerprint(parsedResult.module, expandedSource)
+    : {
+      identity: previousRevision!.syntaxIdentity,
+      dependencyEnd: previousRevision!.syntaxDependencyEnd,
+    };
+  const semanticIdentities = revisionReuse === "none"
+    ? new Map<string, string>()
+    : previousRevision!.semanticIdentities;
+  let semanticIdentity = semanticIdentities.get(semanticContextIdentity);
+  const semanticFingerprintReused = semanticIdentity !== undefined;
+  if (semanticIdentity === undefined) {
+    semanticIdentity = contentIdentity({
+      schema: 1,
+      file,
+      module: syntaxFingerprint.identity,
+      hostInterface: hostInterfaceIdentity,
+      gpuMode: options.gpuMode ?? "auto",
+      gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+    });
+    semanticIdentities.set(semanticContextIdentity, semanticIdentity);
+  }
+  const semanticFingerprintMilliseconds = performance.now() -
+    semanticFingerprintStart;
+  if (options.session !== undefined) {
+    options.session.sourceRevisions.set(file, {
+      expandedSource,
+      parsedResult,
+      syntaxDependencyEnd: syntaxFingerprint.dependencyEnd,
+      syntaxIdentity: syntaxFingerprint.identity,
+      semanticIdentities,
+    });
+  }
+
+  return {
+    file,
+    source,
     expandedSource,
+    parsedResult,
+    semanticIdentity,
+    semanticFingerprintReused,
+    revisionReuse,
+    sourceExpansionMilliseconds,
+    semanticContextMilliseconds,
+    parsingMilliseconds,
+    semanticFingerprintMilliseconds: semanticFingerprintReused
+      ? 0
+      : semanticFingerprintMilliseconds,
+    parseMilliseconds: performance.now() - parseStart,
+  };
+}
+
+function ducklangRevisionReuse(
+  revision: CachedDucklangSourceRevision,
+  expandedSource: string,
+): "none" | "exact" | "trailingTrivia" {
+  if (revision.expandedSource === expandedSource) return "exact";
+  const dependencyEnd = revision.syntaxDependencyEnd;
+  if (
+    dependencyEnd > revision.expandedSource.length ||
+    dependencyEnd > expandedSource.length ||
+    revision.expandedSource.slice(0, dependencyEnd) !==
+      expandedSource.slice(0, dependencyEnd) ||
+    !isDucklangTrivia(revision.expandedSource.slice(dependencyEnd)) ||
+    !isDucklangTrivia(expandedSource.slice(dependencyEnd))
+  ) {
+    return "none";
+  }
+  revision.expandedSource = expandedSource;
+  return "trailingTrivia";
+}
+
+function isDucklangTrivia(source: string): boolean {
+  for (let index = 0; index < source.length; index += 1) {
+    if (/\s/.test(source[index])) continue;
+    if (source[index] !== "/" || source[index + 1] !== "/") return false;
+    index += 2;
+    while (
+      index < source.length &&
+      source[index] !== "\n" &&
+      source[index] !== "\r"
+    ) {
+      index += 1;
+    }
+  }
+  return true;
+}
+
+function ducklangSyntaxFingerprint(
+  module: DucklangModule,
+  source: string,
+): {
+  readonly identity: unknown;
+  readonly dependencyEnd: number;
+} {
+  const normalized = normalizeDucklangSyntaxNode(module);
+  return {
+    identity: normalized.value,
+    dependencyEnd: ducklangSyntaxDependencyEnd(source),
+  };
+}
+
+function ducklangSyntaxDependencyEnd(source: string): number {
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let lineComment = false;
+  let dependencyEnd = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (lineComment) {
+      if (character === "\n" || character === "\r") lineComment = false;
+      continue;
+    }
+    if (quote !== undefined) {
+      dependencyEnd = index + 1;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      dependencyEnd = index + 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (!/\s/.test(character)) dependencyEnd = index + 1;
+  }
+  return dependencyEnd;
+}
+
+function normalizeDucklangSyntaxNode(value: unknown): {
+  readonly value: unknown;
+  readonly lastSourceEnd: number | undefined;
+} {
+  if (value === null || typeof value !== "object") {
+    return { value, lastSourceEnd: undefined };
+  }
+  if (Array.isArray(value)) {
+    const elements = value.map(normalizeDucklangSyntaxNode);
+    return {
+      value: elements.map((element) => element.value),
+      lastSourceEnd: maximumSourceEnd(
+        elements.map((element) => element.lastSourceEnd),
+      ),
+    };
+  }
+
+  const record = value as Readonly<Record<string, unknown>>;
+  const span = isSourceSpan(record.span) ? record.span : undefined;
+  const entries = Object.entries(record)
+    .filter(([key]) => key !== "span")
+    .map(([key, entryValue]) =>
+      [
+        key,
+        normalizeDucklangSyntaxNode(entryValue),
+      ] as const
+    );
+  const descendantEnd = maximumSourceEnd(
+    entries.map(([, entry]) => entry.lastSourceEnd),
   );
+  const normalized = Object.fromEntries(
+    entries.map(([key, entry]) => [key, entry.value]),
+  );
+  if (span !== undefined) {
+    normalized.span = {
+      file: span.file,
+      start: span.start,
+      end: descendantEnd ?? span.end,
+    };
+  }
+  return {
+    value: normalized,
+    lastSourceEnd: descendantEnd ?? span?.end,
+  };
+}
+
+function maximumSourceEnd(
+  candidates: readonly (number | undefined)[],
+): number | undefined {
+  const ends = candidates.filter((candidate): candidate is number =>
+    candidate !== undefined
+  );
+  return ends.length === 0 ? undefined : Math.max(...ends);
+}
+
+function isSourceSpan(value: unknown): value is {
+  readonly file: string;
+  readonly start: number;
+  readonly end: number;
+} {
+  return typeof value === "object" && value !== null &&
+    "file" in value && typeof value.file === "string" &&
+    "start" in value && typeof value.start === "number" &&
+    "end" in value && typeof value.end === "number";
+}
+
+async function elaborateDucklangModuleSource(
+  prepared: PreparedDucklangSource,
+  options: CompilationOptions,
+): Promise<DucklangFrontendResult> {
+  const {
+    expandedSource,
+    file,
+    parsedResult,
+    source,
+    sourceExpansionMilliseconds,
+    semanticContextMilliseconds,
+    parsingMilliseconds,
+    semanticFingerprintMilliseconds,
+    semanticFingerprintReused,
+    revisionReuse,
+  } = prepared;
+  const gpuMode = options.gpuMode ?? "auto";
   const parsedSource = parsedResult.module;
+
   const elaborationStart = performance.now();
-  const parsedWithHost = options.hostInterface === undefined
-    ? parsedSource
-    : await applyDucklangHostInterface(parsedSource, options.hostInterface);
+  let parsedWithHost = parsedSource;
+  let hostInterfaceMilliseconds = 0;
+  if (options.hostInterface !== undefined) {
+    const hostInterfaceStart = performance.now();
+    parsedWithHost = await applyDucklangHostInterface(
+      parsedSource,
+      options.hostInterface,
+    );
+    hostInterfaceMilliseconds = performance.now() - hostInterfaceStart;
+  }
+
+  const sourceTestElaborationStart = performance.now();
+  const withSourceTests = elaborateDucklangSourceTests(parsedWithHost);
+  const sourceTestElaborationMilliseconds = performance.now() -
+    sourceTestElaborationStart;
+
+  const localImportResolutionStart = performance.now();
+  const moduleInstances = options.session?.moduleInstances ??
+    createDucklangModuleInstanceCache<DucklangModule>();
+  const moduleSyntax = options.session?.moduleSyntax ??
+    createDucklangModuleSyntaxCache();
+  const moduleAnalysesBefore = moduleInstances.analyses;
+  const moduleReusesBefore = moduleInstances.reuses;
+  const moduleSyntaxAnalysesBefore = moduleSyntax.analyses;
+  const moduleSyntaxReusesBefore = moduleSyntax.reuses;
+  let moduleGraph: DucklangModuleGraph | undefined;
   const linked = await resolveDucklangLocalImports(
-    elaborateDucklangSourceTests(parsedWithHost),
+    withSourceTests,
     expandedSource,
+    {
+      instances: moduleInstances,
+      syntaxCache: moduleSyntax,
+      onModuleGraph: (graph) => {
+        moduleGraph = graph;
+      },
+    },
   );
+  const localImportResolutionMilliseconds = performance.now() -
+    localImportResolutionStart;
+
   // Nominal type identity must be unambiguous before any pass looks a type up by
   // name, so this runs on the fully linked program and ahead of elaboration.
+  const typeQualificationStart = performance.now();
   const qualified = qualifyDucklangTypeCollisions(linked);
+  const typeQualificationMilliseconds = performance.now() -
+    typeQualificationStart;
+
   // Ahead of static loop expansion, which would otherwise fold a
   // constant-conditioned loop away before its exits can be checked.
+  const loopExitValidationStart = performance.now();
   requireConsistentDucklangLoopExits(qualified.module.statements);
-  const parsed = lowerDucklangControlFlow(
-    expandStaticDucklangLoops(
-      elaborateDucklangExtensions(
-        elaborateDucklangDerivations(
-          elaborateDucklangHandlers(
-            validateDucklangOwnership(
-              lowerDucklangModuleExports(qualified.module),
-            ),
-          ),
-        ),
-      ),
-    ),
+  const loopExitValidationMilliseconds = performance.now() -
+    loopExitValidationStart;
+
+  const moduleExportLoweringStart = performance.now();
+  const withLoweredExports = lowerDucklangModuleExports(qualified.module);
+  const moduleExportLoweringMilliseconds = performance.now() -
+    moduleExportLoweringStart;
+
+  const ownershipValidationStart = performance.now();
+  const withValidatedOwnership = validateDucklangOwnership(withLoweredExports);
+  const ownershipValidationMilliseconds = performance.now() -
+    ownershipValidationStart;
+
+  const derivationElaborationStart = performance.now();
+  const withElaboratedDerivations = elaborateDucklangDerivations(
+    withValidatedOwnership,
   );
+  const derivationElaborationMilliseconds = performance.now() -
+    derivationElaborationStart;
+
+  const extensionElaborationStart = performance.now();
+  const withElaboratedExtensions = elaborateDucklangExtensions(
+    withElaboratedDerivations,
+  );
+  const extensionElaborationMilliseconds = performance.now() -
+    extensionElaborationStart;
+
+  const staticLoopExpansionStart = performance.now();
+  const withExpandedStaticLoops = expandStaticDucklangLoops(
+    withElaboratedExtensions,
+  );
+  const staticLoopExpansionMilliseconds = performance.now() -
+    staticLoopExpansionStart;
+
+  const controlFlowLoweringStart = performance.now();
+  const parsed = lowerDucklangControlFlow(withExpandedStaticLoops);
+  const controlFlowLoweringMilliseconds = performance.now() -
+    controlFlowLoweringStart;
+
   const elaborationMilliseconds = performance.now() - elaborationStart;
-  const parseMilliseconds = performance.now() - parseStart;
 
   const resolutionStart = performance.now();
   const resolved = resolveDucklangModule(parsed);
   const resolutionMilliseconds = performance.now() - resolutionStart;
+
   const initialTypeStart = performance.now();
-  const initialInference = reflectDucklangTypes(
-    inferDucklangModule(resolved),
+  const typeInferenceStart = performance.now();
+  const effectHir = validateDucklangEffectOwnership(
+    inferDucklangEffectModule(resolved),
   );
+  const typeInferenceMilliseconds = performance.now() - typeInferenceStart;
+
+  const handlerElaborationStart = performance.now();
+  const effectLowering = lowerDucklangEffectsStructurally(effectHir);
+  const handlerElaborationMilliseconds = performance.now() -
+    handlerElaborationStart;
+  const typeReflectionStart = performance.now();
+  const initialInference = reflectDucklangTypes(effectLowering.module);
+  const typeReflectionMilliseconds = performance.now() - typeReflectionStart;
   const initialTypeMilliseconds = performance.now() - initialTypeStart;
   const initialTypes = initialInference.bindings.map((binding) =>
     `${binding.symbol.text}#${binding.symbol.id} :: ${
@@ -442,10 +1029,15 @@ async function elaborateDucklangModuleSource(
     throw new Error(gpuTypeResult.reason);
   }
 
-  const comptimeStart = performance.now();
-  const staticallySpecialized = specializeStaticDucklangClosures(
+  const preComptimeSpecializationStart = performance.now();
+  const preComptimeSpecialization = specializeStaticDucklangClosures(
     initialInference,
   );
+  const staticallySpecialized = preComptimeSpecialization.module;
+  const preComptimeSpecializationMilliseconds = performance.now() -
+    preComptimeSpecializationStart;
+
+  const comptimeStart = performance.now();
   const comptime = await evaluateDucklangComptime(
     staticallySpecialized,
     gpuMode !== "off",
@@ -455,14 +1047,228 @@ async function elaborateDucklangModuleSource(
   }
   const comptimeMilliseconds = performance.now() - comptimeStart;
 
+  const comptimeChanged = comptime.changedBindingSymbols.size > 0 ||
+    comptime.resultChanged;
+  const postComptimeSpecializationStart = comptimeChanged
+    ? performance.now()
+    : 0;
+  const postComptimeSpecialization = comptimeChanged
+    ? specializeStaticDucklangClosures(
+      comptime.module,
+      {
+        changedBindingSymbols: comptime.changedBindingSymbols,
+        resultChanged: comptime.resultChanged,
+      },
+    )
+    : undefined;
+  const postComptimeSpecializationMilliseconds =
+    postComptimeSpecialization === undefined
+      ? 0
+      : performance.now() - postComptimeSpecializationStart;
+  const specialized = postComptimeSpecialization?.module ?? comptime.module;
+
   return {
-    module: specializeStaticDucklangClosures(comptime.module),
+    module: specialized,
+    effectHir,
     initialTypes,
     gpuTypeResult,
     comptime,
+    profile: {
+      stages: {
+        sourceExpansionMilliseconds,
+        semanticContextMilliseconds,
+        parsingMilliseconds,
+        semanticFingerprintMilliseconds,
+        semanticReuseValidationMilliseconds: 0,
+        elaborationMilliseconds,
+        resolutionMilliseconds,
+        typeAnalysisMilliseconds: initialTypeMilliseconds,
+        gpuTypeSolveMilliseconds: gpuMode === "off" ? 0 : gpuTypeMilliseconds,
+        preComptimeSpecializationMilliseconds,
+        comptimeMilliseconds,
+        postComptimeSpecializationMilliseconds,
+        coreLoweringMilliseconds: 0,
+        coreFlatteningMilliseconds: 0,
+        gpuCorePassMilliseconds: 0,
+        cpuCoreRewriteMilliseconds: 0,
+        coreInflationMilliseconds: 0,
+        wasmPlanningAndCpuEmissionMilliseconds: 0,
+        gpuWasmEmissionMilliseconds: 0,
+        wasmSelectionMilliseconds: 0,
+        abiConstructionMilliseconds: 0,
+        wasmValidationMilliseconds: 0,
+        artifactValidationMilliseconds: 0,
+      },
+      details: {
+        parserInitializationMilliseconds:
+          parsedResult.timings.parserInitializationMilliseconds,
+        contextualClassificationMilliseconds:
+          parsedResult.timings.contextualClassificationMilliseconds,
+        parserExecutionMilliseconds:
+          parsedResult.timings.parserExecutionMilliseconds,
+        syntaxMilliseconds: parsedResult.timings.syntaxMilliseconds,
+        astLoweringMilliseconds: parsedResult.timings.astLoweringMilliseconds,
+        hostInterfaceMilliseconds,
+        sourceTestElaborationMilliseconds,
+        localImportResolutionMilliseconds,
+        typeQualificationMilliseconds,
+        loopExitValidationMilliseconds,
+        moduleExportLoweringMilliseconds,
+        ownershipValidationMilliseconds,
+        handlerElaborationMilliseconds,
+        derivationElaborationMilliseconds,
+        extensionElaborationMilliseconds,
+        staticLoopExpansionMilliseconds,
+        controlFlowLoweringMilliseconds,
+        typeInferenceMilliseconds,
+        typeReflectionMilliseconds,
+        preSpecializationDemandMilliseconds:
+          preComptimeSpecialization.timings.demandMilliseconds,
+        preSpecializationFrontierMilliseconds:
+          preComptimeSpecialization.timings.frontierMilliseconds,
+        preSpecializationRewriteMilliseconds:
+          preComptimeSpecialization.timings.rewriteMilliseconds,
+        preSpecializationLiftingMilliseconds:
+          preComptimeSpecialization.timings.liftingMilliseconds,
+        preSpecializationReachabilityMilliseconds:
+          preComptimeSpecialization.timings.reachabilityMilliseconds,
+        preSpecializationAccountingMilliseconds:
+          preComptimeSpecialization.timings.accountingMilliseconds,
+        postSpecializationDemandMilliseconds:
+          postComptimeSpecialization?.timings.demandMilliseconds ?? 0,
+        postSpecializationFrontierMilliseconds:
+          postComptimeSpecialization?.timings.frontierMilliseconds ?? 0,
+        postSpecializationRewriteMilliseconds:
+          postComptimeSpecialization?.timings.rewriteMilliseconds ?? 0,
+        postSpecializationLiftingMilliseconds:
+          postComptimeSpecialization?.timings.liftingMilliseconds ?? 0,
+        postSpecializationReachabilityMilliseconds:
+          postComptimeSpecialization?.timings.reachabilityMilliseconds ?? 0,
+        postSpecializationAccountingMilliseconds:
+          postComptimeSpecialization?.timings.accountingMilliseconds ?? 0,
+        gpuCoreInitializationMilliseconds: 0,
+        gpuTypeQueueWaitMilliseconds: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.queueWaitMilliseconds ?? 0
+          : 0,
+        gpuCoreQueueWaitMilliseconds: 0,
+        gpuWasmQueueWaitMilliseconds: 0,
+        gpuCoreExecutionMilliseconds: 0,
+        gpuCoreTransferMilliseconds: 0,
+        gpuCoreCommitMilliseconds: 0,
+      },
+      work: {
+        sourceBytes: new TextEncoder().encode(source).byteLength,
+        expandedSourceBytes:
+          new TextEncoder().encode(expandedSource).byteLength,
+        parsedStatementCount: parsedSource.statements.length,
+        linkedStatementCount: linked.statements.length,
+        moduleAnalysisCount: moduleInstances.analyses - moduleAnalysesBefore,
+        moduleReuseCount: moduleInstances.reuses - moduleReusesBefore,
+        moduleSyntaxAnalysisCount: moduleSyntax.analyses -
+          moduleSyntaxAnalysesBefore,
+        moduleSyntaxReuseCount: moduleSyntax.reuses -
+          moduleSyntaxReusesBefore,
+        semanticArtifactReuseCount: 0,
+        exactSourceRevisionReuseCount: revisionReuse === "exact" ? 1 : 0,
+        trailingTriviaRevisionReuseCount: revisionReuse === "trailingTrivia"
+          ? 1
+          : 0,
+        syntaxAnalysisCount: revisionReuse === "none" ? 1 : 0,
+        semanticFingerprintReuseCount: semanticFingerprintReused ? 1 : 0,
+        typedBindingCount: initialInference.bindings.length,
+        typeEqualityCount: initialInference.equalities.length,
+        effectRowMembershipCount: initialInference.bindings.reduce(
+          (total, binding) =>
+            total + binding.latentEffectRow.operations.length +
+            binding.latentEffectRow.parameterEffects.length,
+          0,
+        ),
+        capabilityOperandCount: effectLowering.metrics.capabilityOperandCount,
+        rootCapabilityCount: new Set(
+          initialInference.requiredEffects.map((effect) => effect.effectName),
+        ).size,
+        directStatePassingRegionCount:
+          effectLowering.metrics.directStatePassingRegionCount,
+        directStatePassingFunctionCount:
+          effectLowering.metrics.directStatePassingFunctionCount,
+        cpsTransformedRegionCount:
+          effectLowering.metrics.cpsTransformedRegionCount,
+        cpsTransformedFunctionCount:
+          effectLowering.metrics.cpsTransformedFunctionCount,
+        handledPerformanceCount: effectLowering.metrics.handledPerformanceCount,
+        continuationCaptureCount:
+          effectLowering.metrics.continuationCaptureCount,
+        comptimeExpressionCount: comptime.metrics.expressionCount,
+        functionComptimeExpressionCount:
+          comptime.metrics.functionExpressionCount,
+        scalarComptimeJobCount: comptime.metrics.scalarJobCount,
+        deferredComptimeExpressionCount:
+          comptime.metrics.deferredExpressionCount,
+        comptimeChangedBindingCount: comptime.metrics.changedBindingCount,
+        specializationInputBindingCount:
+          preComptimeSpecialization.metrics.inputBindingCount,
+        specializationDemandedBindingCount:
+          preComptimeSpecialization.metrics.demandedBindingCount,
+        specializationDiscardedBindingCount:
+          preComptimeSpecialization.metrics.inputBindingCount -
+          preComptimeSpecialization.metrics.demandedBindingCount,
+        specializationInputNodeCount:
+          preComptimeSpecialization.metrics.inputNodeCount,
+        specializationDemandedInputNodeCount:
+          preComptimeSpecialization.metrics.demandedInputNodeCount,
+        specializationResidualNodeCount:
+          postComptimeSpecialization?.metrics.residualNodeCount ??
+            preComptimeSpecialization.metrics.residualNodeCount,
+        specializationDistinctKeyCount:
+          preComptimeSpecialization.metrics.distinctSpecializationKeyCount +
+          (postComptimeSpecialization?.metrics
+            .distinctSpecializationKeyCount ?? 0),
+        specializationCacheHitCount:
+          preComptimeSpecialization.metrics.specializationCacheHitCount +
+          (postComptimeSpecialization?.metrics.specializationCacheHitCount ??
+            0),
+        specializationDistinctFunctionAnalysisCount:
+          preComptimeSpecialization.metrics.distinctFunctionAnalysisCount +
+          (postComptimeSpecialization?.metrics.distinctFunctionAnalysisCount ??
+            0),
+        specializationRepeatedFunctionAnalysisCount:
+          preComptimeSpecialization.metrics.repeatedFunctionAnalysisCount +
+          (postComptimeSpecialization?.metrics.repeatedFunctionAnalysisCount ??
+            0),
+        postSpecializationFrontierBindingCount:
+          postComptimeSpecialization?.metrics.rewrittenBindingCount ?? 0,
+        postSpecializationFrontierNodeCount:
+          postComptimeSpecialization?.metrics.rewrittenInputNodeCount ?? 0,
+        downstreamParallelFunctionCount: 0,
+        coreFunctionCount: 0,
+        coreBlockCount: 0,
+        coreOperationCount: 0,
+        flatCoreValueCount: 0,
+        gpuValidationRecordCount: 0,
+        gpuRewriteProposalCount: 0,
+        wasmAtomCount: 0,
+        wasmOutputBufferBytes: 0,
+        wasmBytes: 0,
+        backendFunctionAnalysisCount: 0,
+        backendFunctionReuseCount: 0,
+        gpuTypeSubmissionBatchSize: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.submissionBatchSize ?? 0
+          : 0,
+        gpuTypePayloadBatchSize: gpuTypeResult?.status === "solved"
+          ? gpuTypeResult.payloadBatchSize ?? 0
+          : 0,
+        gpuCoreSubmissionBatchSize: 0,
+        gpuCorePayloadBatchSize: 0,
+        gpuWasmSubmissionBatchSize: 0,
+        gpuWasmPayloadBatchSize: 0,
+      },
+    },
+    dependencies: moduleGraph === undefined
+      ? []
+      : ducklangDependencyIdentities(moduleGraph),
     timings: {
-      parseMilliseconds,
-      includeMilliseconds,
+      parseMilliseconds: prepared.parseMilliseconds,
+      includeMilliseconds: sourceExpansionMilliseconds,
       parserInitializationMilliseconds:
         parsedResult.timings.parserInitializationMilliseconds,
       syntaxMilliseconds: parsedResult.timings.syntaxMilliseconds,
@@ -481,19 +1287,206 @@ async function compileDucklangModuleSource(
   source: string,
   options: CompilationOptions,
 ): Promise<DucklangCompilationArtifact> {
+  const compilationStart = performance.now();
   const gpuMode = options.gpuMode ?? "auto";
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
-  const frontend = await elaborateDucklangModuleSource(file, source, options);
+  const prepared = await prepareDucklangModuleSource(file, source, options);
+  let semanticReuseValidationMilliseconds = 0;
+  const cachedCompilation = options.session?.compilations.get(
+    prepared.semanticIdentity,
+  );
+  if (cachedCompilation !== undefined) {
+    const semanticReuseValidationStart = performance.now();
+    const sourceProvider = createDucklangFilesystemSourceProvider();
+    const dependencyMatches = await Promise.all(
+      cachedCompilation.dependencies.map(async (dependency) => {
+        try {
+          const resolved = await sourceProvider.resolve(
+            {
+              canonicalSource: dependency.importer,
+              file: dependency.importer,
+              source: "",
+            },
+            dependency.path,
+            {
+              file: dependency.importer,
+              start: 0,
+              end: 0,
+            },
+          );
+          return resolved.canonicalSource === dependency.canonicalSource &&
+            await ducklangSourceHash(resolved.source) === dependency.sourceHash;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    const dependenciesMatch = dependencyMatches.every(Boolean);
+    semanticReuseValidationMilliseconds = performance.now() -
+      semanticReuseValidationStart;
+    if (dependenciesMatch) {
+      const stages: DucklangCompilationStageTimings = {
+        sourceExpansionMilliseconds: prepared.sourceExpansionMilliseconds,
+        semanticContextMilliseconds: prepared.semanticContextMilliseconds,
+        parsingMilliseconds: prepared.parsingMilliseconds,
+        semanticFingerprintMilliseconds:
+          prepared.semanticFingerprintMilliseconds,
+        semanticReuseValidationMilliseconds,
+        elaborationMilliseconds: 0,
+        resolutionMilliseconds: 0,
+        typeAnalysisMilliseconds: 0,
+        gpuTypeSolveMilliseconds: 0,
+        preComptimeSpecializationMilliseconds: 0,
+        comptimeMilliseconds: 0,
+        postComptimeSpecializationMilliseconds: 0,
+        coreLoweringMilliseconds: 0,
+        coreFlatteningMilliseconds: 0,
+        gpuCorePassMilliseconds: 0,
+        cpuCoreRewriteMilliseconds: 0,
+        coreInflationMilliseconds: 0,
+        wasmPlanningAndCpuEmissionMilliseconds: 0,
+        gpuWasmEmissionMilliseconds: 0,
+        wasmSelectionMilliseconds: 0,
+        abiConstructionMilliseconds: 0,
+        wasmValidationMilliseconds: 0,
+        artifactValidationMilliseconds: 0,
+      };
+      const accountedMilliseconds = Object.values(stages).reduce(
+        (total, milliseconds) => total + milliseconds,
+        0,
+      );
+      const totalMilliseconds = performance.now() - compilationStart;
+      const previous = cachedCompilation.artifact;
+      return {
+        ...previous,
+        profile: {
+          totalMilliseconds,
+          accountedMilliseconds,
+          unattributedMilliseconds: totalMilliseconds -
+            accountedMilliseconds,
+          stages,
+          details: {
+            parserInitializationMilliseconds:
+              prepared.parsedResult.timings.parserInitializationMilliseconds,
+            contextualClassificationMilliseconds: prepared.parsedResult.timings
+              .contextualClassificationMilliseconds,
+            parserExecutionMilliseconds:
+              prepared.parsedResult.timings.parserExecutionMilliseconds,
+            syntaxMilliseconds:
+              prepared.parsedResult.timings.syntaxMilliseconds,
+            astLoweringMilliseconds:
+              prepared.parsedResult.timings.astLoweringMilliseconds,
+            hostInterfaceMilliseconds: 0,
+            sourceTestElaborationMilliseconds: 0,
+            localImportResolutionMilliseconds: 0,
+            typeQualificationMilliseconds: 0,
+            loopExitValidationMilliseconds: 0,
+            moduleExportLoweringMilliseconds: 0,
+            ownershipValidationMilliseconds: 0,
+            handlerElaborationMilliseconds: 0,
+            derivationElaborationMilliseconds: 0,
+            extensionElaborationMilliseconds: 0,
+            staticLoopExpansionMilliseconds: 0,
+            controlFlowLoweringMilliseconds: 0,
+            typeInferenceMilliseconds: 0,
+            typeReflectionMilliseconds: 0,
+            preSpecializationDemandMilliseconds: 0,
+            preSpecializationFrontierMilliseconds: 0,
+            preSpecializationRewriteMilliseconds: 0,
+            preSpecializationLiftingMilliseconds: 0,
+            preSpecializationReachabilityMilliseconds: 0,
+            preSpecializationAccountingMilliseconds: 0,
+            postSpecializationDemandMilliseconds: 0,
+            postSpecializationFrontierMilliseconds: 0,
+            postSpecializationRewriteMilliseconds: 0,
+            postSpecializationLiftingMilliseconds: 0,
+            postSpecializationReachabilityMilliseconds: 0,
+            postSpecializationAccountingMilliseconds: 0,
+            gpuCoreInitializationMilliseconds: 0,
+            gpuTypeQueueWaitMilliseconds: 0,
+            gpuCoreQueueWaitMilliseconds: 0,
+            gpuWasmQueueWaitMilliseconds: 0,
+            gpuCoreExecutionMilliseconds: 0,
+            gpuCoreTransferMilliseconds: 0,
+            gpuCoreCommitMilliseconds: 0,
+          },
+          work: {
+            ...previous.profile.work,
+            sourceBytes: new TextEncoder().encode(source).byteLength,
+            expandedSourceBytes: new TextEncoder().encode(
+              prepared.expandedSource,
+            ).byteLength,
+            moduleAnalysisCount: 0,
+            moduleReuseCount: 0,
+            moduleSyntaxAnalysisCount: 0,
+            moduleSyntaxReuseCount: 0,
+            semanticArtifactReuseCount: 1,
+            exactSourceRevisionReuseCount: prepared.revisionReuse === "exact"
+              ? 1
+              : 0,
+            trailingTriviaRevisionReuseCount:
+              prepared.revisionReuse === "trailingTrivia" ? 1 : 0,
+            syntaxAnalysisCount: prepared.revisionReuse === "none" ? 1 : 0,
+            semanticFingerprintReuseCount: prepared.semanticFingerprintReused
+              ? 1
+              : 0,
+            backendFunctionAnalysisCount: 0,
+            backendFunctionReuseCount: 0,
+            gpuTypeSubmissionBatchSize: 0,
+            gpuTypePayloadBatchSize: 0,
+            gpuCoreSubmissionBatchSize: 0,
+            gpuCorePayloadBatchSize: 0,
+            gpuWasmSubmissionBatchSize: 0,
+            gpuWasmPayloadBatchSize: 0,
+          },
+        },
+        timings: {
+          ...previous.timings,
+          parseMilliseconds: prepared.parseMilliseconds,
+          includeMilliseconds: prepared.sourceExpansionMilliseconds,
+          parserInitializationMilliseconds:
+            prepared.parsedResult.timings.parserInitializationMilliseconds,
+          syntaxMilliseconds: prepared.parsedResult.timings.syntaxMilliseconds,
+          astLoweringMilliseconds:
+            prepared.parsedResult.timings.astLoweringMilliseconds,
+          elaborationMilliseconds: 0,
+          resolutionMilliseconds: 0,
+          initialTypeMilliseconds: 0,
+          gpuTypeMilliseconds: 0,
+          comptimeMilliseconds: 0,
+          coreMilliseconds: 0,
+          flatCoreMilliseconds: 0,
+          cpuCoreRewriteMilliseconds: 0,
+          gpuCoreInitializationMilliseconds: 0,
+          gpuCoreMilliseconds: 0,
+          gpuCoreTransferMilliseconds: 0,
+          gpuCoreCommitMilliseconds: 0,
+          wasmMilliseconds: 0,
+          gpuWasmMilliseconds: 0,
+        },
+      };
+    }
+  }
+
+  const frontend = await elaborateDucklangModuleSource(prepared, options);
   const specialized = frontend.module;
   const coreStart = performance.now();
   const core = lowerDucklangToCore(specialized);
+  const effectClosed = closeDucklangEffectBoundary(specialized, core);
   const coreMilliseconds = performance.now() - coreStart;
   const flatCoreStart = performance.now();
   const flatCore = flattenDucklangCore(core);
   const flatCoreMilliseconds = performance.now() - flatCoreStart;
+
+  const gpuCorePassStart = performance.now();
   const gpuCoreResult = gpuMode === "off"
     ? undefined
-    : await runDucklangCoreGpuPass(flatCore);
+    : await runDucklangCoreGpuPass(flatCore, {
+      scheduling: options.gpuScheduling,
+    });
+  const gpuCorePassMilliseconds = gpuMode === "off"
+    ? 0
+    : performance.now() - gpuCorePassStart;
   if (gpuCoreResult?.status === "unavailable" && gpuMode === "required") {
     throw new Error(gpuCoreResult.reason);
   }
@@ -511,19 +1504,31 @@ async function compileDucklangModuleSource(
     optimizedFlatCore = rewriteFlatDucklangCore(flatCore).package;
     cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
   }
+
+  const coreInflationStart = performance.now();
   const optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
+  const coreInflationMilliseconds = performance.now() - coreInflationStart;
+
   const wasmStart = performance.now();
+  const backendFunctions = options.session?.backendFunctions;
+  const backendFunctionAnalysesBefore = backendFunctions?.analyses ?? 0;
+  const backendFunctionReusesBefore = backendFunctions?.reuses ?? 0;
   const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore, {
     emission: gpuMode === "off" || gpuWasmVerification === "differential"
       ? "cpu"
       : "planOnly",
+    functions: backendFunctions,
   });
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
-    : await emitWasmPlanOnGpu(lowered.wasmPlan);
+    : await emitWasmPlanOnGpu(lowered.wasmPlan, {
+      scheduling: options.gpuScheduling,
+    });
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
+
+  const wasmSelectionStart = performance.now();
   const wasm = selectWasmOutput(
     file,
     lowered.wasm,
@@ -532,21 +1537,134 @@ async function compileDucklangModuleSource(
     gpuMode,
     gpuWasmVerification,
   );
-  const abi = createDucklangManagedAbi(specialized, lowered.textLiterals);
+  const wasmSelectionMilliseconds = performance.now() - wasmSelectionStart;
+
+  const abiConstructionStart = performance.now();
+  const abi = createDucklangManagedAbi(effectClosed, lowered.textLiterals);
+  const abiConstructionMilliseconds = performance.now() -
+    abiConstructionStart;
+
+  const wasmValidationStart = performance.now();
   const wasmModule = validateSelectedWasm(file, wasm);
+  const wasmValidationMilliseconds = performance.now() - wasmValidationStart;
+
+  const artifactValidationStart = performance.now();
   validateDucklangManagedArtifact(file, wasmModule, abi);
-  return {
+  const artifactValidationMilliseconds = performance.now() -
+    artifactValidationStart;
+
+  const stages: DucklangCompilationStageTimings = {
+    ...frontend.profile.stages,
+    semanticReuseValidationMilliseconds,
+    coreLoweringMilliseconds: coreMilliseconds,
+    coreFlatteningMilliseconds: flatCoreMilliseconds,
+    gpuCorePassMilliseconds,
+    cpuCoreRewriteMilliseconds,
+    coreInflationMilliseconds,
+    wasmPlanningAndCpuEmissionMilliseconds: wasmMilliseconds,
+    gpuWasmEmissionMilliseconds: gpuMode === "off" ? 0 : gpuWasmMilliseconds,
+    wasmSelectionMilliseconds,
+    abiConstructionMilliseconds,
+    wasmValidationMilliseconds,
+    artifactValidationMilliseconds,
+  };
+  const accountedMilliseconds = Object.values(stages).reduce(
+    (total, milliseconds) => total + milliseconds,
+    0,
+  );
+  const totalMilliseconds = performance.now() - compilationStart;
+  const profile: DucklangCompilationProfile = {
+    totalMilliseconds,
+    accountedMilliseconds,
+    unattributedMilliseconds: totalMilliseconds - accountedMilliseconds,
+    stages,
+    details: {
+      ...frontend.profile.details,
+      gpuCoreInitializationMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.initializationMilliseconds
+        : 0,
+      gpuCoreQueueWaitMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.queueWaitMilliseconds
+        : 0,
+      gpuWasmQueueWaitMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.queueWaitMilliseconds
+        : 0,
+      gpuCoreExecutionMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.gpuMilliseconds
+        : 0,
+      gpuCoreTransferMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.transferMilliseconds
+        : 0,
+      gpuCoreCommitMilliseconds: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.commitMilliseconds
+        : 0,
+    },
+    work: {
+      ...frontend.profile.work,
+      rootCapabilityCount: new Set(
+        effectClosed.requiredEffects.map((effect) => effect.effectName),
+      ).size,
+      coreFunctionCount: core.functions.length,
+      coreBlockCount: core.functions.reduce(
+        (total, function_) => total + function_.blocks.length,
+        0,
+      ),
+      coreOperationCount: core.functions.reduce(
+        (functionTotal, function_) =>
+          functionTotal +
+          function_.blocks.reduce(
+            (blockTotal, block) => blockTotal + block.operations.length,
+            0,
+          ),
+        0,
+      ),
+      downstreamParallelFunctionCount: gpuCoreResult?.status === "completed"
+        ? core.functions.length
+        : 0,
+      flatCoreValueCount: flatCore.valueFunctionIds.length,
+      gpuValidationRecordCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.validationRecordCount
+        : 0,
+      gpuRewriteProposalCount: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.proposals.length
+        : 0,
+      wasmAtomCount: lowered.wasmPlan.atoms.length,
+      wasmOutputBufferBytes: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.outputBufferBytes
+        : 0,
+      wasmBytes: wasm.byteLength,
+      backendFunctionAnalysisCount: (backendFunctions?.analyses ?? 0) -
+        backendFunctionAnalysesBefore,
+      backendFunctionReuseCount: (backendFunctions?.reuses ?? 0) -
+        backendFunctionReusesBefore,
+      gpuCoreSubmissionBatchSize: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.submissionBatchSize
+        : 0,
+      gpuCorePayloadBatchSize: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.payloadBatchSize
+        : 0,
+      gpuWasmSubmissionBatchSize: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.submissionBatchSize
+        : 0,
+      gpuWasmPayloadBatchSize: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.payloadBatchSize
+        : 0,
+    },
+  };
+  const artifact: DucklangCompilationArtifact = {
     language: "ducklang",
     wasm,
     fcg: lowered.fcg,
     flatFcg: lowered.flatFcg,
-    inferred: specialized,
+    inferred: effectClosed,
+    effectHir: frontend.effectHir,
     core,
     flatCore,
     optimizedFlatCore,
     optimizedCore,
     gpuCoreResult,
     abi,
+    profile,
     initialTypes: frontend.initialTypes,
     finalTypes: frontend.initialTypes,
     gpuTypeResult: frontend.gpuTypeResult,
@@ -596,6 +1714,35 @@ async function compileDucklangModuleSource(
       gpuWasmMilliseconds,
     },
   };
+  options.session?.compilations.set(prepared.semanticIdentity, {
+    artifact,
+    dependencies: frontend.dependencies,
+  });
+  return artifact;
+}
+
+function ducklangDependencyIdentities(
+  graph: DucklangModuleGraph,
+): readonly DucklangDependencyIdentity[] {
+  const dependencies = new Map<string, DucklangDependencyIdentity>();
+  for (const importer of graph.modules.values()) {
+    for (const import_ of importer.imports) {
+      const imported = graph.modules.get(import_.moduleId);
+      if (imported === undefined) {
+        throw new Error(
+          `${importer.canonicalSource}:${import_.span.start}: module graph import ${import_.path} has no source identity`,
+        );
+      }
+      const dependency = {
+        importer: importer.canonicalSource,
+        path: import_.path,
+        canonicalSource: imported.canonicalSource,
+        sourceHash: imported.sourceHash,
+      };
+      dependencies.set(contentIdentity(dependency), dependency);
+    }
+  }
+  return [...dependencies.values()];
 }
 
 function selectWasmOutput(

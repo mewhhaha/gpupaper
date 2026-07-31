@@ -8,7 +8,11 @@ import {
   formatCompilationBackends,
   parseCommandLine,
 } from "../src/cli.ts";
-import { compileModuleSource, runMain } from "../src/compiler.ts";
+import {
+  compileModuleSource,
+  createDucklangCompilationSession,
+  runMain,
+} from "../src/compiler.ts";
 import {
   solveTypeEqualitiesOnGpu,
   unionPairsOnGpu,
@@ -100,6 +104,18 @@ Deno.test("host interfaces are rejected for non-Ducklang compilation", async () 
         { hostInterface: "host.duck" },
       ),
     /hostInterface is available only for Ducklang compilation; received test\.hs/,
+  );
+});
+
+Deno.test("Ducklang compilation sessions are rejected for Haskell", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.hs",
+        "main = 42\n",
+        { session: createDucklangCompilationSession() },
+      ),
+    /session is available only for Ducklang compilation; received test\.hs/,
   );
 });
 

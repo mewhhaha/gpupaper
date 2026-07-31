@@ -11,6 +11,7 @@ import {
   type DucklangModuleGraph,
   ducklangModuleInstanceKey,
   type DucklangModuleInstances,
+  type DucklangModuleSyntaxCache,
   type DucklangSourceProvider,
   expandDucklangIncludes,
   type ModuleId,
@@ -32,6 +33,8 @@ export type DucklangLinkOptions = {
    * across roots and observe how many analyses the link actually performed.
    */
   readonly instances?: DucklangModuleInstances<DucklangModule>;
+  readonly syntaxCache?: DucklangModuleSyntaxCache;
+  readonly onModuleGraph?: (graph: DucklangModuleGraph) => void;
 };
 
 export async function resolveDucklangLocalImports(
@@ -79,9 +82,11 @@ export async function resolveDucklangLocalImports(
     parsedRoot: module,
     sourceProvider: options.sourceProvider ??
       createDucklangFilesystemSourceProvider(),
+    syntaxCache: options.syntaxCache,
     followImport: (importPath) =>
       importPath.startsWith(".") || isSourceBackedDucklangModule(importPath),
   });
+  options.onModuleGraph?.(graph);
   const linked = await resolveModuleImports(
     module,
     graph.rootId,
@@ -340,7 +345,7 @@ async function resolveModuleImports(
     }
     const instanceKey = ducklangModuleInstanceKey({
       moduleId: dependencyNode.id,
-      sourceHash: dependencyNode.sourceHash,
+      analysisHash: dependencyNode.analysisHash,
       parameterNames: dependencyNode.module.parameters.map(
         (parameter) => parameter.text,
       ),
@@ -692,6 +697,17 @@ function mergeImportedDeclarations(
   for (const node of graph.modules.values()) {
     if (node.id === graph.rootId) continue;
     for (const statement of node.module.statements) {
+      if (
+        statement.kind === "effectDeclaration" ||
+        statement.kind === "initDeclaration"
+      ) {
+        const identity =
+          `${statement.kind}\u0000${statement.span.file}\u0000${statement.span.start}`;
+        if (seenDeclarations.has(identity)) continue;
+        seenDeclarations.add(identity);
+        declarations.push(statement);
+        continue;
+      }
       if (
         statement.kind !== "unionType" &&
         statement.kind !== "structType" &&

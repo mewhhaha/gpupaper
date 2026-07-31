@@ -217,6 +217,20 @@ function rewriteExpression(
     rewriteExpression(candidate, renames, shadowed);
 
   switch (expression.kind) {
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: recur(field.value),
+        })),
+      };
+    case "handle":
+      return {
+        ...expression,
+        body: recur(expression.body),
+        handler: recur(expression.handler),
+      };
     case "reference": {
       const renamed = renameName(expression.name, renames, shadowed);
       return renamed === expression.name

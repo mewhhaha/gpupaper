@@ -1407,6 +1407,20 @@ function lowerExpression(
           lowerExpression(argument)
         ),
       };
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: lowerExpression(field.value),
+        })),
+      };
+    case "handle":
+      return {
+        ...expression,
+        body: lowerExpression(expression.body),
+        handler: lowerExpression(expression.handler),
+      };
     case "optionDo":
       return { ...expression, option: lowerExpression(expression.option) };
     case "unionCase":

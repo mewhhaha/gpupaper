@@ -23,7 +23,15 @@ export type Type =
     readonly kind: "function";
     readonly parameter: Type;
     readonly result: Type;
+    readonly effects?: CallableEffectRow;
+    readonly nullary?: true;
   };
+
+export type CallableEffectRow = {
+  readonly operations: readonly string[];
+  readonly parameterEffects: readonly number[];
+  readonly variables?: readonly number[];
+};
 
 export type Predicate = {
   readonly className: string;

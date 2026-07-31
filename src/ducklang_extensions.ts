@@ -128,7 +128,10 @@ export function elaborateDucklangExtensions(
   return {
     ...module,
     protocols: [],
-    extensions: [],
+    extensions: module.extensions.map((extension) => ({
+      ...extension,
+      methods: extension.methods.filter((method) => method.name === "order"),
+    })),
     fixities: [],
     statements: elaborateStatements(
       statements,
@@ -1005,6 +1008,20 @@ function elaborateExpression(
     }
     case "hostCall":
       return { ...expression, arguments: expression.arguments.map(descend) };
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: descend(field.value),
+        })),
+      };
+    case "handle":
+      return {
+        ...expression,
+        body: descend(expression.body),
+        handler: descend(expression.handler),
+      };
     case "optionDo":
       return { ...expression, option: descend(expression.option) };
     case "unionCase":
@@ -1809,6 +1826,20 @@ function substituteExtensionParameters(
       return parameters.get(expression.name.text) ?? expression;
     case "hostCall":
       return { ...expression, arguments: expression.arguments.map(descend) };
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: descend(field.value),
+        })),
+      };
+    case "handle":
+      return {
+        ...expression,
+        body: descend(expression.body),
+        handler: descend(expression.handler),
+      };
     case "optionDo":
       return { ...expression, option: descend(expression.option) };
     case "unionCase":

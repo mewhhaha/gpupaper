@@ -22,6 +22,12 @@ Ducklang program is supported. See
 [Ducklang corpus compatibility](duck-compatibility.md) for the exact semantic
 contract.
 
+Language semantics and compiler representations are governed by
+[the paper and specification](PAPER.md). That document records the selected
+models, soundness obligations, counterexamples, corpus measurements, cost
+calculations, primary research, and review triggers. Passing the corpus is not
+treated as a substitute for those obligations.
+
 The repository also retains the smaller Haskell-like Experiments A–F described
 in
 [GPU-Parallel Type Resolution and Compile-Time Execution](type-resolution-and-comptime.md).
@@ -65,7 +71,9 @@ Useful project commands are:
 
 ```sh
 deno task benchmark:frontend
+deno task benchmark:rebuild
 deno task benchmark:break-even
+deno task benchmark:peers
 deno task experiments
 deno task run examples/all.hs
 deno task run examples/duck/06_functions_and_blocks.duck
@@ -79,6 +87,17 @@ budgets, and repeated byte identity.
 Recorded RTX 4080 SUPER measurements, device limits, and the measured break-even
 interval are in [Ducklang frontend performance](PERFORMANCE.md).
 
+Ducklang compilation artifacts include a non-overlapping stage profile. It
+records the accounted and unattributed wall time, detailed parser and
+elaboration boundaries, GPU queue wait, cache reuse, submission and payload
+packing, specialization retention and dirty-frontier size, and the amount of
+work presented to each stage. Pass a `createDucklangCompilationSession()` result
+as the `session` compilation option to retain immutable module, semantic, and
+per-function backend artifacts across rebuilds. Exact source and trailing-trivia
+edits also retain the lowered AST and semantic fingerprint. Use
+`gpuScheduling: "throughput"` for a bounded 2 ms batching window; the default
+`"latency"` policy flushes ready GPU work on the next scheduler turn.
+
 ## Managed applications
 
 Dynamic `Text`, aggregate values, and host effects use a browser-compatible
@@ -87,6 +106,12 @@ runtime tables. The compilation artifact declares exact effect operations,
 capabilities, aggregate layouts, exports, and text literals; the selected Wasm
 imports and metadata are checked against that declaration before the artifact is
 returned.
+
+Ducklang effects use canonical open rows, lexical handler identities, deep
+one-shot resumptions, and ownership-sensitive control multiplicity. Local
+handlers lower through tail capability passing or selective continuations before
+Core; only the closed root capability row reaches the managed ABI. Flat Core and
+the GPU contain no source handler or open effect row.
 
 ```ts
 import { compileModuleSource } from "./src/compiler.ts";
@@ -119,6 +144,10 @@ Host interfaces are ordinary declaration-only Duck modules. The runtime never
 parses source to discover an artifact's ABI.
 
 ## Compiler pipeline
+
+The following is the currently implemented pipeline. Typed effect rows and the
+executable Effect HIR semantics govern capability/selective-continuation
+lowering before SSA; see [the paper and specification](PAPER.md).
 
 ```text
 Duck source
@@ -164,7 +193,8 @@ The admitted compiler contract and focused tests cover:
 - `const`, `comptime`, type reflection, protocols, extensions, custom operators,
   structural derivation, and parameterized modules;
 - linear ownership, shared borrows, freezing, scratch regions, explicit Core
-  cleanup, source handlers, affine resumptions, and typed host effects.
+  cleanup, canonical open effect rows, deep one-shot handlers, row-polymorphic
+  callbacks, and typed synchronous host capabilities.
 
 Source bindings are immutable values. Rebinding creates a new symbol and Core
 `ValueId`; the resolver enforces ownership transfers and borrows, while layout
@@ -180,6 +210,10 @@ standalone Wasm runtime. Generated parser artifacts are checked in.
 - The managed ABI is synchronous and exports at most one source value through
   the single Wasm `main` function. Asynchronous effects remain reserved until
   there is a portable task/poll contract.
+- Multi-shot handlers, scoped higher-order effects, and user-defined cleanup
+  evidence require extensions to the calculus in
+  [the paper and specification](PAPER.md); they are not approximated by the
+  one-shot algebraic effect implementation.
 - Managed `Text`, `Bytes`, aggregates, and closures use opaque runtime handles.
   GPU kernels compile the payload; they do not execute its buffer operations.
 - The semantic frontend, ownership/effect policy, type oracle, and host-ABI
@@ -199,6 +233,9 @@ altered behavior.
   compile-time values.
 - `src/ducklang_resolution.ts`, `src/ducklang_types.ts`,
   `src/ducklang_ownership.ts`: symbols, types, effects, and resources.
+- `src/ducklang_effect_ir.ts`, `src/ducklang_effects.ts`,
+  `src/ducklang_effect_cps.ts`, `src/ducklang_effect_boundary.ts`: reference
+  semantics, row inference, selective lowering, and ABI closure.
 - `src/ducklang_core.ts`, `src/flat_ducklang_core.ts`: immutable SSA Core and
   its GPU-facing flat schema.
 - `src/gpu_ducklang_core.ts`, `src/gpu_solver.ts`, `src/comptime.ts`,

@@ -10,6 +10,7 @@ export type DucklangName = {
   readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
   readonly affine?: boolean;
+  readonly resumption?: true;
   readonly span: SourceSpan;
 };
 
@@ -54,6 +55,7 @@ export type DucklangImportSelection = {
 export type DucklangTypeReference = {
   readonly name: string;
   readonly arguments: readonly DucklangTypeReference[];
+  readonly effectRow?: DucklangEffectRow | null;
   readonly span: SourceSpan;
 };
 
@@ -174,6 +176,18 @@ export type DucklangExpression =
     readonly effectName: string;
     readonly operationName: string;
     readonly arguments: readonly DucklangExpression[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "effectHandler";
+    readonly effectName: string;
+    readonly fields: readonly DucklangRecordField[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "handle";
+    readonly body: DucklangExpression;
+    readonly handler: DucklangExpression;
     readonly span: SourceSpan;
   }
   | {
@@ -314,6 +328,7 @@ export type DucklangStatement =
   | {
     readonly kind: "effectDeclaration";
     readonly name: string;
+    readonly parameters: readonly string[];
     readonly operations: readonly DucklangEffectOperation[];
     readonly span: SourceSpan;
   }

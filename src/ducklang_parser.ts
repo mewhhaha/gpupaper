@@ -39,6 +39,8 @@ let parserPromise: Promise<DucklangParser> | undefined;
 
 export type DucklangParseTimings = {
   readonly parserInitializationMilliseconds: number;
+  readonly contextualClassificationMilliseconds: number;
+  readonly parserExecutionMilliseconds: number;
   readonly syntaxMilliseconds: number;
   readonly astLoweringMilliseconds: number;
 };
@@ -73,18 +75,28 @@ export async function parseDucklangModuleWithTimings(
   const parser = await getDucklangParser();
   const parserInitializationMilliseconds = performance.now() -
     initializationStart;
-  const syntaxStart = performance.now();
+
+  const contextualClassificationStart = performance.now();
   const classifiedSource = classifyContextualTokens(source);
+  const contextualClassificationMilliseconds = performance.now() -
+    contextualClassificationStart;
+
+  const parserExecutionStart = performance.now();
   const result = parser.parse(classifiedSource, {
     maxTraceActions: 10_000_000,
   });
-  const syntaxMilliseconds = performance.now() - syntaxStart;
+  const parserExecutionMilliseconds = performance.now() -
+    parserExecutionStart;
+  const syntaxMilliseconds = contextualClassificationMilliseconds +
+    parserExecutionMilliseconds;
   if (!result.ok) {
     const diagnostic = result.diagnostics[0];
     throw new DucklangSyntaxError(
       `${file}:${diagnostic.span.start}: ${diagnostic.message}`,
       {
         parserInitializationMilliseconds,
+        contextualClassificationMilliseconds,
+        parserExecutionMilliseconds,
         syntaxMilliseconds,
         astLoweringMilliseconds: 0,
       },
@@ -283,6 +295,8 @@ export async function parseDucklangModuleWithTimings(
     module,
     timings: {
       parserInitializationMilliseconds,
+      contextualClassificationMilliseconds,
+      parserExecutionMilliseconds,
       syntaxMilliseconds,
       astLoweringMilliseconds: performance.now() - astLoweringStart,
     },
@@ -630,6 +644,14 @@ function normalizeExpressionStatementBoundaries(
       return {
         ...expression,
         arguments: expression.arguments.map(normalize),
+      };
+    case "effectHandler":
+      return { ...expression, fields: normalizeFields(expression.fields) };
+    case "handle":
+      return {
+        ...expression,
+        body: normalize(expression.body),
+        handler: normalize(expression.handler),
       };
     case "optionDo":
       return { ...expression, option: normalize(expression.option) };
@@ -1223,6 +1245,9 @@ function lowerModuleStatement(
         requiredField(statement, "name"),
         "effect declaration name",
       ),
+      parameters: statement.fieldArray("parameter").map((parameter) =>
+        identifierName(file, parameter, "effect type parameter").text
+      ),
       operations: operationBlock.children().flatMap((child) => {
         if (child.type !== "rule" || child.name !== "effect_operation") {
           return [];
@@ -1368,8 +1393,7 @@ function lowerModuleStatement(
     }
     if (
       value.kind === "function" && isCursor(declaredType) &&
-      value.parameters.length > 0 &&
-      forallType !== undefined
+      value.parameters.length > 0
     ) {
       const functionType = findRule(declaredType, "function_type");
       const functionResult = functionType?.field("result");
@@ -1379,7 +1403,8 @@ function lowerModuleStatement(
       );
       if (parameter !== undefined) {
         const parameterType = lowerTypeReference(file, parameter);
-        const parameterTypes = parameterType.name === "$tuple"
+        const parameterTypes = parameterType.name === "$tuple" ||
+            parameterType.name === "$array"
           ? parameterType.arguments
           : [parameterType];
         if (parameterTypes.length === value.parameters.length) {
@@ -1387,10 +1412,13 @@ function lowerModuleStatement(
             ...value,
             parameters: value.parameters.map((parameter, index) => {
               const type = parameterTypes[index];
-              return parameter.declaredType !== undefined ||
-                  type.name.startsWith("$")
-                ? parameter
-                : { ...parameter, declaredType: type };
+              const carriesLatentEffects = type.name === "$function";
+              const carriesForallType = forallType !== undefined &&
+                !type.name.startsWith("$");
+              return parameter.declaredType === undefined &&
+                  (carriesLatentEffects || carriesForallType)
+                ? { ...parameter, declaredType: type }
+                : parameter;
             }),
           };
         }
@@ -1955,7 +1983,7 @@ function lowerDeclaredEffectRow(
   file: string,
   input: SyntaxCursor,
 ): DucklangEffectRow | null | undefined {
-  const functionType = findRule(input, "function_type");
+  const functionType = topLevelRule(input, "function_type");
   if (
     functionType === undefined ||
     !functionType.children().some((child) =>
@@ -2056,16 +2084,12 @@ function lowerTypeReference(
   file: string,
   input: SyntaxCursor,
 ): DucklangTypeReference {
-  const forallType = input.type === "rule" && input.name === "forall_type"
-    ? input
-    : findRule(input, "forall_type");
+  const forallType = topLevelRule(input, "forall_type");
   const forallBody = forallType?.field("body");
   if (forallType !== undefined && isCursor(forallBody)) {
     return lowerTypeReference(file, forallBody);
   }
-  const functionType = input.type === "rule" && input.name === "function_type"
-    ? input
-    : findRule(input, "function_type");
+  const functionType = topLevelRule(input, "function_type");
   const functionResult = functionType?.field("result");
   if (functionType !== undefined && isCursor(functionResult)) {
     const parameter = functionType.children().find((child) =>
@@ -2075,12 +2099,19 @@ function lowerTypeReference(
     if (parameter === undefined) {
       throw unsupported(file, functionType, "function parameter type");
     }
+    const latent = functionType.children().find(
+      (child): child is RuleCursor =>
+        child.type === "rule" && child.name === "latent_effect_row",
+    );
     return {
       name: "$function",
       arguments: [
         lowerTypeReference(file, parameter),
         lowerTypeReference(file, functionResult),
       ],
+      effectRow: latent === undefined
+        ? null
+        : lowerEffectRow(file, requiredField(latent, "row")),
       span: sourceSpan(file, functionType),
     };
   }
@@ -2357,20 +2388,12 @@ function lowerExpression(
 
   if (cursor.name === "try_with_expression") {
     const handler = cursor.field("handler");
-    const body = lowerExpression(file, requiredField(cursor, "body"));
     return {
-      kind: "call",
-      callee: {
-        kind: "reference",
-        name: { text: "$duck_try", span: sourceSpan(file, cursor) },
-        span: sourceSpan(file, cursor),
-      },
-      arguments: [
-        body,
-        isCursor(handler)
-          ? lowerExpression(file, handler)
-          : { kind: "unit", span: sourceSpan(file, cursor) },
-      ],
+      kind: "handle",
+      body: lowerExpression(file, requiredField(cursor, "body")),
+      handler: isCursor(handler)
+        ? lowerExpression(file, handler)
+        : { kind: "unit", span: sourceSpan(file, cursor) },
       span: sourceSpan(file, cursor),
     };
   }
@@ -2423,9 +2446,9 @@ function lowerExpression(
       }];
     });
     return {
-      kind: "record",
+      kind: "effectHandler",
+      effectName,
       fields,
-      nominalType: `$effect_handler_${effectName}`,
       span: sourceSpan(file, cursor),
     };
   }
@@ -2614,8 +2637,9 @@ function lowerExpression(
       expression.arguments[0].fields.some((field) => field.name === "return")
     ) {
       return {
-        ...expression.arguments[0],
-        nominalType: `$effect_handler_${expression.callee.name.text}`,
+        kind: "effectHandler",
+        effectName: expression.callee.name.text,
+        fields: expression.arguments[0].fields,
         span: expression.span,
       };
     }
@@ -4308,6 +4332,22 @@ function findRule(cursor: SyntaxCursor, name: string): RuleCursor | undefined {
   for (const child of cursor.children()) {
     const found = findRule(child, name);
     if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function topLevelRule(
+  cursor: SyntaxCursor,
+  name: string,
+): RuleCursor | undefined {
+  let current = cursor;
+  while (current.type === "rule") {
+    if (current.name === name) return current;
+    const ruleChildren = current.children().filter((
+      child,
+    ): child is RuleCursor => child.type === "rule");
+    if (ruleChildren.length !== 1) return undefined;
+    current = ruleChildren[0];
   }
   return undefined;
 }

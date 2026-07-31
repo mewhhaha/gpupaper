@@ -1,5 +1,15 @@
 import { compileModuleSource } from "../src/compiler.ts";
+import type {
+  CoreBlockId,
+  CoreFunctionId,
+  CoreSignatureId,
+  CoreTypeId,
+  CoreValueId,
+  DucklangCoreModule,
+} from "../src/ducklang_core.ts";
+import { closeDucklangEffectBoundary } from "../src/ducklang_effect_boundary.ts";
 import { runDucklangManaged } from "../src/ducklang_runtime.ts";
+import type { TypedDucklangModule } from "../src/ducklang_types.ts";
 
 /**
  * Module-boundary effects as typed host calls, and the reservation of
@@ -32,6 +42,9 @@ Deno.test("Ducklang lowers an unresolved effect to a host call", async () => {
   });
 
   assertEquals(result, { result: 7 });
+  assertEquals(artifact.profile.work.capabilityOperandCount, 0);
+  assertEquals(artifact.profile.work.rootCapabilityCount, 1);
+  assertEquals(artifact.profile.work.cpsTransformedRegionCount, 0);
 });
 
 Deno.test("Ducklang types host call arguments at the boundary", async () => {
@@ -52,6 +65,52 @@ Deno.test("Ducklang rejects an undeclared host operation", async () => {
   await assertRejects(
     `${head}\nresult <- Host.missing()\nreturn { .result = result }\n`,
     /unknown Ducklang effect operation Host\.missing/,
+  );
+});
+
+Deno.test("Ducklang rejects a reachable host call absent from the inferred row", () => {
+  const span = { file: "boundary.duck", start: 17, end: 28 };
+  const module = {
+    file: span.file,
+    requiredEffects: [],
+  } as unknown as TypedDucklangModule;
+  const core: DucklangCoreModule = {
+    schemaVersion: 1,
+    file: span.file,
+    types: [{ kind: "scalar", scalar: "i32" }],
+    signatures: [{ parameters: [], result: 0 as CoreTypeId }],
+    functions: [{
+      id: 0 as CoreFunctionId,
+      name: "main",
+      sourceSymbolId: undefined,
+      signature: 0 as CoreSignatureId,
+      entryBlock: 0 as CoreBlockId,
+      blocks: [{
+        id: 0 as CoreBlockId,
+        parameters: [],
+        operations: [{
+          kind: "host.call",
+          effectName: "Host",
+          operationName: "read",
+          result: 0 as CoreValueId,
+          type: 0 as CoreTypeId,
+          operands: [],
+          span,
+        }],
+        terminator: {
+          kind: "return",
+          values: [0 as CoreValueId],
+          span,
+        },
+      }],
+      span,
+    }],
+    entryFunction: 0 as CoreFunctionId,
+  };
+
+  assertThrows(
+    () => closeDucklangEffectBoundary(module, core),
+    /boundary\.duck:17: reachable Core host call Host\.read is absent from the inferred main effect row/,
   );
 });
 
@@ -97,6 +156,20 @@ function assertEquals(actual: unknown, expected: unknown): void {
       `expected ${JSON.stringify(expected)}, received ${
         JSON.stringify(actual)
       }`,
+    );
+  }
+}
+
+function assertThrows(operation: () => unknown, expected: RegExp): void {
+  let message = "";
+  try {
+    operation();
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (!expected.test(message)) {
+    throw new Error(
+      `expected ${expected}, received ${JSON.stringify(message)}`,
     );
   }
 }

@@ -1,6 +1,7 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
+import { formatDucklangType } from "../src/ducklang_types.ts";
 import { inflateFlatFcgPackage } from "../src/flat_fcg.ts";
 import { inflateFlatDucklangCore } from "../src/flat_ducklang_core.ts";
 
@@ -563,6 +564,10 @@ return { .result = result }
     ["Input.read"],
   );
   assertEquals(
+    readValue === undefined ? undefined : formatDucklangType(readValue.type),
+    "() -> i32 ! <Input.read>",
+  );
+  assertEquals(
     artifact.inferred.requiredEffects.map((effect) =>
       `${effect.effectName}.${effect.operationName}`
     ),
@@ -588,6 +593,34 @@ return { .result = result }
         { gpuMode: "off" },
       ),
     /function read_value exceeds its declared effect row with Input\.read/,
+  );
+});
+
+Deno.test("Ducklang rejects an effect hidden behind a conditional callee", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource(
+        "test.duck",
+        `module (!init: Init) where
+declare effect Input {
+  read: () => I32
+}
+declare Init { input: Input }
+
+let read: () -> <Input.read> I32 = () => {
+  value <- Input.read()
+  value
+}
+
+let claimed_pure: () -> I32 =
+  () => (if 1 == 1 { read } else { read })()
+
+result <- claimed_pure()
+return { .result = result }
+`,
+        { gpuMode: "off" },
+      ),
+    /function claimed_pure exceeds its declared effect row with Input\.read/,
   );
 });
 

@@ -1,14 +1,17 @@
 import type { EqualityConstraint, Type } from "./types.ts";
 import {
-  acquireCompilerGpuErrorScope,
   awaitCompilerGpuCommand,
   CompilerGpuCapacityError,
   type CompilerGpuCapacityRequest,
+  type CompilerGpuSchedulingPolicy,
+  type CompilerGpuSubmissionMetrics,
   CompilerGpuUnavailableError,
+  createCompilerGpuBatchQueue,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
   requireCompilerGpuCapacity,
+  submitCompilerGpuCommand,
 } from "./gpu_device.ts";
 
 export type GpuSolveResult =
@@ -19,6 +22,9 @@ export type GpuSolveResult =
     readonly equalityCount: number;
     readonly unionRounds: number;
     readonly decompositionCount: number;
+    readonly submissionBatchSize?: number;
+    readonly payloadBatchSize?: number;
+    readonly queueWaitMilliseconds?: number;
   }
   | {
     readonly status: "constructorClash";
@@ -66,6 +72,20 @@ type DecompositionPipelines = {
 type ReachabilityPipeline = {
   readonly pipeline: GPUComputePipeline;
   readonly bindGroupLayout: GPUBindGroupLayout;
+};
+
+type UnionGpuInput = {
+  readonly device: GPUDevice;
+  readonly initialRepresentatives: readonly number[];
+  readonly equalities: readonly [number, number][];
+};
+
+type UnionGpuOutput = {
+  readonly result: {
+    readonly representatives: number[];
+    readonly rounds: number;
+  };
+  readonly submission: CompilerGpuSubmissionMetrics;
 };
 
 const maximumDecomposedEqualityCount = 1_048_576;
@@ -225,15 +245,67 @@ let pipelineDevice: GPUDevice | undefined;
 let unionPipelinesPromise: Promise<UnionPipelines> | undefined;
 let decompositionPipelinesPromise: Promise<DecompositionPipelines> | undefined;
 let reachabilityPipelinePromise: Promise<ReachabilityPipeline> | undefined;
+const typeSolverBatchQueue = createCompilerGpuBatchQueue(
+  (equalityBatches: readonly (readonly EqualityConstraint[])[]) =>
+    Promise.all(
+      equalityBatches.map((equalities) =>
+        solveTypeEqualitiesWithoutPayloadBatch(equalities)
+      ),
+    ),
+);
+const unionGpuBatchQueue = createCompilerGpuBatchQueue(
+  (inputs: readonly UnionGpuInput[]) =>
+    inputs.length === 1
+      ? Promise.all(inputs.map(runUnionOnGpuWithoutBatch))
+      : runUnionGpuBatch(inputs),
+);
 
 export async function solveTypeEqualitiesOnGpu(
+  equalities: readonly EqualityConstraint[],
+  options: {
+    readonly scheduling?: CompilerGpuSchedulingPolicy;
+  } = {},
+): Promise<GpuSolveResult> {
+  const batch = await typeSolverBatchQueue.enqueue(
+    equalities,
+    options.scheduling ?? "latency",
+  );
+  return batch.output.status === "solved"
+    ? {
+      ...batch.output,
+      payloadBatchSize: batch.payloadBatchSize,
+      queueWaitMilliseconds: batch.queueWaitMilliseconds +
+        (batch.output.queueWaitMilliseconds ?? 0),
+    }
+    : batch.output;
+}
+
+async function solveTypeEqualitiesWithoutPayloadBatch(
   equalities: readonly EqualityConstraint[],
 ): Promise<GpuSolveResult> {
   const deviceRequest = await requestCompilerGpuDevice();
   if (deviceRequest.status === "unavailable") return deviceRequest;
   const device = deviceRequest.device;
+  const submissions: CompilerGpuSubmissionMetrics[] = [];
   try {
-    return await solveTypeEqualitiesWithDevice(device, equalities);
+    const result = await solveTypeEqualitiesWithDevice(
+      device,
+      equalities,
+      "latency",
+      submissions,
+    );
+    if (result.status !== "solved") return result;
+    return {
+      ...result,
+      submissionBatchSize: Math.max(
+        0,
+        ...submissions.map((submission) => submission.submissionBatchSize),
+      ),
+      queueWaitMilliseconds: submissions.reduce(
+        (total, submission) => total + submission.queueWaitMilliseconds,
+        0,
+      ),
+    };
   } catch (error) {
     if (
       error instanceof CompilerGpuCapacityError ||
@@ -248,6 +320,8 @@ export async function solveTypeEqualitiesOnGpu(
 async function solveTypeEqualitiesWithDevice(
   device: GPUDevice,
   equalities: readonly EqualityConstraint[],
+  scheduling: CompilerGpuSchedulingPolicy,
+  submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<GpuSolveResult> {
   selectPipelineDevice(device);
   const flat = flattenEqualities(equalities);
@@ -262,7 +336,12 @@ async function solveTypeEqualitiesWithDevice(
     };
   }
   if (flat.terms.length > maximumQuadraticGpuTermCount) {
-    return await solveLargeFlatConstraintsOnGpu(device, flat);
+    return await solveLargeFlatConstraintsOnGpu(
+      device,
+      flat,
+      scheduling,
+      submissions,
+    );
   }
   const allEqualities = [...flat.equalities];
   const allSourceStarts = [...flat.sourceStarts];
@@ -272,13 +351,21 @@ async function solveTypeEqualitiesWithDevice(
   let decompositionCount = 0;
 
   while (true) {
-    const union = await unionOnGpu(device, representatives, allEqualities);
+    const union = await unionOnGpu(
+      device,
+      representatives,
+      allEqualities,
+      scheduling,
+      submissions,
+    );
     representatives = union.representatives;
     unionRounds += union.rounds;
     const decomposition = await decomposeConstructorsOnGpu(
       device,
       flat.terms,
       representatives,
+      scheduling,
+      submissions,
     );
     if (decomposition.status === "unavailable") {
       return { status: "unavailable", reason: decomposition.reason };
@@ -321,6 +408,8 @@ async function solveTypeEqualitiesWithDevice(
     device,
     flat.terms,
     representatives,
+    scheduling,
+    submissions,
   );
   if (infiniteRepresentative !== undefined) {
     return { status: "infiniteType", representative: infiniteRepresentative };
@@ -369,7 +458,13 @@ export async function unionPairsOnGpu(
     (_, index) => index,
   );
   try {
-    return (await unionOnGpu(device, initialRepresentatives, equalities))
+    return (await unionOnGpu(
+      device,
+      initialRepresentatives,
+      equalities,
+      "latency",
+      [],
+    ))
       .representatives;
   } catch (error) {
     if (
@@ -425,6 +520,8 @@ function flattenEqualities(
 async function solveLargeFlatConstraintsOnGpu(
   device: GPUDevice,
   flat: FlatConstraints,
+  scheduling: CompilerGpuSchedulingPolicy,
+  submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<GpuSolveResult> {
   const allEqualities = [...flat.equalities];
   const allSourceStarts = [...flat.sourceStarts];
@@ -511,6 +608,8 @@ async function solveLargeFlatConstraintsOnGpu(
     device,
     flat.terms.map((_, index) => index),
     allEqualities,
+    scheduling,
+    submissions,
   );
   for (
     let termIndex = 0;
@@ -587,6 +686,8 @@ async function decomposeConstructorsOnGpu(
   device: GPUDevice,
   terms: readonly FlatTerm[],
   representatives: readonly number[],
+  scheduling: CompilerGpuSchedulingPolicy,
+  submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<ConstructorDecomposition> {
   const termCount = terms.length;
   if (terms.filter((term) => term.kind === "constructor").length < 2) {
@@ -764,13 +865,8 @@ async function decomposeConstructorsOnGpu(
   let metadataMapped = false;
   let outputReadback: GPUBuffer | undefined;
   let outputMapped = false;
-  let releaseErrorScope: (() => void) | undefined;
-  let validationScopePending = false;
   try {
     const pipelines = await requestDecompositionPipelines(device);
-    releaseErrorScope = await acquireCompilerGpuErrorScope();
-    device.pushErrorScope("validation");
-    validationScopePending = true;
     const encoder = device.createCommandEncoder();
     const countBindGroup = device.createBindGroup({
       layout: pipelines.count.getBindGroupLayout(0),
@@ -862,7 +958,14 @@ async function decomposeConstructorsOnGpu(
       4,
     );
     encoder.copyBufferToBuffer(overflowBuffer, 0, metadataReadback, 8, 4);
-    device.queue.submit([encoder.finish()]);
+    submissions.push(
+      await submitCompilerGpuCommand(
+        device,
+        "type solver constructor metadata",
+        encoder.finish(),
+        scheduling,
+      ),
+    );
     await awaitCompilerGpuCommand(
       device,
       "type solver constructor metadata",
@@ -872,13 +975,6 @@ async function decomposeConstructorsOnGpu(
     const metadata = new Uint32Array(
       metadataReadback.getMappedRange().slice(0),
     );
-    const validationError = await device.popErrorScope();
-    validationScopePending = false;
-    if (validationError !== null) {
-      throw new Error(
-        `WebGPU constructor decomposition validation failed: ${validationError.message}`,
-      );
-    }
     const clashPair = metadata[0];
     if (clashPair !== 0xffff_ffff) {
       return {
@@ -932,7 +1028,14 @@ async function decomposeConstructorsOnGpu(
       equalityCount * 8,
       equalityCount * 4,
     );
-    device.queue.submit([outputEncoder.finish()]);
+    submissions.push(
+      await submitCompilerGpuCommand(
+        device,
+        "type solver constructor output",
+        outputEncoder.finish(),
+        scheduling,
+      ),
+    );
     await awaitCompilerGpuCommand(
       device,
       "type solver constructor output",
@@ -964,8 +1067,6 @@ async function decomposeConstructorsOnGpu(
     );
     return { status: "completed", clash: undefined, equalities };
   } finally {
-    if (validationScopePending) await device.popErrorScope();
-    releaseErrorScope?.();
     if (metadataMapped) metadataReadback.unmap();
     if (outputMapped) outputReadback?.unmap();
     outputReadback?.destroy();
@@ -975,11 +1076,245 @@ async function decomposeConstructorsOnGpu(
   }
 }
 
+type PackedTypeSolverColumn = {
+  readonly words: Uint32Array;
+  readonly regions: readonly {
+    readonly offset: number;
+    readonly size: number;
+  }[];
+  readonly maximumRegionSize: number;
+};
+
+async function runUnionGpuBatch(
+  inputs: readonly UnionGpuInput[],
+): Promise<readonly UnionGpuOutput[]> {
+  try {
+    return await runPackedUnionGpuBatch(inputs);
+  } catch (error) {
+    if (error instanceof CompilerGpuCapacityError && inputs.length > 1) {
+      const split = Math.ceil(inputs.length / 2);
+      const [left, right] = await Promise.all([
+        runUnionGpuBatch(inputs.slice(0, split)),
+        runUnionGpuBatch(inputs.slice(split)),
+      ]);
+      return [...left, ...right];
+    }
+    throw error;
+  }
+}
+
+async function runPackedUnionGpuBatch(
+  inputs: readonly UnionGpuInput[],
+): Promise<readonly UnionGpuOutput[]> {
+  const device = inputs[0].device;
+  if (inputs.some((input) => input.device !== device)) {
+    return await Promise.all(inputs.map(runUnionOnGpuWithoutBatch));
+  }
+  const alignment = device.limits.minStorageBufferOffsetAlignment;
+  const parents = packTypeSolverColumns(
+    inputs.map((input) => new Uint32Array(input.initialRepresentatives)),
+    4,
+    alignment,
+  );
+  const equalities = packTypeSolverColumns(
+    inputs.map((input) => {
+      const words = new Uint32Array(input.equalities.flat());
+      return words.length === 0 ? new Uint32Array([0, 0]) : words;
+    }),
+    8,
+    alignment,
+  );
+  const readbacks = packTypeSolverColumns(
+    inputs.map((input) => new Uint32Array(input.initialRepresentatives.length)),
+    4,
+    4,
+  );
+  const parentBuffer = createBuffer(
+    device,
+    parents.words,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC |
+      GPUBufferUsage.COPY_DST,
+    parents.maximumRegionSize,
+  );
+  const equalityBuffer = createBuffer(
+    device,
+    equalities.words,
+    GPUBufferUsage.STORAGE,
+    equalities.maximumRegionSize,
+  );
+  const readbackBuffer = createCompilerGpuBuffer(
+    device,
+    "type solver union batch readback",
+    {
+      size: readbacks.words.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
+  let readbackMapped = false;
+  try {
+    const pipelines = await requestUnionPipelines(device);
+    const bindGroups = inputs.map((_, index) =>
+      device.createBindGroup({
+        layout: pipelines.union.getBindGroupLayout(0),
+        entries: [
+          typeSolverBindGroupEntry(0, parentBuffer, parents.regions[index]),
+          typeSolverBindGroupEntry(
+            1,
+            equalityBuffer,
+            equalities.regions[index],
+          ),
+        ],
+      })
+    );
+    const encoder = device.createCommandEncoder();
+    const unionPass = encoder.beginComputePass();
+    unionPass.setPipeline(pipelines.union);
+    for (const [index, input] of inputs.entries()) {
+      unionPass.setBindGroup(0, bindGroups[index]);
+      dispatchCompilerGpuWorkgroups(
+        device,
+        unionPass,
+        `type solver union batch job ${index}`,
+        Math.max(1, Math.ceil(input.equalities.length / 64)),
+      );
+    }
+    unionPass.end();
+    const compressionPass = encoder.beginComputePass();
+    compressionPass.setPipeline(pipelines.compression);
+    for (const [index, input] of inputs.entries()) {
+      compressionPass.setBindGroup(0, bindGroups[index]);
+      dispatchCompilerGpuWorkgroups(
+        device,
+        compressionPass,
+        `type solver compression batch job ${index}`,
+        Math.ceil(input.initialRepresentatives.length / 64),
+      );
+    }
+    compressionPass.end();
+    for (const [index, input] of inputs.entries()) {
+      encoder.copyBufferToBuffer(
+        parentBuffer,
+        parents.regions[index].offset,
+        readbackBuffer,
+        readbacks.regions[index].offset,
+        input.initialRepresentatives.length * 4,
+      );
+    }
+    const submission = await submitCompilerGpuCommand(
+      device,
+      "type solver union payload batch",
+      encoder.finish(),
+      "latency",
+    );
+    await awaitCompilerGpuCommand(
+      device,
+      "type solver union payload batch",
+      readbackBuffer.mapAsync(GPUMapMode.READ),
+    );
+    readbackMapped = true;
+    const mapped = readbackBuffer.getMappedRange();
+    return inputs.map((input, index) => {
+      const representatives = [
+        ...new Uint32Array(
+          mapped,
+          readbacks.regions[index].offset,
+          input.initialRepresentatives.length,
+        ),
+      ];
+      requireCompressedRepresentatives(representatives);
+      return {
+        result: { representatives, rounds: 1 },
+        submission,
+      };
+    });
+  } finally {
+    if (readbackMapped) readbackBuffer.unmap();
+    parentBuffer.destroy();
+    equalityBuffer.destroy();
+    readbackBuffer.destroy();
+  }
+}
+
+function packTypeSolverColumns(
+  columns: readonly Uint32Array[],
+  minimumRegionBytes: number,
+  alignment: number,
+): PackedTypeSolverColumn {
+  const regions: { offset: number; size: number }[] = [];
+  let byteLength = 0;
+  let maximumRegionSize = 0;
+  for (const column of columns) {
+    byteLength = Math.ceil(byteLength / alignment) * alignment;
+    const size = Math.max(minimumRegionBytes, column.byteLength);
+    regions.push({ offset: byteLength, size });
+    maximumRegionSize = Math.max(maximumRegionSize, size);
+    byteLength += size;
+  }
+  const words = new Uint32Array(Math.max(1, Math.ceil(byteLength / 4)));
+  for (const [index, column] of columns.entries()) {
+    words.set(column, regions[index].offset / 4);
+  }
+  return {
+    words,
+    regions,
+    maximumRegionSize: Math.max(minimumRegionBytes, maximumRegionSize),
+  };
+}
+
+function typeSolverBindGroupEntry(
+  binding: number,
+  buffer: GPUBuffer,
+  region: { readonly offset: number; readonly size: number },
+): GPUBindGroupEntry {
+  return {
+    binding,
+    resource: { buffer, offset: region.offset, size: region.size },
+  };
+}
+
+function requireCompressedRepresentatives(
+  representatives: readonly number[],
+): void {
+  for (const [term, representative] of representatives.entries()) {
+    if (representative >= representatives.length) {
+      throw new Error(
+        `WebGPU union returned representative ${representative} for term ${term}, outside term count ${representatives.length}`,
+      );
+    }
+    if (representatives[representative] !== representative) {
+      throw new Error(
+        `WebGPU union returned uncompressed parent ${representative} for term ${term}; parent points to ${
+          representatives[representative]
+        }`,
+      );
+    }
+  }
+}
+
 async function unionOnGpu(
   device: GPUDevice,
   initialRepresentatives: readonly number[],
   equalities: readonly [number, number][],
+  scheduling: CompilerGpuSchedulingPolicy,
+  submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<{ readonly representatives: number[]; readonly rounds: number }> {
+  const batch = await unionGpuBatchQueue.enqueue(
+    { device, initialRepresentatives, equalities },
+    scheduling,
+  );
+  submissions.push({
+    submissionBatchSize: batch.output.submission.submissionBatchSize,
+    queueWaitMilliseconds: batch.queueWaitMilliseconds +
+      batch.output.submission.queueWaitMilliseconds,
+  });
+  return batch.output.result;
+}
+
+async function runUnionOnGpuWithoutBatch(
+  input: UnionGpuInput,
+): Promise<UnionGpuOutput> {
+  const { device, initialRepresentatives, equalities } = input;
   const parentBytes = new Uint32Array(initialRepresentatives);
   const equalityWords = new Uint32Array(equalities.flat());
   const equalityBufferBytes = Math.max(8, equalityWords.byteLength);
@@ -1059,7 +1394,12 @@ async function unionOnGpu(
       0,
       parentBytes.byteLength,
     );
-    device.queue.submit([encoder.finish()]);
+    const submission = await submitCompilerGpuCommand(
+      device,
+      "type solver union",
+      encoder.finish(),
+      "latency",
+    );
     await awaitCompilerGpuCommand(
       device,
       "type solver union",
@@ -1069,21 +1409,11 @@ async function unionOnGpu(
     const representatives = [
       ...new Uint32Array(readback.getMappedRange().slice(0)),
     ];
-    for (const [term, representative] of representatives.entries()) {
-      if (representative >= representatives.length) {
-        throw new Error(
-          `WebGPU union returned representative ${representative} for term ${term}, outside term count ${representatives.length}`,
-        );
-      }
-      if (representatives[representative] !== representative) {
-        throw new Error(
-          `WebGPU union returned uncompressed parent ${representative} for term ${term}; parent points to ${
-            representatives[representative]
-          }`,
-        );
-      }
-    }
-    return { representatives, rounds: 1 };
+    requireCompressedRepresentatives(representatives);
+    return {
+      result: { representatives, rounds: 1 },
+      submission,
+    };
   } finally {
     if (readbackMapped) readback.unmap();
     parentBuffer.destroy();
@@ -1175,6 +1505,8 @@ async function findInfiniteTypeOnGpu(
   device: GPUDevice,
   terms: readonly FlatTerm[],
   representatives: readonly number[],
+  scheduling: CompilerGpuSchedulingPolicy,
+  submissions: CompilerGpuSubmissionMetrics[],
 ): Promise<number | undefined> {
   const roots = [...new Set(representatives)].sort((left, right) =>
     left - right
@@ -1265,7 +1597,14 @@ async function findInfiniteTypeOnGpu(
       pass.end();
     }
     encoder.copyBufferToBuffer(matrixBuffer, 0, readback, 0, matrix.byteLength);
-    device.queue.submit([encoder.finish()]);
+    submissions.push(
+      await submitCompilerGpuCommand(
+        device,
+        "type solver reachability",
+        encoder.finish(),
+        scheduling,
+      ),
+    );
     await awaitCompilerGpuCommand(
       device,
       "type solver reachability",

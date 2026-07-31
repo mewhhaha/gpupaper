@@ -861,24 +861,19 @@ nested source functions.
       `examples/showcases/05_linear_host_session.duck` exports one. A nested
       scratch owns its own region and does not carry the outer one's
       allocations.
-- [x] Elaborate source-defined handlers through selective one-shot CPS
-      normalization. The surrounding expression tree is the delimited
-      continuation: a handled performance is replaced by its clause while the
-      context remains in place, and `resume(value)` supplies the value consumed
-      by that context. Calls hiding a handled performance are exposed first;
-      recursive handled calls are rejected at their source rather than leaked
-      into Core. Resumptions are affine, handler ordering and state are
-      explicit, and a Core assertion proves a locally handled `Counter`
-      operation leaves no `host.call`.
-- [x] Enforce affine or linear use of resumptions. A clause declares its
-      resumption linear as `(!resume)`, but elaboration substituted it away and
-      inlined each call as its argument, so resolution never saw the `!` and a
-      clause could resume twice: the two calls were inlined side by side and the
-      program ran, which is the body duplicated rather than a continuation
-      invoked twice. Uses are now counted during elaboration and more than one
-      is rejected. Resuming zero times stays allowed, which is the affine half.
-      Ordinary linear parameters were never affected and are pinned alongside:
-      used twice is rejected, never used is rejected, once is accepted.
+- [x] Replace source-handler substitution with typed deep-handler semantics.
+      `ducklang_effect_ir.ts` is the executable fine-grain reference semantics;
+      `ducklang_effect_cps.ts` splits a performance from its delimited
+      continuation, and an aborting clause now returns 40 rather than executing
+      the discarded `+ 2` continuation and returning 42. Handler state is
+      preserved as ordinary shadowed bindings threaded through the one-shot CPS
+      translation.
+- [x] Infer control-flow linearity for resumptions from their captured
+      resources. The reference evaluator rejects discarding a non-discardable
+      capture. Source lowering identifies lexical linear owners live across a
+      performance and requires exactly one resume when one is captured; every
+      resumption remains one-shot. This is deliberately conservative and keeps
+      multi-shot resumptions outside the admitted contract.
 - [x] Lower unresolved module-boundary effects to typed host calls. A declared
       effect operation that no source handler resolves becomes a host call, and
       the boundary is typed rather than merely reached: a `Text` parameter given
@@ -899,6 +894,58 @@ nested source functions.
 
 Exit criterion: every Core function has validated resource, cleanup, effect, and
 host-boundary plans before flattening.
+
+### Phase 7A: Sound first-class effect elaboration (reopened)
+
+- [x] Add an executable fine-grain call-by-value reference calculus with
+      `return`, sequencing, lexical capabilities, `perform`, deep handlers, and
+      typed resumptions. Six conformance tests cover abort, resume, one-shot
+      use, lexical identity, capture cleanup, row canonicalization, and exact
+      capability subtraction.
+- [x] Put canonical open effect rows in computation and function types. Infer,
+      generalize, and instantiate row variables so higher-order calls preserve
+      the callee's effects rather than relying on a statically named binding.
+      Function type references retain their latent rows, typed bindings carry a
+      canonical operation/parameter row, and higher-order call summaries
+      instantiate the actual callback row.
+- [x] Give every handler instance a generative lexical capability identity.
+      Operations may be handled only by the capability selected at their source,
+      preventing accidental capture across effect-polymorphic abstractions.
+      Source identities are stable file/span/binding identities; the reference
+      calculus uses numeric generative identities. Two handlers for the same
+      signature select independently.
+- [x] Type handler clauses with an answer type, forwarded row, clause row, and
+      control-flow multiplicity. Prove the empty-row progress property and
+      handler row subtraction with reference-evaluator conformance tests.
+      `EffectHandler<Result, Answer>` fixes the answer type for return and
+      operation clauses, records its clause row, and admits only linear or
+      affine one-shot control.
+- [x] Run ownership analysis while performances and resumptions remain explicit,
+      then lower capabilities and only the effectful program slice through
+      type-directed selective CPS. Ownership validation precedes effect
+      elimination, captured linear owners constrain multiplicity, general
+      handlers split continuations. The proposed direct path was not selected:
+      tail position in a clause does not imply tail position of the captured
+      performance continuation. The admitted baseline uses one-shot CPS and
+      records the whole-region proof required before adding that optimization.
+- [x] Require the residual capability row at `main` to equal the generated ABI
+      requirements. `closeDucklangEffectBoundary` derives the final canonical
+      row from reachable, typed Core host calls and rejects any inferred
+      requirement that lowering lost. The managed ABI is generated from that
+      closed row.
+- [x] Delete the source-substitution handler lowering after structural lowering
+      is selected. `ducklang_effect_cps.ts` is the sole production source-effect
+      lowering.
+- [x] Measure effect-row propagation, added capability operands, transformed CPS
+      functions, live continuation captures, and generated code size against the
+      calculations in [PAPER.md](PAPER.md). Every artifact profile records row
+      memberships, root capability operands, transformed regions, handled
+      performances, continuation captures, Core volume, and Wasm bytes.
+
+Exit criterion: the reference semantics, type-and-effect checker, ownership
+checker, capability/CPS lowering, residual ABI, and observable execution agree;
+closed empty-row computations cannot perform an unhandled operation; and Flat
+Core receives no source handler or open effect row.
 
 ## Phase 8: Flat Core and GPU passes
 
@@ -1143,28 +1190,75 @@ bound; the returned Wasm and ABI are independently valid; editor, Codex, grep,
 tar, wav, and raytracer compile in required-GPU verification mode; and the
 documented release command passes from a clean checkout.
 
+## Phase 11: Demand-specialization boundary
+
+- [x] Add a retention ledger for input, demanded, rewritten, and residual
+      bindings and nodes, plus specialization keys and cache hits.
+- [x] Define specialization requests from typed function, diagnostic-site,
+      argument, and referenced-environment identities, with pending and complete
+      memo states.
+- [x] Compute the least demanded binding closure before rewriting instead of
+      specializing every module binding.
+- [x] Emit only reachable demanded bindings while conservatively retaining
+      runtime non-function initializers and dynamic callees.
+- [x] Derive the post-comptime dirty frontier from exact rewrite evidence and
+      reverse dependencies; clean applications now perform zero second-pass node
+      rewrites.
+- [x] Feed every residual function into the shared flat GPU package after
+      pruning. Keep operation-level GPU parallelism and stable commit order;
+      reject CPU worker cloning until a measured cost model justifies
+      `O(P × Core_bytes)` replication.
+
+Exit criterion: demand and frontier tests pin discarded and clean work,
+determinism and frozen execution still pass, every artifact reports the ledger,
+and `PAPER.md` records the identity model, failed structural-hash approach,
+resource cost, and corpus measurements.
+
+## Phase 12: Sharing-preserving specialization
+
+- [x] Split read-only typed-HIR traversal from reconstruction so observation
+      allocates no payload nodes.
+- [x] Preserve the original immutable expression object when every rewritten
+      child is pointer-identical.
+- [x] Summarize each immutable function body once per specialization pass and
+      record distinct and repeated analysis counts.
+- [x] Fuse capture-free parameter substitution with rewriting under globally
+      unique resolved symbol IDs.
+- [x] Rewrite only the selected arm of a static call-by-value conditional and
+      test that an unreachable compile-time failure is not evaluated.
+- [x] Skip the complete post-comptime specialization pass when both the changed
+      binding set and result-change witness are empty.
+- [x] Measure all six frozen applications on CPU and required GPU, pin the new
+      deterministic Codex binary size, and record substage and structural deltas
+      in `PAPER.md` and `PERFORMANCE.md`.
+
+Exit criterion: identity rewriting, unselected-branch behavior, deterministic
+Wasm, managed Codex execution, and required-GPU differential emission pass; the
+paper derives the immutable-sharing rule, records its limits, and distinguishes
+proof obligations from empirical timing evidence.
+
 ## Final boundary inventory
 
 The live targets have no remaining first-error boundary inside the admitted
 contract. Each former boundary now has an executable completion proof:
 
-| Boundary                    | Final state                                                                                                                                                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Syntax                      | The generated parser accepts all 121 compatibility sources and all 35 frozen live sources.                                                                                                                                           |
-| Modules and namespaces      | Canonical module instances preserve private captures, namespace projections, parameterized modules, and complete transitive declaration environments.                                                                                |
-| Extensions and protocols    | Canonical receiver identities select same-file and cross-file implementations; missing, ambiguous, overlapping, and incoherent implementations fail before Core with receiver evidence.                                              |
-| Staging                     | Scalars, products, sums, types, closures, and modules inhabit one `ConstValue` domain; specialization erases modules, protocols, extensions, type values, and compile-time closures before Core.                                     |
-| Control flow                | Shadowing, joins, early return, nested loops, carried values, valued exits, dynamic ranges, collection loops, and `continue` reach typed Core blocks and edges.                                                                      |
-| Primitives                  | Scalar, SIMD, buffer, UTF-8, conversion, reinterpretation, trap, and host operations use stable primitive IDs before flat Core.                                                                                                      |
-| Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                         |
-| Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, affine resumptions, source handlers, and typed host calls validate before flattening.                                     |
-| ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.           |
-| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, generated differential checks, concurrent isolation, and the six-application release gate are implemented and measured. |
+| Boundary                    | Final state                                                                                                                                                                                                                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Syntax                      | The generated parser accepts all 121 compatibility sources and all 35 frozen live sources. Exact and trailing-trivia revisions reuse the lowered AST and semantic fingerprint; earlier edits conservatively reparse.                                                                                      |
+| Modules and namespaces      | Canonical module instances preserve private captures, namespace projections, parameterized modules, and complete transitive declaration environments.                                                                                                                                                     |
+| Extensions and protocols    | Canonical receiver identities select same-file and cross-file implementations; missing, ambiguous, overlapping, and incoherent implementations fail before Core with receiver evidence.                                                                                                                   |
+| Staging                     | Scalars, products, sums, types, closures, and modules inhabit one `ConstValue` domain; specialization erases modules, protocols, extensions, type values, and compile-time closures before Core.                                                                                                          |
+| Control flow                | Shadowing, joins, early return, nested loops, carried values, valued exits, dynamic ranges, collection loops, and `continue` reach typed Core blocks and edges.                                                                                                                                           |
+| Primitives                  | Scalar, SIMD, buffer, UTF-8, conversion, reinterpretation, trap, and host operations use stable primitive IDs before flat Core.                                                                                                                                                                           |
+| Closures and aggregates     | Direct and indirect calls, captured environments, products, sums, recursive boxed layouts, lists, buffers, and bounds traps lower through ordinary typed operations rather than source-specific GPU opcodes.                                                                                              |
+| Ownership and effects       | Path-sensitive moves and borrows, compatible joins, freeze proofs, scratch regions, explicit Core cleanup, canonical open rows, lexical capability identities, deep one-shot resumptions, capture-sensitive control linearity, selective lowering, and exact host-row closure validate before flattening. |
+| ABI and artifact validation | Layout identity is separate from type identity; managed representations are deterministic; the selected Wasm, imports, exports, ABI declarations, requirements, and text metadata are independently checked before return.                                                                                |
+| GPU production boundary     | Capacity preflight, device-loss recovery, authoritative Core rewrites, optional authoritative Wasm emission, stable suballocated type/Core/Wasm payload batches, generated differential checks, concurrent isolation, and the six-application release gate are implemented and measured.                  |
 
 Deliberate exclusions are part of the contract rather than live errors:
-asynchronous effects await a portable task/poll ABI, and raw linear-memory
-payload operations await a payload ABI that needs them. Neither is inferred or
-silently emulated.
+asynchronous, scoped, and multi-shot effects await their own typed calculi, and
+raw linear-memory payload operations await a payload ABI that needs them. None
+is inferred or silently emulated.
 
 ## Completion rule
 

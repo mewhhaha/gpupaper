@@ -1,12 +1,15 @@
 import {
-  acquireCompilerGpuErrorScope,
   awaitCompilerGpuCommand,
+  CompilerGpuCapacityError,
   compilerGpuCapacityViolation,
+  type CompilerGpuSchedulingPolicy,
   compilerGpuUnavailabilityReason,
+  createCompilerGpuBatchQueue,
   createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
   requireCompilerGpuCapacity,
+  submitCompilerGpuCommand,
 } from "./gpu_device.ts";
 import {
   validateWasmBinaryPlan,
@@ -23,6 +26,9 @@ export type GpuWasmEmissionResult =
     readonly outputBufferBytes: number;
     readonly lengthRounds: number;
     readonly scanRounds: number;
+    readonly submissionBatchSize: number;
+    readonly payloadBatchSize: number;
+    readonly queueWaitMilliseconds: number;
   }
   | { readonly status: "unavailable"; readonly reason: string };
 
@@ -44,6 +50,14 @@ const atomSigned64 = 3;
 const atomLength = 4;
 const maximumEncodedAtomSize = 10;
 let contextPromise: Promise<GpuWasmContextRequest> | undefined;
+const wasmBatchQueue = createCompilerGpuBatchQueue(
+  (plans: readonly WasmBinaryPlan[]) =>
+    plans.length === 1
+      ? Promise.all(
+        plans.map((plan) => emitWasmPlanWithGpu(plan, "latency")),
+      )
+      : emitPackedWasmPlansOnGpu(plans),
+);
 
 const encodingFunctions = `
 fn unsigned_size(value: u32) -> u32 {
@@ -237,9 +251,23 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
 
 export async function emitWasmPlanOnGpu(
   plan: WasmBinaryPlan,
+  options: {
+    readonly scheduling?: CompilerGpuSchedulingPolicy;
+  } = {},
 ): Promise<GpuWasmEmissionResult> {
   try {
-    return await emitWasmPlanWithGpu(plan);
+    const batch = await wasmBatchQueue.enqueue(
+      plan,
+      options.scheduling ?? "latency",
+    );
+    return batch.output.status === "completed"
+      ? {
+        ...batch.output,
+        payloadBatchSize: batch.payloadBatchSize,
+        queueWaitMilliseconds: batch.queueWaitMilliseconds +
+          batch.output.queueWaitMilliseconds,
+      }
+      : batch.output;
   } catch (error) {
     const reason = compilerGpuUnavailabilityReason("Wasm emission", error);
     if (reason !== undefined) return { status: "unavailable", reason };
@@ -247,8 +275,578 @@ export async function emitWasmPlanOnGpu(
   }
 }
 
+type PreparedWasmGpuJob = {
+  readonly plan: WasmBinaryPlan;
+  readonly columns: ReturnType<typeof atomColumns>;
+  readonly maximumByteCount: number;
+  readonly maximumOutputWordCount: number;
+  readonly workgroupCount: number;
+  readonly scanDistances: readonly number[];
+};
+
+type PackedWasmColumn = {
+  readonly words: Uint32Array;
+  readonly regions: readonly {
+    readonly offset: number;
+    readonly size: number;
+  }[];
+  readonly maximumRegionSize: number;
+};
+
+async function emitPackedWasmPlansOnGpu(
+  plans: readonly WasmBinaryPlan[],
+): Promise<readonly GpuWasmEmissionResult[]> {
+  try {
+    return await emitPackedWasmPlanBatch(plans);
+  } catch (error) {
+    if (error instanceof CompilerGpuCapacityError && plans.length > 1) {
+      const split = Math.ceil(plans.length / 2);
+      const [left, right] = await Promise.all([
+        emitPackedWasmPlansOnGpu(plans.slice(0, split)),
+        emitPackedWasmPlansOnGpu(plans.slice(split)),
+      ]);
+      return [...left, ...right];
+    }
+    throw error;
+  }
+}
+
+async function emitPackedWasmPlanBatch(
+  plans: readonly WasmBinaryPlan[],
+): Promise<readonly GpuWasmEmissionResult[]> {
+  const jobs = plans.map(prepareWasmGpuJob);
+  const context = await requestGpuWasmContext();
+  if (context.status === "unavailable") return plans.map(() => context);
+  const {
+    device,
+    emissionPipeline,
+    lengthPipeline,
+    scanPipeline,
+    sizePipeline,
+  } = context;
+  const storageAlignment = device.limits.minStorageBufferOffsetAlignment;
+  const uniformAlignment = device.limits.minUniformBufferOffsetAlignment;
+  const kinds = packWasmColumns(
+    jobs.map((job) => job.columns.kinds),
+    4,
+    storageAlignment,
+  );
+  const lowWords = packWasmColumns(
+    jobs.map((job) => job.columns.lowWords),
+    4,
+    storageAlignment,
+  );
+  const highWords = packWasmColumns(
+    jobs.map((job) => job.columns.highWords),
+    4,
+    storageAlignment,
+  );
+  const rangeStarts = packWasmColumns(
+    jobs.map((job) => job.columns.rangeStarts),
+    4,
+    storageAlignment,
+  );
+  const rangeCounts = packWasmColumns(
+    jobs.map((job) => job.columns.rangeCounts),
+    4,
+    storageAlignment,
+  );
+  const dependencyLevels = packWasmColumns(
+    jobs.map((job) => job.columns.dependencyLevels),
+    4,
+    storageAlignment,
+  );
+  const sizes = packWasmColumns(
+    jobs.map((job) => new Uint32Array(job.plan.atoms.length)),
+    4,
+    storageAlignment,
+  );
+  const prefixes = packWasmColumns(
+    jobs.map((job) => new Uint32Array(job.plan.atoms.length)),
+    4,
+    storageAlignment,
+  );
+  const alternatePrefixes = packWasmColumns(
+    jobs.map((job) => new Uint32Array(job.plan.atoms.length)),
+    4,
+    storageAlignment,
+  );
+  const outputs = packWasmColumns(
+    jobs.map((job) => new Uint32Array(job.maximumOutputWordCount)),
+    4,
+    storageAlignment,
+  );
+  const countParameters = packWasmColumns(
+    jobs.map((job) => new Uint32Array([job.plan.atoms.length])),
+    4,
+    uniformAlignment,
+  );
+  const passParameterWords: Uint32Array[] = [];
+  const lengthParameterIndices = jobs.map((job) =>
+    Array.from(
+      { length: job.plan.maximumDependencyLevel },
+      (_, index) => {
+        passParameterWords.push(
+          new Uint32Array([job.plan.atoms.length, index + 1]),
+        );
+        return passParameterWords.length - 1;
+      },
+    )
+  );
+  const scanParameterIndices = jobs.map((job) =>
+    job.scanDistances.map((distance) => {
+      passParameterWords.push(
+        new Uint32Array([job.plan.atoms.length, distance]),
+      );
+      return passParameterWords.length - 1;
+    })
+  );
+  const passParameters = packWasmColumns(
+    passParameterWords,
+    8,
+    uniformAlignment,
+  );
+  const readbacks = packWasmColumns(
+    jobs.map((job) => new Uint32Array(1 + job.maximumOutputWordCount)),
+    4,
+    4,
+  );
+
+  const kindBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch atom kinds",
+    kinds,
+    GPUBufferUsage.STORAGE,
+  );
+  const lowWordBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch low words",
+    lowWords,
+    GPUBufferUsage.STORAGE,
+  );
+  const highWordBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch high words",
+    highWords,
+    GPUBufferUsage.STORAGE,
+  );
+  const rangeStartBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch range starts",
+    rangeStarts,
+    GPUBufferUsage.STORAGE,
+  );
+  const rangeCountBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch range counts",
+    rangeCounts,
+    GPUBufferUsage.STORAGE,
+  );
+  const dependencyLevelBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch dependency levels",
+    dependencyLevels,
+    GPUBufferUsage.STORAGE,
+  );
+  const sizeBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch atom sizes",
+    sizes,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  );
+  const prefixBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch prefixes",
+    prefixes,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST |
+      GPUBufferUsage.COPY_SRC,
+  );
+  const alternatePrefixBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch alternate prefixes",
+    alternatePrefixes,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  );
+  const outputBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch packed output",
+    outputs,
+    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  );
+  const countParameterBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch count parameters",
+    countParameters,
+    GPUBufferUsage.UNIFORM,
+  );
+  const passParameterBuffer = createPackedWasmBuffer(
+    device,
+    "Wasm batch pass parameters",
+    passParameters,
+    GPUBufferUsage.UNIFORM,
+  );
+  const readbackBuffer = createCompilerGpuBuffer(
+    device,
+    "Wasm batch readback",
+    {
+      size: readbacks.words.byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    },
+    "copy",
+  );
+  const buffers = [
+    kindBuffer,
+    lowWordBuffer,
+    highWordBuffer,
+    rangeStartBuffer,
+    rangeCountBuffer,
+    dependencyLevelBuffer,
+    sizeBuffer,
+    prefixBuffer,
+    alternatePrefixBuffer,
+    outputBuffer,
+    countParameterBuffer,
+    passParameterBuffer,
+    readbackBuffer,
+  ];
+  let readbackMapped = false;
+  try {
+    const encoder = device.createCommandEncoder();
+    const sizePass = encoder.beginComputePass();
+    sizePass.setPipeline(sizePipeline);
+    for (const [index, job] of jobs.entries()) {
+      sizePass.setBindGroup(
+        0,
+        device.createBindGroup({
+          layout: sizePipeline.getBindGroupLayout(0),
+          entries: [
+            wasmBindGroupEntry(0, kindBuffer, kinds.regions[index]),
+            wasmBindGroupEntry(1, lowWordBuffer, lowWords.regions[index]),
+            wasmBindGroupEntry(2, highWordBuffer, highWords.regions[index]),
+            wasmBindGroupEntry(3, sizeBuffer, sizes.regions[index]),
+            wasmBindGroupEntry(
+              4,
+              countParameterBuffer,
+              countParameters.regions[index],
+            ),
+          ],
+        }),
+      );
+      dispatchCompilerGpuWorkgroups(
+        device,
+        sizePass,
+        `Wasm batch size calculation job ${index}`,
+        job.workgroupCount,
+      );
+    }
+    sizePass.end();
+
+    const lengthPass = encoder.beginComputePass();
+    lengthPass.setPipeline(lengthPipeline);
+    for (const [jobIndex, job] of jobs.entries()) {
+      for (
+        let level = 1;
+        level <= job.plan.maximumDependencyLevel;
+        level += 1
+      ) {
+        const parameterIndex = lengthParameterIndices[jobIndex][level - 1];
+        lengthPass.setBindGroup(
+          0,
+          device.createBindGroup({
+            layout: lengthPipeline.getBindGroupLayout(0),
+            entries: [
+              wasmBindGroupEntry(0, kindBuffer, kinds.regions[jobIndex]),
+              wasmBindGroupEntry(
+                1,
+                lowWordBuffer,
+                lowWords.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(
+                2,
+                rangeStartBuffer,
+                rangeStarts.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(
+                3,
+                rangeCountBuffer,
+                rangeCounts.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(
+                4,
+                dependencyLevelBuffer,
+                dependencyLevels.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(5, sizeBuffer, sizes.regions[jobIndex]),
+              wasmBindGroupEntry(
+                6,
+                passParameterBuffer,
+                passParameters.regions[parameterIndex],
+              ),
+            ],
+          }),
+        );
+        dispatchCompilerGpuWorkgroups(
+          device,
+          lengthPass,
+          `Wasm batch length job ${jobIndex} level ${level}`,
+          job.workgroupCount,
+        );
+      }
+    }
+    lengthPass.end();
+
+    for (const [index, job] of jobs.entries()) {
+      encoder.copyBufferToBuffer(
+        sizeBuffer,
+        sizes.regions[index].offset,
+        prefixBuffer,
+        prefixes.regions[index].offset,
+        job.columns.kinds.byteLength,
+      );
+    }
+
+    const finalPrefixBuffers: GPUBuffer[] = [];
+    const scanPass = encoder.beginComputePass();
+    scanPass.setPipeline(scanPipeline);
+    for (const [jobIndex, job] of jobs.entries()) {
+      let inputPrefixBuffer = prefixBuffer;
+      let outputPrefixBuffer = alternatePrefixBuffer;
+      for (
+        const [round, distance] of job.scanDistances.entries()
+      ) {
+        const parameterIndex = scanParameterIndices[jobIndex][round];
+        scanPass.setBindGroup(
+          0,
+          device.createBindGroup({
+            layout: scanPipeline.getBindGroupLayout(0),
+            entries: [
+              wasmBindGroupEntry(
+                0,
+                inputPrefixBuffer,
+                inputPrefixBuffer === prefixBuffer
+                  ? prefixes.regions[jobIndex]
+                  : alternatePrefixes.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(
+                1,
+                outputPrefixBuffer,
+                outputPrefixBuffer === prefixBuffer
+                  ? prefixes.regions[jobIndex]
+                  : alternatePrefixes.regions[jobIndex],
+              ),
+              wasmBindGroupEntry(
+                2,
+                passParameterBuffer,
+                passParameters.regions[parameterIndex],
+              ),
+            ],
+          }),
+        );
+        dispatchCompilerGpuWorkgroups(
+          device,
+          scanPass,
+          `Wasm batch scan job ${jobIndex} distance ${distance}`,
+          job.workgroupCount,
+        );
+        [inputPrefixBuffer, outputPrefixBuffer] = [
+          outputPrefixBuffer,
+          inputPrefixBuffer,
+        ];
+      }
+      finalPrefixBuffers.push(inputPrefixBuffer);
+    }
+    scanPass.end();
+
+    const emissionPass = encoder.beginComputePass();
+    emissionPass.setPipeline(emissionPipeline);
+    for (const [index, job] of jobs.entries()) {
+      const finalPrefixBuffer = finalPrefixBuffers[index];
+      emissionPass.setBindGroup(
+        0,
+        device.createBindGroup({
+          layout: emissionPipeline.getBindGroupLayout(0),
+          entries: [
+            wasmBindGroupEntry(0, kindBuffer, kinds.regions[index]),
+            wasmBindGroupEntry(1, lowWordBuffer, lowWords.regions[index]),
+            wasmBindGroupEntry(2, highWordBuffer, highWords.regions[index]),
+            wasmBindGroupEntry(3, sizeBuffer, sizes.regions[index]),
+            wasmBindGroupEntry(
+              4,
+              finalPrefixBuffer,
+              finalPrefixBuffer === prefixBuffer
+                ? prefixes.regions[index]
+                : alternatePrefixes.regions[index],
+            ),
+            wasmBindGroupEntry(5, outputBuffer, outputs.regions[index]),
+            wasmBindGroupEntry(
+              6,
+              countParameterBuffer,
+              countParameters.regions[index],
+            ),
+          ],
+        }),
+      );
+      dispatchCompilerGpuWorkgroups(
+        device,
+        emissionPass,
+        `Wasm batch emission job ${index}`,
+        job.workgroupCount,
+      );
+    }
+    emissionPass.end();
+
+    for (const [index, job] of jobs.entries()) {
+      const finalPrefixBuffer = finalPrefixBuffers[index];
+      const finalPrefixRegion = finalPrefixBuffer === prefixBuffer
+        ? prefixes.regions[index]
+        : alternatePrefixes.regions[index];
+      encoder.copyBufferToBuffer(
+        finalPrefixBuffer,
+        finalPrefixRegion.offset + (job.plan.atoms.length - 1) * 4,
+        readbackBuffer,
+        readbacks.regions[index].offset,
+        4,
+      );
+      encoder.copyBufferToBuffer(
+        outputBuffer,
+        outputs.regions[index].offset,
+        readbackBuffer,
+        readbacks.regions[index].offset + 4,
+        job.maximumOutputWordCount * 4,
+      );
+    }
+
+    const submission = await submitCompilerGpuCommand(
+      device,
+      "Wasm payload batch",
+      encoder.finish(),
+      "latency",
+    );
+    await awaitCompilerGpuCommand(
+      device,
+      "Wasm payload batch",
+      readbackBuffer.mapAsync(GPUMapMode.READ),
+    );
+    readbackMapped = true;
+    const mapped = readbackBuffer.getMappedRange();
+    return jobs.map((job, index) => {
+      const readbackOffset = readbacks.regions[index].offset;
+      const byteCount = new Uint32Array(mapped, readbackOffset, 1)[0];
+      if (byteCount > job.maximumByteCount) {
+        throw new RangeError(
+          `WebGPU Wasm batch job ${index} returned ${byteCount} bytes; plan maximum is ${job.maximumByteCount}`,
+        );
+      }
+      return {
+        status: "completed",
+        bytes: new Uint8Array(mapped, readbackOffset + 4, byteCount).slice(),
+        atomCount: job.plan.atoms.length,
+        byteCount,
+        outputBufferBytes: job.maximumOutputWordCount * 4,
+        lengthRounds: job.plan.maximumDependencyLevel,
+        scanRounds: job.scanDistances.length,
+        submissionBatchSize: submission.submissionBatchSize,
+        payloadBatchSize: jobs.length,
+        queueWaitMilliseconds: submission.queueWaitMilliseconds,
+      };
+    });
+  } finally {
+    if (readbackMapped) readbackBuffer.unmap();
+    buffers.forEach((buffer) => buffer.destroy());
+  }
+}
+
+function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
+  validateWasmBinaryPlan(plan);
+  const maximumByteCount = plan.atoms.length * maximumEncodedAtomSize;
+  if (
+    !Number.isSafeInteger(maximumByteCount) || maximumByteCount > 0xffff_ffff
+  ) {
+    throw new RangeError(
+      `GPU Wasm plan contains ${plan.atoms.length} atoms; its maximum encoded size exceeds u32`,
+    );
+  }
+  const scanDistances: number[] = [];
+  for (let distance = 1; distance < plan.atoms.length; distance *= 2) {
+    scanDistances.push(distance);
+  }
+  return {
+    plan,
+    columns: atomColumns(plan.atoms),
+    maximumByteCount,
+    maximumOutputWordCount: Math.ceil(maximumByteCount / 4),
+    workgroupCount: Math.ceil(plan.atoms.length / 64),
+    scanDistances,
+  };
+}
+
+function packWasmColumns(
+  columns: readonly Uint32Array[],
+  minimumRegionBytes: number,
+  alignment: number,
+): PackedWasmColumn {
+  const regions: { offset: number; size: number }[] = [];
+  let byteLength = 0;
+  let maximumRegionSize = 0;
+  for (const column of columns) {
+    byteLength = Math.ceil(byteLength / alignment) * alignment;
+    const size = Math.max(minimumRegionBytes, column.byteLength);
+    regions.push({ offset: byteLength, size });
+    maximumRegionSize = Math.max(maximumRegionSize, size);
+    byteLength += size;
+  }
+  const words = new Uint32Array(
+    Math.max(1, Math.ceil(byteLength / 4)),
+  );
+  for (const [index, column] of columns.entries()) {
+    words.set(column, regions[index].offset / 4);
+  }
+  return {
+    words,
+    regions,
+    maximumRegionSize: Math.max(minimumRegionBytes, maximumRegionSize),
+  };
+}
+
+function createPackedWasmBuffer(
+  device: GPUDevice,
+  label: string,
+  column: PackedWasmColumn,
+  usage: GPUBufferUsageFlags,
+): GPUBuffer {
+  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
+    ? "uniform"
+    : "storage";
+  const buffer = createCompilerGpuBuffer(
+    device,
+    label,
+    {
+      size: column.words.byteLength,
+      usage,
+      mappedAtCreation: true,
+    },
+    binding,
+    column.maximumRegionSize,
+  );
+  new Uint32Array(buffer.getMappedRange()).set(column.words);
+  buffer.unmap();
+  return buffer;
+}
+
+function wasmBindGroupEntry(
+  binding: number,
+  buffer: GPUBuffer,
+  region: { readonly offset: number; readonly size: number },
+): GPUBindGroupEntry {
+  return {
+    binding,
+    resource: { buffer, offset: region.offset, size: region.size },
+  };
+}
+
 async function emitWasmPlanWithGpu(
   plan: WasmBinaryPlan,
+  scheduling: CompilerGpuSchedulingPolicy,
 ): Promise<GpuWasmEmissionResult> {
   validateWasmBinaryPlan(plan);
   const columns = atomColumns(plan.atoms);
@@ -409,12 +1007,8 @@ async function emitWasmPlanWithGpu(
     countParameterBuffer,
     readback,
   ];
-  const releaseEmission = await acquireCompilerGpuErrorScope();
   let readbackMapped = false;
-  let validationScopePending = false;
   try {
-    device.pushErrorScope("validation");
-    validationScopePending = true;
     const encoder = device.createCommandEncoder();
     const sizeBindGroup = device.createBindGroup({
       layout: sizePipeline.getBindGroupLayout(0),
@@ -552,20 +1146,18 @@ async function emitWasmPlanWithGpu(
       4,
       maximumOutputWordCount * 4,
     );
-    device.queue.submit([encoder.finish()]);
+    const submission = await submitCompilerGpuCommand(
+      device,
+      "Wasm emission",
+      encoder.finish(),
+      scheduling,
+    );
     await awaitCompilerGpuCommand(
       device,
       "Wasm emission",
       readback.mapAsync(GPUMapMode.READ),
     );
     readbackMapped = true;
-    const validationError = await device.popErrorScope();
-    validationScopePending = false;
-    if (validationError !== null) {
-      throw new Error(
-        `WebGPU Wasm emission validation failed: ${validationError.message}`,
-      );
-    }
     const mapped = readback.getMappedRange();
     const byteCount = new Uint32Array(mapped, 0, 1)[0];
     if (byteCount > maximumByteCount) {
@@ -582,18 +1174,19 @@ async function emitWasmPlanWithGpu(
       outputBufferBytes: maximumOutputWordCount * 4,
       lengthRounds: plan.maximumDependencyLevel,
       scanRounds,
+      submissionBatchSize: submission.submissionBatchSize,
+      payloadBatchSize: 1,
+      queueWaitMilliseconds: submission.queueWaitMilliseconds,
     };
   } catch (error) {
     const reason = compilerGpuUnavailabilityReason("Wasm emission", error);
     if (reason !== undefined) return { status: "unavailable", reason };
     throw error;
   } finally {
-    if (validationScopePending) await device.popErrorScope();
     if (readbackMapped) readback.unmap();
     for (const buffer of [...buffers, ...transientParameterBuffers]) {
       buffer.destroy();
     }
-    releaseEmission();
   }
 }
 

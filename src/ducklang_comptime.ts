@@ -11,6 +11,7 @@ import {
   evaluateDucklangConst,
   recursiveDucklangConstEnvironment,
 } from "./ducklang_const.ts";
+import { visitDucklangExpressionChildren } from "./ducklang_closures.ts";
 import type {
   TypedDucklangExpression,
   TypedDucklangModule,
@@ -24,8 +25,18 @@ export async function evaluateDucklangComptime(
   readonly module: TypedDucklangModule;
   readonly cpuValues: readonly ComptimeValue[];
   readonly gpu: ComptimeBatchResult | undefined;
+  readonly changedBindingSymbols: ReadonlySet<number>;
+  readonly resultChanged: boolean;
+  readonly metrics: {
+    readonly expressionCount: number;
+    readonly functionExpressionCount: number;
+    readonly scalarJobCount: number;
+    readonly deferredExpressionCount: number;
+    readonly changedBindingCount: number;
+  };
 }> {
   const expressions: TypedDucklangExpression[] = [];
+  const functionExpressions = new Set<TypedDucklangExpression>();
   const deferredExpressions = new Set<TypedDucklangExpression>();
   for (const binding of module.bindings) {
     collectComptimeExpressions(
@@ -33,6 +44,7 @@ export async function evaluateDucklangComptime(
       expressions,
       new Set(),
       deferredExpressions,
+      functionExpressions,
     );
   }
   collectComptimeExpressions(
@@ -40,6 +52,7 @@ export async function evaluateDucklangComptime(
     expressions,
     new Set(),
     deferredExpressions,
+    functionExpressions,
   );
 
   // Module-level function bindings are supplied as closures that can see the
@@ -105,18 +118,77 @@ export async function evaluateDucklangComptime(
       () => valueIndex++,
       deferredExpressions,
     );
-  return {
-    module: {
+  const changedBindingSymbols = new Set<number>();
+  const bindings = module.bindings.map((binding) => {
+    if (!containsComptimeReplacement(binding.value, deferredExpressions)) {
+      return binding;
+    }
+    changedBindingSymbols.add(binding.symbol.id);
+    return { ...binding, value: replace(binding.value) };
+  });
+  const resultChanged = containsComptimeReplacement(
+    module.result,
+    deferredExpressions,
+  );
+  const result = resultChanged ? replace(module.result) : module.result;
+  const comptimeModule = changedBindingSymbols.size === 0 && !resultChanged
+    ? module
+    : {
       ...module,
-      bindings: module.bindings.map((binding) => ({
-        ...binding,
-        value: replace(binding.value),
-      })),
-      result: replace(module.result),
-    },
+      bindings,
+      result,
+    };
+  return {
+    module: comptimeModule,
     cpuValues: cpu.values,
     gpu,
+    changedBindingSymbols,
+    resultChanged,
+    metrics: {
+      expressionCount: expressions.length,
+      functionExpressionCount: functionExpressions.size,
+      scalarJobCount: scalarExpressions.length,
+      deferredExpressionCount: deferredExpressions.size,
+      changedBindingCount: changedBindingSymbols.size,
+    },
   };
+}
+
+function containsComptimeReplacement(
+  expression: TypedDucklangExpression,
+  deferredExpressions: ReadonlySet<TypedDucklangExpression>,
+): boolean {
+  if (expression.kind === "comptime") {
+    return !deferredExpressions.has(expression);
+  }
+  if (expression.kind === "binary") {
+    if (expression.operator === ":>" || expression.operator === ":<") {
+      return true;
+    }
+    if (
+      expression.operator === ":+"
+    ) {
+      if (expression.left.kind === "integer" && expression.left.value === 0) {
+        return true;
+      }
+      if (
+        expression.left.kind === "product" &&
+        expression.right.kind === "product"
+      ) {
+        return true;
+      }
+    }
+  }
+  let containsReplacement = false;
+  visitDucklangExpressionChildren(expression, (child) => {
+    if (
+      !containsReplacement &&
+      containsComptimeReplacement(child, deferredExpressions)
+    ) {
+      containsReplacement = true;
+    }
+  });
+  return containsReplacement;
 }
 
 function collectComptimeExpressions(
@@ -124,9 +196,13 @@ function collectComptimeExpressions(
   expressions: TypedDucklangExpression[],
   boundSymbols: ReadonlySet<number>,
   deferredExpressions: Set<TypedDucklangExpression>,
+  functionExpressions: Set<TypedDucklangExpression>,
 ): void {
   if (expression.kind === "comptime") {
-    if (expression.expression.kind === "function") return;
+    if (expression.expression.kind === "function") {
+      functionExpressions.add(expression);
+      return;
+    }
     if (referencesBoundSymbol(expression.expression, boundSymbols)) {
       deferredExpressions.add(expression);
       return;
@@ -140,8 +216,19 @@ function collectComptimeExpressions(
       expressions,
       boundSymbols,
       deferredExpressions,
+      functionExpressions,
     );
   switch (expression.kind) {
+    case "effectHandler":
+      for (const field of expression.fields) collect(field.value);
+      return;
+    case "resume":
+      collect(expression.value);
+      return;
+    case "handle":
+      throw new Error(
+        `${expression.span.file}:${expression.span.start}: typed Ducklang effect syntax reached comptime before structural effect lowering`,
+      );
     case "integer":
     case "integer64":
     case "float32":
@@ -183,6 +270,7 @@ function collectComptimeExpressions(
         expressions,
         functionSymbols,
         deferredExpressions,
+        functionExpressions,
       );
       return;
     }
@@ -477,6 +565,33 @@ function replaceComptimeExpressions(
           )
         ),
       };
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: replaceComptimeExpressions(
+            field.value,
+            values,
+            nextValueIndex,
+            deferredExpressions,
+          ),
+        })),
+      };
+    case "resume":
+      return {
+        ...expression,
+        value: replaceComptimeExpressions(
+          expression.value,
+          values,
+          nextValueIndex,
+          deferredExpressions,
+        ),
+      };
+    case "handle":
+      throw new Error(
+        `${expression.span.file}:${expression.span.start}: typed Ducklang effect syntax reached comptime replacement before structural effect lowering`,
+      );
     case "optionDo":
       return {
         ...expression,

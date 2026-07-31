@@ -57,6 +57,31 @@ value + 1
     assertEquals([...artifact.wasm], [...expected]);
     assertEquals(artifact.gpuWasmResult?.status, "completed");
   }
+  const duckArtifacts = artifacts.filter((artifact) =>
+    artifact.language === "ducklang"
+  );
+  if (
+    Math.max(
+      ...duckArtifacts.map((artifact) =>
+        artifact.profile.work.gpuCorePayloadBatchSize
+      ),
+    ) < 2
+  ) {
+    throw new Error(
+      "concurrent Ducklang Core payloads were not packed together",
+    );
+  }
+  if (
+    Math.max(
+      ...duckArtifacts.map((artifact) =>
+        artifact.profile.work.gpuWasmPayloadBatchSize
+      ),
+    ) < 2
+  ) {
+    throw new Error(
+      "concurrent Ducklang Wasm payloads were not packed together",
+    );
+  }
 
   const recovered = await compileModuleSource(
     "recovered.duck",

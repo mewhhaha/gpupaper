@@ -12,20 +12,186 @@ import {
 import type { DucklangSymbol } from "./ducklang_resolution.ts";
 import type { SourceSpan } from "./syntax.ts";
 
+export type DucklangSpecializationMetrics = {
+  readonly inputBindingCount: number;
+  readonly demandedBindingCount: number;
+  readonly rewrittenBindingCount: number;
+  readonly residualBindingCount: number;
+  readonly inputNodeCount: number;
+  readonly demandedInputNodeCount: number;
+  readonly rewrittenInputNodeCount: number;
+  readonly residualNodeCount: number;
+  readonly distinctSpecializationKeyCount: number;
+  readonly specializationCacheHitCount: number;
+  readonly distinctFunctionAnalysisCount: number;
+  readonly repeatedFunctionAnalysisCount: number;
+};
+
+export type DucklangSpecializationResult = {
+  readonly module: TypedDucklangModule;
+  readonly metrics: DucklangSpecializationMetrics;
+  readonly timings: {
+    readonly demandMilliseconds: number;
+    readonly frontierMilliseconds: number;
+    readonly rewriteMilliseconds: number;
+    readonly liftingMilliseconds: number;
+    readonly reachabilityMilliseconds: number;
+    readonly accountingMilliseconds: number;
+  };
+};
+
+export type DucklangSpecializationFrontier = {
+  readonly changedBindingSymbols: ReadonlySet<number>;
+  readonly resultChanged: boolean;
+};
+
+type FunctionSpecializationAnalysis = {
+  readonly body: TypedDucklangExpression;
+  readonly referencedSymbols: ReadonlySet<number>;
+  readonly parameterSymbols: ReadonlySet<number>;
+  readonly directlyCalledSymbols: ReadonlySet<number>;
+};
+
+type SpecializationContext = {
+  readonly requests: Map<
+    string,
+    | { readonly status: "pending" }
+    | {
+      readonly status: "complete";
+      readonly expression: TypedDucklangExpression;
+    }
+  >;
+  readonly functionIds: WeakMap<object, number>;
+  readonly functionAnalyses: WeakMap<
+    object,
+    FunctionSpecializationAnalysis | null
+  >;
+  readonly typeIdentities: WeakMap<object, string>;
+  readonly valueIds: WeakMap<object, number>;
+  readonly substitutionEnvironments: ReadonlyMap<
+    number,
+    TypedDucklangExpression
+  >[];
+  nextFunctionId: number;
+  nextValueId: number;
+  cacheHitCount: number;
+  distinctFunctionAnalysisCount: number;
+  repeatedFunctionAnalysisCount: number;
+};
+
 export function specializeStaticDucklangClosures(
   module: TypedDucklangModule,
-): TypedDucklangModule {
+  frontier?: DucklangSpecializationFrontier,
+): DucklangSpecializationResult {
+  const demandStart = performance.now();
+  const inputBindingsBySymbol = new Map(
+    module.bindings.map((binding) => [binding.symbol.id, binding]),
+  );
+  const demandedBindingSymbols = new Set<number>();
+  const pendingBindingSymbols: number[] = [];
+  const demandExpression = (expression: TypedDucklangExpression): void => {
+    const references = new Set<number>();
+    collectReferences(expression, references);
+    for (const symbolId of references) {
+      if (
+        demandedBindingSymbols.has(symbolId) ||
+        !inputBindingsBySymbol.has(symbolId)
+      ) {
+        continue;
+      }
+      demandedBindingSymbols.add(symbolId);
+      pendingBindingSymbols.push(symbolId);
+    }
+  };
+  demandExpression(module.result);
+  for (const binding of module.bindings) {
+    if (binding.stage !== "runtime" || binding.value.kind === "function") {
+      continue;
+    }
+    if (demandedBindingSymbols.has(binding.symbol.id)) continue;
+    demandedBindingSymbols.add(binding.symbol.id);
+    pendingBindingSymbols.push(binding.symbol.id);
+  }
+  while (pendingBindingSymbols.length > 0) {
+    const symbolId = pendingBindingSymbols.pop()!;
+    demandExpression(inputBindingsBySymbol.get(symbolId)!.value);
+  }
+  const demandedInputBindings = module.bindings.filter((binding) =>
+    demandedBindingSymbols.has(binding.symbol.id)
+  );
+  const demandMilliseconds = performance.now() - demandStart;
+
+  const frontierStart = performance.now();
+  const rewrittenBindingSymbols = frontier === undefined
+    ? new Set(demandedBindingSymbols)
+    : new Set(
+      [...frontier.changedBindingSymbols].filter((symbolId) =>
+        demandedBindingSymbols.has(symbolId)
+      ),
+    );
+  if (frontier !== undefined) {
+    const dependentBindings = new Map<number, Set<number>>();
+    for (const binding of demandedInputBindings) {
+      const references = new Set<number>();
+      collectReferences(binding.value, references);
+      for (const referencedSymbol of references) {
+        if (!demandedBindingSymbols.has(referencedSymbol)) continue;
+        const dependents = dependentBindings.get(referencedSymbol) ??
+          new Set<number>();
+        dependents.add(binding.symbol.id);
+        dependentBindings.set(referencedSymbol, dependents);
+      }
+    }
+    const pendingChangedSymbols = [...rewrittenBindingSymbols];
+    while (pendingChangedSymbols.length > 0) {
+      const changedSymbol = pendingChangedSymbols.pop()!;
+      for (const dependent of dependentBindings.get(changedSymbol) ?? []) {
+        if (rewrittenBindingSymbols.has(dependent)) continue;
+        rewrittenBindingSymbols.add(dependent);
+        pendingChangedSymbols.push(dependent);
+      }
+    }
+  }
+  const resultReferences = new Set<number>();
+  collectReferences(module.result, resultReferences);
+  const rewriteResult = frontier === undefined || frontier.resultChanged ||
+    [...resultReferences].some((symbolId) =>
+      rewrittenBindingSymbols.has(symbolId)
+    );
+  const specialization: SpecializationContext = {
+    requests: new Map(),
+    functionIds: new WeakMap(),
+    functionAnalyses: new WeakMap(),
+    typeIdentities: new WeakMap(),
+    valueIds: new WeakMap(),
+    substitutionEnvironments: [],
+    nextFunctionId: 0,
+    nextValueId: 0,
+    cacheHitCount: 0,
+    distinctFunctionAnalysisCount: 0,
+    repeatedFunctionAnalysisCount: 0,
+  };
+  const frontierMilliseconds = performance.now() - frontierStart;
+
+  const rewriteStart = performance.now();
   const values = new Map<number, TypedDucklangExpression>();
-  const rewrittenBindings = module.bindings.map((
+  const rewrittenBindings = demandedInputBindings.map((
     binding,
   ): TypedDucklangBinding => {
-    const value = rewriteExpression(binding.value, values);
+    const value = rewrittenBindingSymbols.has(binding.symbol.id)
+      ? rewriteExpression(binding.value, values, specialization)
+      : binding.value;
     values.set(binding.symbol.id, value);
     return { ...binding, value };
   });
   const liftedBindings: TypedDucklangBinding[] = [];
   const liftedFunctionSymbols = new Set<number>();
-  const rewrittenResult = rewriteExpression(module.result, values);
+  const rewrittenResult = rewriteResult
+    ? rewriteExpression(module.result, values, specialization)
+    : module.result;
+  const rewriteMilliseconds = performance.now() - rewriteStart;
+
+  const liftingStart = performance.now();
   const directFunctionSymbols = new Set<number>();
   const collectDirectFunctions = (
     expression: TypedDucklangExpression,
@@ -56,23 +222,29 @@ export function specializeStaticDucklangClosures(
   };
   const bindings = rewrittenBindings.map((binding) => ({
     ...binding,
-    value: liftGeneratedFunctions(
-      binding.value,
+    value: rewrittenBindingSymbols.has(binding.symbol.id)
+      ? liftGeneratedFunctions(
+        binding.value,
+        liftedBindings,
+        liftedFunctionSymbols,
+        directFunctionSymbols,
+        allocateSymbolId,
+      )
+      : binding.value,
+  }));
+  const result = rewriteResult
+    ? liftGeneratedFunctions(
+      rewrittenResult,
       liftedBindings,
       liftedFunctionSymbols,
       directFunctionSymbols,
       allocateSymbolId,
-    ),
-  }));
-  const result = liftGeneratedFunctions(
-    rewrittenResult,
-    liftedBindings,
-    liftedFunctionSymbols,
-    directFunctionSymbols,
-    allocateSymbolId,
-  );
+    )
+    : rewrittenResult;
   bindings.push(...liftedBindings);
+  const liftingMilliseconds = performance.now() - liftingStart;
 
+  const reachabilityStart = performance.now();
   const bindingsBySymbol = new Map(
     bindings.map((binding) => [binding.symbol.id, binding]),
   );
@@ -90,13 +262,59 @@ export function specializeStaticDucklangClosures(
   };
   visit(result);
 
-  return {
+  const specializedModule = {
     ...module,
     bindings: bindings.filter((binding) =>
       reachable.has(binding.symbol.id) ||
       (binding.stage === "runtime" && binding.value.kind !== "function")
     ),
     result,
+  };
+  const reachabilityMilliseconds = performance.now() - reachabilityStart;
+
+  const accountingStart = performance.now();
+  const metrics = {
+    inputBindingCount: module.bindings.length,
+    demandedBindingCount: demandedInputBindings.length,
+    rewrittenBindingCount: rewrittenBindingSymbols.size,
+    residualBindingCount: specializedModule.bindings.length,
+    inputNodeCount: module.bindings.reduce(
+      (count, binding) => count + countExpressionNodes(binding.value),
+      countExpressionNodes(module.result),
+    ),
+    demandedInputNodeCount: demandedInputBindings.reduce(
+      (count, binding) => count + countExpressionNodes(binding.value),
+      countExpressionNodes(module.result),
+    ),
+    rewrittenInputNodeCount: demandedInputBindings.reduce(
+      (count, binding) =>
+        rewrittenBindingSymbols.has(binding.symbol.id)
+          ? count + countExpressionNodes(binding.value)
+          : count,
+      rewriteResult ? countExpressionNodes(module.result) : 0,
+    ),
+    residualNodeCount: specializedModule.bindings.reduce(
+      (count, binding) => count + countExpressionNodes(binding.value),
+      countExpressionNodes(specializedModule.result),
+    ),
+    distinctSpecializationKeyCount: specialization.requests.size,
+    specializationCacheHitCount: specialization.cacheHitCount,
+    distinctFunctionAnalysisCount: specialization.distinctFunctionAnalysisCount,
+    repeatedFunctionAnalysisCount: specialization.repeatedFunctionAnalysisCount,
+  };
+  const accountingMilliseconds = performance.now() - accountingStart;
+
+  return {
+    module: specializedModule,
+    metrics,
+    timings: {
+      demandMilliseconds,
+      frontierMilliseconds,
+      rewriteMilliseconds,
+      liftingMilliseconds,
+      reachabilityMilliseconds,
+      accountingMilliseconds,
+    },
   };
 }
 
@@ -443,8 +661,21 @@ function appendCallArguments(
 function rewriteExpression(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
+  specialization: SpecializationContext,
 ): TypedDucklangExpression {
   if (expression.kind === "reference") {
+    for (
+      let index = specialization.substitutionEnvironments.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const substituted = specialization.substitutionEnvironments[index].get(
+        expression.symbol.id,
+      );
+      if (substituted !== undefined) {
+        return rewriteExpression(substituted, values, specialization);
+      }
+    }
     const value = values.get(expression.symbol.id);
     if (value !== undefined && isInlineableScalar(value)) {
       return {
@@ -464,11 +695,55 @@ function rewriteExpression(
     }
   }
   if (expression.kind === "block") {
-    return rewriteBlock(expression, values);
+    return rewriteBlock(expression, values, specialization);
+  }
+  if (expression.kind === "if") {
+    const condition = rewriteExpression(
+      expression.condition,
+      values,
+      specialization,
+    );
+    const staticCondition = staticValue(condition, values);
+    if (
+      staticCondition.kind === "boolean" ||
+      staticCondition.kind === "integer"
+    ) {
+      const selectsConsequence = staticCondition.kind === "boolean"
+        ? staticCondition.value
+        : staticCondition.value !== 0;
+      return rewriteExpression(
+        selectsConsequence ? expression.consequence : expression.alternative,
+        values,
+        specialization,
+      );
+    }
+    const consequence = rewriteExpression(
+      expression.consequence,
+      values,
+      specialization,
+    );
+    const alternative = rewriteExpression(
+      expression.alternative,
+      values,
+      specialization,
+    );
+    if (
+      condition === expression.condition &&
+      consequence === expression.consequence &&
+      alternative === expression.alternative
+    ) {
+      return expression;
+    }
+    return {
+      ...expression,
+      condition,
+      consequence,
+      alternative,
+    };
   }
   const rewritten = rewriteChildren(
     expression,
-    (child) => rewriteExpression(child, values),
+    (child) => rewriteExpression(child, values, specialization),
   );
   if (
     rewritten.kind === "comptime" &&
@@ -570,25 +845,29 @@ function rewriteExpression(
       return value;
     }
     if (product.kind === "if") {
-      return rewriteExpression({
-        ...product,
-        consequence: {
-          kind: "project",
-          product: product.consequence,
-          index: rewritten.index,
+      return rewriteExpression(
+        {
+          ...product,
+          consequence: {
+            kind: "project",
+            product: product.consequence,
+            index: rewritten.index,
+            type: rewritten.type,
+            span: rewritten.span,
+          },
+          alternative: {
+            kind: "project",
+            product: product.alternative,
+            index: rewritten.index,
+            type: rewritten.type,
+            span: rewritten.span,
+          },
           type: rewritten.type,
           span: rewritten.span,
         },
-        alternative: {
-          kind: "project",
-          product: product.alternative,
-          index: rewritten.index,
-          type: rewritten.type,
-          span: rewritten.span,
-        },
-        type: rewritten.type,
-        span: rewritten.span,
-      }, values);
+        values,
+        specialization,
+      );
     }
   }
   if (rewritten.kind === "recordUpdate") {
@@ -630,85 +909,90 @@ function rewriteExpression(
             new Map([[rewritten.payloadSymbol.id, value.value]]),
           ),
           values,
+          specialization,
         );
       }
-      return rewriteExpression(selected, values);
+      return rewriteExpression(selected, values, specialization);
     }
     if (value.kind === "if") {
-      return rewriteExpression({
-        ...value,
-        consequence: {
-          ...rewritten,
-          value: value.consequence,
-        },
-        alternative: {
-          ...rewritten,
-          value: value.alternative,
-        },
-        type: rewritten.type,
-        span: rewritten.span,
-      }, values);
-    }
-  }
-  if (rewritten.kind === "if") {
-    const condition = staticValue(rewritten.condition, values);
-    if (condition.kind === "boolean" || condition.kind === "integer") {
-      const selected = condition.kind === "boolean"
-        ? condition.value
-        : condition.value !== 0;
       return rewriteExpression(
-        selected ? rewritten.consequence : rewritten.alternative,
+        {
+          ...value,
+          consequence: {
+            ...rewritten,
+            value: value.consequence,
+          },
+          alternative: {
+            ...rewritten,
+            value: value.alternative,
+          },
+          type: rewritten.type,
+          span: rewritten.span,
+        },
         values,
+        specialization,
       );
     }
   }
   const foldedBinary = foldStaticBinary(rewritten, values);
   if (foldedBinary !== undefined) return foldedBinary;
-  const foldedIntrinsic = foldStaticIntrinsic(rewritten, values);
+  const foldedIntrinsic = foldStaticIntrinsic(
+    rewritten,
+    values,
+    specialization,
+  );
   if (foldedIntrinsic !== undefined) return foldedIntrinsic;
   if (rewritten.kind !== "call") return collapseEmptyBlock(rewritten);
   const selectedCallee = staticValue(rewritten.callee, values);
   if (selectedCallee.kind === "if") {
-    return rewriteExpression({
-      ...selectedCallee,
-      consequence: {
-        kind: "call",
-        callee: selectedCallee.consequence,
-        arguments: rewritten.arguments,
+    return rewriteExpression(
+      {
+        ...selectedCallee,
+        consequence: {
+          kind: "call",
+          callee: selectedCallee.consequence,
+          arguments: rewritten.arguments,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
+        alternative: {
+          kind: "call",
+          callee: selectedCallee.alternative,
+          arguments: rewritten.arguments,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
         type: rewritten.type,
         span: rewritten.span,
       },
-      alternative: {
-        kind: "call",
-        callee: selectedCallee.alternative,
-        arguments: rewritten.arguments,
-        type: rewritten.type,
-        span: rewritten.span,
-      },
-      type: rewritten.type,
-      span: rewritten.span,
-    }, values);
+      values,
+      specialization,
+    );
   }
   if (selectedCallee.kind === "ifUnion") {
-    return rewriteExpression({
-      ...selectedCallee,
-      consequence: {
-        kind: "call",
-        callee: selectedCallee.consequence,
-        arguments: rewritten.arguments,
+    return rewriteExpression(
+      {
+        ...selectedCallee,
+        consequence: {
+          kind: "call",
+          callee: selectedCallee.consequence,
+          arguments: rewritten.arguments,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
+        alternative: {
+          kind: "call",
+          callee: selectedCallee.alternative,
+          arguments: rewritten.arguments,
+          type: rewritten.type,
+          span: rewritten.span,
+        },
         type: rewritten.type,
         span: rewritten.span,
       },
-      alternative: {
-        kind: "call",
-        callee: selectedCallee.alternative,
-        arguments: rewritten.arguments,
-        type: rewritten.type,
-        span: rewritten.span,
-      },
-      type: rewritten.type,
-      span: rewritten.span,
-    }, values);
+      values,
+      specialization,
+    );
   }
   if (
     rewritten.arguments.length === 0 &&
@@ -728,38 +1012,41 @@ function rewriteExpression(
   ) {
     return collapseEmptyBlock(rewritten);
   }
-  const factoryBody = inlineableFunctionBody(factory.body);
-  if (factoryBody === undefined) return collapseEmptyBlock(rewritten);
+  const analysis = analyzeSpecializationFunction(factory, specialization);
+  if (analysis === undefined) return collapseEmptyBlock(rewritten);
+  const staticArguments = rewritten.arguments.map((argument) =>
+    staticValue(argument, values)
+  );
   const returnsFunction = rewritten.type.kind === "function";
   const returnsAggregate = rewritten.type.kind === "constructor" &&
     (rewritten.type.name === "tuple" || rewritten.type.name === "array");
   const specializesFunctionParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factoryBody, parameter.id) &&
-      staticValue(rewritten.arguments[index], values).kind === "function",
+      analysis.referencedSymbols.has(parameter.id) &&
+      staticArguments[index].kind === "function",
   );
   const specializesTextParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factoryBody, parameter.id) &&
-      staticValue(rewritten.arguments[index], values).kind === "string",
+      analysis.referencedSymbols.has(parameter.id) &&
+      staticArguments[index].kind === "string",
   );
   const specializesUnionParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factoryBody, parameter.id) &&
-      staticValue(rewritten.arguments[index], values).kind === "unionCase",
+      analysis.referencedSymbols.has(parameter.id) &&
+      staticArguments[index].kind === "unionCase",
   );
   const specializesProductParameter = factory.parameters.some(
     (parameter, index) =>
-      referencesSymbol(factoryBody, parameter.id) &&
-      staticValue(rewritten.arguments[index], values).kind === "product",
+      analysis.referencedSymbols.has(parameter.id) &&
+      staticArguments[index].kind === "product",
   );
   const specializesIntrinsicParameter = factory.parameters.some(
     (parameter, index) => {
-      const argument = staticValue(rewritten.arguments[index], values);
+      const argument = staticArguments[index];
       return argument.kind === "intrinsic" &&
-        (isCalledParameter(factoryBody, parameter.id) ||
+        (analysis.directlyCalledSymbols.has(parameter.id) ||
           (argument.modulePath.startsWith("duck:type/") &&
-            referencesSymbol(factoryBody, parameter.id)));
+            analysis.referencedSymbols.has(parameter.id)));
     },
   );
   const specializesCompileTimeParameter = factory.parameters.some(
@@ -774,13 +1061,204 @@ function rewriteExpression(
   ) {
     return collapseEmptyBlock(rewritten);
   }
+  let functionId = specialization.functionIds.get(factory);
+  if (functionId === undefined) {
+    functionId = specialization.nextFunctionId;
+    specialization.nextFunctionId += 1;
+    specialization.functionIds.set(factory, functionId);
+  }
+  const environmentIdentity = [...analysis.referencedSymbols]
+    .filter((symbolId) =>
+      !analysis.parameterSymbols.has(symbolId) && values.has(symbolId)
+    )
+    .toSorted((left, right) => left - right)
+    .map((symbolId) => [
+      symbolId,
+      specializationExpressionIdentity(
+        staticValue(values.get(symbolId)!, values),
+        specialization,
+      ),
+    ]);
+  const requestKey = JSON.stringify([
+    functionId,
+    rewritten.span.file,
+    rewritten.span.start,
+    rewritten.span.end,
+    staticArguments.map((argument) =>
+      specializationExpressionIdentity(argument, specialization)
+    ),
+    environmentIdentity,
+  ]);
+  const cached = specialization.requests.get(requestKey);
+  if (cached?.status === "complete") {
+    specialization.cacheHitCount += 1;
+    return cached.expression;
+  }
+  if (cached?.status === "pending") return collapseEmptyBlock(rewritten);
+  specialization.requests.set(requestKey, { status: "pending" });
   const substitutions = new Map(
     factory.parameters.map((parameter, index) => [
       parameter.id,
       rewritten.arguments[index],
     ]),
   );
-  return rewriteExpression(substitute(factoryBody, substitutions), values);
+  specialization.substitutionEnvironments.push(substitutions);
+  let specialized: TypedDucklangExpression;
+  try {
+    specialized = rewriteExpression(
+      analysis.body,
+      values,
+      specialization,
+    );
+  } finally {
+    specialization.substitutionEnvironments.pop();
+  }
+  specialization.requests.set(requestKey, {
+    status: "complete",
+    expression: specialized,
+  });
+  return specialized;
+}
+
+function analyzeSpecializationFunction(
+  factory: Extract<TypedDucklangExpression, { readonly kind: "function" }>,
+  specialization: SpecializationContext,
+): FunctionSpecializationAnalysis | undefined {
+  const cached = specialization.functionAnalyses.get(factory);
+  if (cached !== undefined) {
+    specialization.repeatedFunctionAnalysisCount += 1;
+    return cached ?? undefined;
+  }
+
+  specialization.distinctFunctionAnalysisCount += 1;
+  const body = inlineableFunctionBody(factory.body);
+  if (body === undefined) {
+    specialization.functionAnalyses.set(factory, null);
+    return undefined;
+  }
+
+  const referencedSymbols = new Set<number>();
+  const directlyCalledSymbols = new Set<number>();
+  const pending = [body];
+  while (pending.length > 0) {
+    const expression = pending.pop()!;
+    if (expression.kind === "reference") {
+      referencedSymbols.add(expression.symbol.id);
+    }
+    if (
+      expression.kind === "call" &&
+      expression.callee.kind === "reference"
+    ) {
+      directlyCalledSymbols.add(expression.callee.symbol.id);
+    }
+    visitDucklangExpressionChildren(
+      expression,
+      (child) => pending.push(child),
+    );
+  }
+
+  const analysis = {
+    body,
+    referencedSymbols,
+    parameterSymbols: new Set(
+      factory.parameters.map((parameter) => parameter.id),
+    ),
+    directlyCalledSymbols,
+  };
+  specialization.functionAnalyses.set(factory, analysis);
+  return analysis;
+}
+
+function specializationExpressionIdentity(
+  expression: TypedDucklangExpression,
+  specialization: SpecializationContext,
+): string {
+  let typeIdentity = specialization.typeIdentities.get(expression.type);
+  if (typeIdentity === undefined) {
+    typeIdentity = JSON.stringify(expression.type);
+    specialization.typeIdentities.set(expression.type, typeIdentity);
+  }
+  switch (expression.kind) {
+    case "integer":
+    case "float32":
+    case "float64": {
+      const value = Object.is(expression.value, -0)
+        ? "-0"
+        : String(expression.value);
+      return JSON.stringify([expression.kind, typeIdentity, value]);
+    }
+    case "boolean":
+    case "string":
+      return JSON.stringify([
+        expression.kind,
+        typeIdentity,
+        expression.value,
+      ]);
+    case "integer64":
+      return JSON.stringify([
+        "integer64",
+        typeIdentity,
+        expression.value.toString(),
+      ]);
+    case "unit":
+      return JSON.stringify(["unit", typeIdentity]);
+    case "intrinsic":
+      return JSON.stringify([
+        "intrinsic",
+        typeIdentity,
+        expression.modulePath,
+        expression.exportName,
+      ]);
+    case "primitive":
+      return JSON.stringify([
+        "primitive",
+        typeIdentity,
+        expression.primitiveId,
+      ]);
+    case "reference":
+      return JSON.stringify([
+        "reference",
+        typeIdentity,
+        expression.symbol.id,
+      ]);
+    case "function": {
+      let functionId = specialization.functionIds.get(expression);
+      if (functionId === undefined) {
+        functionId = specialization.nextFunctionId;
+        specialization.nextFunctionId += 1;
+        specialization.functionIds.set(expression, functionId);
+      }
+      return JSON.stringify(["function", typeIdentity, functionId]);
+    }
+    case "unionCase":
+      return JSON.stringify([
+        "unionCase",
+        typeIdentity,
+        expression.nominalType ?? "",
+        expression.unionName,
+        expression.caseName,
+        specializationExpressionIdentity(expression.value, specialization),
+      ]);
+    case "product":
+      return JSON.stringify([
+        "product",
+        typeIdentity,
+        expression.nominalType ?? "",
+        expression.productKind,
+        expression.values.map((value) =>
+          specializationExpressionIdentity(value, specialization)
+        ),
+      ]);
+    default: {
+      let valueId = specialization.valueIds.get(expression);
+      if (valueId === undefined) {
+        valueId = specialization.nextValueId;
+        specialization.nextValueId += 1;
+        specialization.valueIds.set(expression, valueId);
+      }
+      return JSON.stringify([expression.kind, typeIdentity, valueId]);
+    }
+  }
 }
 
 function inlineableFunctionBody(
@@ -821,23 +1299,28 @@ function referencesSymbol(
 function rewriteBlock(
   block: Extract<TypedDucklangExpression, { readonly kind: "block" }>,
   outerValues: ReadonlyMap<number, TypedDucklangExpression>,
+  specialization: SpecializationContext,
 ): TypedDucklangExpression {
   const values = new Map(outerValues);
   const steps = block.steps.map((step): TypedDucklangBlockStep => {
     if (step.kind === "expression") {
       return {
         kind: "expression",
-        expression: rewriteExpression(step.expression, values),
+        expression: rewriteExpression(
+          step.expression,
+          values,
+          specialization,
+        ),
       };
     }
     const binding = {
       ...step.binding,
-      value: rewriteExpression(step.binding.value, values),
+      value: rewriteExpression(step.binding.value, values, specialization),
     };
     values.set(binding.symbol.id, binding.value);
     return { kind: "binding", binding };
   });
-  const result = rewriteExpression(block.result, values);
+  const result = rewriteExpression(block.result, values, specialization);
   const live = new Set<number>();
   collectReferences(result, live);
   const retained: TypedDucklangBlockStep[] = [];
@@ -898,22 +1381,18 @@ function collectReferences(
   }
 }
 
-function isCalledParameter(
-  expression: TypedDucklangExpression,
-  parameterId: number,
-): boolean {
+function countExpressionNodes(expression: TypedDucklangExpression): number {
+  let count = 0;
   const pending = [expression];
+  const visited = new Set<TypedDucklangExpression>();
   while (pending.length > 0) {
     const current = pending.pop()!;
-    if (
-      current.kind === "call" && current.callee.kind === "reference" &&
-      current.callee.symbol.id === parameterId
-    ) {
-      return true;
-    }
+    if (visited.has(current)) continue;
+    visited.add(current);
+    count += 1;
     visitDucklangExpressionChildren(current, (child) => pending.push(child));
   }
-  return false;
+  return count;
 }
 
 function foldStaticBinary(
@@ -1011,6 +1490,7 @@ function typeDescription(
 function foldStaticIntrinsic(
   expression: TypedDucklangExpression,
   values: ReadonlyMap<number, TypedDucklangExpression>,
+  specialization: SpecializationContext,
 ): TypedDucklangExpression | undefined {
   if (expression.kind !== "call") return undefined;
   const callee = staticValue(expression.callee, values);
@@ -1087,19 +1567,23 @@ function foldStaticIntrinsic(
       callee.primitiveId === PrimitiveId.bufferLength &&
       arguments_.length === 1 && arguments_[0].kind === "if"
     ) {
-      return rewriteExpression({
-        ...arguments_[0],
-        consequence: {
-          ...expression,
-          arguments: [arguments_[0].consequence],
+      return rewriteExpression(
+        {
+          ...arguments_[0],
+          consequence: {
+            ...expression,
+            arguments: [arguments_[0].consequence],
+          },
+          alternative: {
+            ...expression,
+            arguments: [arguments_[0].alternative],
+          },
+          type: expression.type,
+          span: expression.span,
         },
-        alternative: {
-          ...expression,
-          arguments: [arguments_[0].alternative],
-        },
-        type: expression.type,
-        span: expression.span,
-      }, values);
+        values,
+        specialization,
+      );
     }
     if (
       callee.primitiveId === PrimitiveId.bufferLength &&
@@ -1235,14 +1719,18 @@ function foldStaticIntrinsic(
       span: expression.span,
     };
     const assertsTruth = callee.exportName === "assert";
-    return rewriteExpression({
-      kind: "if",
-      condition: expression.arguments[0],
-      consequence: assertsTruth ? unit : panic,
-      alternative: assertsTruth ? panic : unit,
-      type: expression.type,
-      span: expression.span,
-    }, values);
+    return rewriteExpression(
+      {
+        kind: "if",
+        condition: expression.arguments[0],
+        consequence: assertsTruth ? unit : panic,
+        alternative: assertsTruth ? panic : unit,
+        type: expression.type,
+        span: expression.span,
+      },
+      values,
+      specialization,
+    );
   }
   if (
     callee.modulePath === "duck:compiler/string-pattern" &&
@@ -1596,6 +2084,34 @@ export function rewriteChildren(
   rewrite: (child: TypedDucklangExpression) => TypedDucklangExpression,
 ): TypedDucklangExpression {
   switch (expression.kind) {
+    case "effectHandler": {
+      const fields = expression.fields.map((field) => {
+        const value = rewrite(field.value);
+        return value === field.value ? field : {
+          ...field,
+          value,
+        };
+      });
+      return fields.every((field, index) => field === expression.fields[index])
+        ? expression
+        : { ...expression, fields };
+    }
+    case "handle": {
+      const body = rewrite(expression.body);
+      const handler = rewrite(expression.handler);
+      if (body === expression.body && handler === expression.handler) {
+        return expression;
+      }
+      return {
+        ...expression,
+        body,
+        handler,
+      };
+    }
+    case "resume": {
+      const value = rewrite(expression.value);
+      return value === expression.value ? expression : { ...expression, value };
+    }
     case "integer":
     case "integer64":
     case "float32":
@@ -1607,112 +2123,321 @@ export function rewriteChildren(
     case "primitive":
     case "reference":
       return expression;
-    case "unionCase":
-      return { ...expression, value: rewrite(expression.value) };
-    case "product":
-      return { ...expression, values: expression.values.map(rewrite) };
+    case "unionCase": {
+      const value = rewrite(expression.value);
+      return value === expression.value ? expression : { ...expression, value };
+    }
+    case "product": {
+      const values = rewriteExpressionList(expression.values, rewrite);
+      return values === expression.values ? expression : {
+        ...expression,
+        values,
+      };
+    }
     case "project":
-      return { ...expression, product: rewrite(expression.product) };
-    case "namedProject":
-      return { ...expression, product: rewrite(expression.product) };
-    case "recordUpdate":
+    case "namedProject": {
+      const product = rewrite(expression.product);
+      return product === expression.product ? expression : {
+        ...expression,
+        product,
+      };
+    }
+    case "recordUpdate": {
+      const product = rewrite(expression.product);
+      const fields = expression.fields.map((field) => {
+        const value = rewrite(field.value);
+        return value === field.value ? field : { ...field, value };
+      });
+      if (
+        product === expression.product &&
+        fields.every((field, index) => field === expression.fields[index])
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        product: rewrite(expression.product),
-        fields: expression.fields.map((field) => ({
-          ...field,
-          value: rewrite(field.value),
-        })),
+        product,
+        fields,
       };
-    case "function":
-      return { ...expression, body: rewrite(expression.body) };
-    case "call":
+    }
+    case "function": {
+      const body = rewrite(expression.body);
+      return body === expression.body ? expression : { ...expression, body };
+    }
+    case "call": {
+      const callee = rewrite(expression.callee);
+      const arguments_ = rewriteExpressionList(expression.arguments, rewrite);
+      if (callee === expression.callee && arguments_ === expression.arguments) {
+        return expression;
+      }
       return {
         ...expression,
-        callee: rewrite(expression.callee),
-        arguments: expression.arguments.map(rewrite),
+        callee,
+        arguments: arguments_,
       };
-    case "hostCall":
-      return { ...expression, arguments: expression.arguments.map(rewrite) };
-    case "optionDo":
-      return { ...expression, option: rewrite(expression.option) };
-    case "index":
+    }
+    case "hostCall": {
+      const arguments_ = rewriteExpressionList(expression.arguments, rewrite);
+      return arguments_ === expression.arguments ? expression : {
+        ...expression,
+        arguments: arguments_,
+      };
+    }
+    case "optionDo": {
+      const option = rewrite(expression.option);
+      return option === expression.option ? expression : {
+        ...expression,
+        option,
+      };
+    }
+    case "index": {
+      const collection = rewrite(expression.collection);
+      const index = rewrite(expression.index);
+      if (
+        collection === expression.collection && index === expression.index
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        collection: rewrite(expression.collection),
-        index: rewrite(expression.index),
+        collection,
+        index,
       };
-    case "selectProductElement":
+    }
+    case "selectProductElement": {
+      const values = rewriteExpressionList(expression.values, rewrite);
+      const index = rewrite(expression.index);
+      if (values === expression.values && index === expression.index) {
+        return expression;
+      }
       return {
         ...expression,
-        values: expression.values.map(rewrite),
-        index: rewrite(expression.index),
+        values,
+        index,
       };
-    case "indexUpdate":
+    }
+    case "indexUpdate": {
+      const product = rewrite(expression.product);
+      const index = rewrite(expression.index);
+      const value = rewrite(expression.value);
+      if (
+        product === expression.product && index === expression.index &&
+        value === expression.value
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        product: rewrite(expression.product),
-        index: rewrite(expression.index),
-        value: rewrite(expression.value),
+        product,
+        index,
+        value,
       };
+    }
     case "textAppend":
+    case "binary": {
+      const left = rewrite(expression.left);
+      const right = rewrite(expression.right);
+      if (left === expression.left && right === expression.right) {
+        return expression;
+      }
       return {
         ...expression,
-        left: rewrite(expression.left),
-        right: rewrite(expression.right),
+        left,
+        right,
       };
-    case "binary":
-      return {
-        ...expression,
-        left: rewrite(expression.left),
-        right: rewrite(expression.right),
-      };
+    }
     case "ownership":
-      return { ...expression, expression: rewrite(expression.expression) };
     case "return":
-    case "comptime":
-      return { ...expression, expression: rewrite(expression.expression) };
-    case "scratch":
-      return { ...expression, body: rewrite(expression.body) };
-    case "if":
+    case "comptime": {
+      const rewritten = rewrite(expression.expression);
+      return rewritten === expression.expression ? expression : {
+        ...expression,
+        expression: rewritten,
+      };
+    }
+    case "scratch": {
+      const body = rewrite(expression.body);
+      return body === expression.body ? expression : { ...expression, body };
+    }
+    case "if": {
+      const condition = rewrite(expression.condition);
+      const consequence = rewrite(expression.consequence);
+      const alternative = rewrite(expression.alternative);
+      if (
+        condition === expression.condition &&
+        consequence === expression.consequence &&
+        alternative === expression.alternative
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        condition: rewrite(expression.condition),
-        consequence: rewrite(expression.consequence),
-        alternative: rewrite(expression.alternative),
+        condition,
+        consequence,
+        alternative,
       };
-    case "ifUnion":
+    }
+    case "ifUnion": {
+      const value = rewrite(expression.value);
+      const consequence = rewrite(expression.consequence);
+      const alternative = rewrite(expression.alternative);
+      if (
+        value === expression.value && consequence === expression.consequence &&
+        alternative === expression.alternative
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        value: rewrite(expression.value),
-        consequence: rewrite(expression.consequence),
-        alternative: rewrite(expression.alternative),
+        value,
+        consequence,
+        alternative,
       };
-    case "block":
+    }
+    case "block": {
+      const steps = expression.steps.map(
+        (step): TypedDucklangBlockStep => {
+          if (step.kind === "expression") {
+            const rewritten = rewrite(step.expression);
+            return rewritten === step.expression ? step : {
+              kind: "expression",
+              expression: rewritten,
+            };
+          }
+          const value = rewrite(step.binding.value);
+          return value === step.binding.value ? step : {
+            kind: "binding",
+            binding: {
+              ...step.binding,
+              value,
+            },
+          };
+        },
+      );
+      const result = rewrite(expression.result);
+      if (
+        result === expression.result &&
+        steps.every((step, index) => step === expression.steps[index])
+      ) {
+        return expression;
+      }
       return {
         ...expression,
-        steps: expression.steps.map((step): TypedDucklangBlockStep =>
-          step.kind === "expression"
-            ? { kind: "expression", expression: rewrite(step.expression) }
-            : {
-              kind: "binding",
-              binding: {
-                ...step.binding,
-                value: rewrite(step.binding.value),
-              },
-            }
-        ),
-        result: rewrite(expression.result),
+        steps,
+        result,
       };
+    }
   }
+}
+
+function rewriteExpressionList(
+  expressions: readonly TypedDucklangExpression[],
+  rewrite: (expression: TypedDucklangExpression) => TypedDucklangExpression,
+): readonly TypedDucklangExpression[] {
+  const rewritten = expressions.map(rewrite);
+  return rewritten.every((expression, index) =>
+      expression === expressions[index]
+    )
+    ? expressions
+    : rewritten;
 }
 
 export function visitDucklangExpressionChildren(
   expression: TypedDucklangExpression,
   visit: (child: TypedDucklangExpression) => void,
 ): void {
-  rewriteChildren(expression, (child) => {
-    visit(child);
-    return child;
-  });
+  switch (expression.kind) {
+    case "integer":
+    case "integer64":
+    case "float32":
+    case "float64":
+    case "boolean":
+    case "unit":
+    case "string":
+    case "intrinsic":
+    case "primitive":
+    case "reference":
+      return;
+    case "effectHandler":
+      for (const field of expression.fields) visit(field.value);
+      return;
+    case "handle":
+      visit(expression.body);
+      visit(expression.handler);
+      return;
+    case "resume":
+      visit(expression.value);
+      return;
+    case "unionCase":
+      visit(expression.value);
+      return;
+    case "product":
+      for (const value of expression.values) visit(value);
+      return;
+    case "project":
+    case "namedProject":
+      visit(expression.product);
+      return;
+    case "recordUpdate":
+      visit(expression.product);
+      for (const field of expression.fields) visit(field.value);
+      return;
+    case "function":
+      visit(expression.body);
+      return;
+    case "call":
+      visit(expression.callee);
+      for (const argument of expression.arguments) visit(argument);
+      return;
+    case "hostCall":
+      for (const argument of expression.arguments) visit(argument);
+      return;
+    case "optionDo":
+      visit(expression.option);
+      return;
+    case "index":
+      visit(expression.collection);
+      visit(expression.index);
+      return;
+    case "selectProductElement":
+      for (const value of expression.values) visit(value);
+      visit(expression.index);
+      return;
+    case "indexUpdate":
+      visit(expression.product);
+      visit(expression.index);
+      visit(expression.value);
+      return;
+    case "textAppend":
+    case "binary":
+      visit(expression.left);
+      visit(expression.right);
+      return;
+    case "ownership":
+    case "return":
+    case "comptime":
+      visit(expression.expression);
+      return;
+    case "scratch":
+      visit(expression.body);
+      return;
+    case "if":
+      visit(expression.condition);
+      visit(expression.consequence);
+      visit(expression.alternative);
+      return;
+    case "ifUnion":
+      visit(expression.value);
+      visit(expression.consequence);
+      visit(expression.alternative);
+      return;
+    case "block":
+      for (const step of expression.steps) {
+        visit(
+          step.kind === "binding" ? step.binding.value : step.expression,
+        );
+      }
+      visit(expression.result);
+      return;
+  }
 }

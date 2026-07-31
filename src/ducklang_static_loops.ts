@@ -490,6 +490,32 @@ function substituteExpression(
           substituteExpression(argument, values, replaceReferences)
         ),
       };
+    case "effectHandler":
+      return {
+        ...expression,
+        fields: expression.fields.map((field) => ({
+          ...field,
+          value: substituteExpression(
+            field.value,
+            values,
+            replaceReferences,
+          ),
+        })),
+      };
+    case "handle":
+      return {
+        ...expression,
+        body: substituteExpression(
+          expression.body,
+          values,
+          replaceReferences,
+        ),
+        handler: substituteExpression(
+          expression.handler,
+          values,
+          replaceReferences,
+        ),
+      };
     case "optionDo":
       return {
         ...expression,

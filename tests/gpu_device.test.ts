@@ -3,6 +3,7 @@ import {
   compilerGpuCapacityViolation,
   type CompilerGpuLimits,
   compilerGpuUnavailabilityReason,
+  createCompilerGpuBatchQueue,
 } from "../src/gpu_device.ts";
 
 const limits: CompilerGpuLimits = {
@@ -138,6 +139,55 @@ Deno.test("GPU out-of-memory errors are classified as unavailability", () => {
   assertEquals(
     compilerGpuUnavailabilityReason("Wasm emission", error),
     "Wasm emission: WebGPU ran out of memory: allocation failed",
+  );
+});
+
+Deno.test("throughput GPU jobs retain order in one payload batch", async () => {
+  const executions: number[][] = [];
+  const queue = createCompilerGpuBatchQueue((inputs: readonly number[]) => {
+    executions.push([...inputs]);
+    return Promise.resolve(inputs.map((input) => input * 2));
+  });
+
+  const results = await Promise.all([
+    queue.enqueue(3, "throughput"),
+    queue.enqueue(1, "throughput"),
+    queue.enqueue(2, "throughput"),
+  ]);
+
+  assertEquals(JSON.stringify(executions), JSON.stringify([[3, 1, 2]]));
+  assertEquals(
+    JSON.stringify(results.map((result) => result.output)),
+    JSON.stringify([6, 2, 4]),
+  );
+  assertEquals(
+    JSON.stringify(results.map((result) => result.payloadBatchSize)),
+    JSON.stringify([3, 3, 3]),
+  );
+});
+
+Deno.test("a failed GPU payload batch rejects every queued job", async () => {
+  const queue = createCompilerGpuBatchQueue<number, number>(() => {
+    throw new Error("batch failed with evidence");
+  });
+  const jobs = [
+    queue.enqueue(1, "throughput"),
+    queue.enqueue(2, "throughput"),
+  ];
+
+  const outcomes = await Promise.allSettled(jobs);
+  assertEquals(
+    JSON.stringify(
+      outcomes.map((outcome) =>
+        outcome.status === "rejected"
+          ? String(outcome.reason)
+          : "unexpected success"
+      ),
+    ),
+    JSON.stringify([
+      "Error: batch failed with evidence",
+      "Error: batch failed with evidence",
+    ]),
   );
 });
 

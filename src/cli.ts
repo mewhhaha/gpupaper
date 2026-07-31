@@ -245,6 +245,8 @@ function experimentReport(
         ? mainResult.toString()
         : mainResult,
     },
-    timingsMilliseconds: artifact.timings,
+    ...(artifact.language === "ducklang"
+      ? { ducklangProfile: artifact.profile }
+      : { timingsMilliseconds: artifact.timings }),
   };
 }

@@ -202,6 +202,8 @@ const expressionKinds = new Set([
   "string",
   "moduleImport",
   "hostCall",
+  "effectHandler",
+  "handle",
   "optionDo",
   "unionCase",
   "product",

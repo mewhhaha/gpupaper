@@ -61,6 +61,40 @@ Deno.test("Ducklang frontend parses every frozen live Binned target", async () =
   }
 });
 
+Deno.test("Ducklang syntax retains explicit handlers and handled computations", async () => {
+  const module = await parseDucklangModule(
+    "explicit_effect_syntax.duck",
+    `effect Counter {
+  get: () => I32
+}
+
+let run = () => Counter.get()
+let counter = Counter {
+  get: (!resume) => !resume(40),
+  return: value => value,
+}
+try run() with counter
+`,
+  );
+  const counter = module.statements.find((statement) =>
+    statement.kind === "binding" && statement.name.text === "counter"
+  );
+  const result = module.statements.at(-1);
+
+  const counterKind = counter?.kind === "binding"
+    ? counter.value.kind
+    : undefined;
+  if (counterKind !== "effectHandler") {
+    throw new Error(`expected effectHandler, received ${counterKind}`);
+  }
+  const resultKind = result?.kind === "expression"
+    ? result.expression.kind
+    : undefined;
+  if (resultKind !== "handle") {
+    throw new Error(`expected handle, received ${resultKind}`);
+  }
+});
+
 Deno.test("assignment-valued conditionals remain one expression", async () => {
   const module = await parseDucklangModule(
     "conditional_assignment.duck",

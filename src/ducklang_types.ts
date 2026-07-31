@@ -10,10 +10,14 @@ import type { DucklangTypeReference } from "./ducklang_ast.ts";
 import type {
   DucklangEffectOperation,
   DucklangEffectReference,
+  DucklangEffectRow,
   DucklangInitField,
 } from "./ducklang_ast.ts";
-import { analyzeDucklangEffects } from "./ducklang_effects.ts";
-import type { EqualityConstraint, Type } from "./types.ts";
+import {
+  analyzeDucklangEffects,
+  type DucklangEffectRowType,
+} from "./ducklang_effects.ts";
+import type { CallableEffectRow, EqualityConstraint, Type } from "./types.ts";
 import type {
   DucklangSymbol,
   ResolvedDucklangBinding,
@@ -84,6 +88,45 @@ export type TypedDucklangExpression =
     readonly effectName: string;
     readonly operationName: string;
     readonly arguments: readonly TypedDucklangExpression[];
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "effectHandler";
+    readonly capabilityId: string;
+    readonly effectName: string;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly value: TypedDucklangExpression;
+      readonly span: SourceSpan;
+    }[];
+    readonly inputType: Type;
+    readonly answerType: Type;
+    readonly clauseEffects: CallableEffectRow;
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "handle";
+    readonly body: TypedDucklangExpression;
+    readonly handler: TypedDucklangExpression;
+    readonly capabilityId: string;
+    readonly effectName: string;
+    readonly forwardedEffects: CallableEffectRow;
+    readonly clauseEffects: CallableEffectRow;
+    readonly effects: CallableEffectRow;
+    readonly controlFlow: readonly {
+      readonly operationName: string;
+      readonly multiplicity: "affine" | "linear";
+      readonly capturedLinearSymbols: readonly string[];
+    }[];
+    readonly type: Type;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "resume";
+    readonly resumption: DucklangSymbol;
+    readonly value: TypedDucklangExpression;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -164,6 +207,7 @@ export type TypedDucklangExpression =
     readonly kind: "call";
     readonly callee: TypedDucklangExpression;
     readonly arguments: readonly TypedDucklangExpression[];
+    readonly effects?: CallableEffectRow;
     readonly type: Type;
     readonly span: SourceSpan;
   }
@@ -287,6 +331,7 @@ export type TypedDucklangBinding = {
   readonly value: TypedDucklangExpression;
   readonly type: Type;
   readonly latentEffects: readonly DucklangEffectReference[];
+  readonly latentEffectRow: DucklangEffectRowType;
   readonly span: SourceSpan;
 };
 
@@ -309,11 +354,17 @@ export type TypedDucklangModule = {
     string,
     readonly DucklangEffectOperation[]
   >;
+  readonly effectParameters: ReadonlyMap<string, readonly string[]>;
+  readonly defaultHandlerOrders: ReadonlyMap<string, number>;
   readonly requiredEffects: readonly DucklangEffectReference[];
   readonly initFields: readonly DucklangInitField[];
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly structTypes: readonly ResolvedDucklangStructType[];
+};
+
+export type TypedDucklangEffectModule = TypedDucklangModule & {
+  readonly effectHirVersion: 1;
 };
 
 type InferredExpression = {
@@ -379,6 +430,8 @@ export function inferDucklangModule(
     module.typeAliases,
     module.structTypes,
     module.effects,
+    module.effectParameters,
+    module.defaultHandlerOrders,
     effectAnalysis.bindingEffects,
     module.initFields,
     module.exportNames,
@@ -389,16 +442,39 @@ export function inferDucklangModule(
   return inference.finish(bindings, result, effectAnalysis.moduleEffects);
 }
 
+export function inferDucklangEffectModule(
+  module: ResolvedDucklangModule,
+): TypedDucklangEffectModule {
+  return {
+    ...inferDucklangModule(module),
+    effectHirVersion: 1,
+  };
+}
+
 export function formatDucklangType(type: Type): string {
   if (type.kind === "variable") return `t${type.id}`;
   if (type.kind === "constructor") {
     if (type.arguments.length === 0) return type.name;
     return `${type.name}<${type.arguments.map(formatDucklangType).join(", ")}>`;
   }
-  const parameter = type.parameter.kind === "function"
+  const parameter = type.nullary === true
+    ? "()"
+    : type.parameter.kind === "function"
     ? `(${formatDucklangType(type.parameter)})`
     : formatDucklangType(type.parameter);
-  return `${parameter} -> ${formatDucklangType(type.result)}`;
+  const effects = type.effects === undefined ||
+      (type.effects.operations.length === 0 &&
+        type.effects.parameterEffects.length === 0 &&
+        (type.effects.variables?.length ?? 0) === 0)
+    ? ""
+    : ` ! <${
+      [
+        ...type.effects.operations,
+        ...type.effects.parameterEffects.map((index) => `ρ${index}`),
+        ...(type.effects.variables ?? []).map((variable) => `ρ${variable}`),
+      ].join(", ")
+    }>`;
+  return `${parameter} -> ${formatDucklangType(type.result)}${effects}`;
 }
 
 class DucklangInference {
@@ -418,14 +494,23 @@ class DucklangInference {
     string,
     readonly DucklangEffectOperation[]
   >;
+  readonly #effectParameters: ReadonlyMap<string, readonly string[]>;
+  readonly #defaultHandlerOrders: ReadonlyMap<string, number>;
   readonly #bindingEffects: ReadonlyMap<
     number,
-    readonly DucklangEffectReference[]
+    DucklangEffectRowType
   >;
   readonly #initFields: readonly DucklangInitField[];
   readonly #exportNames: readonly string[];
+  readonly #handlerEffects = new Map<string, CallableEffectRow>();
+  readonly #defaultHandlers: {
+    readonly binding: TypedDucklangBinding;
+    readonly effectName: string;
+    readonly order: number;
+  }[] = [];
   #activeTypeParameters: ReadonlyMap<string, Type> = new Map();
   #nextVariable = 0;
+  #nextEffectVariable = 0;
 
   constructor(
     file: string,
@@ -436,9 +521,11 @@ class DucklangInference {
       string,
       readonly DucklangEffectOperation[]
     >,
+    effectParameters: ReadonlyMap<string, readonly string[]>,
+    defaultHandlerOrders: ReadonlyMap<string, number>,
     bindingEffects: ReadonlyMap<
       number,
-      readonly DucklangEffectReference[]
+      DucklangEffectRowType
     >,
     initFields: readonly DucklangInitField[],
     exportNames: readonly string[],
@@ -448,6 +535,8 @@ class DucklangInference {
     this.#typeAliases = typeAliases;
     this.#structTypes = structTypes;
     this.#effectDeclarations = effectDeclarations;
+    this.#effectParameters = effectParameters;
+    this.#defaultHandlerOrders = defaultHandlerOrders;
     this.#bindingEffects = bindingEffects;
     this.#initFields = initFields;
     this.#exportNames = exportNames;
@@ -584,7 +673,25 @@ class DucklangInference {
         environment,
         declaredBindingType ?? previousType,
       );
-      const bindingType = recursiveType ?? inferred.type;
+      const latentEffectRow = this.#bindingEffects.get(binding.symbol.id) ?? {
+        operations: [],
+        parameterEffects: [],
+      };
+      const inferredBindingType = this.#apply(
+        declaredBindingType === undefined
+          ? recursiveType ?? inferred.type
+          : mergeCallableAnnotations(
+            recursiveType ?? inferred.type,
+            declaredBindingType,
+          ),
+      );
+      const bindingType = binding.value.kind === "function"
+        ? withCallableEffects(
+          inferredBindingType,
+          latentEffectRow,
+          binding.span,
+        )
+        : inferredBindingType;
       if (recursiveType !== undefined) {
         this.#unify(recursiveType, inferred.type, binding.span);
       }
@@ -615,12 +722,24 @@ class DucklangInference {
       }
       environment.set(binding.symbol.id, bindingType);
       this.#symbolTypes.set(binding.symbol.id, bindingType);
-      typed.push({
+      const typedBinding: TypedDucklangBinding = {
         ...binding,
-        value: inferred.expression,
+        value: binding.value.kind === "function"
+          ? { ...inferred.expression, type: bindingType }
+          : inferred.expression,
         type: bindingType,
-        latentEffects: this.#bindingEffects.get(binding.symbol.id) ?? [],
-      });
+        latentEffects: latentEffectRow.operations,
+        latentEffectRow,
+      };
+      typed.push(typedBinding);
+      const handler = typedHandlerExpression(typedBinding.value);
+      if (handler !== undefined) {
+        this.#defaultHandlers.push({
+          binding: typedBinding,
+          effectName: handler.effectName,
+          order: this.#defaultHandlerOrders.get(handler.effectName) ?? 0,
+        });
+      }
     }
     return typed;
   }
@@ -959,20 +1078,21 @@ class DucklangInference {
         return { expression: { ...expression, type }, type };
       }
       case "hostCall": {
+        const effectTypes = this.#effectTypeArguments(expression.effectName);
         const arguments_ = expression.arguments.map((argument) =>
           this.inferExpression(argument, environment)
         );
         for (const [index, argument] of arguments_.entries()) {
           const declared = this.#typeReference(
             expression.operation.parameterTypes[index],
-            new Map(),
+            effectTypes,
             [],
           );
           this.#unify(declared, argument.type, argument.expression.span);
         }
         const type = this.#typeReference(
           expression.operation.resultType,
-          new Map(),
+          effectTypes,
           [],
         );
         return {
@@ -985,6 +1105,280 @@ class DucklangInference {
             span: expression.span,
           },
           type,
+        };
+      }
+      case "effectHandler": {
+        const operations = this.#effectDeclarations.get(expression.effectName);
+        if (operations === undefined) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: unknown typed Ducklang handler effect ${expression.effectName}`,
+          );
+        }
+        const inputType = this.#freshVariable();
+        const answerType = this.#freshVariable();
+        const effectTypes = this.#effectTypeArguments(expression.effectName);
+        const fields = expression.fields.map((field) => {
+          const operation = operations.find((candidate) =>
+            candidate.name === field.name
+          );
+          const expected = field.name === "return"
+            ? functionType([inputType], answerType)
+            : operation === undefined
+            ? undefined
+            : functionType([
+              ...operation.parameterTypes.map((parameter) =>
+                this.#typeReference(parameter, effectTypes, [])
+              ),
+              functionType([
+                this.#typeReference(operation.resultType, effectTypes, []),
+              ], answerType),
+            ], answerType);
+          if (expected === undefined) {
+            throw new TypeError(
+              `${field.span.file}:${field.span.start}: unknown Ducklang handler clause ${expression.effectName}.${field.name}`,
+            );
+          }
+          const value = this.inferExpression(
+            field.value,
+            environment,
+            expected,
+          );
+          this.#unify(value.type, expected, field.span);
+          return { ...field, value: value.expression };
+        });
+        const type: Type = {
+          kind: "constructor",
+          name: `$effect_handler:${expression.capabilityId}`,
+          arguments: [inputType, answerType],
+        };
+        const clauseEffects = fields.reduce(
+          (effects, field) =>
+            field.value.kind === "function"
+              ? unionCallableEffects(
+                effects,
+                ducklangExpressionEffects(field.value.body),
+              )
+              : effects,
+          emptyCallableEffects(),
+        );
+        this.#handlerEffects.set(type.name, clauseEffects);
+        return {
+          expression: {
+            ...expression,
+            fields,
+            inputType,
+            answerType,
+            clauseEffects,
+            type,
+          },
+          type,
+        };
+      }
+      case "handle": {
+        const body = this.inferExpression(expression.body, environment);
+        const handler = this.inferExpression(expression.handler, environment);
+        if (handler.expression.kind === "unit") {
+          const bodyEffects = ducklangExpressionEffects(body.expression);
+          if (bodyEffects.operations.length !== 0) {
+            const families = new Set(
+              bodyEffects.operations.map((operation) =>
+                operation.slice(0, operation.indexOf("."))
+              ),
+            );
+            const selectedByFamily = new Map<string, {
+              readonly binding: TypedDucklangBinding;
+              readonly effectName: string;
+              readonly order: number;
+            }>();
+            for (const candidate of this.#defaultHandlers) {
+              if (families.has(candidate.effectName)) {
+                selectedByFamily.set(candidate.effectName, candidate);
+              }
+            }
+            const defaults = [...selectedByFamily.values()].toSorted(
+              (left, right) =>
+                left.order - right.order ||
+                left.binding.span.start - right.binding.span.start,
+            );
+            const covered = new Set(
+              defaults.map((candidate) => candidate.effectName),
+            );
+            const missing = [...families].filter((family) =>
+              !covered.has(family)
+            );
+            if (missing.length !== 0) {
+              throw new TypeError(
+                `${expression.span.file}:${expression.span.start}: Ducklang handled computation has no default handler for ${
+                  missing.toSorted().join(", ")
+                }`,
+              );
+            }
+            let handledExpression = body.expression;
+            let handledType = body.type;
+            for (const selected of defaults) {
+              const reference: TypedDucklangExpression = {
+                kind: "reference",
+                symbol: selected.binding.symbol,
+                type: selected.binding.type,
+                span: expression.handler.span,
+              };
+              const selectedHandler = selected.binding.value.kind ===
+                    "function" &&
+                  selected.binding.value.parameters.length === 0
+                ? {
+                  kind: "call" as const,
+                  callee: reference,
+                  arguments: [],
+                  effects: emptyCallableEffects(),
+                  type: functionResultType(selected.binding.type),
+                  span: expression.handler.span,
+                }
+                : reference;
+              const selectedType = this.#apply(selectedHandler.type);
+              if (
+                selectedType.kind !== "constructor" ||
+                !selectedType.name.startsWith("$effect_handler:") ||
+                selectedType.arguments.length !== 2
+              ) {
+                throw new TypeError(
+                  `${selected.binding.span.file}:${selected.binding.span.start}: default handler ${selected.binding.symbol.text} does not produce a handler`,
+                );
+              }
+              this.#unify(
+                handledType,
+                selectedType.arguments[0],
+                expression.body.span,
+              );
+              const capabilityId = selectedType.name.slice(
+                "$effect_handler:".length,
+              );
+              const clauseEffects = this.#handlerEffects.get(
+                selectedType.name,
+              ) ?? emptyCallableEffects();
+              const forwardedEffects = withoutEffectFamily(
+                ducklangExpressionEffects(handledExpression),
+                selected.effectName,
+              );
+              const effects = unionCallableEffects(
+                forwardedEffects,
+                clauseEffects,
+              );
+              handledType = selectedType.arguments[1];
+              handledExpression = {
+                kind: "handle",
+                body: handledExpression,
+                handler: selectedHandler,
+                capabilityId,
+                effectName: selected.effectName,
+                forwardedEffects,
+                clauseEffects,
+                effects,
+                controlFlow: [],
+                type: handledType,
+                span: expression.span,
+              };
+            }
+            return { expression: handledExpression, type: handledType };
+          }
+          const appliedExpected = expectedType === undefined
+            ? undefined
+            : this.#apply(expectedType);
+          const some = this.#unionCaseType(
+            "Some",
+            expression.span,
+            appliedExpected?.kind === "constructor"
+              ? appliedExpected.name
+              : undefined,
+          );
+          this.#unify(body.type, some.payload, expression.body.span);
+          if (expectedType !== undefined) {
+            this.#unify(some.union, expectedType, expression.span);
+          }
+          return {
+            expression: {
+              kind: "unionCase",
+              unionName: some.unionName,
+              caseName: "Some",
+              value: body.expression,
+              nominalType: some.unionName,
+              type: some.union,
+              span: expression.span,
+            },
+            type: some.union,
+          };
+        }
+        const handlerType = this.#apply(handler.type);
+        if (
+          handlerType.kind !== "constructor" ||
+          !handlerType.name.startsWith("$effect_handler:") ||
+          handlerType.arguments.length !== 2
+        ) {
+          throw new TypeError(
+            `${expression.handler.span.file}:${expression.handler.span.start}: Ducklang handled computation requires a typed handler; received ${
+              formatDucklangType(handlerType)
+            }`,
+          );
+        }
+        this.#unify(body.type, handlerType.arguments[0], expression.body.span);
+        const type = handlerType.arguments[1];
+        const capabilityId = handlerType.name.slice(
+          "$effect_handler:".length,
+        );
+        const effectName = capabilityId.slice(
+          capabilityId.lastIndexOf(":") + 1,
+        );
+        const forwardedEffects = withoutEffectFamily(
+          ducklangExpressionEffects(body.expression),
+          effectName,
+        );
+        const clauseEffects = this.#handlerEffects.get(handlerType.name) ??
+          emptyCallableEffects();
+        const effects = unionCallableEffects(
+          forwardedEffects,
+          clauseEffects,
+        );
+        return {
+          expression: {
+            ...expression,
+            body: body.expression,
+            handler: handler.expression,
+            capabilityId,
+            effectName,
+            forwardedEffects,
+            clauseEffects,
+            effects,
+            controlFlow: [],
+            type,
+          },
+          type,
+        };
+      }
+      case "resume": {
+        const resumptionType = environment.get(expression.resumption.id);
+        if (resumptionType === undefined) {
+          throw new Error(
+            `${expression.span.file}:${expression.span.start}: missing type for resumption ${expression.resumption.text}#${expression.resumption.id}`,
+          );
+        }
+        const applied = this.#apply(resumptionType);
+        if (applied.kind !== "function" || applied.nullary === true) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: Ducklang resumption ${expression.resumption.text} is not unary`,
+          );
+        }
+        const value = this.inferExpression(
+          expression.value,
+          environment,
+          applied.parameter,
+        );
+        this.#unify(value.type, applied.parameter, expression.value.span);
+        return {
+          expression: {
+            ...expression,
+            value: value.expression,
+            type: applied.result,
+          },
+          type: applied.result,
         };
       }
       case "optionDo": {
@@ -1528,6 +1922,12 @@ class DucklangInference {
       }
       case "function": {
         const functionEnvironment = new Map(environment);
+        const expectedFunction = expectedType === undefined
+          ? undefined
+          : expectedFunctionTypes(
+            this.#apply(expectedType),
+            expression.parameters.length,
+          );
         const typeParameters = this.#functionTypeParameters(
           expression.parameters,
           expression.typeParameters,
@@ -1547,6 +1947,7 @@ class DucklangInference {
                   typeParameters,
                 )
                 : typeParameters.get(parameter.text) ??
+                  expectedFunction?.parameters[index] ??
                   parameterTypeSources?.[index]?.type ??
                   this.#freshVariable();
               functionEnvironment.set(parameter.id, type);
@@ -1555,7 +1956,7 @@ class DucklangInference {
             },
           );
           const declaredResultType = expression.declaredResultType === undefined
-            ? undefined
+            ? expectedFunction?.result
             : this.#declaredType(
               expression.declaredResultType,
               expression.span,
@@ -1571,10 +1972,10 @@ class DucklangInference {
             this.#unify(body.type, declaredResultType, expression.body.span);
           }
           this.#unifyReturnTypes(body.expression, resultType);
-          const type = parameterTypes.toReversed().reduce<Type>(
-            (result, parameter) => ({ kind: "function", parameter, result }),
-            resultType,
-          );
+          const type = functionType(parameterTypes, resultType);
+          if (expectedType !== undefined) {
+            this.#unify(type, expectedType, expression.span);
+          }
           return {
             expression: {
               ...expression,
@@ -1622,25 +2023,71 @@ class DucklangInference {
           };
         }
         const arguments_: InferredExpression[] = [];
+        let effects: CallableEffectRow = {
+          operations: [],
+          parameterEffects: [],
+        };
         let result = callee.type;
         let calleeResult = callee.type;
+        if (expression.arguments.length === 0) {
+          if (
+            appliedCalleeType.kind === "function" &&
+            appliedCalleeType.nullary === true
+          ) {
+            result = this.#apply(appliedCalleeType.result);
+            effects = unionCallableEffects(effects, appliedCalleeType.effects);
+          } else if (
+            appliedCalleeType.kind !== "variable" &&
+            !(appliedCalleeType.kind === "constructor" &&
+              appliedCalleeType.name.startsWith("$module_"))
+          ) {
+            throw new TypeError(
+              `${expression.span.file}:${expression.span.start}: Ducklang zero-argument call requires a nullary function; received ${
+                sourceTypeName(appliedCalleeType)
+              }`,
+            );
+          }
+        }
         for (
           const [index, argumentExpression] of expression.arguments.entries()
         ) {
           const appliedCallee = this.#apply(calleeResult);
+          if (appliedCallee.kind === "function" && appliedCallee.nullary) {
+            throw new TypeError(
+              `${argumentExpression.span.file}:${argumentExpression.span.start}: Ducklang nullary function cannot receive an argument`,
+            );
+          }
+          if (appliedCallee.kind === "function") {
+            effects = unionCallableEffects(effects, appliedCallee.effects);
+          }
+          const expectedParameter = appliedCallee.kind === "function"
+            ? appliedCallee.parameter
+            : undefined;
           const argument = this.inferExpression(
             argumentExpression,
             environment,
-            appliedCallee.kind === "function"
-              ? appliedCallee.parameter
-              : undefined,
+            expectedParameter,
           );
           arguments_.push(argument);
           result = this.#freshVariable();
+          const inferredEffects = appliedCallee.kind === "variable"
+            ? {
+              operations: [],
+              parameterEffects: [],
+              variables: [this.#freshEffectVariable()],
+            }
+            : appliedCallee.kind === "function"
+            ? appliedCallee.effects
+            : undefined;
           try {
             this.#unify(
               calleeResult,
-              { kind: "function", parameter: argument.type, result },
+              {
+                kind: "function",
+                parameter: argument.type,
+                result,
+                effects: inferredEffects,
+              },
               argumentExpression.span,
             );
           } catch (cause) {
@@ -1655,12 +2102,14 @@ class DucklangInference {
           }
           calleeResult = result;
         }
+        effects = instantiateCallableEffects(effects, callee.type, arguments_);
         result = this.#apply(result);
         return {
           expression: {
             ...expression,
             callee: callee.expression,
             arguments: arguments_.map((argument) => argument.expression),
+            effects,
             type: result,
           },
           type: result,
@@ -2555,6 +3004,16 @@ class DucklangInference {
         : reference,
       parameters,
       [],
+      new Map(),
+    );
+  }
+
+  #effectTypeArguments(effectName: string): ReadonlyMap<string, Type> {
+    return new Map(
+      (this.#effectParameters.get(effectName) ?? []).map((parameter) => [
+        parameter,
+        this.#freshVariable(),
+      ]),
     );
   }
 
@@ -2607,13 +3066,19 @@ class DucklangInference {
     reference: DucklangTypeReference,
     parameters: ReadonlyMap<string, Type>,
     expandingAliases: readonly string[],
+    effectVariables: Map<string, number> = new Map(),
   ): Type {
     if (reference.name === "$tuple") {
       return {
         kind: "constructor",
         name: "tuple",
         arguments: reference.arguments.map((argument) =>
-          this.#typeReference(argument, parameters, expandingAliases)
+          this.#typeReference(
+            argument,
+            parameters,
+            expandingAliases,
+            effectVariables,
+          )
         ),
       };
     }
@@ -2622,15 +3087,24 @@ class DucklangInference {
         reference.arguments[0],
         parameters,
         expandingAliases,
+        effectVariables,
       );
       const result = this.#typeReference(
         reference.arguments[1],
         parameters,
         expandingAliases,
+        effectVariables,
       );
-      return parameter.kind === "constructor" && parameter.name === "tuple"
+      const type = parameter.kind === "constructor" &&
+          parameter.name === "tuple"
         ? functionType(parameter.arguments, result)
         : functionType([parameter], result);
+      return reference.effectRow === undefined
+        ? type
+        : withDeclaredCallableEffects(
+          type,
+          this.#declaredCallableEffects(reference.effectRow, effectVariables),
+        );
     }
     const parameter = parameters.get(reference.name);
     if (parameter !== undefined) {
@@ -2668,7 +3142,12 @@ class DucklangInference {
       const arguments_ = reference.arguments.length === 0
         ? structDeclaration.parameters.map(() => this.#freshVariable())
         : reference.arguments.map((argument) =>
-          this.#typeReference(argument, parameters, expandingAliases)
+          this.#typeReference(
+            argument,
+            parameters,
+            expandingAliases,
+            effectVariables,
+          )
         );
       if (arguments_.length !== structDeclaration.parameters.length) {
         throw new TypeError(
@@ -2682,7 +3161,12 @@ class DucklangInference {
       };
     }
     let arguments_ = reference.arguments.map((argument) =>
-      this.#typeReference(argument, parameters, expandingAliases)
+      this.#typeReference(
+        argument,
+        parameters,
+        expandingAliases,
+        effectVariables,
+      )
     );
     const alias =
       this.#typeAliases.find((candidate) =>
@@ -2713,6 +3197,7 @@ class DucklangInference {
           alias.parameters.map((name, index) => [name, arguments_[index]]),
         ),
         [...expandingAliases, alias.name],
+        effectVariables,
       );
     }
     const declaration =
@@ -2756,6 +3241,70 @@ class DucklangInference {
         formatDucklangType(applied)
       } is not a struct`,
     );
+  }
+
+  #declaredCallableEffects(
+    row: DucklangEffectRow | null,
+    variables: Map<string, number>,
+  ): CallableEffectRow {
+    if (row === null) {
+      return { operations: [], parameterEffects: [], variables: [] };
+    }
+    if (row.kind === "variable") {
+      let variable = variables.get(row.name);
+      if (variable === undefined) {
+        variable = this.#freshEffectVariable();
+        variables.set(row.name, variable);
+      }
+      return {
+        operations: [],
+        parameterEffects: [],
+        variables: [variable],
+      };
+    }
+    if (row.kind === "operation") {
+      return {
+        operations: [`${row.effectName}.${row.operationName}`],
+        parameterEffects: [],
+        variables: [],
+      };
+    }
+    if (row.kind === "family") {
+      const operations = this.#effectDeclarations.get(row.effectName);
+      if (operations === undefined) {
+        throw new TypeError(
+          `${row.span.file}:${row.span.start}: unknown Ducklang effect ${row.effectName} in callable type`,
+        );
+      }
+      return {
+        operations: operations.map((operation) =>
+          `${row.effectName}.${operation.name}`
+        ).toSorted(),
+        parameterEffects: [],
+        variables: [],
+      };
+    }
+    const left = this.#declaredCallableEffects(row.left, variables);
+    const right = this.#declaredCallableEffects(row.right, variables);
+    if (row.kind === "union") return unionCallableEffects(left, right);
+    if (
+      (left.variables?.length ?? 0) !== 0 ||
+      (right.variables?.length ?? 0) !== 0
+    ) {
+      throw new TypeError(
+        `${row.span.file}:${row.span.start}: open Ducklang effect rows support union but not ${row.kind}`,
+      );
+    }
+    const rightOperations = new Set(right.operations);
+    return {
+      operations: left.operations.filter((operation) =>
+        row.kind === "intersection"
+          ? rightOperations.has(operation)
+          : !rightOperations.has(operation)
+      ),
+      parameterEffects: [],
+      variables: [],
+    };
   }
 
   #structFieldType(
@@ -2818,6 +3367,8 @@ class DucklangInference {
         [...this.#symbolTypes].map(([id, type]) => [id, this.#apply(type)]),
       ),
       effectDeclarations: this.#effectDeclarations,
+      effectParameters: this.#effectParameters,
+      defaultHandlerOrders: this.#defaultHandlerOrders,
       requiredEffects,
       initFields: this.#initFields,
       unionTypes: this.#unionTypes,
@@ -2848,6 +3399,30 @@ class DucklangInference {
           arguments: expression.arguments.map((argument) =>
             this.#normalizeExpression(argument)
           ),
+          type,
+        };
+      case "effectHandler":
+        return {
+          ...expression,
+          fields: expression.fields.map((field) => ({
+            ...field,
+            value: this.#normalizeExpression(field.value),
+          })),
+          inputType: this.#apply(expression.inputType),
+          answerType: this.#apply(expression.answerType),
+          type,
+        };
+      case "handle":
+        return {
+          ...expression,
+          body: this.#normalizeExpression(expression.body),
+          handler: this.#normalizeExpression(expression.handler),
+          type,
+        };
+      case "resume":
+        return {
+          ...expression,
+          value: this.#normalizeExpression(expression.value),
           type,
         };
       case "optionDo":
@@ -3037,6 +3612,12 @@ class DucklangInference {
     return type;
   }
 
+  #freshEffectVariable(): number {
+    const variable = this.#nextEffectVariable;
+    this.#nextEffectVariable += 1;
+    return variable;
+  }
+
   #freshBottomVariable(): Type {
     const type = this.#freshVariable();
     if (type.kind === "variable") {
@@ -3199,8 +3780,20 @@ class DucklangInference {
       return;
     }
     if (left.kind === "function" && right.kind === "function") {
+      if (left.nullary !== right.nullary) {
+        throw new TypeError(
+          `${this.#file}:${span.start}: cannot unify nullary and unary Ducklang functions`,
+        );
+      }
       this.#unify(left.parameter, right.parameter, span);
       this.#unify(left.result, right.result, span);
+      if (!sameCallableEffects(left.effects, right.effects)) {
+        throw new TypeError(
+          `${this.#file}:${span.start}: cannot unify callable effect rows ${
+            formatCallableEffects(left.effects)
+          } and ${formatCallableEffects(right.effects)}`,
+        );
+      }
       return;
     }
     if (
@@ -3348,6 +3941,8 @@ class DucklangInference {
         kind: "function",
         parameter: this.#apply(type.parameter),
         result: this.#apply(type.result),
+        effects: type.effects,
+        nullary: type.nullary,
       };
     }
     return {
@@ -3370,6 +3965,14 @@ class DucklangInference {
 }
 
 function functionType(parameters: readonly Type[], result: Type): Type {
+  if (parameters.length === 0) {
+    return {
+      kind: "function",
+      parameter: unitType,
+      result,
+      nullary: true,
+    };
+  }
   return parameters.toReversed().reduce<Type>(
     (returnType, parameter) => ({
       kind: "function",
@@ -3378,6 +3981,404 @@ function functionType(parameters: readonly Type[], result: Type): Type {
     }),
     result,
   );
+}
+
+function expectedFunctionTypes(
+  type: Type,
+  arity: number,
+): {
+  readonly parameters: readonly Type[];
+  readonly result: Type;
+} | undefined {
+  if (arity === 0) {
+    return type.kind === "function" && type.nullary === true
+      ? { parameters: [], result: type.result }
+      : undefined;
+  }
+  const parameters: Type[] = [];
+  let current = type;
+  for (let index = 0; index < arity; index += 1) {
+    if (current.kind !== "function" || current.nullary === true) {
+      return undefined;
+    }
+    parameters.push(current.parameter);
+    current = current.result;
+  }
+  return { parameters, result: current };
+}
+
+function functionParameterTypes(type: Type): readonly Type[] {
+  const parameters: Type[] = [];
+  let current = type;
+  while (current.kind === "function") {
+    if (current.nullary !== true) parameters.push(current.parameter);
+    current = current.result;
+  }
+  return parameters;
+}
+
+function functionResultType(type: Type): Type {
+  let current = type;
+  while (current.kind === "function") current = current.result;
+  return current;
+}
+
+function withCallableEffects(
+  type: Type,
+  row: DucklangEffectRowType,
+  span: SourceSpan,
+): Type {
+  if (row.operations.length === 0 && row.parameterEffects.length === 0) {
+    return type;
+  }
+  if (type.kind !== "function") {
+    throw new TypeError(
+      `${span.file}:${span.start}: latent effects require a function type; received ${
+        formatDucklangType(type)
+      }`,
+    );
+  }
+  const parameters = functionParameterTypes(type);
+  let effects: CallableEffectRow = {
+    operations: row.operations.map((effect) =>
+      `${effect.effectName}.${effect.operationName}`
+    ).toSorted(),
+    parameterEffects: [],
+    variables: [],
+  };
+  for (const parameterIndex of row.parameterEffects) {
+    const parameter = parameters[parameterIndex];
+    const parameterRow = parameter === undefined
+      ? undefined
+      : terminalCallableEffects(parameter);
+    if ((parameterRow?.variables?.length ?? 0) === 0) {
+      effects = {
+        ...effects,
+        parameterEffects: [
+          ...effects.parameterEffects,
+          parameterIndex,
+        ].toSorted((left, right) => left - right),
+      };
+      continue;
+    }
+    effects = unionCallableEffects(effects, {
+      operations: [],
+      parameterEffects: [],
+      variables: parameterRow?.variables ?? [],
+    });
+  }
+  return attachTerminalCallableEffects(type, effects);
+}
+
+function attachTerminalCallableEffects(
+  type: Extract<Type, { readonly kind: "function" }>,
+  effects: CallableEffectRow,
+): Type {
+  if (type.result.kind === "function") {
+    return {
+      ...type,
+      result: attachTerminalCallableEffects(type.result, effects),
+    };
+  }
+  return {
+    ...type,
+    effects,
+  };
+}
+
+function sameCallableEffects(
+  left: CallableEffectRow | undefined,
+  right: CallableEffectRow | undefined,
+): boolean {
+  if (
+    (left?.variables?.length ?? 0) !== 0 ||
+    (right?.variables?.length ?? 0) !== 0
+  ) {
+    if (
+      (left?.variables?.length ?? 0) !== 0 &&
+      (right?.variables?.length ?? 0) !== 0
+    ) {
+      return formatCallableEffects(left) === formatCallableEffects(right);
+    }
+    const leftOperations = new Set(left?.operations ?? []);
+    const rightOperations = new Set(right?.operations ?? []);
+    return (left?.variables?.length ?? 0) !== 0
+      ? [...leftOperations].every((operation) => rightOperations.has(operation))
+      : [...rightOperations].every((operation) =>
+        leftOperations.has(operation)
+      );
+  }
+  return formatCallableEffects(left) === formatCallableEffects(right);
+}
+
+function formatCallableEffects(
+  row: CallableEffectRow | undefined,
+): string {
+  if (row === undefined) return "<>";
+  return `<${
+    [
+      ...row.operations,
+      ...row.parameterEffects.map((index) => `ρ${index}`),
+      ...(row.variables ?? []).map((variable) => `ρ${variable}`),
+    ]
+      .join(", ")
+  }>`;
+}
+
+function unionCallableEffects(
+  left: CallableEffectRow,
+  right: CallableEffectRow | undefined,
+): CallableEffectRow {
+  if (right === undefined) return left;
+  return {
+    operations: [...new Set([...left.operations, ...right.operations])]
+      .toSorted(),
+    parameterEffects: [
+      ...new Set([...left.parameterEffects, ...right.parameterEffects]),
+    ].toSorted((a, b) => a - b),
+    variables: [
+      ...new Set([
+        ...(left.variables ?? []),
+        ...(right.variables ?? []),
+      ]),
+    ].toSorted((first, second) => first - second),
+  };
+}
+
+function emptyCallableEffects(): CallableEffectRow {
+  return { operations: [], parameterEffects: [], variables: [] };
+}
+
+function typedHandlerExpression(
+  expression: TypedDucklangExpression,
+):
+  | Extract<
+    TypedDucklangExpression,
+    { readonly kind: "effectHandler" }
+  >
+  | undefined {
+  if (expression.kind === "effectHandler") return expression;
+  if (expression.kind === "function") {
+    return typedHandlerExpression(expression.body);
+  }
+  if (expression.kind === "block") {
+    return typedHandlerExpression(expression.result);
+  }
+  return undefined;
+}
+
+function withoutEffectFamily(
+  row: CallableEffectRow,
+  effectName: string,
+): CallableEffectRow {
+  const prefix = `${effectName}.`;
+  return {
+    ...row,
+    operations: row.operations.filter((operation) =>
+      !operation.startsWith(prefix)
+    ),
+  };
+}
+
+export function ducklangExpressionEffects(
+  expression: TypedDucklangExpression,
+): CallableEffectRow {
+  switch (expression.kind) {
+    case "integer":
+    case "integer64":
+    case "float32":
+    case "float64":
+    case "boolean":
+    case "unit":
+    case "string":
+    case "intrinsic":
+    case "primitive":
+    case "reference":
+    case "function":
+    case "effectHandler":
+      return emptyCallableEffects();
+    case "hostCall":
+      return unionExpressionEffects(expression.arguments, {
+        operations: [`${expression.effectName}.${expression.operationName}`],
+        parameterEffects: [],
+        variables: [],
+      });
+    case "handle":
+      return expression.effects;
+    case "resume":
+      return ducklangExpressionEffects(expression.value);
+    case "optionDo":
+      return ducklangExpressionEffects(expression.option);
+    case "unionCase":
+      return ducklangExpressionEffects(expression.value);
+    case "product":
+      return unionExpressionEffects(expression.values);
+    case "project":
+    case "namedProject":
+      return ducklangExpressionEffects(expression.product);
+    case "recordUpdate":
+      return unionExpressionEffects([
+        expression.product,
+        ...expression.fields.map((field) => field.value),
+      ]);
+    case "call":
+      return unionExpressionEffects(
+        [expression.callee, ...expression.arguments],
+        expression.effects,
+      );
+    case "index":
+      return unionExpressionEffects([
+        expression.collection,
+        expression.index,
+      ]);
+    case "selectProductElement":
+      return unionExpressionEffects([
+        ...expression.values,
+        expression.index,
+      ]);
+    case "indexUpdate":
+      return unionExpressionEffects([
+        expression.product,
+        expression.index,
+        expression.value,
+      ]);
+    case "textAppend":
+    case "binary":
+      return unionExpressionEffects([expression.left, expression.right]);
+    case "ownership":
+    case "return":
+    case "comptime":
+      return ducklangExpressionEffects(expression.expression);
+    case "if":
+      return unionExpressionEffects([
+        expression.condition,
+        expression.consequence,
+        expression.alternative,
+      ]);
+    case "ifUnion":
+      return unionExpressionEffects([
+        expression.value,
+        expression.consequence,
+        expression.alternative,
+      ]);
+    case "block":
+      return unionExpressionEffects([
+        ...expression.steps.map((step) =>
+          step.kind === "binding" ? step.binding.value : step.expression
+        ),
+        expression.result,
+      ]);
+    case "scratch":
+      return ducklangExpressionEffects(expression.body);
+  }
+}
+
+function unionExpressionEffects(
+  expressions: readonly TypedDucklangExpression[],
+  initial: CallableEffectRow = emptyCallableEffects(),
+): CallableEffectRow {
+  return expressions.reduce(
+    (effects, expression) =>
+      unionCallableEffects(effects, ducklangExpressionEffects(expression)),
+    initial,
+  );
+}
+
+function instantiateCallableEffects(
+  row: CallableEffectRow,
+  calleeType: Type,
+  arguments_: readonly InferredExpression[],
+): CallableEffectRow {
+  let instantiated: CallableEffectRow = {
+    operations: row.operations,
+    parameterEffects: [],
+    variables: row.variables ?? [],
+  };
+  for (const parameterIndex of row.parameterEffects) {
+    const argument = arguments_[parameterIndex];
+    if (argument === undefined) continue;
+    instantiated = unionCallableEffects(
+      instantiated,
+      terminalCallableEffects(argument.type),
+    );
+  }
+  const parameters = functionParameterTypes(calleeType);
+  const substitutions = new Map<number, CallableEffectRow>();
+  for (const [index, argument] of arguments_.entries()) {
+    const formal = parameters[index];
+    if (formal === undefined) continue;
+    const formalRow = terminalCallableEffects(formal);
+    const actualRow = terminalCallableEffects(argument.type) ?? {
+      operations: [],
+      parameterEffects: [],
+      variables: [],
+    };
+    for (const variable of formalRow?.variables ?? []) {
+      const previous = substitutions.get(variable);
+      substitutions.set(
+        variable,
+        previous === undefined
+          ? actualRow
+          : unionCallableEffects(previous, actualRow),
+      );
+    }
+  }
+  instantiated = {
+    ...instantiated,
+    variables: [],
+  };
+  for (const variable of row.variables ?? []) {
+    const replacement = substitutions.get(variable);
+    instantiated = replacement === undefined
+      ? unionCallableEffects(instantiated, {
+        operations: [],
+        parameterEffects: [],
+        variables: [variable],
+      })
+      : unionCallableEffects(instantiated, replacement);
+  }
+  return instantiated;
+}
+
+function withDeclaredCallableEffects(
+  type: Type,
+  effects: CallableEffectRow,
+): Type {
+  if (type.kind !== "function") return type;
+  if (type.result.kind === "function") {
+    return {
+      ...type,
+      result: withDeclaredCallableEffects(type.result, effects),
+    };
+  }
+  return { ...type, effects };
+}
+
+function mergeCallableAnnotations(
+  inferred: Type,
+  declared: Type,
+): Type {
+  if (inferred.kind !== "function" || declared.kind !== "function") {
+    return inferred;
+  }
+  return {
+    ...inferred,
+    parameter: mergeCallableAnnotations(inferred.parameter, declared.parameter),
+    result: mergeCallableAnnotations(inferred.result, declared.result),
+    effects: inferred.effects ?? declared.effects,
+  };
+}
+
+function terminalCallableEffects(
+  type: Type,
+): CallableEffectRow | undefined {
+  let current = type;
+  let effects: CallableEffectRow | undefined;
+  while (current.kind === "function") {
+    effects = current.effects ?? effects;
+    current = current.result;
+  }
+  return effects;
 }
 
 const structuralRecordPrefix = "$record:";

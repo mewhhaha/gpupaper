@@ -30,6 +30,7 @@ export type DucklangSymbol = {
   readonly compileTimeRecord?: boolean;
   readonly linear?: boolean;
   readonly affine?: boolean;
+  readonly resumption?: true;
   readonly span: SourceSpan;
 };
 
@@ -85,6 +86,29 @@ export type ResolvedDucklangExpression =
     readonly operationName: string;
     readonly arguments: readonly ResolvedDucklangExpression[];
     readonly operation: DucklangEffectOperation;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "effectHandler";
+    readonly capabilityId: string;
+    readonly effectName: string;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly value: ResolvedDucklangExpression;
+      readonly span: SourceSpan;
+    }[];
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "handle";
+    readonly body: ResolvedDucklangExpression;
+    readonly handler: ResolvedDucklangExpression;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "resume";
+    readonly resumption: DucklangSymbol;
+    readonly value: ResolvedDucklangExpression;
     readonly span: SourceSpan;
   }
   | {
@@ -278,6 +302,8 @@ export type ResolvedDucklangModule = {
   readonly unionTypes: readonly ResolvedDucklangUnionType[];
   readonly typeAliases: readonly ResolvedDucklangTypeAlias[];
   readonly effects: ReadonlyMap<string, readonly DucklangEffectOperation[]>;
+  readonly effectParameters: ReadonlyMap<string, readonly string[]>;
+  readonly defaultHandlerOrders: ReadonlyMap<string, number>;
   readonly initFields: readonly DucklangInitField[];
   readonly structTypes: readonly ResolvedDucklangStructType[];
 };
@@ -319,6 +345,20 @@ export function resolveDucklangModule(
     unionTypes: resolver.unionTypes,
     typeAliases: resolver.typeAliases,
     effects: resolver.effects,
+    effectParameters: resolver.effectParameters,
+    defaultHandlerOrders: new Map(
+      module.extensions.map((extension) => {
+        const order = extension.methods.find((method) =>
+          method.name === "order"
+        )?.value;
+        return [
+          extension.targetType,
+          order?.kind === "function" && order.body.kind === "integer"
+            ? order.body.value
+            : 0,
+        ];
+      }),
+    ),
     initFields: resolver.initFields,
     structTypes: resolver.structTypes,
   };
@@ -330,6 +370,7 @@ class DucklangResolver {
   readonly #unionTypes: ResolvedDucklangUnionType[] = [];
   readonly #typeAliases: ResolvedDucklangTypeAlias[] = [];
   readonly #effects = new Map<string, readonly DucklangEffectOperation[]>();
+  readonly #effectParameters = new Map<string, readonly string[]>();
   readonly #initFields: DucklangInitField[] = [];
   readonly #structTypes: ResolvedDucklangStructType[] = [];
   readonly #linearUseCounts = new Map<number, number>();
@@ -440,6 +481,10 @@ class DucklangResolver {
 
   get effects(): ResolvedDucklangModule["effects"] {
     return this.#effects;
+  }
+
+  get effectParameters(): ResolvedDucklangModule["effectParameters"] {
+    return this.#effectParameters;
   }
 
   get initFields(): ResolvedDucklangModule["initFields"] {
@@ -592,6 +637,7 @@ class DucklangResolver {
           operationNames.add(operation.name);
         }
         this.#effects.set(statement.name, statement.operations);
+        this.#effectParameters.set(statement.name, statement.parameters);
         continue;
       }
       if (statement.kind === "structType") {
@@ -1101,6 +1147,78 @@ class DucklangResolver {
     currentRecursive: DucklangSymbol | undefined,
   ): ResolvedDucklangExpression {
     switch (expression.kind) {
+      case "effectHandler": {
+        const operations = this.#effects.get(expression.effectName);
+        if (operations === undefined) {
+          throw new ReferenceError(
+            `${expression.span.file}:${expression.span.start}: unknown Ducklang handler effect ${expression.effectName}`,
+          );
+        }
+        const expectedNames = new Set([
+          ...operations.map((operation) => operation.name),
+          "return",
+        ]);
+        const receivedNames = new Set(
+          expression.fields.map((field) => field.name),
+        );
+        const missing = [...expectedNames].filter((name) =>
+          !receivedNames.has(name)
+        );
+        const unexpected = [...receivedNames].filter((name) =>
+          !expectedNames.has(name)
+        );
+        if (missing.length !== 0 || unexpected.length !== 0) {
+          throw new TypeError(
+            `${expression.span.file}:${expression.span.start}: Ducklang handler ${expression.effectName} requires clauses ${
+              [...expectedNames].join(", ")
+            }; missing ${missing.join(", ") || "none"}; unexpected ${
+              unexpected.join(", ") || "none"
+            }`,
+          );
+        }
+        return {
+          ...expression,
+          capabilityId:
+            `${expression.span.file}:${expression.span.start}:${expression.effectName}`,
+          fields: expression.fields.map((field) => ({
+            ...field,
+            value: this.#resolveExpression(
+              field.name !== "return" &&
+                field.value.kind === "function" &&
+                field.value.parameters.at(-1)?.linear === true
+                ? {
+                  ...field.value,
+                  parameters: [
+                    ...field.value.parameters.slice(0, -1),
+                    {
+                      ...field.value.parameters.at(-1)!,
+                      linear: false,
+                      affine: true,
+                      resumption: true,
+                    },
+                  ],
+                }
+                : field.value,
+              environment,
+              currentRecursive,
+            ),
+          })),
+        };
+      }
+      case "handle":
+        return {
+          ...expression,
+          body: this.#resolveExpression(
+            expression.body,
+            environment,
+            currentRecursive,
+          ),
+          handler: this.#resolveExpression(
+            expression.handler,
+            environment,
+            currentRecursive,
+          ),
+        };
       case "integer":
       case "integer64":
       case "float32":
@@ -1684,7 +1802,29 @@ class DucklangResolver {
           ),
         };
       }
-      case "unary":
+      case "unary": {
+        if (
+          expression.operator === "!" &&
+          expression.operand.kind === "call" &&
+          expression.operand.callee.kind === "reference" &&
+          expression.operand.arguments.length === 1
+        ) {
+          const resumption = environment.get(
+            expression.operand.callee.name.text,
+          );
+          if (resumption?.resumption === true) {
+            return {
+              kind: "resume",
+              resumption,
+              value: this.#resolveExpression(
+                expression.operand.arguments[0],
+                environment,
+                currentRecursive,
+              ),
+              span: expression.span,
+            };
+          }
+        }
         return {
           ...expression,
           operand: this.#resolveExpression(
@@ -1693,6 +1833,7 @@ class DucklangResolver {
             currentRecursive,
           ),
         };
+      }
       case "if": {
         const condition = this.#resolveExpression(
           expression.condition,
@@ -1846,6 +1987,7 @@ class DucklangResolver {
         : { compileTimeRecord: name.compileTimeRecord }),
       ...(name.linear === undefined ? {} : { linear: name.linear }),
       ...(name.affine === undefined ? {} : { affine: name.affine }),
+      ...(name.resumption === undefined ? {} : { resumption: name.resumption }),
       span: name.span,
     } satisfies DucklangSymbol;
     this.#symbols.push(symbol);

@@ -8,6 +8,7 @@ import type {
   DucklangCoreOperation,
   DucklangCoreTerminator,
 } from "./ducklang_core.ts";
+import { contentIdentity } from "./content_identity.ts";
 import { validateDucklangCore } from "./ducklang_core.ts";
 import {
   managedProductIndexImportName,
@@ -48,7 +49,49 @@ export type DucklangCoreWasmArtifact = {
 
 export type DucklangCoreWasmOptions = {
   readonly emission: "cpu" | "planOnly";
+  readonly functions?: DucklangBackendFunctionCache;
 };
+
+export type DucklangBackendFunctionCache = {
+  instantiate<Artifact>(
+    environmentIdentity: string,
+    functionIdentity: string,
+    compile: () => Artifact,
+  ): Artifact;
+  readonly analyses: number;
+  readonly reuses: number;
+};
+
+export function createDucklangBackendFunctionCache(): DucklangBackendFunctionCache {
+  const environments = new Map<string, Map<string, unknown>>();
+  let analyses = 0;
+  let reuses = 0;
+  return {
+    instantiate<Artifact>(
+      environmentIdentity: string,
+      functionIdentity: string,
+      compile: () => Artifact,
+    ): Artifact {
+      const functions = environments.get(environmentIdentity) ??
+        new Map<string, unknown>();
+      if (functions.has(functionIdentity)) {
+        reuses += 1;
+        return functions.get(functionIdentity) as Artifact;
+      }
+      analyses += 1;
+      const artifact = compile();
+      functions.set(functionIdentity, artifact);
+      environments.set(environmentIdentity, functions);
+      return artifact;
+    },
+    get analyses() {
+      return analyses;
+    },
+    get reuses() {
+      return reuses;
+    },
+  };
+}
 
 export const ducklangTextLiteralsSectionName = "ducklang.text_literals";
 
@@ -154,23 +197,74 @@ export function lowerDucklangCoreToFcgAndWasm(
   const functionIndices = core.functions.map((function_) =>
     requirements.size + function_.id
   );
-  const fcgFunctions: FcgFunction[] = [];
-  for (const function_ of core.functions) {
-    const layout = planFunctionValues(core, function_);
-    const instructions = emitFunction(
-      core,
-      function_,
-      layout,
-      importedFunctions,
+  const backendEnvironmentIdentity = options.functions === undefined
+    ? undefined
+    : contentIdentity({
+      schema: 1,
+      types: core.types,
+      signatures: core.signatures,
+      requirements: [...requirements.values()],
       functionIndices,
       closureTargets,
       closureTypeIndices,
-      textHandles,
-    );
+      textLiterals,
+    });
+  const fcgFunctions: FcgFunction[] = [];
+  for (const function_ of core.functions) {
+    let loweredFunction: {
+      readonly layout: FunctionValueLayout;
+      readonly instructions: readonly WasmInstruction[];
+      readonly fcg: FcgFunction;
+    };
+    if (
+      options.functions === undefined ||
+      backendEnvironmentIdentity === undefined
+    ) {
+      const layout = planFunctionValues(core, function_);
+      const instructions = emitFunction(
+        core,
+        function_,
+        layout,
+        importedFunctions,
+        functionIndices,
+        closureTargets,
+        closureTypeIndices,
+        textHandles,
+      );
+      loweredFunction = {
+        layout,
+        instructions,
+        fcg: publicFunction(core, function_, layout),
+      };
+    } else {
+      const functionIdentity = contentIdentity(function_);
+      loweredFunction = options.functions.instantiate(
+        backendEnvironmentIdentity,
+        functionIdentity,
+        () => {
+          const layout = planFunctionValues(core, function_);
+          const instructions = emitFunction(
+            core,
+            function_,
+            layout,
+            importedFunctions,
+            functionIndices,
+            closureTargets,
+            closureTypeIndices,
+            textHandles,
+          );
+          return {
+            layout,
+            instructions,
+            fcg: publicFunction(core, function_, layout),
+          };
+        },
+      );
+    }
     const functionIndex = builder.addFunction(
       functionTypeIndices[function_.id],
-      layout.locals,
-      instructions,
+      loweredFunction.layout.locals,
+      loweredFunction.instructions,
     );
     const expectedIndex = functionIndices[function_.id];
     if (functionIndex !== expectedIndex) {
@@ -178,7 +272,7 @@ export function lowerDucklangCoreToFcgAndWasm(
         `Core function ${function_.name} expected Wasm index ${expectedIndex}; received ${functionIndex}`,
       );
     }
-    fcgFunctions.push(publicFunction(core, function_, layout));
+    fcgFunctions.push(loweredFunction.fcg);
   }
 
   const wrapperIndices: number[] = [];

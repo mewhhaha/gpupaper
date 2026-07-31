@@ -1,6 +1,6 @@
 import {
-  type CompilationTimings,
   compileModuleSource,
+  type DucklangCompilationProfile,
 } from "../src/compiler.ts";
 import {
   clearDucklangParserCache,
@@ -120,6 +120,14 @@ try {
               timings.parserInitializationMilliseconds
             ),
           ),
+          contextualClassificationMilliseconds: median(
+            warmTimings.map((timings) =>
+              timings.contextualClassificationMilliseconds
+            ),
+          ),
+          parserExecutionMilliseconds: median(
+            warmTimings.map((timings) => timings.parserExecutionMilliseconds),
+          ),
           syntaxMilliseconds: median(
             warmTimings.map((timings) => timings.syntaxMilliseconds),
           ),
@@ -159,16 +167,7 @@ type ParserMeasurement = {
 type CompletedCompilationMeasurement = {
   readonly status: "completed";
   readonly totalMilliseconds: number;
-  readonly timingsMilliseconds: CompilationTimings;
-  readonly wasmBytes: number;
-  readonly coreFunctionCount: number;
-  readonly coreOperationCount: number;
-  readonly gpuTypeTermCount: number;
-  readonly gpuTypeEqualityCount: number;
-  readonly gpuValidationRecordCount: number;
-  readonly gpuRewriteProposalCount: number;
-  readonly gpuWasmAtomCount: number;
-  readonly gpuWasmOutputBufferBytes: number;
+  readonly profile: DucklangCompilationProfile;
 };
 
 type CompilationMeasurement =
@@ -214,45 +213,13 @@ async function measureCompilation(
       gpuMode,
       ...(hostInterface === undefined ? {} : { hostInterface }),
     });
+    if (artifact.language !== "ducklang") {
+      throw new Error(`Ducklang benchmark compiled ${artifact.language}`);
+    }
     return {
       status: "completed",
       totalMilliseconds: performance.now() - start,
-      timingsMilliseconds: artifact.timings,
-      wasmBytes: artifact.wasm.length,
-      coreFunctionCount: artifact.language === "ducklang"
-        ? artifact.core.functions.length
-        : 0,
-      coreOperationCount: artifact.language === "ducklang"
-        ? artifact.core.functions.reduce(
-          (functionTotal, function_) =>
-            functionTotal +
-            function_.blocks.reduce(
-              (blockTotal, block) => blockTotal + block.operations.length,
-              0,
-            ),
-          0,
-        )
-        : 0,
-      gpuTypeTermCount: artifact.gpuTypeResult?.status === "solved"
-        ? artifact.gpuTypeResult.termCount
-        : 0,
-      gpuTypeEqualityCount: artifact.gpuTypeResult?.status === "solved"
-        ? artifact.gpuTypeResult.equalityCount
-        : 0,
-      gpuValidationRecordCount: artifact.language === "ducklang" &&
-          artifact.gpuCoreResult?.status === "completed"
-        ? artifact.gpuCoreResult.validationRecordCount
-        : 0,
-      gpuRewriteProposalCount: artifact.language === "ducklang" &&
-          artifact.gpuCoreResult?.status === "completed"
-        ? artifact.gpuCoreResult.proposals.length
-        : 0,
-      gpuWasmAtomCount: artifact.gpuWasmResult?.status === "completed"
-        ? artifact.gpuWasmResult.atomCount
-        : 0,
-      gpuWasmOutputBufferBytes: artifact.gpuWasmResult?.status === "completed"
-        ? artifact.gpuWasmResult.outputBufferBytes
-        : 0,
+      profile: artifact.profile,
     };
   } catch (error) {
     return {
@@ -272,7 +239,12 @@ async function measureCompilationMode(
   readonly first: CompilationMeasurement;
   readonly warmIterationCount: number;
   readonly warmMedianTotalMilliseconds: number;
-  readonly warmMedianTimingsMilliseconds?: CompilationTimings;
+  readonly warmMedianProfile?: DucklangCompilationProfile;
+  readonly warmHotStages?: readonly {
+    readonly stage: keyof DucklangCompilationProfile["stages"];
+    readonly milliseconds: number;
+    readonly percentageOfTotal: number;
+  }[];
   readonly warmErrors?: readonly string[];
 }> {
   await clearDucklangParserCache();
@@ -297,8 +269,11 @@ async function measureCompilationMode(
     ),
     ...(completed.length === warm.length
       ? {
-        warmMedianTimingsMilliseconds: medianCompilationTimings(
-          completed.map((measurement) => measurement.timingsMilliseconds),
+        warmMedianProfile: medianCompilationProfile(
+          completed.map((measurement) => measurement.profile),
+        ),
+        warmHotStages: hotStages(
+          completed.map((measurement) => measurement.profile),
         ),
       }
       : {
@@ -309,11 +284,53 @@ async function measureCompilationMode(
   };
 }
 
-function medianCompilationTimings(
-  samples: readonly CompilationTimings[],
-): CompilationTimings {
-  const keys = Object.keys(samples[0]) as (keyof CompilationTimings)[];
+function medianCompilationProfile(
+  samples: readonly DucklangCompilationProfile[],
+): DucklangCompilationProfile {
+  return {
+    totalMilliseconds: median(
+      samples.map((sample) => sample.totalMilliseconds),
+    ),
+    accountedMilliseconds: median(
+      samples.map((sample) => sample.accountedMilliseconds),
+    ),
+    unattributedMilliseconds: median(
+      samples.map((sample) => sample.unattributedMilliseconds),
+    ),
+    stages: medianNumericRecord(samples.map((sample) => sample.stages)),
+    details: medianNumericRecord(samples.map((sample) => sample.details)),
+    work: medianNumericRecord(samples.map((sample) => sample.work)),
+  };
+}
+
+function hotStages(
+  samples: readonly DucklangCompilationProfile[],
+): readonly {
+  readonly stage: keyof DucklangCompilationProfile["stages"];
+  readonly milliseconds: number;
+  readonly percentageOfTotal: number;
+}[] {
+  const profile = medianCompilationProfile(samples);
+  return Object.entries(profile.stages)
+    .map(([stage, milliseconds]) => ({
+      stage: stage as keyof DucklangCompilationProfile["stages"],
+      milliseconds,
+      percentageOfTotal: profile.totalMilliseconds === 0
+        ? 0
+        : milliseconds / profile.totalMilliseconds * 100,
+    }))
+    .sort((left, right) => right.milliseconds - left.milliseconds)
+    .slice(0, 8);
+}
+
+function medianNumericRecord<Record_ extends Readonly<Record<string, number>>>(
+  samples: readonly Record_[],
+): Record_ {
+  const keys = Object.keys(samples[0]) as (keyof Record_)[];
   return Object.fromEntries(
-    keys.map((key) => [key, median(samples.map((sample) => sample[key]))]),
-  ) as CompilationTimings;
+    keys.map((key) => [
+      key,
+      median(samples.map((sample) => sample[key] as number)),
+    ]),
+  ) as Record_;
 }
