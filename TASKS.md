@@ -1014,6 +1014,10 @@ Core receives no source handler or open effect row.
       frozen atom input, while a 21-pair dense/ranked benchmark found median
       ratios within ±0.40%. Forced-layout differentials and mixed-layout packed
       batches validate both representations.
+- [x] Derive within-word byte rank with nibble-parallel zero detection and
+      `countOneBits`. Four fixed shifts replace a divergent zero-to-seven
+      comparison loop while preserving the exact stable-rank proof. A GPU/CPU
+      differential enumerates all 256 byte/non-byte masks in one kind word.
 - [x] Structure reducible CFGs into Wasm regions and dispatch-lower general
       CFGs. The Core backend emits direct structured `if`/`block` forms for the
       reducible diamond and uses a deterministic block-state local inside a

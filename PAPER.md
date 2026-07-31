@@ -1194,10 +1194,22 @@ Q - ceil(Q / 4) > ceil(A / 8)
 asymptotically \(Q>A/6\). The selector chooses ranked only under this strict
 inequality; dense wins equal-capacity ties because it has less lookup work.
 Within ranked lookup, the rank word supplies the preceding eight-atom groups and
-at most seven nibble comparisons supply the within-group byte count. A byte lane
-indexes its packed stream by that count; a non-byte lane uses
-`atom_id - byte_rank`. Both are exactly the stable ranks of their variants, so
-they recover the same low word as dense indexing.
+one bit-parallel expression supplies the within-group byte count. Byte has tag
+zero, so for kind word \(x\):
+
+```text
+n = x | (x >> 1) | (x >> 2) | (x >> 3)
+z = (~n) & 0x11111111
+m_i = (1 << (4(i mod 8))) - 1
+within_byte_rank(i) = popcount(z & m_i)
+```
+
+At bit \(4q\), \(n\) is set exactly when one of the four bits in nibble \(q\)
+is set; shifts from the next nibble cannot reach bit \(4q\). Thus \(z\) has
+exactly one bit for every zero-tag byte atom, and \(m_i\) retains exactly the
+preceding nibbles. A byte lane indexes its packed stream by the resulting total
+rank; a non-byte lane uses `atom_id - byte_rank`. Both are exactly the stable
+ranks of their variants, so they recover the same low word as dense indexing.
 
 The pipeline uses seven storage bindings—kind, primary low word, non-byte low
 word, byte rank, high word, boundaries, and output—and one uniform. The logical
@@ -1210,7 +1222,9 @@ B_atom_input = L(A, Q) + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 
 The host already counts signed-64 atoms before choosing their high-word
 representation; byte counting is fused into that pass. Rank construction and
-packing remain \(O(A)\). Every frozen target selects ranked and removes
+packing remain \(O(A)\). Ranked GPU lookup now has four constant shifts, three
+ORs, three masks/complements, and one population count rather than zero to seven
+data-dependent tag comparisons. Every frozen target selects ranked and removes
 3,236–245,336 additional bytes. A 21-pair counterbalanced experiment measured
 ranked/dense median ratios from 0.9907 to 1.0040, so no latency improvement is
 claimed; the representation is admitted because it strictly reduces capacity
@@ -2770,6 +2784,27 @@ milliseconds were Editor 334.16/229.35, Codex 949.72/788.76, grep
 129.66/125.46, Tar 197.90/183.27, wav 115.33/110.38, and raytracer
 99.43/92.84. They are correctness samples, not a latency comparison with an
 earlier implementation.
+
+### 2026-07-31: byte rank becomes a bit-parallel calculation
+
+The first ranked decoder counted byte tags before a lane with a loop of zero to
+seven iterations. Section 7.4 now derives all eight zero-nibble predicates at
+once and uses `countOneBits` on the lane's prefix. The proof depends on byte
+having physical tag zero and on four-bit tags; both are explicit representation
+invariants.
+
+This replaces divergent comparison work with a fixed expression and does not
+change capacity, bindings, dispatches, or emitted bytes. Successive 21-pair
+experiments measured ranked medians changing by -0.11% to -1.88% across the six
+targets, but the implementations were not interleaved in one experiment, so
+those values are advisory. Forced-layout differentials, generated plans, and
+the mixed-layout batch regression remain the executable semantic evidence. A
+direct forced-ranked regression enumerates all \(2^8=256\) byte/non-byte masks
+for one kind word and compares the complete emission with the independent CPU
+encoder. The exact 501-test required-GPU gate passed; paired target samples in
+milliseconds were Editor 325.67/223.58, Codex 931.50/790.41, grep
+125.21/127.96, Tar 191.43/181.10, wav 112.90/113.90, and raytracer
+97.69/92.46.
 
 ## References
 

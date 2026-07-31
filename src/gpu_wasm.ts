@@ -134,10 +134,14 @@ fn atom_low_word(index: u32, kind: u32, kind_word: u32) -> u32 {
     return primary_low_words[index];
   }
   var byte_rank = byte_ranks[index >> 3u];
-  for (var preceding = 0u; preceding < (index & 7u); preceding += 1u) {
-    let preceding_kind = (kind_word >> (preceding << 2u)) & 15u;
-    if (preceding_kind == ${atomByte}u) { byte_rank += 1u; }
-  }
+  let nonzero_nibbles =
+    kind_word |
+    (kind_word >> 1u) |
+    (kind_word >> 2u) |
+    (kind_word >> 3u);
+  let byte_nibbles = (~nonzero_nibbles) & 0x11111111u;
+  let preceding_bits = (1u << ((index & 7u) << 2u)) - 1u;
+  byte_rank += countOneBits(byte_nibbles & preceding_bits);
   if (kind == ${atomByte}u) {
     let packed = primary_low_words[byte_rank >> 2u];
     return (packed >> ((byte_rank & 3u) << 3u)) & 255u;

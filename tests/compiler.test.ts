@@ -1178,6 +1178,34 @@ Deno.test("WebGPU Wasm emission keeps dense signed64 high words above break-even
   assertEquals(emitted.signed64HighWordBytes, 12);
 });
 
+Deno.test("ranked WebGPU low words decode every byte-tag mask", async () => {
+  const atoms = Array.from(
+    { length: 256 },
+    (_, byteMask) =>
+      Array.from(
+        { length: 8 },
+        (_, position) =>
+          (byteMask & (1 << position)) !== 0
+            ? {
+              kind: "byte" as const,
+              value: (byteMask + position) & 0xff,
+            }
+            : {
+              kind: "unsigned" as const,
+              value: byteMask + position,
+            },
+      ),
+  ).flat();
+  const plan = { atoms, maximumDependencyLevel: 0 };
+  const emitted = await emitWasmPlanOnGpu(plan, {
+    lowWordLayout: "ranked",
+  });
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(emitted.lowWordLayout, "ranked");
+  assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
+});
+
 Deno.test("packed WebGPU Wasm layouts are deterministic across shared words", async () => {
   const builder = new WasmModuleBuilder();
   const typeIndex = builder.addFunctionType([], [wasmType.i32]);

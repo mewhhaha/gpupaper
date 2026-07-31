@@ -482,9 +482,11 @@ logical size is `4 ceil(B / 4) + 4(A - B) + 4 ceil(A / 8)`, versus the dense
 | raytracer |      25,036 |       19,728 |       5,308 |    21.20% |
 
 Adaptive selection uses ranked only when this logical input is strictly smaller;
-dense wins ties. Lookup adds two storage bindings and up to seven within-word
-tag comparisons in every emission lane. A 21-pair real-plan benchmark alternated
-dense-first and ranked-first order:
+dense wins ties. Lookup adds two storage bindings. The first implementation
+counted the preceding zero tags with a divergent zero-to-seven-iteration loop. A
+later bit-parallel decoder ORs four shifted copies of the kind word, masks one
+zero-test bit per nibble, and applies `countOneBits` to the preceding prefix.
+The table below is the 21-pair loop-decoder experiment:
 
 | Target    | Dense median/p95 | Ranked median/p95 | Ranked/dense median |
 | --------- | ---------------: | ----------------: | ------------------: |
@@ -501,6 +503,25 @@ capacity reduction, not a claimed speedup. Forced-layout byte differentials and
 mixed-layout packed batches retain dense as an executable fallback. The
 post-change required-GPU gate passed 500 tests and compiled all frozen targets
 twice; exact samples are recorded in the continuous paper.
+
+Replacing the within-word comparison loop with nibble-parallel zero detection
+and `countOneBits` produced these second-run ranked medians:
+
+| Target    | Loop decoder | Bit-parallel decoder | Change |
+| --------- | -----------: | -------------------: | -----: |
+| Editor    |        27.84 |                27.69 | -0.51% |
+| Codex     |        34.50 |                33.85 | -1.88% |
+| grep      |        27.08 |                27.05 | -0.11% |
+| tar       |        27.67 |                27.64 | -0.13% |
+| wav       |        27.05 |                26.95 | -0.35% |
+| raytracer |        27.08 |                27.03 | -0.20% |
+
+These are successive experiments rather than interleaved implementation pairs,
+so the changes are advisory. The proved result is removal of a divergent
+zero-to-seven-iteration loop; no latency speedup is claimed. The exact
+bit-parallel implementation passed the 500-test required-GPU release gate and
+compiled all frozen targets twice. After adding the exhaustive 256-mask
+regression, the exact gate passed 501 tests.
 
 ### Compacted Core rewrite frontier
 
