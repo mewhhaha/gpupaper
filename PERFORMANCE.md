@@ -190,12 +190,12 @@ differential comparison, engine validation, and byte determinism:
 These two release samples are a correctness gate, not a latency distribution.
 All device-capacity preflights and the malformed-input rejection gate passed.
 
-### Wasm emission work audit
+### Wasm emission work audit before hierarchical scan
 
-The 2026-07-31 required-GPU audit exposes the exact current Hillis–Steele scan
-cost. `length` is the number of full-array length-dependency rounds, `scan` is
-the number of full-array prefix rounds, and invocations include workgroup
-padding across size, length, scan, and emission passes:
+The initial 2026-07-31 required-GPU audit exposed the Hillis–Steele scan cost.
+`length` is the number of full-array length-dependency rounds, `scan` is the
+number of full-array prefix rounds, and invocations include workgroup padding
+across size, length, scan, and emission passes:
 
 | Target    |   Atoms | Length | Scan | Invocations | Uniform output bound | Wasm bytes |
 | --------- | ------: | -----: | ---: | ----------: | -------------------: | ---------: |
@@ -244,6 +244,41 @@ device:
 The GPU independently computes its final prefix and must match the exact host
 measure. The six-target required-GPU gate passed byte differential and engine
 validation. This changes capacity and host width work, not scan dispatches.
+
+### Hierarchical Wasm scan
+
+The subsequent hierarchical scan recursively scans 64-element blocks and
+propagates block prefixes downward. The counts below are observed profile
+values from one required-GPU differential compilation per frozen target:
+
+| Target    | Old scan dispatches | New scan dispatches | Old invocations | New invocations | Reduction |
+| --------- | ------------------: | ------------------: | --------------: | --------------: | --------: |
+| Editor    |                  15 |                   5 |         454,784 |         144,448 |    68.24% |
+| Codex     |                  18 |                   5 |       4,491,520 |       1,231,424 |    72.58% |
+| grep      |                  12 |                   3 |          62,464 |          23,488 |    62.40% |
+| tar       |                  15 |                   5 |         421,952 |         134,080 |    68.22% |
+| wav       |                  12 |                   3 |          39,936 |          15,040 |    62.34% |
+| raytracer |                  12 |                   3 |          62,464 |          23,488 |    62.40% |
+
+The invocation metric counts scheduled GPU lanes. Section 7.4 of `PAPER.md`
+also accounts for the six shared-memory addition steps within each upward lane;
+the total scan work remains linear because the hierarchy is geometric.
+
+The old scan used two full atom-width prefix buffers. The new scan uses one
+full-width result and two alternating sum/prefix hierarchy pairs:
+
+| Target    | Old scan bytes | New scan bytes | Reduction |
+| --------- | -------------: | -------------: | --------: |
+| Editor    |        191,384 |         98,748 |    48.40% |
+| Codex     |      1,632,792 |        842,332 |    48.41% |
+| grep      |         31,176 |         16,092 |    48.38% |
+| tar       |        177,608 |         91,644 |    48.40% |
+| wav       |         19,816 |         10,236 |    48.34% |
+| raytracer |         30,808 |         15,908 |    48.36% |
+
+These are deterministic execution and allocation counts, not a latency claim.
+All six outputs remain byte-identical to CPU emission and validate in the Wasm
+engine.
 
 ### Scalar comptime stack capacity
 

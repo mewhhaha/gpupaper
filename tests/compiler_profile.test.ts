@@ -82,7 +82,7 @@ add(20, 22)
   }
 });
 
-Deno.test("GPU Wasm profile exposes every full-array dispatch round", async () => {
+Deno.test("GPU Wasm profile exposes hierarchical scan work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",
     "let add = (left: I32, right: I32) => left + right\nadd(20, 22)\n",
@@ -92,16 +92,26 @@ Deno.test("GPU Wasm profile exposes every full-array dispatch round", async () =
     },
   );
   const work = artifact.profile.work;
-  const dispatchedWidth = Math.ceil(work.wasmAtomCount / 64) * 64;
-  const expectedInvocations = dispatchedWidth *
-    (
-      2 + work.gpuWasmLengthRoundCount +
-      work.gpuWasmScanRoundCount
+  const hierarchyCounts = [work.wasmAtomCount];
+  while (hierarchyCounts.at(-1)! > 64) {
+    hierarchyCounts.push(Math.ceil(hierarchyCounts.at(-1)! / 64));
+  }
+  const paddedInvocationCount = (count: number) => Math.ceil(count / 64) * 64;
+  const scanInvocationCount = hierarchyCounts.reduce(
+    (total, count) => total + paddedInvocationCount(count),
+    0,
+  ) +
+    hierarchyCounts.slice(0, -1).reduce(
+      (total, count) => total + paddedInvocationCount(count),
+      0,
     );
+  const expectedInvocationCount = paddedInvocationCount(work.wasmAtomCount) *
+      (2 + work.gpuWasmLengthRoundCount) +
+    scanInvocationCount;
   if (
     work.gpuWasmLengthRoundCount === 0 ||
-    work.gpuWasmScanRoundCount === 0 ||
-    work.gpuWasmDispatchedInvocationCount !== expectedInvocations ||
+    work.gpuWasmScanDispatchCount !== hierarchyCounts.length * 2 - 1 ||
+    work.gpuWasmDispatchedInvocationCount !== expectedInvocationCount ||
     work.wasmOutputBufferBytes < work.wasmBytes ||
     work.wasmOutputBufferBytes >= work.wasmBytes + 4
   ) {

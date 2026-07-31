@@ -925,35 +925,66 @@ For `A` atoms and maximum length level `D`, emission performs:
 3. an inclusive prefix sum of all resolved sizes;
 4. one full-array pass writing each atom into its assigned byte interval.
 
-The current prefix implementation is Hillis–Steele. For distances
-`1, 2, 4, … < A`, round `r` computes:
+The prefix implementation is a hierarchical inclusive scan with workgroup width
+\(W=64\). Define:
 
 ```text
-pᵣ[i] = pᵣ₋₁[i] + (i ≥ 2ʳ ? pᵣ₋₁[i - 2ʳ] : 0)
+n₀ = A
+nₗ₊₁ = ceil(nₗ / W)
 ```
 
-After round `r`, `pᵣ[i]` is the sum of the last at most `2ʳ⁺¹` input sizes
-ending at `i`; induction yields the complete inclusive prefix after:
+and stop at level \(h-1\) where \(n_{h-1}\le W\). An upward dispatch computes
+an inclusive scan independently within each block and emits its block sum as
+the next level. The top level is therefore a complete prefix of all block sums.
+A downward dispatch for levels \(h-2,\ldots,0\) adds:
 
 ```text
-R = ceil(log₂ A)
+parent_prefix[floor(i / W) - 1]
 ```
 
-This is not the work-efficient Blelloch scan discussed by the historical design
-paper. With workgroup width 64, the exact scheduled lane count for one plan is:
+to each element outside the first block. The block-local invariant says that an
+upward result is the sum from the start of its block through its index. Assuming
+the parent is globally prefixed, the downward addition supplies exactly the sum
+of all preceding blocks. Downward induction therefore proves that level zero is
+the inclusive prefix of the atom sizes.
+
+Adjacent hierarchy levels alternate between two sum buffers and two prefix
+buffers. Consequently every dispatch binds its input read-only and its output
+read-write through distinct GPU buffers; the representation rules out WebGPU
+storage-usage aliasing. Dense offsets within each buffer are shader indices, not
+bind-group offsets, so they require no device-specific alignment padding.
+
+Let \(L(n)=W\lceil n/W\rceil\). The exact scheduled lane counts are:
 
 ```text
-L = 64 ceil(A / 64)
-dispatches = 2 + D + R
-scheduled_invocations = L(2 + D + R)
-work = Θ(A(D + log A))
-span = Θ(D + log A) dispatch rounds
+scan_dispatches = 2h - 1
+scan_invocations = Σ[l=0..h-1] L(nₗ) + Σ[l=0..h-2] L(nₗ)
+all_invocations = L(A)(2 + D) + scan_invocations
 ```
 
-Only length atoms at the active level do useful work during a length pass, so
-the formula includes inactive lanes. The profile reports `A`, `D`, `R`, and the
-scheduled invocation count. This makes a future hierarchical or level-compacted
-implementation comparable without changing the semantic plan.
+The block-local implementation performs six Hillis–Steele shared-memory steps.
+For a full workgroup this is
+\(\sum_{k=0}^{5}(64-2^k)=321\) additions. Upward work is therefore
+\(321\sum_l\lceil n_l/64\rceil\); downward work adds
+\(\sum_{l=0}^{h-2}(n_l-\min(n_l,64))\). Because the hierarchy is geometric,
+total scan work is \(\Theta(A)\), while its synchronization span is
+\(\Theta(h\log W)\). A Blelloch local scan would use fewer additions but twice
+as many shared-memory synchronization steps; selecting it requires latency
+measurements rather than asymptotics alone [17, 18].
+
+Let \(H=\sum_{l=1}^{h-1}n_l\). The scan stores one \(A\)-word result plus two
+copies of the hierarchy and two scratch words per copy:
+
+```text
+scan_storage_bytes = 4(A + 2(H + 2))
+```
+
+The previous global Hillis–Steele scan required two \(A\)-word prefix buffers,
+\(8A\) bytes, and \(\lceil\log_2 A\rceil\) full-width dispatches. Only length
+atoms at the active level do useful work during a length pass, so the reported
+all-invocation count still includes those inactive lanes. The profile reports
+`A`, `D`, hierarchical scan dispatches, and the exact scheduled invocation
+count.
 
 Each atom owns a disjoint byte interval from the prefix result. Adjacent atoms
 may share a `u32` output word, so writers use `atomicOr` into a zeroed buffer.
@@ -982,8 +1013,8 @@ scan, and write passes, and the returned final prefix must equal
 An earlier uniform `10A` bound and then a per-kind `1/5/10` bound were safe by
 case analysis but conservative. Exact host sizing removes their slack without a
 device readback or an additional submission because the immutable atom DAG is
-already a host payload. The scan still uses two `4A`-byte prefix buffers, and
-the size column uses another `4A` bytes. Packed batches add device-required
+already a host payload. The size column uses `4A` bytes and the hierarchical
+scan storage follows the formula above. Packed batches add device-required
 alignment between job regions but do not change per-job atom semantics.
 
 The default CPU differential independently evaluates the length DAG, encodes
@@ -1810,6 +1841,25 @@ device synchronization; Codex saves 331,172 bytes in each buffer. The full
 six-target required-GPU gate, CPU byte differentials, and engine validation
 passed.
 
+### 2026-07-31: Wasm prefixes become hierarchical
+
+The global Hillis–Steele scan was a correct but unnecessarily superlinear
+execution schedule. The implementation now performs 64-element shared-memory
+scans upward through a geometric hierarchy and propagates parent prefixes
+downward. Section 7.4 proves the inclusive-prefix invariant and records the
+exact work, span, storage, and non-aliasing rules. A first implementation bound
+adjacent hierarchy levels through the same storage buffer; WebGPU rejected the
+read-only/read-write alias. Alternating level buffers makes that illegal state
+unrepresentable.
+
+On the frozen corpus, this executable work count reduces scheduled invocations
+by 62.34–72.58%. Codex changes from 18 scan dispatches and 4,491,520 total
+scheduled invocations to 5 and 1,231,424. Its scan storage changes from
+1,632,792 to 842,332 bytes, a 48.41% reduction. These are deterministic counts,
+not timing claims. Generated-plan and CPU-byte differentials, shared-word
+determinism, engine validation, and the full required-GPU gate are the
+executable evidence; latency improvement remains an empirical question.
+
 ### 2026-07-31: type closure gains a semantic oracle
 
 The prior GPU boundary checked only that returned parent arrays were in range
@@ -1948,3 +1998,8 @@ change for such a small job.
 16. WebAssembly Community Group. “WebAssembly Core Specification: Integer
     Operations.”
     <https://webassembly.github.io/spec/core/exec/numerics.html#integer-operations>
+17. Guy E. Blelloch. “Prefix Sums and Their Applications.” CMU-CS-90-190,
+    1990. <https://www.cs.cmu.edu/afs/cs.cmu.edu/project/scandal/public/papers/CMU-CS-90-190.html>
+18. Shubhabrata Sengupta, Mark Harris, Yao Zhang, and John D. Owens. “Efficient
+    Parallel Scan Algorithms for GPUs.” NVIDIA Technical Report NVR-2008-003,
+    2008. <https://research.nvidia.com/publication/2008-12_efficient-parallel-scan-algorithms-gpus>
