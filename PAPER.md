@@ -893,6 +893,13 @@ Medians and nearest-rank p95 values remain descriptive statistics; without
 independent repetitions and uncertainty intervals they do not establish a
 general speedup.
 
+For a batch size \(N\), observed latency break-even is the predicate
+\(\operatorname{median}_i(G_{N,i}-C_{N,i})\leq 0\). The difference of the two
+marginal medians is not substituted for this estimator. If the predicate is
+false for all \(N\) in a finite measured set \(S\), the only valid conclusion
+without a monotonicity proof is “not observed through \(\max S\).” In
+particular, \(\max S\) is not a lower bound on a future crossover.
+
 Executable evidence consists of capacity-boundary tests, device-loss recovery,
 physical-batch isolation tests, generated CPU/GPU differentials for type
 closure, Core rewrites and Wasm plans, and the six-target required-GPU release
@@ -4002,6 +4009,49 @@ arithmetic contract: every completed pair produces one difference, incomplete
 pairs omit the paired summary, and the existing required-GPU compilation path
 still returns validated artifacts. No compiler semantics or emitted bytes
 changed in this audit.
+
+### 2026-07-31: break-even is bounded by measured pairs
+
+The concurrency benchmark still selected a crossover by comparing marginal
+CPU and GPU medians and described its largest tested size as a lower bound when
+none was found. The Codex counterexample above already disproves equivalence of
+the marginal and paired estimators. A lower-bound conclusion would additionally
+require a proof that the paired GPU-minus-CPU difference is monotone in batch
+size; the scheduler, capacity splits, frontend arrival order, and device queue
+provide no such model.
+
+The executable report now retains all CPU, GPU, and paired observations at each
+batch size, selects break-even using the Section 7.1 paired predicate, and
+reports only `maximumMeasuredBatchSize` on failure. The measured set expands
+from \(\{1,2,4,8,16\}\) to \(\{1,2,4,8,16,32,64\}\).
+
+A 16-sample run found no paired crossover under either policy. Latency-policy
+paired median/MAD differences in milliseconds were
+
+\[
+[26.975/0.903,\ 26.232/0.970,\ 28.784/2.718,\ 28.192/3.924,\
+30.808/5.522,\ 24.739/12.212,\ 41.324/13.775],
+\]
+
+and throughput-policy values were
+
+\[
+[29.813/0.818,\ 26.502/0.822,\ 36.796/2.253,\ 34.671/3.751,\
+35.840/6.277,\ 26.990/11.506,\ 30.975/8.843].
+\]
+
+The entries follow increasing batch size. At \(N=64\), throughput CPU and GPU
+medians were 603.336 and 645.696 ms. Thus marginal work per compilation was
+9.427 and 10.089 ms, and the paired premium amortized to
+\(30.975/64=0.484\) ms per job. The physical Wasm payload median saturated at
+16 jobs for both \(N=32\) and \(N=64\).
+
+These are empirical measurements. They prove neither monotonicity nor absence
+of a crossover outside the measured set. They do reject, on this adapter and
+protocol, the hypothesis that the configured scheduler reaches latency
+break-even merely by presenting up to 64 concurrent grep compilations. Raising
+the 16-job physical batch limit remains an unverified experiment rather than an
+inferred optimization.
 
 ## References
 

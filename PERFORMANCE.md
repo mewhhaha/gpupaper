@@ -56,6 +56,10 @@ retains every warm total and reports the paired differences
 by adjacent CPU/GPU observations; the raw samples expose stalls that a marginal
 median would hide. It does not estimate confidence or remove backend-specific
 noise.
+The break-even report retains the same raw and paired evidence for every batch
+size. A crossover is observed only when the paired median is non-positive.
+Failure to observe one reports the maximum measured size, not a lower bound on
+an unknown crossover: no monotonicity property has been proved.
 
 ```sh
 deno task benchmark:frontend
@@ -1594,24 +1598,30 @@ and layout environment are stable.
 ## Authoritative-GPU concurrency
 
 `benchmark:break-even` compiles dirty grep roots concurrently without a
-compilation session. Core and Wasm queue before allocation and suballocate one
-shared buffer set per payload batch. Capacity overflow splits a batch in stable
-order.
+compilation session. Core identity stops before scheduling. Wasm jobs queue
+before allocation and suballocate one shared buffer set per physical payload
+batch. Capacity overflow splits a batch in stable order.
 
-| Jobs | Latency CPU / job | Latency GPU / job | Throughput CPU / job | Throughput GPU / job | Throughput GPU / CPU | Throughput Core/Wasm pack |
-| ---: | ----------------: | ----------------: | -------------------: | -------------------: | -------------------: | ------------------------: |
-|    1 |         121.17 ms |         171.97 ms |            124.52 ms |            189.30 ms |                 1.520 |                       1/1 |
-|    2 |         110.12 ms |         138.64 ms |            111.50 ms |            138.43 ms |                 1.242 |                       2/2 |
-|    4 |         122.88 ms |         129.19 ms |            109.72 ms |            123.96 ms |                 1.130 |                       3/3 |
-|    8 |         103.28 ms |         119.32 ms |            108.68 ms |            111.67 ms |                 1.027 |                       5/5 |
-|   16 |         105.36 ms |         115.40 ms |            111.31 ms |            112.98 ms |                 1.015 |                       8/8 |
+| Jobs | Latency CPU/GPU total | Paired GPU−CPU median/MAD | Throughput CPU/GPU total | Paired GPU−CPU median/MAD | Latency/throughput Wasm payload |
+| ---: | --------------------: | ------------------------: | -----------------------: | ------------------------: | ------------------------------: |
+|    1 |       12.48/38.88 ms |           26.97/0.90 ms |        10.09/39.70 ms |           29.81/0.82 ms |                             1/1 |
+|    2 |       23.75/49.96 ms |           26.23/0.97 ms |        18.21/44.76 ms |           26.50/0.82 ms |                             2/2 |
+|    4 |       41.64/69.94 ms |           28.78/2.72 ms |        37.18/73.65 ms |           36.80/2.25 ms |                             4/3 |
+|    8 |      78.81/107.79 ms |           28.19/3.92 ms |       76.37/111.05 ms |           34.67/3.75 ms |                             8/4 |
+|   16 |     149.13/181.82 ms |           30.81/5.52 ms |      156.59/188.40 ms |           35.84/6.28 ms |                          16/9.5 |
+|   32 |     305.19/329.72 ms |          24.74/12.21 ms |      301.14/328.11 ms |          26.99/11.51 ms |                           16/16 |
+|   64 |     611.03/663.77 ms |          41.32/13.78 ms |      603.34/645.70 ms |           30.98/8.84 ms |                           16/16 |
 
-Latency mode flushes on the next scheduler turn. Throughput mode waits for at
-most 2 ms, 16 jobs, or a capacity boundary. After removing production type
-validation, throughput GPU/CPU falls from 1.520 at one job to 1.015 at sixteen;
-no break-even was observed. Absolute times are materially higher than the prior
-sweep for both CPU and GPU, so the ratio and exact pack sizes are more useful
-than cross-sweep latency subtraction.
+Times are 16-sample medians; paired columns use the retained adjacent
+observations. Latency mode flushes on the next scheduler turn. Throughput mode
+waits for at most 2 ms, 16 jobs, or a capacity boundary. Neither policy reaches
+break-even through the maximum measured size of 64. At 64 jobs, throughput
+costs 10.089 ms per GPU compilation versus 9.427 ms per CPU compilation, while
+the paired 30.975 ms premium amortizes to 0.484 ms/job. This is a bounded
+negative result. It does not imply that 64 is a lower bound on a crossover or
+that the latency difference is monotone. Physical Wasm packing saturates at the
+configured 16-job boundary, so a larger physical batch remains a separate
+unmeasured policy experiment.
 
 ## Peer boundaries
 

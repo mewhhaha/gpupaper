@@ -1390,6 +1390,9 @@ resource cost, and corpus measurements.
 - [x] Retain every frontend benchmark observation and report paired
       GPU-minus-CPU median and MAD. Record the discarded-observation
       counterexample and remeasure the six-target post-Core stage frontier.
+- [x] Apply the paired estimator to concurrency break-even, stop treating a
+      finite non-observation as a monotone lower bound, and extend the measured
+      domain through 64 concurrent grep compilations.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -3,7 +3,7 @@ import {
   type GpuSchedulingPolicy,
 } from "../src/compiler.ts";
 
-const batchSizes = [1, 2, 4, 8, 16] as const;
+const batchSizes = [1, 2, 4, 8, 16, 32, 64] as const;
 const sampleCount = requestedSampleCount(Deno.args);
 const sourceFile = new URL(
   "../examples/binned/live/case-studies/grep/grep.duck",
@@ -40,17 +40,32 @@ for (const gpuScheduling of policies) {
     const gpuMedianMilliseconds = median(
       gpuSamples.map((sample) => sample.milliseconds),
     );
+    const pairedGpuMinusCpuMilliseconds = gpuSamples.map((sample, index) =>
+      sample.milliseconds - cpuSamples[index]!.milliseconds
+    );
+    const pairedGpuMinusCpuMedianMilliseconds = median(
+      pairedGpuMinusCpuMilliseconds,
+    );
     measurements.push({
       batchSize,
+      cpuTotalMilliseconds: cpuSamples.map((sample) => sample.milliseconds),
       cpuMedianMilliseconds,
       cpuP95Milliseconds: percentile(
         cpuSamples.map((sample) => sample.milliseconds),
         0.95,
       ),
+      gpuTotalMilliseconds: gpuSamples.map((sample) => sample.milliseconds),
       gpuMedianMilliseconds,
       gpuP95Milliseconds: percentile(
         gpuSamples.map((sample) => sample.milliseconds),
         0.95,
+      ),
+      pairedGpuMinusCpuMilliseconds,
+      pairedGpuMinusCpuMedianMilliseconds,
+      pairedGpuMinusCpuMedianAbsoluteDeviationMilliseconds: median(
+        pairedGpuMinusCpuMilliseconds.map((difference) =>
+          Math.abs(difference - pairedGpuMinusCpuMedianMilliseconds)
+        ),
       ),
       cpuMillisecondsPerCompilation: cpuMedianMilliseconds / batchSize,
       gpuMillisecondsPerCompilation: gpuMedianMilliseconds / batchSize,
@@ -73,13 +88,13 @@ for (const gpuScheduling of policies) {
     });
   }
   const observedBreakEven = measurements.find((measurement) =>
-    measurement.gpuMedianMilliseconds <= measurement.cpuMedianMilliseconds
+    measurement.pairedGpuMinusCpuMedianMilliseconds <= 0
   );
   policyMeasurements.push({
     gpuScheduling,
     measurements,
     breakEven: observedBreakEven === undefined
-      ? { status: "notObserved", batchSizeLowerBound: batchSizes.at(-1)! }
+      ? { status: "notObserved", maximumMeasuredBatchSize: batchSizes.at(-1)! }
       : { status: "observed", batchSize: observedBreakEven.batchSize },
   });
 }
@@ -137,10 +152,15 @@ type BatchMeasurement = {
 
 type BatchReport = {
   readonly batchSize: number;
+  readonly cpuTotalMilliseconds: readonly number[];
   readonly cpuMedianMilliseconds: number;
   readonly cpuP95Milliseconds: number;
+  readonly gpuTotalMilliseconds: readonly number[];
   readonly gpuMedianMilliseconds: number;
   readonly gpuP95Milliseconds: number;
+  readonly pairedGpuMinusCpuMilliseconds: readonly number[];
+  readonly pairedGpuMinusCpuMedianMilliseconds: number;
+  readonly pairedGpuMinusCpuMedianAbsoluteDeviationMilliseconds: number;
   readonly cpuMillisecondsPerCompilation: number;
   readonly gpuMillisecondsPerCompilation: number;
   readonly gpuToCpuRatio: number;
