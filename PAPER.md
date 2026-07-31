@@ -911,6 +911,19 @@ frontiers and preserves their logical result positions. For nonempty \(C\),
 scheduled lanes are \(64\lceil|C|/64\rceil\), replacing
 \(64\lceil O/64\rceil\).
 
+Backend provenance is part of the result type:
+
+```text
+backend = identity  iff C is empty and no Core command is submitted
+backend = gpu       iff a nonempty C is executed by a GPU command
+backend = cpu       iff compilation selects the CPU fallback
+```
+
+An identity result has zero descriptor bytes, lanes, initialization, transfer,
+GPU, commit, and physical submissions. It is a proof that the transformation is
+unnecessary, not an execution backend. This distinction prevents zero-work jobs
+from inflating GPU coverage.
+
 Validation is a trust-boundary operation rather than a property that becomes
 stronger by repetition. `validateFlatDucklangCore` either rejects the untrusted
 input before a device is requested or returns a branded snapshot held read-only
@@ -2607,6 +2620,25 @@ byte-identical CPU/GPU emission and engine validation. Its samples were
 344.93/347.40 ms for grep, 697.60/548.34 ms for tar, 316.84/355.19 ms for
 wav, and 239.35/366.22 ms for raytracer. They establish conformance under the
 observed heavy system load and are not used as performance evidence.
+
+### 2026-07-31: backend labels denote physical execution
+
+The rule-head frontier makes raytracer a Core identity job. The completed result
+previously caused compiler orchestration to report `core=gpu` even though its
+submission count and every GPU timing were zero. Section 7.3 now makes
+provenance a disjoint result: `identity` is a host proof that the matcher domain
+is empty, `gpu` requires a submitted nonempty frontier, and `cpu` is a fallback.
+
+This is an accounting invariant rather than a semantic transformation. Focused
+single and packed empty-frontier tests assert the identity label together with
+zero submissions, bytes, lanes, and timings; a positive rewrite test asserts the
+GPU label. The release contract expects `identity` only for raytracer and still
+requires GPU Wasm emission for every target. The 499-test gate passed; its
+required-GPU samples were 378.83/239.13 ms for Editor,
+1,015.11/861.97 ms for Codex, 137.89/136.83 ms for grep,
+198.51/194.43 ms for tar, 114.32/117.09 ms for wav, and
+94.66/97.97 ms for raytracer. These are correctness observations, not a timing
+claim.
 
 ## References
 

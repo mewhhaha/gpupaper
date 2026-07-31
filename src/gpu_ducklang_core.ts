@@ -25,6 +25,7 @@ import {
 export type GpuDucklangCoreResult =
   | {
     readonly status: "completed";
+    readonly backend: "gpu" | "identity";
     readonly package: FlatDucklangCore;
     readonly proposals: readonly DucklangCoreRewriteProposal[];
     readonly accepted: readonly DucklangCoreRewriteProposal[];
@@ -483,6 +484,7 @@ async function runPackedDucklangCoreGpuBatch(
       );
       return {
         status: "completed",
+        backend: "gpu",
         package: committed.package,
         proposals,
         accepted: committed.accepted,
@@ -895,6 +897,7 @@ async function runDucklangCoreWithGpu(
     const commitMilliseconds = performance.now() - commitStart;
     return {
       status: "completed",
+      backend: "gpu",
       package: committed.package,
       proposals: gpuProposals,
       accepted: committed.accepted,
@@ -929,6 +932,7 @@ function completeEmptyCoreRewriteFrontier(
 ): GpuDucklangCoreResult {
   return {
     status: "completed",
+    backend: "identity",
     package: snapshot.package,
     proposals: [],
     accepted: [],

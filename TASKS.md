@@ -1135,6 +1135,10 @@ CPU/GPU disagreement, or return partially written output.
       facts; the GPU still decides constant identity, orientation, and
       replacement. Frozen candidates fall from 3,788 to 1,242 without removing
       a possible match.
+- [x] Make Core backend provenance disjoint. A host-proved empty frontier reports
+      `identity`, a submitted matcher reports `gpu`, and fallback reports `cpu`.
+      Raytracer no longer claims GPU Core execution after its frontier became
+      empty.
 - [x] Hash-cons repeated type constructors before solving, derive the least
       constructor congruence on the CPU, validate its complete equality
       certificate with one GPU union/compression submission, and pack four

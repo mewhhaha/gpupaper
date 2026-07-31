@@ -106,7 +106,7 @@ export type CompilationOptions = {
 export type CompilationBackends = {
   readonly typeCheck: "cpu";
   readonly comptime: "cpu";
-  readonly coreRewrite: "cpu" | "gpu" | "notApplicable";
+  readonly coreRewrite: "cpu" | "gpu" | "identity" | "notApplicable";
   readonly wasmEmission: "cpu" | "gpu";
   readonly wasmVerification: "none" | "cpuDifferential";
 };
@@ -1634,7 +1634,9 @@ async function compileDucklangModuleSource(
     backends: {
       typeCheck: "cpu",
       comptime: "cpu",
-      coreRewrite: gpuCoreResult?.status === "completed" ? "gpu" : "cpu",
+      coreRewrite: gpuCoreResult?.status === "completed"
+        ? gpuCoreResult.backend
+        : "cpu",
       wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
       wasmVerification: gpuWasmResult?.status === "completed" &&
           gpuWasmVerification === "differential"

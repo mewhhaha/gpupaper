@@ -934,7 +934,7 @@ Deno.test("Ducklang GPU-authoritative emission matches differential emission", a
   assertEquals(authoritative.gpuWasmResult?.status, "completed");
   assertEquals([...authoritative.wasm], [...differential.wasm]);
   assertEquals(authoritative.backends.typeCheck, "cpu");
-  assertEquals(authoritative.backends.coreRewrite, "gpu");
+  assertEquals(authoritative.backends.coreRewrite, "identity");
   assertEquals(authoritative.backends.wasmEmission, "gpu");
   assertEquals(authoritative.backends.wasmVerification, "none");
 });

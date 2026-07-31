@@ -67,7 +67,8 @@ to make the GPU-produced byte buffer authoritative and avoid CPU encoding unless
 automatic mode needs a fallback. GPU Core rewrite matching is authoritative in
 either GPU mode. Compilation output reports the backend that completed type
 checking, compile-time evaluation, Core rewriting, Wasm emission, and
-verification.
+verification. `core=identity` means CPU validation proved the rewrite frontier
+empty and no Core command was submitted; it is not reported as GPU execution.
 
 Useful project commands are:
 

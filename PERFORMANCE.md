@@ -566,6 +566,8 @@ Tar retains its 24 proposals; the other five targets retain zero. The reduction
 therefore discards only failed matches and preserves optimized Core. Candidate
 order remains source order, and direct rewrite tests retain two positive matches
 plus a structurally admitted non-identity constant that the GPU rejects.
+Raytracer now reports `core=identity`, zero Core submissions, and zero Core GPU
+time instead of claiming a GPU backend for the host-proved empty frontier.
 
 ### Scalar comptime stack capacity
 

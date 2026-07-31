@@ -25,6 +25,7 @@ unmatched - 2
   if (result.status !== "completed") {
     throw new Error(`GPU rejected accepted Core: ${result.reason}`);
   }
+  assertEquals(result.backend, "gpu");
   assertEquals(result.proposals, expected.proposals);
   assertEquals(result.proposals.length, 2);
   assertEquals(result.accepted, expected.accepted);
@@ -62,6 +63,7 @@ Deno.test("empty Core rewrite frontier completes without WebGPU work", async () 
   if (result.package !== snapshot) {
     throw new Error("empty Core rewrite frontier replaced its snapshot");
   }
+  assertEquals(result.backend, "identity");
   assertEquals(result.rewriteCandidateCount, 0);
   assertEquals(result.candidateDescriptorBytes, 0);
   assertEquals(result.logicalDeviceBufferBytes, 0);
@@ -88,6 +90,7 @@ Deno.test("throughput batch discards every empty Core rewrite frontier", async (
     if (result.status !== "completed") {
       throw new Error(`Core identity batch failed: ${result.reason}`);
     }
+    assertEquals(result.backend, "identity");
     assertEquals(result.payloadBatchSize, 2);
     assertEquals(result.submissionBatchSize, 0);
     assertEquals(result.gpuMilliseconds, 0);

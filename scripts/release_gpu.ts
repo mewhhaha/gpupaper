@@ -62,7 +62,8 @@ for (const target_ of targets) {
     if (
       artifact.backends.typeCheck !== "cpu" ||
       artifact.backends.comptime !== "cpu" ||
-      artifact.backends.coreRewrite !== "gpu" ||
+      artifact.backends.coreRewrite !==
+        (target_.name === "raytracer" ? "identity" : "gpu") ||
       artifact.backends.wasmEmission !== "gpu" ||
       artifact.backends.wasmVerification !== "cpuDifferential"
     ) {
