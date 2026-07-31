@@ -1462,6 +1462,9 @@ resource cost, and corpus measurements.
 - [x] Derive a lazy cycle-detection boundary for static alias resolution.
       Preserve unresolved, direct, self-cycle, and general-cycle semantics and
       retain it after a 15-sample Codex A/B/A rewrite comparison.
+- [x] Re-run the paired six-target checkpoint after both specialization fast
+      paths. Record the coherent rewrite-stage reduction, unchanged binaries,
+      and still-positive GPU premiums before advancing the frontier.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

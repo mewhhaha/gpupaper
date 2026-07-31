@@ -4881,6 +4881,27 @@ lazy medians beat the intervening eager baseline. This supports retaining the
 zero-allocation terminating cases; no claim is made for programs dominated by
 long alias chains.
 
+### 2026-07-31: retained specialization fast paths reduce all six rewrites
+
+Review 68 re-runs the paired six-target frontend protocol after the
+resolver-scope guard and lazy static-alias set. Against the retained Review 57
+ordinary-set baseline, specialization rewrite representatives change Editor
+4.368→3.987 ms (-8.74%), Codex 68.594→64.079 (-6.58%), grep
+0.305→0.262 (-13.92%), Tar 3.465→2.825 (-18.47%), wav 0.081→0.069
+(-15.18%), and raytracer 0.199→0.172 (-13.67%). The coherent six-target stage
+direction supports the local mechanisms; consecutive-run noise prevents
+attributing each percentage exactly.
+
+CPU total medians are 74.531, 386.544, 11.045, 57.620, 5.262, and 8.507 ms.
+Required-GPU medians are 102.646, 440.070, 39.530, 113.605, 33.287, and
+36.811 ms. Paired GPU premiums remain positive at 26.184, 54.538, 28.485,
+58.059, 28.029, and 28.385 ms, so the default-CPU policy remains justified.
+
+Deterministic Wasm sizes remain 24,460, 226,134, 3,911, 26,106, 2,520, and
+3,864 bytes. The fast paths remove lookups and allocations but change no
+specialization keys, demanded bindings, residual structure, or emitted bytes.
+This checkpoint is empirical evidence, not yet the full release gate.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

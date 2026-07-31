@@ -469,6 +469,26 @@ sampling was:
 Both lazy medians beat the intervening baseline. The eleven-test
 specialization suite, including direct aliases and multi-scope captures, passes.
 
+### Specialization checkpoint after reviews 66–67
+
+Against the Review 57 baseline, the retained scope and lazy-alias fast paths
+move every specialization rewrite representative downward:
+
+| Target | Before | After | Change |
+| ------ | -----: | ----: | -----: |
+| Editor | 4.368 ms | 3.987 ms | -8.74% |
+| Codex | 68.594 ms | 64.079 ms | -6.58% |
+| grep | 0.305 ms | 0.262 ms | -13.92% |
+| Tar | 3.465 ms | 2.825 ms | -18.47% |
+| wav | 0.081 ms | 0.069 ms | -15.18% |
+| raytracer | 0.199 ms | 0.172 ms | -13.67% |
+
+Current CPU/GPU medians are Editor 74.531/102.646 ms, Codex
+386.544/440.070, grep 11.045/39.530, Tar 57.620/113.605, wav
+5.262/33.287, and raytracer 8.507/36.811. Every paired GPU premium remains
+positive. Wasm sizes are unchanged at 24,460, 226,134, 3,911, 26,106, 2,520,
+and 3,864 bytes.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The
