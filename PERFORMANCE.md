@@ -601,6 +601,11 @@ scans over 19,541 occurrences, less than one 23,594-node residual traversal.
 Generated control functions bypass the scan by construction. Counters were
 removed; accepted-function rewriting remains the lifting frontier.
 
+Capture discovery visits 107,069 Codex occurrences, 4.54× the residual program
+and 5.48× direct-use validation. Editor visits 2,114 and Tar 4,070. The counters
+were removed; compositional free-variable summaries are now the measured lifting
+candidate.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

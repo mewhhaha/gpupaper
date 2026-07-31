@@ -1525,6 +1525,9 @@ resource cost, and corpus measurements.
 - [x] Count direct-use validation scans and occurrences. Reject them as the
       lifting multiplier after only 57 Codex scans visit 19,541 occurrences,
       then remove the counters.
+- [x] Count accepted-function capture traversal. Identify 107,069 Codex visits,
+      4.54 residual traversals, and derive compositional free-variable summaries
+      as the next lifting candidate.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -5340,6 +5340,26 @@ The counters were removed. Lifting review narrows to the work performed for the
 403 accepted functions: capture discovery, capture-argument insertion, step
 removal, and repeated block rebuilding.
 
+### 2026-07-31: capture discovery is the measured lifting multiplier
+
+Review 89 counts occurrences visited by `collectFunctionCaptures` for accepted
+lifts. Codex visits 107,069 occurrences, 4.54 times its 23,594-node residual and
+5.48 times the 19,541 direct-use visits. Editor visits 2,114, grep 672, Tar
+4,070, raytracer 256, and wav zero. Codex capture visits are also 82.27% of the
+130,143 specialization rewrite entries.
+
+Each accepted function currently constructs its defined-symbol set and walks
+its complete body independently. Nested generated functions cause ancestors and
+descendants to be revisited. Capture sets satisfy the compositional equation
+\(FV(function)=FV(body)-parameters-localDefinitions-directFunctions\), so a
+single bottom-up free-variable analysis can replace repeated scans if it
+preserves lexical ownership and deterministic first-use order.
+
+The temporary counters were removed. The next review must measure the number of
+captures emitted versus nodes scanned; then an implementation can choose between
+cached per-function summaries and a whole-residual bottom-up pass with a stated
+memory cost.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
