@@ -26,6 +26,7 @@ export type GpuWasmEmissionResult =
     readonly outputBufferBytes: number;
     readonly lengthAtomCount: number;
     readonly resolvedOffsetBytes: number;
+    readonly resolvedOffsetBitWidth: 16 | 32;
     readonly atomInputBytes: number;
     readonly signed64AtomCount: number;
     readonly signed64HighWordBytes: number;
@@ -65,6 +66,7 @@ struct Parameters {
   count: u32,
   signed64_count: u32,
   sparse_signed64_high_words: u32,
+  packed_u16_offsets: u32,
 }
 @group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
 @group(0) @binding(1) var<storage, read> low_words: array<u32>;
@@ -77,6 +79,14 @@ fn emit_byte(offset: u32, value: u32) {
   let word_index = offset >> 2u;
   let shift = (offset & 3u) << 3u;
   atomicOr(&output_words[word_index], (value & 255u) << shift);
+}
+
+fn atom_offset(index: u32) -> u32 {
+  if (parameters.packed_u16_offsets == 0u) {
+    return atom_offsets[index];
+  }
+  let word = atom_offsets[index >> 1u];
+  return (word >> ((index & 1u) << 4u)) & 0xffffu;
 }
 
 fn signed64_high_word(atom_index: u32) -> u32 {
@@ -109,8 +119,8 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   if (index >= parameters.count) { return; }
   let kind_word = atom_kinds[index >> 3u];
   let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
-  let output_start = atom_offsets[index];
-  let size = atom_offsets[index + 1u] - output_start;
+  let output_start = atom_offset(index);
+  let size = atom_offset(index + 1u) - output_start;
   if (kind == ${atomByte}u) {
     emit_byte(output_start, low_words[index]);
     return;
@@ -183,6 +193,7 @@ type PreparedWasmGpuJob = {
   readonly outputWordCount: number;
   readonly workgroupCount: number;
   readonly atomByteOffsets: Uint32Array;
+  readonly resolvedOffsetBitWidth: 16 | 32;
   readonly lengthAtomCount: number;
 };
 
@@ -253,7 +264,7 @@ async function emitPackedWasmPlanBatch(
         job.plan.atoms.length,
         job.columns.signed64AtomCount,
         job.columns.sparseSigned64HighWords ? 1 : 0,
-        0,
+        job.resolvedOffsetBitWidth === 16 ? 1 : 0,
       ])
     ),
     16,
@@ -393,6 +404,7 @@ async function emitPackedWasmPlanBatch(
         outputBufferBytes: job.outputWordCount * 4,
         lengthAtomCount: job.lengthAtomCount,
         resolvedOffsetBytes: job.atomByteOffsets.byteLength,
+        resolvedOffsetBitWidth: job.resolvedOffsetBitWidth,
         atomInputBytes: job.columns.kinds.byteLength +
           job.columns.lowWords.byteLength +
           job.columns.highWords.byteLength +
@@ -413,13 +425,30 @@ async function emitPackedWasmPlanBatch(
 
 function prepareWasmGpuJob(plan: WasmBinaryPlan): PreparedWasmGpuJob {
   const analysis = analyzeWasmBinaryPlan(plan);
+  const resolvedOffsetBitWidth = analysis.byteLength <= 0xffff ? 16 : 32;
+  let atomByteOffsets = analysis.atomByteOffsets;
+  if (resolvedOffsetBitWidth === 16) {
+    atomByteOffsets = new Uint32Array(
+      Math.ceil(analysis.atomByteOffsets.length / 2),
+    );
+    for (
+      let offsetIndex = 0;
+      offsetIndex < analysis.atomByteOffsets.length;
+      offsetIndex += 1
+    ) {
+      atomByteOffsets[offsetIndex >> 1] |=
+        analysis.atomByteOffsets[offsetIndex] <<
+        ((offsetIndex & 1) << 4);
+    }
+  }
   return {
     plan,
     columns: atomColumns(plan.atoms, analysis.atomByteOffsets),
     expectedByteCount: analysis.byteLength,
     outputWordCount: Math.ceil(analysis.byteLength / 4),
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
-    atomByteOffsets: analysis.atomByteOffsets,
+    atomByteOffsets,
+    resolvedOffsetBitWidth,
     lengthAtomCount: analysis.lengthLevels.reduce(
       (count, level) => count + level.atoms.length,
       0,
@@ -502,6 +531,7 @@ async function emitWasmPlanWithGpu(
     expectedByteCount,
     lengthAtomCount,
     outputWordCount,
+    resolvedOffsetBitWidth,
     workgroupCount,
   } = job;
   const context = await requestGpuWasmContext();
@@ -578,7 +608,7 @@ async function emitWasmPlanWithGpu(
       plan.atoms.length,
       columns.signed64AtomCount,
       columns.sparseSigned64HighWords ? 1 : 0,
-      0,
+      resolvedOffsetBitWidth === 16 ? 1 : 0,
     ]),
     GPUBufferUsage.UNIFORM,
   );
@@ -653,6 +683,7 @@ async function emitWasmPlanWithGpu(
       outputBufferBytes: outputWordCount * 4,
       lengthAtomCount,
       resolvedOffsetBytes: atomByteOffsets.byteLength,
+      resolvedOffsetBitWidth,
       atomInputBytes: columns.kinds.byteLength +
         columns.lowWords.byteLength +
         columns.highWords.byteLength +

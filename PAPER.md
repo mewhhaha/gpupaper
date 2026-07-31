@@ -1088,12 +1088,21 @@ has positive width, hence:
 0 = p_0 < p_1 < ... < p_A = B <= 2^32 - 1
 ```
 
-The resolved representation contains the \(A+1\) `u32` boundaries. For a length
-atom with range \([r,r+c)\), its encoded value is \(p_{r+c}-p_r\). Thus the same
-boundaries resolve both nested lengths and output placement. The GPU receives
-atom kinds, resolved low/high value words, and the boundary vector. Lane \(i\)
+For a length atom with range \([r,r+c)\), its encoded value is
+\(p_{r+c}-p_r\). Thus the same boundaries resolve both nested lengths and output
+placement. When \(B\leq 2^{16}-1\), every boundary fits in `u16` and two are
+packed per `u32`:
+
+```text
+word_q = p_(2q) | (p_(2q+1) << 16)
+p_i    = (word_(i >> 1) >> (16(i & 1))) & 0xffff
+```
+
+Otherwise boundaries remain one `u32` each. The GPU receives atom kinds,
+resolved low/high value words, and this adaptive boundary vector. Lane \(i\)
 owns exactly \([p_i,p_{i+1})\), encodes its atom there, and no sizing or scan
-kernel is required.
+kernel is required. Packing is lossless because \(0\leq p_i\leq B\); it changes
+representation, not the interval proof.
 
 Adjacent intervals may share a `u32` output word, so writers use `atomicOr` into
 a zeroed buffer. The byte masks of distinct intervals are disjoint; the atomic
@@ -1110,9 +1119,18 @@ scan becomes justified again; under the present boundary it is redundant.
 
 Let \(W=64\) and \(L(n)=W\lceil n/W\rceil\). GPU work is now exactly one
 emission dispatch and \(L(A)\) scheduled lanes. The boundary vector transfers
-`4(A+1)` bytes. The pipeline uses five storage bindings—kind, low word, high
-word, boundaries, and output—and one count uniform. Output capacity is exactly
-\(4\lceil B/4\rceil\), and readback contains only that output.
+\(P(A,p_A)\) bytes:
+
+```text
+P(A, p_A) = 4 ceil((A + 1) / 2)  when p_A <= 65535
+            4(A + 1)             otherwise
+```
+
+The narrow representation adds two shifts, one mask, and one shared word load
+per boundary lookup; the host packing loop is \(O(A)\) and requires no new pass
+or synchronization. The pipeline uses five storage bindings—kind, low word,
+high word, boundaries, and output—and one count uniform. Output capacity is
+exactly \(4\lceil B/4\rceil\), and readback contains only that output.
 
 The kind domain has five inhabitants. It is represented as eight four-bit tags
 per `u32`:
@@ -1142,7 +1160,7 @@ direct indexing has less work. Therefore:
 
 ```text
 H(A, S)      = min(4A, 8S)
-B_atom_input = 4A + 4(A + 1) + 4 ceil(A / 8) + H(A, S)
+B_atom_input = 4A + P(A, p_A) + 4 ceil(A / 8) + H(A, S)
 ```
 
 This representation is never larger than dense high words. Its additional sparse
@@ -2665,6 +2683,26 @@ module. The expansion is rejected under the cost model. It should be reopened
 only when retained profiles show nonzero matches or a new workload establishes
 a measured benefit. This is an empirical design rejection, not a claim that the
 laws are unsound.
+
+### 2026-07-31: resolved Wasm offsets use the least lossless width
+
+Section 7.4 now derives offset width from the already-known final byte length.
+If \(p_A\leq 65535\), all monotone boundaries lie in `u16`, so adjacent values
+share one storage word; otherwise the existing u32 representation remains. The
+choice adds no analysis pass, binding, dispatch, or synchronization.
+
+Editor, grep, tar, wav, and raytracer select 16 bits; Codex's 226,134-byte
+module selects 32. Frozen offset input falls from 1,041,816 to 929,108 bytes
+(10.82%), and complete atom input falls from 2,213,848 to 2,101,140 bytes
+(5.09%). A direct 65,535/65,536-byte boundary regression checks both
+representations and every emitted byte. CPU/GPU byte differentials, packed
+multi-job emission, engine validation, and the release gate remain the
+executable soundness boundary. The required-GPU release gate passed 500 tests
+and compiled every frozen target twice. Its paired samples in milliseconds were
+Editor 1078.18/846.76, Codex 3395.07/2651.37, grep 441.34/333.38, Tar
+445.61/502.97, wav 321.31/243.55, and raytracer 240.37/229.04. These
+non-randomized correctness samples are recorded for reproducibility; the exact
+capacity reductions do not establish a latency improvement.
 
 ## References
 

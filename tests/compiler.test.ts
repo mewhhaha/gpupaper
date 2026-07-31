@@ -1024,17 +1024,19 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   const signed64HighWordBytes = signed64AtomCount * 2 < plan.atoms.length
     ? signed64AtomCount * 8
     : plan.atoms.length * 4;
+  const resolvedOffsetBitWidth = gpu.byteCount <= 0xffff ? 16 : 32;
+  const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
+    ? Math.ceil((plan.atoms.length + 1) / 2) * 4
+    : (plan.atoms.length + 1) * 4;
   assertEquals(gpu.lengthAtomCount, lengthAtoms.length);
-  assertEquals(
-    gpu.resolvedOffsetBytes,
-    (plan.atoms.length + 1) * 4,
-  );
+  assertEquals(gpu.resolvedOffsetBitWidth, resolvedOffsetBitWidth);
+  assertEquals(gpu.resolvedOffsetBytes, resolvedOffsetBytes);
   assertEquals(
     gpu.atomInputBytes,
     Math.ceil(plan.atoms.length / 8) * 4 +
       plan.atoms.length * 4 +
       signed64HighWordBytes +
-      (plan.atoms.length + 1) * 4,
+      resolvedOffsetBytes,
   );
   assertEquals(gpu.signed64AtomCount, signed64AtomCount);
   assertEquals(gpu.signed64HighWordBytes, signed64HighWordBytes);
@@ -1064,8 +1066,52 @@ Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", 
 
   assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
   assertEquals(emitted.lengthAtomCount, 1);
-  assertEquals(emitted.resolvedOffsetBytes, 12);
+  assertEquals(emitted.resolvedOffsetBitWidth, 16);
+  assertEquals(emitted.resolvedOffsetBytes, 8);
   assertEquals(emitted.dispatchedInvocationCount, 64);
+});
+
+Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
+  const narrowPlan = {
+    atoms: Array.from(
+      { length: 0xffff },
+      (_, value) => ({ kind: "byte" as const, value: value & 0xff }),
+    ),
+    maximumDependencyLevel: 0,
+  };
+  const narrow = await emitWasmPlanOnGpu(narrowPlan);
+  if (narrow.status === "unavailable") return;
+  assertEquals(narrow.resolvedOffsetBitWidth, 16);
+  assertEquals(
+    narrow.resolvedOffsetBytes,
+    Math.ceil((narrowPlan.atoms.length + 1) / 2) * 4,
+  );
+  for (const [index, byte] of narrow.bytes.entries()) {
+    if (byte !== (index & 0xff)) {
+      throw new Error(
+        `narrow Wasm offset ${index} emitted ${byte}; expected ${index & 0xff}`,
+      );
+    }
+  }
+
+  const widePlan = {
+    atoms: [...narrowPlan.atoms, { kind: "byte" as const, value: 0xff }],
+    maximumDependencyLevel: 0,
+  };
+  const wide = await emitWasmPlanOnGpu(widePlan);
+  if (wide.status === "unavailable") return;
+  assertEquals(wide.resolvedOffsetBitWidth, 32);
+  assertEquals(
+    wide.resolvedOffsetBytes,
+    (widePlan.atoms.length + 1) * 4,
+  );
+  for (const [index, byte] of wide.bytes.entries()) {
+    if (byte !== (index & 0xff)) {
+      throw new Error(
+        `wide Wasm offset ${index} emitted ${byte}; expected ${index & 0xff}`,
+      );
+    }
+  }
 });
 
 Deno.test("WebGPU Wasm emission stores sparse signed64 high words by atom ID", async () => {

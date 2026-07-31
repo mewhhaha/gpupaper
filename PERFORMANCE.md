@@ -365,6 +365,30 @@ is additional physical capacity. The byte differential, shared-word packed
 regression, sparse-level regression, and engine validator test correctness.
 Counts are deterministic; latency still requires counterbalanced samples.
 
+### Adaptive Wasm offset width
+
+Every resolved boundary is at most the final Wasm byte length. Modules no larger
+than 65,535 bytes therefore pack two lossless u16 boundaries per storage word;
+larger modules retain direct u32 indexing.
+
+| Target    | Width | Offset bytes before → after | Atom input before → after |
+| --------- | ----: | --------------------------: | ------------------------: |
+| Editor    |    16 |             95,696 → 47,848 |         203,352 → 155,504 |
+| Codex     |    32 |           816,400 → 816,400 |     1,734,848 → 1,734,848 |
+| grep      |    16 |              15,592 → 7,796 |           33,132 → 25,336 |
+| tar       |    16 |             88,808 → 44,404 |         188,716 → 144,312 |
+| wav       |    16 |               9,912 → 4,956 |           21,060 → 16,104 |
+| raytracer |    16 |              15,408 → 7,704 |           32,740 → 25,036 |
+
+Across the frozen applications, resolved-offset input falls 1,041,816→929,108
+bytes (10.82%) and total atom input falls 2,213,848→2,101,140 bytes (5.09%).
+The narrow path adds lane-local shifts and masks but no pass, dispatch, binding,
+or synchronization. Boundary tests pin u16 selection at exactly 65,535 output
+bytes and u32 selection at 65,536. The post-change required-GPU release gate
+passed 500 tests and compiled all six frozen targets twice; its samples are
+recorded in the corresponding continuous-paper entry. They are correctness
+observations rather than a counterbalanced latency experiment.
+
 ### Packed Wasm atom tags
 
 Five atom variants need three information bits. Eight four-bit tags now share

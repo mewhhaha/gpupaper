@@ -100,6 +100,10 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const expectedCoreRewriteInvocations = work.gpuRewriteCandidateCount === 0
     ? 0
     : paddedInvocationCount(work.gpuRewriteCandidateCount);
+  const resolvedOffsetBitWidth = work.wasmBytes <= 0xffff ? 16 : 32;
+  const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
+    ? Math.ceil((work.wasmAtomCount + 1) / 2) * 4
+    : (work.wasmAtomCount + 1) * 4;
   if (
     work.gpuRewriteCandidateCount === 0 ||
     work.gpuRewriteCandidateCount > work.coreOperationCount ||
@@ -110,13 +114,14 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
     work.gpuRewriteDispatchedInvocationCount !==
       expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
-    work.gpuWasmResolvedOffsetBytes !== (work.wasmAtomCount + 1) * 4 ||
+    work.gpuWasmResolvedOffsetBitWidth !== resolvedOffsetBitWidth ||
+    work.gpuWasmResolvedOffsetBytes !== resolvedOffsetBytes ||
     work.gpuWasmSigned64HighWordBytes !== signed64HighWordBytes ||
     work.gpuWasmAtomInputBytes !==
       Math.ceil(work.wasmAtomCount / 8) * 4 +
         work.wasmAtomCount * 4 +
         signed64HighWordBytes +
-        (work.wasmAtomCount + 1) * 4 ||
+        resolvedOffsetBytes ||
     work.gpuWasmDispatchedInvocationCount !==
       paddedInvocationCount(work.wasmAtomCount) ||
     work.wasmOutputBufferBytes < work.wasmBytes ||

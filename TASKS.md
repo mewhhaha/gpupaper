@@ -1139,6 +1139,10 @@ CPU/GPU disagreement, or return partially written output.
       `identity`, a submitted matcher reports `gpu`, and fallback reports `cpu`.
       Raytracer no longer claims GPU Core execution after its frontier became
       empty.
+- [x] Pack two resolved Wasm offsets per word exactly when the final module is at
+      most 65,535 bytes. Five frozen targets use lossless u16 boundaries; Codex
+      retains u32. Boundary tests pin both sides of the threshold and profiles
+      report the selected width.
 - [x] Hash-cons repeated type constructors before solving, derive the least
       constructor congruence on the CPU, validate its complete equality
       certificate with one GPU union/compression submission, and pack four
