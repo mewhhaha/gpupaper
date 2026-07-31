@@ -536,6 +536,13 @@ target remains below 1,024; Editor's maximum is 958. The counters were removed.
 Any tail optimization must therefore beat its setup cost on at most seven
 requests rather than taxing all 703 keys.
 
+Provenance localizes all seven large Codex requests to JSON paths. Six
+`prelude_json.duck` factories account for 86,172 entries (75.40% of all request
+work); `encode_tool_result` accounts for the other 4,516. Two distinct typed
+function objects for the same `encode_json` source span each cost 32,184
+entries, together 56.33%. Source-span canonicalization is not justified because
+module environments may differ; the temporary provenance was removed.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

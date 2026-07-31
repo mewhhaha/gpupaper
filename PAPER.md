@@ -5021,6 +5021,33 @@ largest requests' source/function provenance before proposing a representation
 change; aggregate size alone cannot distinguish repeated traversal, genuinely
 large bodies, or nested generated structure.
 
+### 2026-07-31: JSON specialization owns the measured heavy tail
+
+Review 75 temporarily records factory and call-site provenance for the seven
+large Codex requests. All seven are JSON-path requests. Six factories originate
+in `prelude_json.duck` and contain 86,172 entries, or 75.40% of all exclusive
+request work; the remaining protocol encoder contains 4,516. The two largest
+requests each contain 32,184 entries and specialize the identical
+`encode_json` source span, bytes 18,021--19,590, at protocol call sites
+6,697--6,728 and 7,078--7,109. Together they account for 56.33% of request work.
+
+Those two requests have different ephemeral function IDs despite sharing a
+source span. This proves only that distinct typed function objects reached the
+specializer; it does not prove semantic equivalence. Canonicalizing by source
+span would be unsound because two module instances may close over different
+environments. The safe optimization boundary is earlier module-instance reuse
+when module identity and captured inputs agree, or later memoization under the
+existing complete specialization key. The other measured factories are
+`parse_json`, `parse_json_document`, `parse_json_string`, and
+`encode_tool_result`, so a generic compiler change must be evaluated against
+JSON's recursive aggregate construction rather than assumed to help arbitrary
+functions.
+
+The provenance strings and request counters were removed. The next review must
+determine whether the duplicate encoder bodies arise from legitimately distinct
+module environments or avoidable repeated frontend instantiation before any
+identity merge is attempted.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP

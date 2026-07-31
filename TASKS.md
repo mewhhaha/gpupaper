@@ -1483,6 +1483,9 @@ resource cost, and corpus measurements.
 - [x] Partition specialization requests at explicit work thresholds. Establish
       that seven Codex requests contain 79.36% of exclusive rewrite work and
       four contain 71.96%, then remove the hot counters.
+- [x] Attribute the seven large requests to source factories and call sites.
+      Localize all of them to JSON paths, including two distinct function
+      objects for one encoder span, without unsafely merging by source span.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new
