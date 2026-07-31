@@ -1480,6 +1480,9 @@ resource cost, and corpus measurements.
 - [x] Measure exclusive rewrite entries per specialization request. Reject the
       uniform-key model after one Codex request accounts for 28.16% of
       substitution work, and remove the hot counters.
+- [x] Partition specialization requests at explicit work thresholds. Establish
+      that seven Codex requests contain 79.36% of exclusive rewrite work and
+      four contain 71.96%, then remove the hot counters.
 - [x] Skip the complete post-comptime specialization pass when both the changed
       binding set and result-change witness are empty.
 - [x] Measure all six frozen applications on CPU and required GPU, pin the new

@@ -529,6 +529,13 @@ Exclusive per-request rewrite instrumentation shows a heavy tail. Editor has
 entries. Temporary counters were removed; uniform request optimization is not
 the right model.
 
+Thresholding that tail shows that Codex has seven requests of at least 1,024
+entries containing 90,688 entries (79.36% of exclusive request work). Four
+requests of at least 8,192 entries contain 82,234 (71.96%). Every other frozen
+target remains below 1,024; Editor's maximum is 958. The counters were removed.
+Any tail optimization must therefore beat its setup cost on at most seven
+requests rather than taxing all 703 keys.
+
 The largest remaining CPU costs are target-specific. Editor retains its root
 parser and semantic passes. Codex retains two ordinary local-module parses,
 specialization of 703 distinct keys, and a 23,594-node residual program. The

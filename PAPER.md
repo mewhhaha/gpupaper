@@ -4999,6 +4999,28 @@ requests inhabit the heavy tail and how much work they cover before choosing
 between large-body memoization, request fusion, or a body-specific rewrite
 primitive.
 
+### 2026-07-31: seven requests contain four-fifths of Codex rewrite work
+
+Review 74 partitions the exclusive request counts from Review 73 at two fixed
+work thresholds. A large request has at least 1,024 rewrite entries; a huge
+request has at least 8,192. These thresholds classify measured work rather than
+define source semantics, and their counters were removed after measurement.
+
+Codex has seven large requests containing 90,688 of 114,281 exclusive entries,
+or 79.36%. Four of those are huge and contain 82,234 entries, or 71.96%. Thus
+the remaining 696 result keys together contribute at most 23,593 entries. No
+other frozen target crosses either threshold: Editor's maximum is 958, grep's
+is two, and Tar, wav, and raytracer have no completed specialization request.
+
+This is empirical evidence for a sparse optimization domain, not a power-law
+claim: two thresholds cannot identify a distribution. It rules out paying a
+material fixed cost on every request to accelerate only the tail. A profitable
+mechanism with setup cost \(S\), per-entry saving \(d\), and seven applicable
+requests must satisfy \(7S < 90{,}688d\). The next review must identify the
+largest requests' source/function provenance before proposing a representation
+change; aggregate size alone cannot distinguish repeated traversal, genuinely
+large bodies, or nested generated structure.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
