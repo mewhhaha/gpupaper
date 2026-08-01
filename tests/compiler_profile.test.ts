@@ -276,6 +276,8 @@ Deno.test("Core identity reuses its structured round-trip witness", async () => 
     work.coreRewriteProposalCount !== 0 ||
     work.coreRewriteAcceptedCount !== 0 ||
     details.cpuCoreValidationMilliseconds !== 0 ||
+    details.vectorValidationMilliseconds !== 0 ||
+    work.vectorCandidateWindowCount !== 0 ||
     stages.coreInflationMilliseconds !== 0
   ) {
     throw new Error(
@@ -324,7 +326,9 @@ add 40
     work.specializationRewrittenBlockCount === 0 ||
     work.specializationAvoidedEnvironmentEntryCopyCount === 0 ||
     work.specializationNodeCountCacheHitCount === 0 ||
-    work.specializationNodeCountCacheHitNodeCount === 0
+    work.specializationNodeCountCacheHitNodeCount === 0 ||
+    work.specializationEmittedRequestCount === 0 ||
+    work.specializationWidenedRequestCount !== 0
   ) {
     throw new Error(
       `profile omitted specialization environment work: ${
@@ -359,7 +363,7 @@ apply(inc, 20) + apply(inc, 20)
   }
 });
 
-Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
+Deno.test("GPU profile exposes canonical Core identity and compacted Wasm work", async () => {
   const artifact = await compileModuleSource(
     "gpu_wasm_profile.duck",
     "let add = (value: I32) => value + 0\nadd(42)\n",
@@ -385,10 +389,8 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const expectedCoreRewriteInvocations = work.gpuRewriteCandidateCount === 0
     ? 0
     : paddedInvocationCount(work.gpuRewriteCandidateCount);
-  const resolvedOffsetBitWidth = work.wasmBytes <= 0xffff ? 16 : 32;
-  const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
-    ? Math.ceil((work.wasmAtomCount + 1) / 2) * 4
-    : (work.wasmAtomCount + 1) * 4;
+  const resolvedOffsetBitWidth = 32;
+  const resolvedOffsetBytes = (work.wasmAtomCount + 1) * 4;
   const byteRankBitWidth = work.gpuWasmMaximumByteRank <= 0xffff ? 16 : 32;
   const byteRankCount = Math.ceil(work.wasmAtomCount / 8);
   const byteRankBytes = byteRankBitWidth === 16
@@ -403,23 +405,12 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
   const lowWordBytes = lowWordLayout === "ranked"
     ? rankedLowWordBytes
     : work.wasmAtomCount * 4;
-  const sparseLengthSizingWork = work.wasmAtomCount +
-    work.gpuWasmLengthAtomCount *
-      (1 + 5 * Math.ceil(Math.log2(work.gpuWasmLengthAtomCount + 1)));
-  const sparseLengthSizing = sparseLengthSizingWork <
-      work.gpuWasmLengthSizingDependencyAtomCount
-    ? 1
-    : 0;
-  const lengthSizingWork = sparseLengthSizing === 1
-    ? sparseLengthSizingWork
-    : work.gpuWasmLengthSizingDependencyAtomCount;
+  const sparseLengthSizing = 0;
+  const lengthSizingWork = work.gpuWasmLengthSizingDependencyAtomCount;
   if (
-    work.gpuRewriteCandidateCount === 0 ||
-    work.gpuRewriteCandidateCount > work.coreOperationCount ||
-    work.gpuRewriteCandidateDescriptorBytes !==
-      work.gpuRewriteCandidateCount * 80 ||
-    work.gpuCoreLogicalDeviceBufferBytes !==
-      work.gpuRewriteCandidateCount * 96 + 4 ||
+    work.gpuRewriteCandidateCount !== 0 ||
+    work.gpuRewriteCandidateDescriptorBytes !== 0 ||
+    work.gpuCoreLogicalDeviceBufferBytes !== 0 ||
     work.gpuRewriteDispatchedInvocationCount !==
       expectedCoreRewriteInvocations ||
     work.gpuWasmLengthAtomCount === 0 ||
@@ -439,11 +430,16 @@ Deno.test("GPU profile exposes compacted Core and Wasm work", async () => {
       Math.ceil(work.wasmAtomCount / 8) * 4 +
         lowWordBytes +
         signed64HighWordBytes +
-        resolvedOffsetBytes ||
-    work.gpuWasmDispatchedInvocationCount !==
+        work.gpuWasmLengthAtomCount * 12 ||
+    work.gpuWasmDispatchedInvocationCount <=
       paddedInvocationCount(work.wasmAtomCount) ||
-    work.wasmOutputBufferBytes < work.wasmBytes ||
-    work.wasmOutputBufferBytes >= work.wasmBytes + 4
+    work.wasmOutputBufferBytes !==
+      Math.ceil(
+          (work.gpuWasmByteAtomCount +
+            work.gpuWasmSigned64AtomCount * 10 +
+            (work.wasmAtomCount - work.gpuWasmByteAtomCount -
+                work.gpuWasmSigned64AtomCount) * 5) / 4,
+        ) * 4
   ) {
     throw new Error(
       `GPU profile omitted compacted work: ${JSON.stringify(work)}`,

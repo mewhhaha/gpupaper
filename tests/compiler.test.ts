@@ -30,6 +30,7 @@ import {
   encodeSigned,
   encodeSigned64,
   encodeUnsigned,
+  inspectWasmBinaryPlanStructure,
   wasmInstruction,
   WasmModuleBuilder,
   wasmType,
@@ -1045,7 +1046,9 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   assertEquals(gpu.atomCount, plan.atoms.length);
   assertEquals(
     gpu.outputBufferBytes,
-    Math.ceil(gpu.byteCount / 4) * 4,
+    Math.ceil(
+      inspectWasmBinaryPlanStructure(plan).maximumEncodedByteLength / 4,
+    ) * 4,
   );
   const lengthAtoms = plan.atoms.filter((atom) => atom.kind === "length");
   let byteAtomCount = 0;
@@ -1059,10 +1062,8 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   const signed64HighWordBytes = signed64AtomCount * 2 < plan.atoms.length
     ? signed64AtomCount * 8
     : plan.atoms.length * 4;
-  const resolvedOffsetBitWidth = gpu.byteCount <= 0xffff ? 16 : 32;
-  const resolvedOffsetBytes = resolvedOffsetBitWidth === 16
-    ? Math.ceil((plan.atoms.length + 1) / 2) * 4
-    : (plan.atoms.length + 1) * 4;
+  const resolvedOffsetBitWidth = 32;
+  const resolvedOffsetBytes = (plan.atoms.length + 1) * 4;
   const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
   const byteRankCount = Math.ceil(plan.atoms.length / 8);
   const byteRankBytes = byteRankBitWidth === 16
@@ -1100,10 +1101,32 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     Math.ceil(plan.atoms.length / 8) * 4 +
       lowWordBytes +
       signed64HighWordBytes +
-      resolvedOffsetBytes,
+      lengthAtoms.length * 12,
   );
   assertEquals(gpu.signed64AtomCount, signed64AtomCount);
   assertEquals(gpu.signed64HighWordBytes, signed64HighWordBytes);
+  assertEquals(gpu.timings.scope, "payload");
+  assertEquals(gpu.timings.completionWitness, "mapping");
+  for (
+    const [name, milliseconds] of Object.entries(gpu.timings).filter((entry) =>
+      typeof entry[1] === "number"
+    ) as [string, number][]
+  ) {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+      throw new Error(
+        `GPU Wasm timing ${name} is not a non-negative finite duration: ${milliseconds}`,
+      );
+    }
+  }
+  if (
+    gpu.timings.planInspectionMilliseconds +
+        gpu.timings.columnConstructionMilliseconds >
+      gpu.timings.planAnalysisAndColumnMilliseconds + 0.1
+  ) {
+    throw new Error(
+      `GPU Wasm inspection and column timings exceed their ${gpu.timings.planAnalysisAndColumnMilliseconds} ms parent`,
+    );
+  }
   assertEquals(
     WebAssembly.validate(
       new Uint8Array(gpu.bytes).buffer as ArrayBuffer,
@@ -1123,7 +1146,7 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
   assertEquals(ranked.lowWordBytes, rankedLowWordBytes);
 });
 
-Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", async () => {
+Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the device", async () => {
   const plan = {
     atoms: [
       { kind: "byte" as const, value: 0 },
@@ -1143,12 +1166,12 @@ Deno.test("WebGPU Wasm emission resolves sparse dependency levels on the host", 
   assertEquals(emitted.lengthAtomCount, 1);
   assertEquals(emitted.lowWordLayout, "dense");
   assertEquals(emitted.lowWordBytes, 8);
-  assertEquals(emitted.resolvedOffsetBitWidth, 16);
-  assertEquals(emitted.resolvedOffsetBytes, 8);
-  assertEquals(emitted.dispatchedInvocationCount, 64);
+  assertEquals(emitted.resolvedOffsetBitWidth, 32);
+  assertEquals(emitted.resolvedOffsetBytes, 12);
+  assertEquals(emitted.dispatchedInvocationCount, 320);
 });
 
-Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
+Deno.test("WebGPU Wasm offsets remain resident u32 values across 64 KiB", async () => {
   const narrowPlan = {
     atoms: Array.from(
       { length: 0xffff },
@@ -1160,10 +1183,10 @@ Deno.test("WebGPU Wasm offsets widen only above 64 KiB", async () => {
   if (narrow.status === "unavailable") return;
   assertEquals(narrow.lowWordLayout, "ranked");
   assertEquals(narrow.byteRankBitWidth, 16);
-  assertEquals(narrow.resolvedOffsetBitWidth, 16);
+  assertEquals(narrow.resolvedOffsetBitWidth, 32);
   assertEquals(
     narrow.resolvedOffsetBytes,
-    Math.ceil((narrowPlan.atoms.length + 1) / 2) * 4,
+    (narrowPlan.atoms.length + 1) * 4,
   );
   for (const [index, byte] of narrow.bytes.entries()) {
     if (byte !== (index & 0xff)) {
@@ -1285,7 +1308,7 @@ Deno.test("ranked WebGPU low words decode every byte-tag mask", async () => {
   assertEquals(emitted.bytes, emitWasmPlanOnCpu(plan));
 });
 
-Deno.test("packed WebGPU Wasm layouts are deterministic across shared words", async () => {
+Deno.test("concurrent WebGPU Wasm layouts remain deterministic", async () => {
   const builder = new WasmModuleBuilder();
   const typeIndex = builder.addFunctionType([], [wasmType.i32]);
   const functionIndex = builder.addFunction(

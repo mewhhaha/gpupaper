@@ -1,6 +1,6 @@
 import {
+  flattenConstructedDucklangCore,
   flattenDucklangCore,
-  flattenTrustedDucklangCore,
   inflateFlatDucklangCore,
   validateFlatDucklangCore,
 } from "../src/flat_ducklang_core.ts";
@@ -19,7 +19,7 @@ if true { apply(add, 2) } else { 0 }
   );
 
   const flat = flattenDucklangCore(core);
-  const constructed = flattenTrustedDucklangCore(core);
+  const constructed = flattenConstructedDucklangCore(core);
   const validated = validateFlatDucklangCore(flat);
 
   assertEquals(constructed.provenance, "construction");

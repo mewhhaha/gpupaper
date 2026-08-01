@@ -731,6 +731,10 @@ async function unionOnGpu(
     submissionBatchSize: batch.output.submission.submissionBatchSize,
     queueWaitMilliseconds: batch.queueWaitMilliseconds +
       batch.output.submission.queueWaitMilliseconds,
+    deviceCompletionMilliseconds:
+      batch.output.submission.deviceCompletionMilliseconds,
+    completionWitnessMilliseconds:
+      batch.output.submission.completionWitnessMilliseconds,
   });
   return batch.output.result;
 }

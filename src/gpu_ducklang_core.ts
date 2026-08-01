@@ -4,6 +4,7 @@ import {
   proposeTrustedDucklangCoreRewrites,
 } from "./ducklang_core_rewrite.ts";
 import {
+  type ConstructedFlatDucklangCore,
   type FlatDucklangCore,
   FlatDucklangCoreKind,
   type TrustedFlatDucklangCore,
@@ -52,6 +53,11 @@ export type GpuDucklangCoreResult =
     readonly status: "unavailable";
     readonly reason: string;
   };
+
+type CompletedGpuDucklangCoreResult = Extract<
+  GpuDucklangCoreResult,
+  { readonly status: "completed" }
+>;
 
 type GpuCoreContext =
   | {
@@ -213,6 +219,12 @@ export async function runTrustedDucklangCoreGpuPass(
     preparedCoreGpuInput(prepared),
     options.scheduling ?? "latency",
   );
+}
+
+export function completeCanonicalDucklangCoreConstruction(
+  snapshot: ConstructedFlatDucklangCore,
+): CompletedGpuDucklangCoreResult {
+  return completeEmptyCoreRewriteFrontier(snapshot);
 }
 
 async function enqueueDucklangCoreGpuPass(
@@ -959,7 +971,7 @@ async function runDucklangCoreWithGpu(
 
 function completeEmptyCoreRewriteFrontier(
   snapshot: TrustedFlatDucklangCore,
-): GpuDucklangCoreResult {
+): CompletedGpuDucklangCoreResult {
   return {
     status: "completed",
     backend: "identity",

@@ -11,9 +11,7 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
  * Static closure specialization.
  *
  * This pass runs on every Ducklang compilation and had no tests. It removes
- * higher-order structure by specializing a closure at each known call site, which
- * is what lets the backend emit direct calls only; Core has no call.indirect and
- * no closure.make.
+ * higher-order structure by specializing a closure at each known call site.
  *
  * TASKS.md schedules it for replacement by real closure conversion "after
  * equivalent behavior is covered", so these tests exist to be the coverage that
@@ -138,6 +136,51 @@ Deno.test("Ducklang specialization visits only demanded bindings", async () => {
     specialized.metrics.demandedInputNodeCount <
       specialized.metrics.inputNodeCount,
     true,
+  );
+});
+
+Deno.test("Ducklang specialization reports residual amplification by source function", async () => {
+  const source =
+    "let apply = (f, v) => f(v)\nlet double = x => x * 2\napply(double, 21)\n";
+  const typed = inferDucklangModule(
+    resolveDucklangModule(await parseDucklangModule("metrics.duck", source)),
+  );
+  const metrics = specializeStaticDucklangClosures(typed).metrics;
+
+  assertEquals(metrics.widenedRequestCount, 0);
+  assertEquals(metrics.rejectedOptionalRequestCount, 1);
+  assertEquals(metrics.requestsByFunction, [{
+    functionId: 0,
+    file: "metrics.duck",
+    start: 12,
+    end: 27,
+    sourceBodyNodeCount: 3,
+    emittedRequestCount: 1,
+    reusedRequestCount: 0,
+    pendingCycleCount: 0,
+    emittedNodeCount: 3,
+    residualNodeAmplification: 1,
+  }]);
+});
+
+Deno.test("function-constructing intrinsics each consume one typed redex", async () => {
+  const source = `const { compose } = import "duck:prelude/functional" ()
+const { predicate_and } = import "duck:prelude/abstractions" ()
+const increment = value => value + 1
+const positive = value => value > 0
+const transform = compose(increment, increment)
+const accepted = predicate_and(positive, positive)
+if accepted(1) { transform(40) } else { 0 }
+`;
+  const typed = inferDucklangModule(
+    resolveDucklangModule(await parseDucklangModule("intrinsics.duck", source)),
+  );
+
+  const specialized = specializeStaticDucklangClosures(typed);
+
+  assertEquals(
+    specialized.metrics.functionConstructingIntrinsicFoldCount,
+    2,
   );
 });
 

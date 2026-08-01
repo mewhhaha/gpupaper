@@ -1,9 +1,11 @@
 import {
+  type ConstructedDucklangCoreModule,
   type CoreBlockId,
   type CoreFunctionId,
   type CoreTypeId,
   type CoreValueId,
   type DucklangCoreBlock,
+  ducklangCoreConstructionCandidateBounds,
   type DucklangCoreFunction,
   type DucklangCoreModule,
   type DucklangCoreOperation,
@@ -108,7 +110,38 @@ export function vectorizeDucklangCore(
 ): DucklangVectorizationResult {
   const validationStart = performance.now();
   validateDucklangCore(snapshot);
-  let validationMilliseconds = performance.now() - validationStart;
+  return vectorizeValidatedDucklangCore(
+    snapshot,
+    performance.now() - validationStart,
+  );
+}
+
+export function vectorizeConstructedDucklangCore(
+  snapshot: ConstructedDucklangCoreModule,
+): DucklangVectorizationResult {
+  const planningStart = performance.now();
+  if (
+    ducklangCoreConstructionCandidateBounds(snapshot)
+      .maximumF32x4SlpRuleHeadCountPerBlock < 4
+  ) {
+    return {
+      module: snapshot,
+      proposals: [],
+      accepted: [],
+      metrics: vectorizationMetrics(0, 0, []),
+      validationMilliseconds: 0,
+      planningMilliseconds: performance.now() - planningStart,
+      rebuildMilliseconds: 0,
+    };
+  }
+  return vectorizeValidatedDucklangCore(snapshot, 0);
+}
+
+function vectorizeValidatedDucklangCore(
+  snapshot: DucklangCoreModule,
+  initialValidationMilliseconds: number,
+): DucklangVectorizationResult {
+  let validationMilliseconds = initialValidationMilliseconds;
   const planningStart = performance.now();
   const discovery = discoverValidatedDucklangVectorPlans(snapshot);
   const accepted = resolveCanonicalDucklangVectorPlans(

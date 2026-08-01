@@ -20,7 +20,7 @@
     "benchmark:wasm": "deno run --unstable-webgpu --allow-read scripts/benchmark_wasm_emission.ts",
     "benchmark:branch-hints": "deno run scripts/benchmark_wasm_branch_hints.ts",
     "benchmark:simd": "deno run --unstable-webgpu --allow-read scripts/benchmark_ducklang_simd.ts",
-    "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno scripts/benchmark_peer_compilers.ts",
+    "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno,git,ps,nvidia-smi scripts/benchmark_peer_compilers.ts",
     "release:gpu": "deno task check && deno task test && deno run --unstable-webgpu --allow-read scripts/release_gpu.ts",
     "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_baba_parser.ts ducklang grammar/duck.baba grammar/duck.baba.json grammar/generated",
     "blot:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts blot grammar/blot/grammar.baba grammar/blot/baba.json grammar/blot/generated",

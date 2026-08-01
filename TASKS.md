@@ -1726,6 +1726,132 @@ named engine benchmark—not likelihood alone—demonstrates that retained hints
 repay their compile and byte costs. Source thunks have their own explicit
 semantics or remain unimplemented.
 
+## Phase 15: Work-efficient resident compilation
+
+This phase executes the ten-part resident-performance program. Its optimization
+order is semantic work, representation traffic, synchronization span, and only
+then kernel throughput. A lower stage may not retain extra work merely to keep
+the GPU occupied.
+
+### Phase 15A: Valid evidence and equal boundaries
+
+- [x] Refuse performance claims while another compiler or GPU workload is
+      active. Record the adapter, driver-visible identity, process load, every
+      raw sample, run order, warmup, boundary, input identity, and output
+      identity. A refused run is evidence about the harness, not the compiler.
+- [x] Separate `source -> artifact`, `typed flat IR -> Wasm plan`, and
+      `Wasm plan -> bytes` boundaries. Compare gpupaper and gpufuck only at a
+      boundary both execute over programs with the same observable result and
+      comparable operation counts. The peer harness now has an exact shared
+      Blot-source boundary through local gpufuck. The Wasm benchmark names both
+      plan-to-bytes and validated-flat-Core-through-current-planner boundaries,
+      explicitly including object reconstruction in the latter until it is
+      removed.
+- [x] Split GPU Wasm timing into plan analysis, column construction, packing,
+      allocation/upload, command encoding, queue wait, device completion,
+      mapping, readback copy, and validation. Preserve the top-level wall-time
+      identity and raw distributions. The Wasm benchmark retains every raw
+      internal timing record, wall observation, CPU sample, and wall-minus-stage
+      residual; it labels itself diagnostic until it gains the load gate.
+- [x] Make differential verification an explicitly named conformance mode. It
+      must not be reported as production GPU latency because it deliberately
+      emits the CPU oracle.
+
+### Phase 15B: Work-efficient scans and resident allocation
+
+- [x] Replace the global Hillis--Steele scan with a hierarchical workgroup scan:
+      local scan, recursive block-total scan, and carry propagation. Derive
+      exact work, span, scheduled lanes, storage, and dispatch counts for every
+      input.
+- [x] Generalize the scan with the associative segmented monoid used by count,
+      compact, arena allocation, and Wasm layout. Differentially test empty,
+      singleton, multi-workgroup, sparse-segment, and maximum-u32-bound cases.
+- [x] Add device-scoped storage/readback buffer pools whose leases have
+      exclusive ownership. Prove that reuse begins only after the preceding
+      queue use and mapping lifetime end. Device loss invalidates the complete
+      pool. Wasm and Blot resident lowering use the pool; failed mapping waits
+      for device completion before a lease-safe rejection.
+
+### Phase 15C: Duck GPU syntax and canonical resident Core
+
+- [ ] Remove Duck lexer guards by replacing contextual-token lookahead with a
+      guard-free lexical product or explicit grammar structure. Regenerate a
+      strict Baba GPU profile and differentially accept/reject the complete
+      compatibility and live corpora before selecting it in production.
+- [ ] Consume Baba's resident token/node/edge buffer on the same device. Lower
+      count/scan/write into a typed flat HIR without reconstructing a pointer
+      AST. Read back only diagnostics on failure and the final host artifact on
+      success.
+- [ ] Make validated flat Core the canonical downstream representation. GPU
+      rewrites, vector planning, stackification, Wasm sizing, and byte emission
+      consume it directly; delete successful-path flat-to-object inflation.
+- [ ] Preserve stable source, symbol, type, effect, ownership, function, block,
+      operation, and value IDs across every resident transform. Validation must
+      reject dangling or cross-version IDs before commit.
+
+### Phase 15D: Bounded specialization and early discard
+
+- [x] Prove termination of the existing nonrecursive typed specialization
+      fragment by reducibility, including a decreasing lemma for every intrinsic
+      that constructs a function. Keep exact semantic keys; introduce finite
+      abstraction, embedding, or widening only if recursive polyvariance or a
+      demonstrated growing counterexample is admitted. The only constructors are
+      the fixed typed delta expansions for compose and predicate conjunction;
+      both consume their head redex without duplicating arguments or reproducing
+      a constructing intrinsic.
+- [ ] Require a profitability certificate
+      `expected runtime saving > compile work + code-size cost` before cloning.
+      Record rejected, widened, reused, and emitted requests plus residual-size
+      amplification by source function. All request evidence is now recorded. A
+      stricter optional-only policy failed 7/114 focused checks and was
+      reverted; mandatory-demand provenance and one closure-capture fix remain.
+- [ ] Propagate demand, effect, ownership, and reachability masks before
+      specialization and Core emission. Count and compact only surviving nodes;
+      no later pass may rediscover an already proved-dead island.
+
+### Phase 15E: Resident Wasm and zero-work gating
+
+- [x] Resolve nested Wasm body lengths bottom-up on the GPU, scan exact atom
+      sizes, and emit directly from device offsets. The CPU may independently
+      verify the plan in conformance mode but is not an input to production GPU
+      emission.
+- [x] Canonicalize integer add-zero and multiply-one while constructing Core.
+      Preserve left-to-right operand evaluation, restrict the equations to
+      integer scalars, and retain the GPU matcher only for noncanonical external
+      flat packages. Production performs zero match, buffer, dispatch, and
+      inflation work for this optional pass.
+- [ ] Keep vector recipes, stack signatures, local assignments, branch metadata,
+      and binary layout as flat resident columns. One final mapped readback is
+      permitted because the JavaScript Wasm API consumes host bytes.
+- [ ] Derive a candidate-domain upper bound for every optional pass. A zero
+      bound must select the identity without allocating pass buffers or
+      submitting a command. Nonzero work is fused when producer and consumer
+      share one snapshot and no observable intermediate boundary. Core integer
+      identities and `f32x4-slp-v1` now have executable zero bounds. The vector
+      bound is accumulated during Core construction and makes a zero decision in
+      O(1); the remaining optional passes still require an audit.
+- [ ] Calibrate latency and throughput scheduling per adapter from measured
+      constants. Selection changes execution strategy only; CPU/GPU artifacts
+      and diagnostics remain deterministic.
+
+### Phase 15F: Completion evidence
+
+- [ ] Run same-boundary gpupaper/gpufuck microbenchmarks plus complete Ducklang,
+      Blot, rebuild, batch, SIMD, branch-hint, and frozen release benchmarks on
+      an uncontended hardware adapter. Report counterexamples and confidence,
+      not only medians.
+- [x] Pass generated semantic differentials, malformed-input diagnostics,
+      CPU-oracle conformance, device-loss recovery, concurrent isolation,
+      capacity limits, `deno task check`, and the complete test suite. The
+      current gate passes 577 tests after the full format/lint/typecheck task.
+- [x] Update `PAPER.md` after every retained or rejected mechanism with proved,
+      validated, measured, and hypothetical claims kept distinct.
+
+Exit criterion: a successful Ducklang or Blot compilation performs syntax,
+lowering, optimization, layout, and emission over device-resident flat data,
+does no work for proved-empty domains, maps only the final artifact, and has an
+equal-boundary comparison whose benchmark-validity gate passes.
+
 ## Final boundary inventory
 
 The live targets have no remaining first-error boundary inside the admitted
