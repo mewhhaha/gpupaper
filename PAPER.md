@@ -2771,6 +2771,519 @@ metadata. Editor, grep, tar, wav, and raytracer are byte-identical to their
 previous contracts. This is an executable artifact-size change, not a new
 whole-application timing measurement.
 
+### 7.10 Work-efficient resident compilation
+
+This section specifies the resident-performance boundary. It replaces the
+informal objective “put more stages on the GPU” with an optimization order:
+
+1. eliminate semantic work whose result is unobservable;
+2. minimize representation construction and host/device traffic;
+3. minimize dependency span and synchronization;
+4. parallelize the remaining work;
+5. improve constant factors without weakening the first four properties.
+
+GPU occupancy is not an objective by itself. An (O(n\log n))-work kernel is not
+preferred to an (O(n))-work kernel merely because it schedules more lanes.
+Blelloch's work/depth model and Brent's simulation bound justify tracking total
+work and critical-path depth separately [17, 36].
+
+#### Cost state
+
+For stage (i), record
+
+\[ C_i=(W_i,S_i,H_i,D_i,A_i,K_i,R_i), \]
+
+where (W_i) is primitive work, (S_i) dependency span, (H_i) host bytes read or
+written, (D_i) device bytes read or written, (A_i) allocated bytes, (K_i) queue
+submissions or host synchronizations, and (R_i) mapped readback bytes. For
+effective parallelism (P_i), host/device bandwidths (B_h,B_d), transfer
+bandwidth (B_t), allocation cost (c_a), submission latency (L), and mapping
+latency (M), the first calibration model is
+
+\[ \widehat T_i = \max(W_i/P_i,S_i)c_i + H_i/B_h + D_i/B_d + (U_i+R_i)/B_t + A_i
+c_a + K_iL + [R_i>0]M. \]
+
+This is an empirical predictor, not a proof of runtime. The proved lower bound
+for the abstract parallel computation is
+
+\[ T_i \ge \max(W_i/P_i,S_i), \]
+
+after choosing one unit-cost primitive model. Queue contention, caches, driver
+validation, and overlap can falsify an additive fit, so raw terms and residuals
+remain visible. A retained strategy must beat its alternative under paired
+measurements; a fitted coefficient alone is not evidence.
+
+#### Benchmark-validity predicate
+
+A measurement set (M) is admissible only when
+
+\[ V(M)=I\land B\land O\land Q\land E, \]
+
+where:
+
+- (I): input bytes, semantic workload, target, and output identity are fixed;
+- (B): named compiler boundaries are equal or explicitly incomparable;
+- (O): order is randomized or balanced and every raw observation is retained;
+- (Q): the selected adapter has no detected competing compiler/GPU workload;
+- (E): environment, revision, runtime, adapter, verification mode, warmup, and
+  sample hierarchy are recorded.
+
+If (V(M)) is false, the harness emits a refusal record and no speedup. Kalibera
+and Jones motivate preserving the hierarchy and uncertainty of repeated systems
+measurements rather than treating iterations as independent draws [38]. The
+current peer harness violates equal-boundary comparison: gpupaper measures
+Ducklang source to Wasm while gpufuck receives a prepared Surface module. It is
+useful as two named workload observations but not as a speedup denominator.
+
+The frontend benchmark now selects `gpuWasmVerification: "none"` and retains
+every warm profile rather than only the median representative. It still lacks
+the peer harness's process/GPU load inspection and consequently labels its
+output `diagnostic`; its stage distributions identify work but are not
+admissible performance claims. Differential mode intentionally constructs CPU
+bytes as an oracle and remains conformance evidence, never production GPU
+latency.
+
+#### Resident ownership state
+
+A resident artifact has the linear state
+
+\[ \textsf{Allocated}\to\textsf{Queued}(q)\to
+\textsf{Ready}(q)\to\textsf{Consumed}\to\textsf{Released}. \]
+
+Queue order permits a consumer submitted after its producer on the same
+`GPUQueue` to observe the produced bytes without a host wait [14]. Mapping is a
+host observation and therefore a synchronization boundary. A buffer lease may
+return to a pool only after every queued use has completed and any mapping has
+ended. Device loss moves every lease and pool entry to `Invalid`; no buffer may
+be reused across device generations.
+
+The successful compilation invariant is:
+
+\[ R_{syntax}+R_{hir}+R_{core}+R_{layout}=0, \qquad R_{final}=|wasm|. \]
+
+Diagnostics may read back a bounded failure certificate. A successful path may
+map only the final Wasm artifact because the JavaScript Wasm API consumes host
+bytes [28]. Validation or benchmarking may additionally map independent oracle
+artifacts, but those modes are not production latency.
+
+#### Canonical flat representation
+
+Every resident IR version is a tuple of immutable columns and stable integer
+IDs. Let (G_v=(C_v,E_v)) be version (v). A transform emits a proposal set (P_v),
+resolves conflicts deterministically, counts successor rows, reserves them by
+scan, and writes (G_{v+1}). It must preserve:
+
+1. every referenced ID names a row in the same declared version;
+2. source, symbol, type, effect, ownership, function, block, operation, and
+   value identities are stable unless a checked remap is emitted;
+3. output row order is the stable source/IR order after removing rejected rows;
+4. the identity proposal produces the same package object and no allocation;
+5. no successful-path transform reconstructs a pointer graph merely to flatten
+   it again.
+
+Flat Core is the target canonical downstream representation. Object Core remains
+a diagnostic or differential view. Vector planning, stackification, local
+assignment, branch metadata, Wasm sizing, and emission must consume flat
+columns. Phase 15 has removed the rewrite-induced half of the present
+
+```text
+object Core -> flat Core -> vectorize object Core -> Wasm nodes
+```
+
+cycle, but object vectorization and stackification still prevent the stronger
+resident invariant from being an implementation claim.
+
+#### Work-efficient segmented scan
+
+For an associative operator (otimes) with identity (e), exclusive scan is
+
+\[ y_i=e\otimes x_0\otimes\cdots\otimes x_{i-1}. \]
+
+Segmented scan represents each input as ((h_i,x_i)), where (h_i) starts a new
+segment, under
+
+\[ (h,a)\odot(k,b)=(h\lor k,\; k?b:a\otimes b). \]
+
+This operator is associative whenever (otimes) is associative. The proof is by
+the two cases for the rightmost start flag: if it is set, both parenthesized
+forms select the right value; otherwise both reduce to associativity of
+(otimes). Count/compact, arena allocation, batched layout, and per-function Wasm
+offsets are instances with natural-number addition.
+
+The retained global algorithm is hierarchical:
+
+1. each workgroup scans (b) values and writes one block total;
+2. block totals are recursively scanned;
+3. one carry pass adds the scanned block total to each local result.
+
+For (n>0), (m=\lceil n/b\rceil), and work-efficient local scans, a two-level
+instance has
+
+\[ W(n,b)\le 2n+2m+n, \qquad S(n,b)=O(\log b+\log m), \]
+
+where the final (n) term is carry propagation. Recursive block scans preserve
+(O(n)) total work and (O(\log n)) span [17, 18]. Exact implementation metrics
+replace the bound in evidence.
+
+The existing Hillis--Steele primitive performs, for (q=\lceil\log_2(n+1)\rceil),
+
+\[ W_{HS}=q(n+1)-(2^q-1). \]
+
+At the grep Wasm frontier (n=3897), (q=12) and (W_{HS}=42{,}681) additions,
+versus approximately (2n=7{,}794) for a Blelloch scan before small block/carry
+terms. The existing primitive is a valid differential oracle, not the production
+global scan. It is currently used by the reference Blot payload strategy and is
+not integrated into Wasm layout.
+
+#### GPU Wasm layout
+
+Let atom (a) have final encoded size (s_a). Nested `length` atoms form an
+acyclic containment graph because a sized node contains only proper descendants.
+For dependency level (d), compute exact child byte sums and the LEB size of
+those sums after level (d-1) is complete. Once every (s_a) is fixed, one
+exclusive scan gives atom offsets. Emission writes the deterministic encoding of
+(a) into ([o_a,o_a+s_a)); these intervals are disjoint and cover the final
+buffer.
+
+The production obligations are:
+
+- size resolution and offsets are device results, not CPU inputs;
+- level barriers occur inside queue-ordered command buffers or explicit
+  submissions recorded in (K);
+- exact CPU analysis remains a differential oracle only;
+- branch-hint anchors use the same final offsets and therefore cannot drift;
+- one final copy/map returns exactly the logical module length.
+
+`prepareWasmGpuJob` structurally validates the plan and constructs scalar atom
+columns on the CPU. It does not call `analyzeWasmBinaryPlan`, compute CPU
+offsets, or resolve length values. Phase 15 still has to move scalar column
+construction behind the resident Core boundary.
+
+#### Bounded specialization
+
+Unrestricted polyvariant specialization can create an unbounded family even when
+each residual function is finite. That is not, however, the model currently
+implemented by Ducklang. The current rewriter refuses every function marked
+recursive before constructing a request. For admitted functions it performs
+typed call-by-value beta reduction over immutable functions, products, sums, and
+selected total intrinsic reductions. Exact request keys and pending/complete
+states share repeated reductions and break an exact re-entry cycle; they are not
+a finite abstraction and do not by themselves prove termination of a strictly
+growing request sequence.
+
+The intended proof basis for the admitted higher-order fragment is strong
+normalization of simply typed lambda calculus by reducibility [39]. To transfer
+that theorem, every intrinsic rewrite that constructs a function must be shown
+to preserve typing and decrease the same reducibility measure, and recursive or
+effectful computation must remain residual. Those extension lemmas have not yet
+been mechanized, so current corpus termination is executable evidence rather
+than a proved global property. If recursive polyvariance or a non-normalizing
+intrinsic is admitted later, the request frontier must instead use a finite
+abstraction or type-aware homeomorphic embedding and widening [37]. Adding that
+machinery to the current restricted fragment without such a counterexample would
+increase work and merge risk without strengthening an established proof.
+
+Termination also does not justify optional cloning. For request (k), accept an
+optional clone only when
+
+\[ N_k\Delta t_k > c_cW_k+c_b\Delta B_k, \]
+
+where (N_k) is expected runtime executions, (Delta t_k) estimated saving per
+execution, (W_k) compiler work, (Delta B_k) emitted-byte increase, and (c_c,c_b)
+calibrated compile and code-size prices. Mandatory normalization that erases a
+compile-time type, module, protocol, or closure witness is a semantic lowering
+obligation rather than an optional clone; its fallback is a separately specified
+runtime representation, not silently skipping the lowering. With no profile or
+static elimination proof, (N_kDelta t_k) is unknown and optional cloning is not
+authorized. Exceeding a budget never identifies distinct static values.
+
+Demand, reachability, effect, and ownership masks precede specialization.
+Counting and scan allocation operate only over surviving nodes. If mask (m_i=0),
+no later stage may rediscover or reconstruct node (i). This is the formal
+version of “discard as much work as possible before parallelizing.”
+
+#### Zero-domain theorem and fusion rule
+
+Each optional pass defines a candidate-domain upper bound (U(G)) computable from
+producer metadata. If (U(G)=0), then candidate discovery must return the
+identity without allocating buffers or submitting commands. This is sound only
+when every rule head is represented in (U); generated differential tests must
+show that CPU discovery is empty whenever the bound is zero.
+
+Producer (A) and consumer (B) may fuse exactly when (B) consumes only the
+immutable version emitted by (A), no validation/diagnostic boundary observes
+their intermediate representation, and the fused stable order equals sequential
+(B(A(G))). Fusion is not justified merely by adjacent dispatches.
+
+The implemented vectorization zero bound is intentionally cheaper than full rule
+matching. Every `f32x4-slp-v1` group contains four scalar-`f32` binary
+operations from `{+, -, *, /}` in one block. Therefore
+
+\[ U_{vec}(G)=\max_b |\{o\in b\mid
+o=\operatorname{binary}^{f32}_{\{+,-,\times,/\}}(x,y)\}| \]
+
+is an upper bound on a four-lane rule head: if (U_vec(G)<4), no plan exists. The
+count ignores def-use shape and intervening barriers, so it may conservatively
+admit full planning but cannot incorrectly skip a plan. Core construction
+updates the maximum while it emits each operation and associates the certificate
+with the immutable construction-branded snapshot. The zero case is consequently
+an O(1) lookup that returns the same object with zero validation and proposal
+work. Raw external Core retains validation before this optimization boundary.
+
+#### Phase 15 implementation evidence
+
+The retained unsegmented scan uses workgroup width (b=128), a Blelloch
+upsweep/downsweep inside each workgroup, recursive block-total scans, and a
+carry pass. For a level of length (n), let (m=\lceil n/128\rceil). The
+implementation reports, rather than estimates,
+
+\[ A(n)=254m+[m>1](A(m)+n-128), \]
+
+\[ D(n)=1+[m>1](D(m)+1), \]
+
+and
+
+\[ I(n)=128m+[m>1](I(m)+128m), \]
+
+for executed additions, dispatches, and scheduled invocations respectively. Its
+temporary storage recurrence is
+
+\[ B(n)=4n+4m+16+[m>1](B(m)+16). \]
+
+These are executable accounting identities. Nine hardware-backed tests validate
+ordinary and segmented exclusive scans over empty, nonuniform, multi-workgroup,
+sparse-head, arbitrary-nonzero-head, and wrapping-u32 inputs. The segmented
+shader implements the pair operator defined above; it does not infer boundaries
+from values. The previous test names incorrectly called the ordinary count scan
+segmented, and the implementation added the missing head/value primitive rather
+than retaining that false claim.
+
+Device-scoped buffer pools now issue exclusive linear leases. Exact usage and a
+power-of-two capacity bucket form the reuse key, at most one released buffer is
+retained per key, a concurrent acquisition cannot observe a leased buffer, and a
+second release is an invariant failure. A release in the Wasm path occurs only
+after its mapping is ended and submission completion has been witnessed. Device
+loss destroys released entries and makes the pool invalid. Thirteen focused unit
+tests include exclusion, reuse, mapped-at-acquisition rejection, second-release
+rejection, both released- and leased-buffer behavior at device loss, and a
+failed mapping that cannot reject until device completion has also been
+witnessed. This is executable validation of the ownership protocol, not a formal
+proof of the WebGPU implementation.
+
+Blot resident lowering now leases its source, candidate, payload, metadata,
+parameter, and readback buffers from the same device pool. Its final map starts
+with queue submission and is the completion witness; the old sequential
+`onSubmittedWorkDone` then `mapAsync` boundary and unconditional destruction of
+six buffers were removed. Temporary recursive-scan buffers remain privately
+owned by the scan encoder and are destroyed after completion. Fourteen Blot
+tests cover direct and segmented lowering, shadowing, diagnostics, deterministic
+emission, and hardware-adapter agreement.
+
+Single-payload GPU Wasm emission now executes the following queue-ordered
+pipeline:
+
+```text
+scalar atom sizes
+  -> bottom-up length levels
+  -> hierarchical exact-size scan
+  -> byte emission from device offsets
+  -> output plus terminal offset copy
+  -> one mapping
+```
+
+The CPU offsets produced by `analyzeWasmBinaryPlan` are no longer bound to any
+production emission shader. Length payloads used by emission are device results,
+and the mapped terminal offset determines the returned slice. Production mode
+runs only CPU structural validation and scalar column construction; it does not
+compute CPU byte lengths. Differential mode independently invokes the CPU
+emitter before the GPU path, so its cost remains deliberately outside production
+latency. Concurrent payloads each build a resident layout, while the submission
+queue batches their command buffers and maps their final artifacts concurrently.
+This replaced and deleted the packed CPU-offset implementation. Differential
+tests cover nested lengths, sparse numeric dependency levels, signed LEB
+boundaries, concurrent isolation, and both sides of 64 KiB.
+
+Because WebGPU copy sizes are host-known, the one-map implementation reserves a
+structural upper bound rather than the device-computed exact length. For byte,
+unsigned, signed-32, signed-64, and length-atom counts (b,u,s_32,s_64,l),
+
+\[ B_{max}=b+5(u+s_{32}+l)+10s_{64}. \]
+
+The bounds are the maximum LEB widths of their admitted domains; hence every
+device-resolved atom interval lies within the word-rounded arena. This replaces
+the earlier (10n) allocation without calculating an exact CPU size. Editor's
+recorded structural counts reduce its copied capacity from 239,232 bytes to
+64,036 bytes while its logical output remains 24,460 bytes. An indirect GPU copy
+still cannot make `copyBufferToBuffer` consume a device-computed size;
+eliminating the remaining slack requires a second host synchronization, a fixed
+resident arena amortized over a batch, or a backend that returns a mapped arena
+with host-side logical slicing. The tighter bound is proved safe by atom domains
+and differentially tested across every atom kind and the 64-KiB boundary; the
+batch arena remains the preferred next experiment.
+
+The submission queue now permits the final `mapAsync` to witness completion of
+the command that fills the readback. Previously the single-payload path awaited
+`queue.onSubmittedWorkDone()` and only then requested mapping, serializing two
+driver waits. On the RTX 4080 SUPER, five ad hoc 37-atom runs before this change
+had steady totals 25.20--25.57 ms, with about 13.4 ms in submission completion
+followed by 11.1 ms mapping. Five runs after the change had steady totals
+13.44--14.75 ms, with 10.37--11.68 ms in the mapping completion witness and
+0.07--0.10 ms residual submission bookkeeping. These are contaminated ad hoc
+measurements, not admissible benchmark claims, but the roughly 11 ms removed
+serial span directly confirms the synchronization model. Pooling simultaneously
+reduced steady preparation from roughly 0.55 ms on the second pre-pool sample to
+0.25--0.40 ms after warmup; cold context creation remained 181--244 ms. Removing
+the zero-delay host timer from the latency policy then reduced five later steady
+37-atom observations to 11.97--12.34 ms total, with 0.006--0.013 ms queue wait
+and 11.29--11.32 ms mapping completion. Throughput policy retains its
+two-millisecond collection window. These observations are still contaminated
+diagnostics, but they falsify the assumption that a zero-delay timer is free at
+the latency boundary.
+
+The scheduler now starts a queue-completion future and the final mapping future
+concurrently from the same submission. Their durations overlap and therefore
+must not be added. Four contaminated Editor diagnostics after the tighter arena
+measured steady queue/device completion at 11.58--12.65 ms and mapping
+completion at 12.28--12.66 ms; the post-device difference was 0.002--1.075 ms.
+Thus the old `mappingMilliseconds` label did not establish an 11-ms mapping
+overhead: it mostly observed the same device/driver critical path. Profiles now
+expose both clocks and call the latter a completion witness. Column construction
+is CPU atom packing; the following interval is named allocation-and-upload
+rather than conflating the two stages.
+
+Integer identity rules are now canonical Core-construction equations:
+
+\[ \operatorname{core}(x+0)=\operatorname{core}(x),\qquad
+\operatorname{core}(x\times1)=\operatorname{core}(x). \]
+
+Both operands are lowered left-to-right before the result value is selected, so
+the equation removes only the pure integer operation and preserves operand
+evaluation. The rule is restricted to `i32` and `i64`; applying it to IEEE-754
+values would be unsound for signed zero. Production therefore returns the
+construction-certified flat package as the exact Core rewrite identity with zero
+matching, descriptors, allocation, submission, or inflation. Focused Core,
+GPU-conformance, compiler-profile, and execution tests pass. The standalone GPU
+rewrite still differentially processes deliberately noncanonical validated flat
+packages, which tests interoperability without making redundant work part of
+normal compilation.
+
+The contaminated Editor diagnostic that motivated the next zero gate spent 2.31
+ms in a vector pass with no candidate windows: approximately 1.57 ms in repeat
+validation and 0.73 ms in planning over 1,341 Core operations. An intermediate
+bound still counted integer arithmetic and measured 0.60--1.60 ms because it
+admitted full planning despite zero `f32` candidates. That counterexample caused
+the bound to move into Core construction and become type-sensitive. Six later
+contaminated observations were 0.0050--0.0218 ms with zero validation and zero
+candidate windows, a 27--317 times reduction over the intermediate range. These
+are diagnostic stage clocks, not an admissible speedup. Focused SIMD tests still
+admit and execute the profitable six-group source plan, and producer-bound tests
+cover both zero and exactly four rule heads.
+
+Construction and validation provenance are now separate capabilities.
+`flattenConstructedDucklangCore` accepts only the unforgeable constructed Core
+type, while `flattenValidatedDucklangCore` validates an arbitrary object and
+labels the result `validation`. This removes the former API hole in which any
+object Core could be called construction-certified. Successful production still
+does not inflate flat Core for identity rewriting; object vectorization and the
+object stackifier remain the incomplete resident boundary.
+
+The Wasm-plan microbenchmark now retains every raw wall observation, every raw
+GPU timing record (inspection, column construction, context, allocation/upload,
+command encoding, submission, queue/device completion, mapping witness, and
+copy), CPU raw samples, and the wall-minus-internal residual. Because this
+microbenchmark does not yet inspect load, it labels the record `diagnostic`.
+It also names and times the currently nonresident boundary as
+`validated-flat-core-through-object-stackifier-to-wasm-plan`. Three contaminated
+samples split Editor into 3.20--4.21 ms of flat-to-object inflation plus
+5.27--5.47 ms of object stackification/planning. Codex required 35.29--37.71 ms
+of inflation plus 47.54--66.25 ms of planning. The split proves neither absolute
+latency nor GPU benefit, but it identifies two independent representation costs:
+removing inflation alone cannot remove more than its measured component, while a
+flat backend must also replace the larger planner component on Codex.
+
+The peer harness now refuses to run when Linux process inspection or NVIDIA
+compute-process inspection finds another compiler/test workload. The 2026-08-01
+attempt correctly refused while a Blot Deno server owned 205 MiB on the RTX 4080
+SUPER. It retains raw sample order and input/output hashes, hashes tracked diffs
+and every untracked file in all three repositories, and contains a paired,
+alternating, warm-process/cold-session boundary. Both gpupaper and local
+`../gpufuck` receive the exact bytes `return 42;\n`, compile Blot source to
+valid Wasm, and are checked by invoking their respective export and requiring
+`42n`. Different runtime sections and output sizes are implementation costs
+rather than an input-boundary mismatch. The earlier 300-function experiment was
+rejected: gpufuck always emitted its runtime table, memory, globals, and exports
+while gpupaper emitted a minimal module, and gpufuck's public timer could not
+isolate function bodies from CPU module assembly. The shared-source timing
+remains unmeasured because the validity gate refused; there is deliberately no
+fabricated speedup.
+
+Specialization now reports rejected optional candidates, the permanently zero
+widening count, emitted/reused/pending requests, and source-span-indexed
+residual node amplification. The only intrinsic rules that construct functions
+are `compose`/`patch_compose` and `predicate_and`. Each is the typed expansion
+of a fixed nonrecursive lambda term, removes its head intrinsic, introduces no
+copy of either function argument, and introduces neither constructing intrinsic.
+Translation to those closed definitions followed by Tait reducibility therefore
+gives strong normalization for the admitted simply typed, nonrecursive fragment
+[39]. A generated typed test exercises both delta rules and counts two consumed
+redexes; recursive factories remain rejected and exact pending re-entry remains
+residual. This is a paper proof plus executable rule-inventory evidence, not a
+machine-checked proof.
+
+An attempted profitability tightening allowed only compile-time records and
+non-runtime intrinsic witnesses. It failed 7 of 114 focused language checks: two
+compile-time closures escaped normalization, four expected specialization shapes
+changed, and one three-level runtime closure exposed a capture-type invariant
+failure. The change was reverted. This falsifies the claim that every existing
+specialization is already optional cloning merely because Core has closure
+operations. Optional and mandatory requests need explicit demand provenance, and
+the closure capture bug needs repair, before the profitability inequality can
+reject those requests safely.
+
+#### Current quantitative falsification
+
+The 2026-08-01 audit proves that the resident boundary is incomplete:
+
+- Ducklang calls Baba's generated-Wasm cursor and lowers a host AST; only Blot
+  uses Baba's GPU-resident frontend.
+- Baba 7.10's public resident session creates and owns its own `GPUDevice`,
+  accepts only host `string` or `Uint16Array` source, and publicly returns one
+  leased resident buffer containing its header and token/node/edge columns. It
+  also exposes that session's device, so a consumer can submit same-queue work
+  before releasing the result; Blot exercises exactly this contract. What Baba
+  does not expose is external-device adoption or resident source-buffer
+  ingestion. Ducklang additionally has 19 contextual lexical terminals plus
+  delimiter- and line-sensitive host classification. A host classifier followed
+  by Baba GPU parsing would add a readback/re-upload boundary and is therefore
+  not called resident. The missing primitives are a guard-free lexical product
+  or equivalent GPU classifier and, for one compiler-wide device owner,
+  external-device adoption with explicit ownership. Resident source ingestion
+  removes the remaining duplicate source upload but is not a prerequisite for
+  consuming syntax on the same device.
+- The adjacent Binned checkout is at `4f06b1f9ca9276955e2def04de002ea9e48466c1`
+  (2026-08-01, “Compose certified identity calls”) but is not a stable corpus
+  input: it has 19 tracked modifications and four untracked paths, including a
+  dirty manifest that adds `examples/compile_time/27_contracts_and_proofs.duck`.
+  No generated contract was imported from that worktree. The vendored corpus
+  remains the reproducible boundary until Binned is clean and pinned.
+- Before canonical construction, most frozen programs reported zero GPU Core
+  rewrite proposals and Tar reported 24. Those two integer identities are now
+  removed before flat Core; a new frozen-corpus measurement is still required.
+- Codex has 149 linked statements, 25,358 type equalities, 23,594 residual
+  specialization nodes, 12,956 Core operations, 204,168 Wasm atoms, and a
+  226,211-byte module. Per linked statement it has 6.2 times Editor's type
+  equalities, 7.2 times residual nodes, 8.4 times Core operations, and 7.4 times
+  Wasm atoms. This is representation amplification, not a hardware lower bound.
+- One apparently idle peer run measured gpupaper at 42.596 ms p50 and gpufuck at
+  0.197 ms p50 under unequal boundaries. During a concurrent gpufuck test suite,
+  the identical harness measured 210.517 and 0.618 ms. Neither pair is an
+  architectural speedup; the second falsifies a harness without a load gate.
+
+These are executable observations or source audits, not proofs that the proposed
+replacement is faster. Phase 15 implementation must update this section with
+retained and rejected mechanisms, exact work equations, differential evidence,
+and uncontended equal-boundary measurements.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -6867,3 +7380,12 @@ distinction between useful empirical evidence and a universal speedup claim.
     <https://www.cambridge.org/core/services/aop-cambridge-core/content/view/F4FC3C34E9CAE3F4326503E254FCF6F2/S0956796897002724a.pdf/the-call-by-need-lambda-calculus.pdf>
 35. WebAssembly Community Group. “WebAssembly Feature Status.”
     <https://webassembly.org/features/>
+36. Guy E. Blelloch. “Programming Parallel Algorithms.” Communications of the
+    ACM 39(3), 1996. <https://www.cs.cmu.edu/~scandal/cacm.html>
+37. Elvira Albert, John P. Gallagher, Miguel Gómez-Zamalloa, and Germán Puebla.
+    “Type-Based Homeomorphic Embedding and Its Applications to Online Partial
+    Evaluation.” LOPSTR 2007. <https://doi.org/10.1007/978-3-540-78769-3_3>
+38. Tomas Kalibera and Richard E. Jones. “Rigorous Benchmarking in Reasonable
+    Time.” ISMM 2013. <https://doi.org/10.1145/2464157.2464160>
+39. William W. Tait. “Intensional Interpretations of Functionals of Finite Type
+    I.” Journal of Symbolic Logic 32(2), 1967. <https://doi.org/10.2307/2271658>

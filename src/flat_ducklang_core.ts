@@ -1,4 +1,5 @@
 import {
+  type ConstructedDucklangCoreModule,
   type CoreBlockId,
   type CoreFunctionId,
   type CoreSignatureId,
@@ -121,6 +122,10 @@ export type TrustedFlatDucklangCore = {
   readonly package: FlatDucklangCore;
   readonly provenance: "construction" | "validation";
   readonly [trustedFlatDucklangCore]: true;
+};
+
+export type ConstructedFlatDucklangCore = TrustedFlatDucklangCore & {
+  readonly provenance: "construction";
 };
 
 const absent = 0xffff_ffff;
@@ -598,12 +603,23 @@ export function flattenDucklangCore(
   };
 }
 
-export function flattenTrustedDucklangCore(
-  module: DucklangCoreModule,
-): TrustedFlatDucklangCore {
+export function flattenConstructedDucklangCore(
+  module: ConstructedDucklangCoreModule,
+): ConstructedFlatDucklangCore {
   return {
     package: flattenDucklangCore(module),
     provenance: "construction",
+    [trustedFlatDucklangCore]: true,
+  };
+}
+
+export function flattenValidatedDucklangCore(
+  module: DucklangCoreModule,
+): TrustedFlatDucklangCore {
+  validateDucklangCore(module);
+  return {
+    package: flattenDucklangCore(module),
+    provenance: "validation",
     [trustedFlatDucklangCore]: true,
   };
 }

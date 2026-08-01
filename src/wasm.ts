@@ -51,7 +51,7 @@ export type WasmBinaryPlanAnalysis = {
   readonly lengthSizingWorkEstimate: number;
 };
 
-type WasmBinaryPlanInspection = {
+export type WasmBinaryPlanStructure = {
   readonly lengthLevels: readonly WasmLengthLevel[];
   readonly byteAtomCount: number;
   readonly maximumByteRank: number;
@@ -59,6 +59,7 @@ type WasmBinaryPlanInspection = {
   readonly dependencyAtomCount: number;
   readonly lengthAtomIndices: readonly number[];
   readonly scalarByteLength: number;
+  readonly maximumEncodedByteLength: number;
 };
 
 type WasmNode =
@@ -393,10 +394,16 @@ export function validateWasmBinaryPlan(
   return inspectWasmBinaryPlan(plan).lengthLevels;
 }
 
+export function inspectWasmBinaryPlanStructure(
+  plan: WasmBinaryPlan,
+): WasmBinaryPlanStructure {
+  return inspectWasmBinaryPlan(plan);
+}
+
 function inspectWasmBinaryPlan(
   plan: WasmBinaryPlan,
   scalarSizes?: Uint8Array,
-): WasmBinaryPlanInspection {
+): WasmBinaryPlanStructure {
   if (plan.atoms.length === 0) {
     throw new TypeError("Wasm binary plan must contain at least one atom");
   }
@@ -414,6 +421,7 @@ function inspectWasmBinaryPlan(
   let signed64AtomCount = 0;
   let dependencyAtomCount = 0;
   let scalarByteLength = 0;
+  let maximumEncodedByteLength = 0;
   const lengthAtomIndices: number[] = [];
   const lengthAtomsByLevel = new Map<
     number,
@@ -425,10 +433,11 @@ function inspectWasmBinaryPlan(
     }[]
   >();
   for (const [atomIndex, atom] of plan.atoms.entries()) {
-    if (scalarSizes !== undefined && (atomIndex & 7) === 0) {
+    if ((atomIndex & 7) === 0) {
       maximumByteRank = byteAtomCount;
     }
     if (atom.kind === "byte") {
+      maximumEncodedByteLength += 1;
       if (
         !Number.isSafeInteger(atom.value) || atom.value < 0 ||
         atom.value > 0xff
@@ -437,14 +446,15 @@ function inspectWasmBinaryPlan(
           `Wasm byte atom ${atomIndex} must fit u8; received ${atom.value}`,
         );
       }
+      byteAtomCount += 1;
       if (scalarSizes !== undefined) {
         scalarSizes[atomIndex] = 1;
-        byteAtomCount += 1;
         scalarByteLength += 1;
       }
       continue;
     }
     if (atom.kind === "unsigned") {
+      maximumEncodedByteLength += 5;
       if (
         !Number.isSafeInteger(atom.value) || atom.value < 0 ||
         atom.value > 0xffff_ffff
@@ -461,6 +471,7 @@ function inspectWasmBinaryPlan(
       continue;
     }
     if (atom.kind === "signed32") {
+      maximumEncodedByteLength += 5;
       requireSigned32(atom.value);
       if (scalarSizes !== undefined) {
         const size = signed32EncodingByteLength(atom.value);
@@ -470,16 +481,18 @@ function inspectWasmBinaryPlan(
       continue;
     }
     if (atom.kind === "signed64") {
+      maximumEncodedByteLength += 10;
       requireSigned64(atom.value);
+      signed64AtomCount += 1;
       if (scalarSizes !== undefined) {
         const size = signed64EncodingByteLength(atom.value);
         scalarSizes[atomIndex] = size;
-        signed64AtomCount += 1;
         scalarByteLength += size;
       }
       continue;
     }
     const rangeEnd = atom.rangeStart + atom.rangeCount;
+    maximumEncodedByteLength += 5;
     if (
       !Number.isSafeInteger(atom.rangeStart) || atom.rangeStart < 0 ||
       !Number.isSafeInteger(atom.rangeCount) || atom.rangeCount < 0 ||
@@ -548,6 +561,7 @@ function inspectWasmBinaryPlan(
     dependencyAtomCount,
     lengthAtomIndices,
     scalarByteLength,
+    maximumEncodedByteLength,
   };
 }
 

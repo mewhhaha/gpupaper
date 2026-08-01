@@ -4,11 +4,11 @@ import {
   requestGpuExclusiveScanPipelines,
 } from "./gpu_segmented_work.ts";
 import {
-  awaitCompilerGpuCommand,
-  createCompilerGpuBuffer,
+  acquireCompilerGpuBuffer,
+  type CompilerGpuBufferLease,
   dispatchCompilerGpuWorkgroups,
   requireCompilerGpuCapacity,
-  submitCompilerGpuCommand,
+  submitCompilerGpuCommandWithReadback,
 } from "./gpu_device.ts";
 
 const blotPayloadRowWords = 12;
@@ -120,13 +120,13 @@ export async function lowerBlotResidentSyntax(
   for (let index = 0; index < source.length; index += 1) {
     sourceWords[index] = source.charCodeAt(index);
   }
-  const sourceBuffer = createBuffer(
+  const sourceLease = uploadBuffer(
     device,
     "Blot UTF-16 source",
     sourceWords,
     GPUBufferUsage.STORAGE,
   );
-  const candidateBuffer = createCompilerGpuBuffer(
+  const candidateLease = acquireCompilerGpuBuffer(
     device,
     "Blot payload candidates",
     {
@@ -135,7 +135,7 @@ export async function lowerBlotResidentSyntax(
     },
     "storage",
   );
-  const payloadBuffer = createCompilerGpuBuffer(
+  const payloadLease = acquireCompilerGpuBuffer(
     device,
     "Blot resident payload",
     {
@@ -144,7 +144,7 @@ export async function lowerBlotResidentSyntax(
     },
     "storage",
   );
-  const metadataBuffer = createCompilerGpuBuffer(
+  const metadataLease = acquireCompilerGpuBuffer(
     device,
     "Blot resident metadata",
     {
@@ -167,14 +167,14 @@ export async function lowerBlotResidentSyntax(
     source.length,
     0,
   ]);
-  const parameterBuffer = createBuffer(
+  const parameterLease = uploadBuffer(
     device,
     "Blot resident layout",
     parameters,
     GPUBufferUsage.UNIFORM,
   );
   const readbackBytes = 32 + declarationCapacity * blotPayloadRowWords * 4;
-  const readbackBuffer = createCompilerGpuBuffer(
+  const readbackLease = acquireCompilerGpuBuffer(
     device,
     "Blot resident payload readback",
     {
@@ -183,14 +183,21 @@ export async function lowerBlotResidentSyntax(
     },
     "copy",
   );
-  const ownedBuffers: GPUBuffer[] = [
-    sourceBuffer,
-    candidateBuffer,
-    payloadBuffer,
-    metadataBuffer,
-    parameterBuffer,
-    readbackBuffer,
+  const leasedBuffers: CompilerGpuBufferLease[] = [
+    sourceLease,
+    candidateLease,
+    payloadLease,
+    metadataLease,
+    parameterLease,
+    readbackLease,
   ];
+  const ownedScanBuffers: GPUBuffer[] = [];
+  const sourceBuffer = sourceLease.buffer;
+  const candidateBuffer = candidateLease.buffer;
+  const payloadBuffer = payloadLease.buffer;
+  const metadataBuffer = metadataLease.buffer;
+  const parameterBuffer = parameterLease.buffer;
+  const readbackBuffer = readbackLease.buffer;
   let mapped = false;
   try {
     const encoder = device.createCommandEncoder({
@@ -208,7 +215,7 @@ export async function lowerBlotResidentSyntax(
         { binding: 2, resource: { buffer: candidateBuffer } },
       ];
       if (strategy === "segmented-scan") {
-        countBuffer = createCompilerGpuBuffer(
+        const countLease = acquireCompilerGpuBuffer(
           device,
           "Blot declaration output counts",
           {
@@ -217,7 +224,8 @@ export async function lowerBlotResidentSyntax(
           },
           "storage",
         );
-        ownedBuffers.push(countBuffer);
+        leasedBuffers.push(countLease);
+        countBuffer = countLease.buffer;
         entries.push({ binding: 3, resource: { buffer: countBuffer } });
         entries.push({ binding: 4, resource: { buffer: metadataBuffer } });
         entries.push({ binding: 5, resource: { buffer: parameterBuffer } });
@@ -259,7 +267,7 @@ export async function lowerBlotResidentSyntax(
         declarationCapacity,
       );
       offsets = scan.offsets;
-      ownedBuffers.push(...scan.ownedBuffers);
+      ownedScanBuffers.push(...scan.ownedBuffers);
       scanDispatchCount = scan.dispatchCount;
       scanAdditionWork = scan.additionWork;
       scanAdditionWorkUpperBound = scan.additionWorkUpperBound;
@@ -311,16 +319,12 @@ export async function lowerBlotResidentSyntax(
       32,
       declarationCapacity * blotPayloadRowWords * 4,
     );
-    await submitCompilerGpuCommand(
+    await submitCompilerGpuCommandWithReadback(
       device,
       "Blot resident lowering",
       encoder.finish(),
+      readbackBuffer,
       "latency",
-    );
-    await awaitCompilerGpuCommand(
-      device,
-      "Blot resident lowering",
-      readbackBuffer.mapAsync(GPUMapMode.READ),
     );
     mapped = true;
     const words = new Uint32Array(readbackBuffer.getMappedRange()).slice();
@@ -346,7 +350,8 @@ export async function lowerBlotResidentSyntax(
     };
   } finally {
     if (mapped) readbackBuffer.unmap();
-    ownedBuffers.forEach((buffer) => buffer.destroy());
+    leasedBuffers.forEach((lease) => lease.release());
+    ownedScanBuffers.forEach((buffer) => buffer.destroy());
   }
 }
 
@@ -912,23 +917,21 @@ fn emit_payload(@builtin(global_invocation_id) invocation: vec3<u32>) {
 `;
 }
 
-function createBuffer(
+function uploadBuffer(
   device: GPUDevice,
   label: string,
   words: Uint32Array,
   usage: GPUBufferUsageFlags,
-): GPUBuffer {
-  const buffer = createCompilerGpuBuffer(
+): CompilerGpuBufferLease {
+  const lease = acquireCompilerGpuBuffer(
     device,
     label,
     {
       size: Math.max(4, words.byteLength),
-      usage,
-      mappedAtCreation: true,
+      usage: usage | GPUBufferUsage.COPY_DST,
     },
     (usage & GPUBufferUsage.UNIFORM) !== 0 ? "uniform" : "storage",
   );
-  new Uint32Array(buffer.getMappedRange()).set(words);
-  buffer.unmap();
-  return buffer;
+  if (words.byteLength !== 0) device.queue.writeBuffer(lease.buffer, 0, words);
+  return lease;
 }

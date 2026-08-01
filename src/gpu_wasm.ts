@@ -1,21 +1,26 @@
 import {
-  awaitCompilerGpuCommand,
-  CompilerGpuCapacityError,
+  acquireCompilerGpuBuffer,
+  type CompilerGpuBufferLease,
   compilerGpuCapacityViolation,
   type CompilerGpuSchedulingPolicy,
   compilerGpuUnavailabilityReason,
   createCompilerGpuBatchQueue,
-  createCompilerGpuBuffer,
   dispatchCompilerGpuWorkgroups,
   requestCompilerGpuDevice,
   requireCompilerGpuCapacity,
-  submitCompilerGpuCommand,
+  submitCompilerGpuCommandWithReadback,
 } from "./gpu_device.ts";
 import {
-  analyzeWasmBinaryPlan,
+  encodeGpuExclusiveScan,
+  type GpuExclusiveScanEncoding,
+  type GpuExclusiveScanPipelines,
+  requestGpuExclusiveScanPipelines,
+} from "./gpu_segmented_work.ts";
+import {
+  inspectWasmBinaryPlanStructure,
   type WasmAtom,
   type WasmBinaryPlan,
-  type WasmBinaryPlanAnalysis,
+  type WasmBinaryPlanStructure,
 } from "./wasm.ts";
 
 export type GpuWasmEmissionResult =
@@ -44,14 +49,35 @@ export type GpuWasmEmissionResult =
     readonly submissionBatchSize: number;
     readonly payloadBatchSize: number;
     readonly queueWaitMilliseconds: number;
+    readonly timings: GpuWasmEmissionTimings;
   }
   | { readonly status: "unavailable"; readonly reason: string };
+
+export type GpuWasmEmissionTimings = {
+  readonly totalMilliseconds: number;
+  readonly planInspectionMilliseconds: number;
+  readonly columnConstructionMilliseconds: number;
+  readonly planAnalysisAndColumnMilliseconds: number;
+  readonly contextMilliseconds: number;
+  readonly allocationAndUploadMilliseconds: number;
+  readonly commandEncodingMilliseconds: number;
+  readonly submissionMilliseconds: number;
+  readonly queueWaitMilliseconds: number;
+  readonly deviceCompletionMilliseconds: number;
+  readonly mappingCompletionMilliseconds: number;
+  readonly readbackCopyMilliseconds: number;
+  readonly scope: "payload" | "batch";
+  readonly completionWitness: "mapping";
+};
 
 type GpuWasmContextRequest =
   | {
     readonly status: "available";
     readonly device: GPUDevice;
     readonly emissionPipeline: GPUComputePipeline;
+    readonly initialSizingPipeline: GPUComputePipeline;
+    readonly lengthSizingPipeline: GPUComputePipeline;
+    readonly scanPipelines: GpuExclusiveScanPipelines;
   }
   | { readonly status: "unavailable"; readonly reason: string };
 
@@ -69,17 +95,15 @@ type WasmGpuRequest = {
 };
 const wasmBatchQueue = createCompilerGpuBatchQueue(
   (requests: readonly WasmGpuRequest[]) =>
-    requests.length === 1
-      ? Promise.all(
-        requests.map((request) =>
-          emitWasmPlanWithGpu(
-            request.plan,
-            "latency",
-            request.lowWordLayout,
-          )
-        ),
-      )
-      : emitPackedWasmPlansOnGpu(requests),
+    Promise.all(
+      requests.map((request) =>
+        emitWasmPlanWithGpu(
+          request.plan,
+          requests.length === 1 ? "latency" : "throughput",
+          request.lowWordLayout,
+        )
+      ),
+    ),
 );
 
 const emissionShader = `
@@ -96,7 +120,8 @@ struct Parameters {
 @group(0) @binding(4) var<storage, read> high_words: array<u32>;
 @group(0) @binding(5) var<storage, read> atom_offsets: array<u32>;
 @group(0) @binding(6) var<storage, read_write> output_words: array<atomic<u32>>;
-@group(0) @binding(7) var<uniform> parameters: Parameters;
+@group(0) @binding(7) var<storage, read> length_values: array<u32>;
+@group(0) @binding(8) var<uniform> parameters: Parameters;
 
 fn emit_byte(offset: u32, value: u32) {
   let word_index = offset >> 2u;
@@ -167,7 +192,12 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   if (index >= parameters.count) { return; }
   let kind_word = atom_kinds[index >> 3u];
   let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
-  let low_word = atom_low_word(index, kind, kind_word);
+  var low_word = 0u;
+  if (kind == ${atomLength}u) {
+    low_word = length_values[index];
+  } else {
+    low_word = atom_low_word(index, kind, kind_word);
+  }
   let output_start = atom_offset(index);
   if (kind == ${atomByte}u) {
     emit_byte(output_start, low_word);
@@ -209,6 +239,164 @@ fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
 }
 `;
 
+const sizingShader = `
+struct Parameters {
+  count: u32,
+  signed64_count: u32,
+  representation_flags: u32,
+  reserved: u32,
+}
+
+struct LengthParameters {
+  first_length_rank: u32,
+  length_count: u32,
+  reserved_0: u32,
+  reserved_1: u32,
+}
+
+@group(0) @binding(0) var<storage, read> atom_kinds: array<u32>;
+@group(0) @binding(1) var<storage, read> primary_low_words: array<u32>;
+@group(0) @binding(2) var<storage, read> non_byte_low_words: array<u32>;
+@group(0) @binding(3) var<storage, read> byte_ranks: array<u32>;
+@group(0) @binding(4) var<storage, read> high_words: array<u32>;
+@group(0) @binding(5) var<storage, read_write> atom_sizes: array<u32>;
+@group(0) @binding(6) var<uniform> parameters: Parameters;
+
+fn signed64_high_word(atom_index: u32) -> u32 {
+  if ((parameters.representation_flags & 1u) == 0u) {
+    return high_words[atom_index];
+  }
+  var lower = 0u;
+  var upper = parameters.signed64_count;
+  while (lower < upper) {
+    let middle = lower + (upper - lower) / 2u;
+    let candidate = high_words[middle * 2u];
+    if (candidate < atom_index) {
+      lower = middle + 1u;
+    } else {
+      upper = middle;
+    }
+  }
+  if (lower >= parameters.signed64_count || high_words[lower * 2u] != atom_index) {
+    return 0u;
+  }
+  return high_words[lower * 2u + 1u];
+}
+
+fn atom_low_word(index: u32, kind: u32, kind_word: u32) -> u32 {
+  if ((parameters.representation_flags & 4u) == 0u) {
+    return primary_low_words[index];
+  }
+  let rank_index = index >> 3u;
+  var byte_rank = byte_ranks[rank_index];
+  if ((parameters.representation_flags & 8u) != 0u) {
+    let packed_rank = byte_ranks[rank_index >> 1u];
+    byte_rank = (packed_rank >> ((rank_index & 1u) << 4u)) & 0xffffu;
+  }
+  let nonzero_nibbles = kind_word | (kind_word >> 1u) | (kind_word >> 2u) | (kind_word >> 3u);
+  let byte_nibbles = (~nonzero_nibbles) & 0x11111111u;
+  let preceding_bits = (1u << ((index & 7u) << 2u)) - 1u;
+  byte_rank += countOneBits(byte_nibbles & preceding_bits);
+  if (kind == ${atomByte}u) {
+    let packed = primary_low_words[byte_rank >> 2u];
+    return (packed >> ((byte_rank & 3u) << 3u)) & 255u;
+  }
+  return non_byte_low_words[index - byte_rank];
+}
+
+fn unsigned_size(value: u32) -> u32 {
+  var remaining = value;
+  var size = 1u;
+  while (remaining >= 128u) {
+    remaining >>= 7u;
+    size += 1u;
+  }
+  return size;
+}
+
+fn signed32_size(value: u32) -> u32 {
+  var remaining = bitcast<i32>(value);
+  var size = 0u;
+  loop {
+    let encoded_byte = u32(remaining) & 127u;
+    remaining >>= 7;
+    size += 1u;
+    let sign_set = (encoded_byte & 64u) != 0u;
+    if ((remaining == 0 && !sign_set) || (remaining == -1 && sign_set)) {
+      return size;
+    }
+  }
+  return size;
+}
+
+fn signed64_size(low_word: u32, high_word: u32) -> u32 {
+  var low = low_word;
+  var high = high_word;
+  var size = 0u;
+  loop {
+    let encoded_byte = low & 127u;
+    let next_low = (low >> 7u) | (high << 25u);
+    let next_high = bitcast<u32>(bitcast<i32>(high) >> 7);
+    size += 1u;
+    let sign_set = (encoded_byte & 64u) != 0u;
+    if (
+      (next_low == 0u && next_high == 0u && !sign_set) ||
+      (next_low == 0xffffffffu && next_high == 0xffffffffu && sign_set)
+    ) {
+      return size;
+    }
+    low = next_low;
+    high = next_high;
+  }
+  return size;
+}
+
+@compute @workgroup_size(${wasmWorkgroupSize})
+fn size_scalar_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let index = invocation.x;
+  if (index >= parameters.count) { return; }
+  let kind_word = atom_kinds[index >> 3u];
+  let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
+  var low_word = 0u;
+  if (kind != ${atomLength}u) {
+    low_word = atom_low_word(index, kind, kind_word);
+  }
+  if (kind == ${atomByte}u) {
+    atom_sizes[index] = 1u;
+  } else if (kind == ${atomUnsigned}u) {
+    atom_sizes[index] = unsigned_size(low_word);
+  } else if (kind == ${atomSigned32}u) {
+    atom_sizes[index] = signed32_size(low_word);
+  } else if (kind == ${atomSigned64}u) {
+    atom_sizes[index] = signed64_size(low_word, signed64_high_word(index));
+  } else {
+    atom_sizes[index] = 0u;
+  }
+}
+
+@group(1) @binding(0) var<storage, read> length_atom_indices: array<u32>;
+@group(1) @binding(1) var<storage, read> length_range_starts: array<u32>;
+@group(1) @binding(2) var<storage, read> length_range_counts: array<u32>;
+@group(1) @binding(3) var<storage, read_write> resolved_atom_sizes: array<u32>;
+@group(1) @binding(4) var<storage, read_write> resolved_length_values: array<u32>;
+@group(1) @binding(5) var<uniform> length_parameters: LengthParameters;
+
+@compute @workgroup_size(${wasmWorkgroupSize})
+fn size_length_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  if (invocation.x >= length_parameters.length_count) { return; }
+  let rank = length_parameters.first_length_rank + invocation.x;
+  let atom_index = length_atom_indices[rank];
+  let range_start = length_range_starts[rank];
+  let range_end = range_start + length_range_counts[rank];
+  var payload_size = 0u;
+  for (var dependency = range_start; dependency < range_end; dependency += 1u) {
+    payload_size += resolved_atom_sizes[dependency];
+  }
+  resolved_length_values[atom_index] = payload_size;
+  resolved_atom_sizes[atom_index] = unsigned_size(payload_size);
+}
+`;
+
 export async function emitWasmPlanOnGpu(
   plan: WasmBinaryPlan,
   options: {
@@ -240,398 +428,66 @@ export async function emitWasmPlanOnGpu(
 }
 
 type PreparedWasmGpuJob = {
-  readonly plan: WasmBinaryPlan;
   readonly columns: ReturnType<typeof atomColumns>;
-  readonly expectedByteCount: number;
-  readonly outputWordCount: number;
   readonly workgroupCount: number;
-  readonly atomByteOffsets: Uint32Array;
-  readonly resolvedOffsetBitWidth: 16 | 32;
   readonly lengthAtomCount: number;
-  readonly sparseLengthSizing: boolean;
   readonly lengthSizingDependencyAtomCount: number;
-  readonly lengthSizingWorkEstimate: number;
-};
-
-type PackedWasmColumn = {
-  readonly words: Uint32Array;
-  readonly regions: readonly {
-    readonly offset: number;
-    readonly size: number;
+  readonly lengthLevelRegions: readonly {
+    readonly firstLengthRank: number;
+    readonly lengthCount: number;
   }[];
-  readonly maximumRegionSize: number;
+  readonly lengthAtomIndices: Uint32Array;
+  readonly lengthRangeStarts: Uint32Array;
+  readonly lengthRangeCounts: Uint32Array;
+  readonly planInspectionMilliseconds: number;
+  readonly columnConstructionMilliseconds: number;
+  readonly maximumEncodedByteLength: number;
 };
-
-async function emitPackedWasmPlansOnGpu(
-  requests: readonly WasmGpuRequest[],
-): Promise<readonly GpuWasmEmissionResult[]> {
-  try {
-    return await emitPackedWasmPlanBatch(requests);
-  } catch (error) {
-    if (error instanceof CompilerGpuCapacityError && requests.length > 1) {
-      const split = Math.ceil(requests.length / 2);
-      const [left, right] = await Promise.all([
-        emitPackedWasmPlansOnGpu(requests.slice(0, split)),
-        emitPackedWasmPlansOnGpu(requests.slice(split)),
-      ]);
-      return [...left, ...right];
-    }
-    throw error;
-  }
-}
-
-async function emitPackedWasmPlanBatch(
-  requests: readonly WasmGpuRequest[],
-): Promise<readonly GpuWasmEmissionResult[]> {
-  const jobs = requests.map((request) =>
-    prepareWasmGpuJob(request.plan, request.lowWordLayout)
-  );
-  const context = await requestGpuWasmContext();
-  if (context.status === "unavailable") return requests.map(() => context);
-  const { device, emissionPipeline } = context;
-  const storageAlignment = device.limits.minStorageBufferOffsetAlignment;
-  const uniformAlignment = device.limits.minUniformBufferOffsetAlignment;
-  const kinds = packWasmColumns(
-    jobs.map((job) => job.columns.kinds),
-    4,
-    storageAlignment,
-  );
-  const primaryLowWords = packWasmColumns(
-    jobs.map((job) => job.columns.primaryLowWords),
-    4,
-    storageAlignment,
-  );
-  const nonByteLowWords = packWasmColumns(
-    jobs.map((job) => job.columns.nonByteLowWords),
-    4,
-    storageAlignment,
-  );
-  const byteRanks = packWasmColumns(
-    jobs.map((job) => job.columns.byteRanks),
-    4,
-    storageAlignment,
-  );
-  const highWords = packWasmColumns(
-    jobs.map((job) => job.columns.highWords),
-    4,
-    storageAlignment,
-  );
-  const atomByteOffsets = packWasmColumns(
-    jobs.map((job) => job.atomByteOffsets),
-    4,
-    storageAlignment,
-  );
-  const outputs = packWasmColumns(
-    jobs.map((job) => new Uint32Array(job.outputWordCount)),
-    4,
-    storageAlignment,
-  );
-  const countParameters = packWasmColumns(
-    jobs.map((job) =>
-      new Uint32Array([
-        job.plan.atoms.length,
-        job.columns.signed64AtomCount,
-        representationFlags(job),
-        0,
-      ])
-    ),
-    16,
-    uniformAlignment,
-  );
-  const readbacks = packWasmColumns(
-    jobs.map((job) => new Uint32Array(job.outputWordCount)),
-    4,
-    4,
-  );
-
-  const kindBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch atom kinds",
-    kinds,
-    GPUBufferUsage.STORAGE,
-  );
-  const lowWordBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch primary low words",
-    primaryLowWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const nonByteLowWordBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch non-byte low words",
-    nonByteLowWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const byteRankBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch byte ranks",
-    byteRanks,
-    GPUBufferUsage.STORAGE,
-  );
-  const highWordBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch high words",
-    highWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const atomByteOffsetBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch atom byte offsets",
-    atomByteOffsets,
-    GPUBufferUsage.STORAGE,
-  );
-  const outputBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch packed output",
-    outputs,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  );
-  const countParameterBuffer = createPackedWasmBuffer(
-    device,
-    "Wasm batch count parameters",
-    countParameters,
-    GPUBufferUsage.UNIFORM,
-  );
-  const readbackBuffer = createCompilerGpuBuffer(
-    device,
-    "Wasm batch readback",
-    {
-      size: readbacks.words.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    },
-    "copy",
-  );
-  const buffers = [
-    kindBuffer,
-    lowWordBuffer,
-    nonByteLowWordBuffer,
-    byteRankBuffer,
-    highWordBuffer,
-    atomByteOffsetBuffer,
-    outputBuffer,
-    countParameterBuffer,
-    readbackBuffer,
-  ];
-  let readbackMapped = false;
-  try {
-    const encoder = device.createCommandEncoder();
-    const emissionPass = encoder.beginComputePass();
-    emissionPass.setPipeline(emissionPipeline);
-    for (const [index, job] of jobs.entries()) {
-      emissionPass.setBindGroup(
-        0,
-        device.createBindGroup({
-          layout: emissionPipeline.getBindGroupLayout(0),
-          entries: [
-            wasmBindGroupEntry(0, kindBuffer, kinds.regions[index]),
-            wasmBindGroupEntry(
-              1,
-              lowWordBuffer,
-              primaryLowWords.regions[index],
-            ),
-            wasmBindGroupEntry(
-              2,
-              nonByteLowWordBuffer,
-              nonByteLowWords.regions[index],
-            ),
-            wasmBindGroupEntry(3, byteRankBuffer, byteRanks.regions[index]),
-            wasmBindGroupEntry(4, highWordBuffer, highWords.regions[index]),
-            wasmBindGroupEntry(
-              5,
-              atomByteOffsetBuffer,
-              atomByteOffsets.regions[index],
-            ),
-            wasmBindGroupEntry(6, outputBuffer, outputs.regions[index]),
-            wasmBindGroupEntry(
-              7,
-              countParameterBuffer,
-              countParameters.regions[index],
-            ),
-          ],
-        }),
-      );
-      dispatchCompilerGpuWorkgroups(
-        device,
-        emissionPass,
-        `Wasm batch emission job ${index}`,
-        job.workgroupCount,
-      );
-    }
-    emissionPass.end();
-
-    for (const [index, job] of jobs.entries()) {
-      encoder.copyBufferToBuffer(
-        outputBuffer,
-        outputs.regions[index].offset,
-        readbackBuffer,
-        readbacks.regions[index].offset,
-        job.outputWordCount * 4,
-      );
-    }
-
-    const submission = await submitCompilerGpuCommand(
-      device,
-      "Wasm payload batch",
-      encoder.finish(),
-      "latency",
-    );
-    await awaitCompilerGpuCommand(
-      device,
-      "Wasm payload batch",
-      readbackBuffer.mapAsync(GPUMapMode.READ),
-    );
-    readbackMapped = true;
-    const mapped = readbackBuffer.getMappedRange();
-    return jobs.map((job, index) => {
-      const readbackOffset = readbacks.regions[index].offset;
-      return {
-        status: "completed",
-        bytes: new Uint8Array(
-          mapped,
-          readbackOffset,
-          job.expectedByteCount,
-        ).slice(),
-        atomCount: job.plan.atoms.length,
-        byteCount: job.expectedByteCount,
-        outputBufferBytes: job.outputWordCount * 4,
-        lengthAtomCount: job.lengthAtomCount,
-        sparseLengthSizing: job.sparseLengthSizing,
-        lengthSizingDependencyAtomCount: job.lengthSizingDependencyAtomCount,
-        lengthSizingWorkEstimate: job.lengthSizingWorkEstimate,
-        resolvedOffsetBytes: job.atomByteOffsets.byteLength,
-        resolvedOffsetBitWidth: job.resolvedOffsetBitWidth,
-        atomInputBytes: job.columns.kinds.byteLength +
-          job.columns.primaryLowWords.byteLength +
-          job.columns.nonByteLowWords.byteLength +
-          job.columns.byteRanks.byteLength +
-          job.columns.highWords.byteLength +
-          job.atomByteOffsets.byteLength,
-        lowWordLayout: job.columns.lowWordLayout,
-        lowWordBytes: job.columns.primaryLowWords.byteLength +
-          job.columns.nonByteLowWords.byteLength +
-          job.columns.byteRanks.byteLength,
-        byteAtomCount: job.columns.byteAtomCount,
-        byteRankBitWidth: job.columns.byteRankBitWidth,
-        byteRankBytes: job.columns.byteRanks.byteLength,
-        maximumByteRank: job.columns.maximumByteRank,
-        signed64AtomCount: job.columns.signed64AtomCount,
-        signed64HighWordBytes: job.columns.highWords.byteLength,
-        dispatchedInvocationCount: job.workgroupCount * wasmWorkgroupSize,
-        submissionBatchSize: submission.submissionBatchSize,
-        payloadBatchSize: jobs.length,
-        queueWaitMilliseconds: submission.queueWaitMilliseconds,
-      };
-    });
-  } finally {
-    if (readbackMapped) readbackBuffer.unmap();
-    buffers.forEach((buffer) => buffer.destroy());
-  }
-}
 
 function prepareWasmGpuJob(
   plan: WasmBinaryPlan,
   lowWordLayout: GpuWasmLowWordLayout,
 ): PreparedWasmGpuJob {
-  const analysis = analyzeWasmBinaryPlan(plan);
-  const resolvedOffsetBitWidth = analysis.byteLength <= 0xffff ? 16 : 32;
-  let atomByteOffsets = analysis.atomByteOffsets;
-  if (resolvedOffsetBitWidth === 16) {
-    atomByteOffsets = new Uint32Array(
-      Math.ceil(analysis.atomByteOffsets.length / 2),
-    );
-    for (
-      let offsetIndex = 0;
-      offsetIndex < analysis.atomByteOffsets.length;
-      offsetIndex += 2
-    ) {
-      const upper = analysis.atomByteOffsets[offsetIndex + 1] ?? 0;
-      atomByteOffsets[offsetIndex >> 1] =
-        analysis.atomByteOffsets[offsetIndex] | (upper << 16);
-    }
-  }
+  const inspectionStart = performance.now();
+  const analysis = inspectWasmBinaryPlanStructure(plan);
+  const planInspectionMilliseconds = performance.now() - inspectionStart;
+  const lengthAtoms = analysis.lengthLevels.flatMap((level) => level.atoms);
+  let firstLengthRank = 0;
+  const columnStart = performance.now();
+  const columns = atomColumns(
+    plan.atoms,
+    analysis,
+    lowWordLayout,
+  );
+  const columnConstructionMilliseconds = performance.now() - columnStart;
   return {
-    plan,
-    columns: atomColumns(
-      plan.atoms,
-      analysis,
-      lowWordLayout,
-    ),
-    expectedByteCount: analysis.byteLength,
-    outputWordCount: Math.ceil(analysis.byteLength / 4),
+    columns,
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
-    atomByteOffsets,
-    resolvedOffsetBitWidth,
     lengthAtomCount: analysis.lengthLevels.reduce(
       (count, level) => count + level.atoms.length,
       0,
     ),
-    sparseLengthSizing: analysis.lengthSizing === "sparse",
-    lengthSizingDependencyAtomCount: analysis.lengthSizingDependencyAtomCount,
-    lengthSizingWorkEstimate: analysis.lengthSizingWorkEstimate,
-  };
-}
-
-function packWasmColumns(
-  columns: readonly Uint32Array[],
-  minimumRegionBytes: number,
-  alignment: number,
-): PackedWasmColumn {
-  const regions: { offset: number; size: number }[] = [];
-  let byteLength = 0;
-  let maximumRegionSize = 0;
-  for (const column of columns) {
-    byteLength = Math.ceil(byteLength / alignment) * alignment;
-    const size = Math.max(minimumRegionBytes, column.byteLength);
-    regions.push({ offset: byteLength, size });
-    maximumRegionSize = Math.max(maximumRegionSize, size);
-    byteLength += size;
-  }
-  const words = new Uint32Array(
-    Math.max(1, Math.ceil(byteLength / 4)),
-  );
-  for (const [index, column] of columns.entries()) {
-    words.set(column, regions[index].offset / 4);
-  }
-  return {
-    words,
-    regions,
-    maximumRegionSize: Math.max(minimumRegionBytes, maximumRegionSize),
-  };
-}
-
-function createPackedWasmBuffer(
-  device: GPUDevice,
-  label: string,
-  column: PackedWasmColumn,
-  usage: GPUBufferUsageFlags,
-): GPUBuffer {
-  const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
-    ? "uniform"
-    : "storage";
-  const buffer = createCompilerGpuBuffer(
-    device,
-    label,
-    {
-      size: column.words.byteLength,
-      usage,
-      mappedAtCreation: true,
-    },
-    binding,
-    column.maximumRegionSize,
-  );
-  new Uint32Array(buffer.getMappedRange()).set(column.words);
-  buffer.unmap();
-  return buffer;
-}
-
-function wasmBindGroupEntry(
-  binding: number,
-  buffer: GPUBuffer,
-  region: { readonly offset: number; readonly size: number },
-): GPUBindGroupEntry {
-  return {
-    binding,
-    resource: { buffer, offset: region.offset, size: region.size },
+    lengthSizingDependencyAtomCount: analysis.dependencyAtomCount,
+    lengthLevelRegions: analysis.lengthLevels.map((level) => {
+      const region = {
+        firstLengthRank,
+        lengthCount: level.atoms.length,
+      };
+      firstLengthRank += level.atoms.length;
+      return region;
+    }),
+    lengthAtomIndices: Uint32Array.from(
+      lengthAtoms.map((atom) => atom.atomIndex),
+    ),
+    lengthRangeStarts: Uint32Array.from(
+      lengthAtoms.map((atom) => atom.rangeStart),
+    ),
+    lengthRangeCounts: Uint32Array.from(
+      lengthAtoms.map((atom) => atom.rangeCount),
+    ),
+    planInspectionMilliseconds,
+    columnConstructionMilliseconds,
+    maximumEncodedByteLength: analysis.maximumEncodedByteLength,
   };
 }
 
@@ -640,22 +496,36 @@ async function emitWasmPlanWithGpu(
   scheduling: CompilerGpuSchedulingPolicy,
   lowWordLayout: GpuWasmLowWordLayout,
 ): Promise<GpuWasmEmissionResult> {
+  const totalStart = performance.now();
+  const planAnalysisStart = performance.now();
   const job = prepareWasmGpuJob(plan, lowWordLayout);
+  const planAnalysisAndColumnMilliseconds = performance.now() -
+    planAnalysisStart;
+  const planInspectionMilliseconds = job.planInspectionMilliseconds;
+  const columnConstructionMilliseconds = job.columnConstructionMilliseconds;
   const {
-    atomByteOffsets,
     columns,
-    expectedByteCount,
     lengthAtomCount,
+    lengthAtomIndices,
+    lengthLevelRegions,
+    lengthRangeCounts,
+    lengthRangeStarts,
     lengthSizingDependencyAtomCount,
-    lengthSizingWorkEstimate,
-    outputWordCount,
-    resolvedOffsetBitWidth,
-    sparseLengthSizing,
+    maximumEncodedByteLength,
     workgroupCount,
   } = job;
+  const contextStart = performance.now();
   const context = await requestGpuWasmContext();
   if (context.status === "unavailable") return context;
-  const { device, emissionPipeline } = context;
+  const contextMilliseconds = performance.now() - contextStart;
+  const allocationAndUploadStart = performance.now();
+  const {
+    device,
+    emissionPipeline,
+    initialSizingPipeline,
+    lengthSizingPipeline,
+    scanPipelines,
+  } = context;
   const kindBytes = Math.max(4, columns.kinds.byteLength);
   const primaryLowWordBytes = Math.max(
     4,
@@ -667,17 +537,41 @@ async function emitWasmPlanWithGpu(
   );
   const byteRankBytes = Math.max(4, columns.byteRanks.byteLength);
   const signed64HighWordBytes = Math.max(4, columns.highWords.byteLength);
-  const outputBytes = outputWordCount * 4;
+  const atomSizeBytes = plan.atoms.length * Uint32Array.BYTES_PER_ELEMENT;
+  const resolvedOffsetBytes = (plan.atoms.length + 1) *
+    Uint32Array.BYTES_PER_ELEMENT;
+  const outputWordCount = Math.ceil(
+    maximumEncodedByteLength / Uint32Array.BYTES_PER_ELEMENT,
+  );
+  const outputBytes = outputWordCount * Uint32Array.BYTES_PER_ELEMENT;
+  const readbackBytes = outputBytes + Uint32Array.BYTES_PER_ELEMENT;
   const capacityRequests = [
     ["atom kinds", kindBytes, "storage"],
     ["atom primary low words", primaryLowWordBytes, "storage"],
     ["atom non-byte low words", nonByteLowWordBytes, "storage"],
     ["atom byte ranks", byteRankBytes, "storage"],
     ["signed64 high words", signed64HighWordBytes, "storage"],
-    ["atom byte offsets", atomByteOffsets.byteLength, "storage"],
+    ["atom sizes", atomSizeBytes, "storage"],
+    ["resolved atom offsets", resolvedOffsetBytes, "storage"],
+    ["length values", atomSizeBytes, "storage"],
+    [
+      "length atom indices",
+      Math.max(4, lengthAtomIndices.byteLength),
+      "storage",
+    ],
+    [
+      "length range starts",
+      Math.max(4, lengthRangeStarts.byteLength),
+      "storage",
+    ],
+    [
+      "length range counts",
+      Math.max(4, lengthRangeCounts.byteLength),
+      "storage",
+    ],
     ["packed output", outputBytes, "storage"],
     ["count parameters", 16, "uniform"],
-    ["readback", outputBytes, "copy"],
+    ["readback", readbackBytes, "copy"],
   ] as const;
   for (const [label, byteLength, binding] of capacityRequests) {
     const reason = compilerGpuCapacityViolation(device.limits, {
@@ -697,52 +591,88 @@ async function emitWasmPlanWithGpu(
     return { status: "unavailable", reason: dispatchReason };
   }
 
-  const kindBuffer = createBuffer(
+  const kindLease = acquireUploadedBuffer(
     device,
     "Wasm atom kinds",
     columns.kinds,
     GPUBufferUsage.STORAGE,
   );
-  const lowWordBuffer = createBuffer(
+  const kindBuffer = kindLease.buffer;
+  const lowWordLease = acquireUploadedBuffer(
     device,
     "Wasm atom primary low words",
     columns.primaryLowWords,
     GPUBufferUsage.STORAGE,
   );
-  const nonByteLowWordBuffer = createBuffer(
+  const lowWordBuffer = lowWordLease.buffer;
+  const nonByteLowWordLease = acquireUploadedBuffer(
     device,
     "Wasm atom non-byte low words",
     columns.nonByteLowWords,
     GPUBufferUsage.STORAGE,
   );
-  const byteRankBuffer = createBuffer(
+  const nonByteLowWordBuffer = nonByteLowWordLease.buffer;
+  const byteRankLease = acquireUploadedBuffer(
     device,
     "Wasm atom byte ranks",
     columns.byteRanks,
     GPUBufferUsage.STORAGE,
   );
-  const highWordBuffer = createBuffer(
+  const byteRankBuffer = byteRankLease.buffer;
+  const highWordLease = acquireUploadedBuffer(
     device,
     "Wasm atom high words",
     columns.highWords,
     GPUBufferUsage.STORAGE,
   );
-  const atomByteOffsetBuffer = createBuffer(
+  const highWordBuffer = highWordLease.buffer;
+  const atomSizeLease = acquireCompilerGpuBuffer(
     device,
-    "Wasm atom byte offsets",
-    atomByteOffsets,
+    "Wasm atom sizes",
+    { size: atomSizeBytes, usage: GPUBufferUsage.STORAGE },
+    "storage",
+  );
+  const atomSizeBuffer = atomSizeLease.buffer;
+  const lengthValueLease = acquireCompilerGpuBuffer(
+    device,
+    "Wasm resolved length values",
+    { size: atomSizeBytes, usage: GPUBufferUsage.STORAGE },
+    "storage",
+  );
+  const lengthValueBuffer = lengthValueLease.buffer;
+  const lengthAtomIndexLease = acquireUploadedBuffer(
+    device,
+    "Wasm length atom indices",
+    lengthAtomIndices,
     GPUBufferUsage.STORAGE,
   );
-  const outputBuffer = createCompilerGpuBuffer(
+  const lengthAtomIndexBuffer = lengthAtomIndexLease.buffer;
+  const lengthRangeStartLease = acquireUploadedBuffer(
+    device,
+    "Wasm length range starts",
+    lengthRangeStarts,
+    GPUBufferUsage.STORAGE,
+  );
+  const lengthRangeStartBuffer = lengthRangeStartLease.buffer;
+  const lengthRangeCountLease = acquireUploadedBuffer(
+    device,
+    "Wasm length range counts",
+    lengthRangeCounts,
+    GPUBufferUsage.STORAGE,
+  );
+  const lengthRangeCountBuffer = lengthRangeCountLease.buffer;
+  const outputLease = acquireCompilerGpuBuffer(
     device,
     "Wasm packed output",
     {
       size: outputBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC |
+        GPUBufferUsage.COPY_DST,
     },
     "storage",
   );
-  const countParameterBuffer = createBuffer(
+  const outputBuffer = outputLease.buffer;
+  const countParameterLease = acquireUploadedBuffer(
     device,
     "Wasm count parameters",
     new Uint32Array([
@@ -753,29 +683,120 @@ async function emitWasmPlanWithGpu(
     ]),
     GPUBufferUsage.UNIFORM,
   );
-  const readback = createCompilerGpuBuffer(
+  const countParameterBuffer = countParameterLease.buffer;
+  const readbackLease = acquireCompilerGpuBuffer(
     device,
     "Wasm readback",
     {
-      size: outputBytes,
+      size: readbackBytes,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     },
     "copy",
   );
-  const buffers = [
-    kindBuffer,
-    lowWordBuffer,
-    nonByteLowWordBuffer,
-    byteRankBuffer,
-    highWordBuffer,
-    atomByteOffsetBuffer,
-    outputBuffer,
-    countParameterBuffer,
-    readback,
+  const readback = readbackLease.buffer;
+  const lengthParameterLeases = lengthLevelRegions.map((region, index) =>
+    acquireUploadedBuffer(
+      device,
+      `Wasm length level ${index} parameters`,
+      new Uint32Array([
+        region.firstLengthRank,
+        region.lengthCount,
+        0,
+        0,
+      ]),
+      GPUBufferUsage.UNIFORM,
+    )
+  );
+  const lengthParameterBuffers = lengthParameterLeases.map((lease) =>
+    lease.buffer
+  );
+  const leases = [
+    kindLease,
+    lowWordLease,
+    nonByteLowWordLease,
+    byteRankLease,
+    highWordLease,
+    atomSizeLease,
+    lengthValueLease,
+    lengthAtomIndexLease,
+    lengthRangeStartLease,
+    lengthRangeCountLease,
+    outputLease,
+    countParameterLease,
+    readbackLease,
+    ...lengthParameterLeases,
   ];
+  const allocationAndUploadMilliseconds = performance.now() -
+    allocationAndUploadStart;
   let readbackMapped = false;
+  let resolvedOffsets: GpuExclusiveScanEncoding | undefined;
   try {
+    const commandEncodingStart = performance.now();
     const encoder = device.createCommandEncoder();
+    encoder.clearBuffer(outputBuffer, 0, outputBytes);
+    const initialSizingPass = encoder.beginComputePass({
+      label: "Wasm scalar atom sizing",
+    });
+    initialSizingPass.setPipeline(initialSizingPipeline);
+    initialSizingPass.setBindGroup(
+      0,
+      device.createBindGroup({
+        layout: initialSizingPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: kindBuffer } },
+          { binding: 1, resource: { buffer: lowWordBuffer } },
+          { binding: 2, resource: { buffer: nonByteLowWordBuffer } },
+          { binding: 3, resource: { buffer: byteRankBuffer } },
+          { binding: 4, resource: { buffer: highWordBuffer } },
+          { binding: 5, resource: { buffer: atomSizeBuffer } },
+          { binding: 6, resource: { buffer: countParameterBuffer } },
+        ],
+      }),
+    );
+    dispatchCompilerGpuWorkgroups(
+      device,
+      initialSizingPass,
+      "Wasm scalar atom sizing",
+      workgroupCount,
+    );
+    initialSizingPass.end();
+    for (const [levelIndex, region] of lengthLevelRegions.entries()) {
+      const lengthSizingPass = encoder.beginComputePass({
+        label: `Wasm length level ${levelIndex} sizing`,
+      });
+      lengthSizingPass.setPipeline(lengthSizingPipeline);
+      lengthSizingPass.setBindGroup(
+        1,
+        device.createBindGroup({
+          layout: lengthSizingPipeline.getBindGroupLayout(1),
+          entries: [
+            { binding: 0, resource: { buffer: lengthAtomIndexBuffer } },
+            { binding: 1, resource: { buffer: lengthRangeStartBuffer } },
+            { binding: 2, resource: { buffer: lengthRangeCountBuffer } },
+            { binding: 3, resource: { buffer: atomSizeBuffer } },
+            { binding: 4, resource: { buffer: lengthValueBuffer } },
+            {
+              binding: 5,
+              resource: { buffer: lengthParameterBuffers[levelIndex]! },
+            },
+          ],
+        }),
+      );
+      dispatchCompilerGpuWorkgroups(
+        device,
+        lengthSizingPass,
+        `Wasm length level ${levelIndex} sizing`,
+        Math.ceil(region.lengthCount / wasmWorkgroupSize),
+      );
+      lengthSizingPass.end();
+    }
+    resolvedOffsets = encodeGpuExclusiveScan(
+      device,
+      encoder,
+      scanPipelines,
+      atomSizeBuffer,
+      plan.atoms.length,
+    );
     const emissionBindGroup = device.createBindGroup({
       layout: emissionPipeline.getBindGroupLayout(0),
       entries: [
@@ -784,9 +805,10 @@ async function emitWasmPlanWithGpu(
         { binding: 2, resource: { buffer: nonByteLowWordBuffer } },
         { binding: 3, resource: { buffer: byteRankBuffer } },
         { binding: 4, resource: { buffer: highWordBuffer } },
-        { binding: 5, resource: { buffer: atomByteOffsetBuffer } },
+        { binding: 5, resource: { buffer: resolvedOffsets.offsets } },
         { binding: 6, resource: { buffer: outputBuffer } },
-        { binding: 7, resource: { buffer: countParameterBuffer } },
+        { binding: 7, resource: { buffer: lengthValueBuffer } },
+        { binding: 8, resource: { buffer: countParameterBuffer } },
       ],
     });
     const emissionPass = encoder.beginComputePass();
@@ -804,40 +826,68 @@ async function emitWasmPlanWithGpu(
       0,
       readback,
       0,
-      outputWordCount * 4,
+      outputBytes,
     );
-    const submission = await submitCompilerGpuCommand(
+    encoder.copyBufferToBuffer(
+      resolvedOffsets.offsets,
+      plan.atoms.length * Uint32Array.BYTES_PER_ELEMENT,
+      readback,
+      outputBytes,
+      Uint32Array.BYTES_PER_ELEMENT,
+    );
+    const command = encoder.finish();
+    const commandEncodingMilliseconds = performance.now() -
+      commandEncodingStart;
+    const submissionStart = performance.now();
+    const submission = await submitCompilerGpuCommandWithReadback(
       device,
       "Wasm emission",
-      encoder.finish(),
+      command,
+      readback,
       scheduling,
     );
-    await awaitCompilerGpuCommand(
-      device,
-      "Wasm emission",
-      readback.mapAsync(GPUMapMode.READ),
+    const submissionWallMilliseconds = performance.now() - submissionStart;
+    const submissionMilliseconds = Math.max(
+      0,
+      submissionWallMilliseconds - submission.queueWaitMilliseconds -
+        Math.max(
+          submission.deviceCompletionMilliseconds,
+          submission.completionWitnessMilliseconds,
+        ),
     );
+    const mappingCompletionMilliseconds =
+      submission.completionWitnessMilliseconds;
     readbackMapped = true;
     const mapped = readback.getMappedRange();
-    const bytes = new Uint8Array(mapped, 0, expectedByteCount).slice();
+    const readbackCopyStart = performance.now();
+    const byteCount = new Uint32Array(mapped, outputBytes, 1)[0]!;
+    if (byteCount > outputBytes) {
+      throw new RangeError(
+        `GPU Wasm layout resolved ${byteCount} bytes into ${outputBytes} bytes of output capacity`,
+      );
+    }
+    const bytes = new Uint8Array(mapped, 0, byteCount).slice();
+    const readbackCopyMilliseconds = performance.now() - readbackCopyStart;
     return {
       status: "completed",
       bytes,
       atomCount: plan.atoms.length,
-      byteCount: expectedByteCount,
-      outputBufferBytes: outputWordCount * 4,
+      byteCount,
+      outputBufferBytes: outputBytes,
       lengthAtomCount,
-      sparseLengthSizing,
+      sparseLengthSizing: false,
       lengthSizingDependencyAtomCount,
-      lengthSizingWorkEstimate,
-      resolvedOffsetBytes: atomByteOffsets.byteLength,
-      resolvedOffsetBitWidth,
+      lengthSizingWorkEstimate: lengthSizingDependencyAtomCount,
+      resolvedOffsetBytes,
+      resolvedOffsetBitWidth: 32,
       atomInputBytes: columns.kinds.byteLength +
         columns.primaryLowWords.byteLength +
         columns.nonByteLowWords.byteLength +
         columns.byteRanks.byteLength +
         columns.highWords.byteLength +
-        atomByteOffsets.byteLength,
+        lengthAtomIndices.byteLength +
+        lengthRangeStarts.byteLength +
+        lengthRangeCounts.byteLength,
       lowWordLayout: columns.lowWordLayout,
       lowWordBytes: columns.primaryLowWords.byteLength +
         columns.nonByteLowWords.byteLength +
@@ -848,10 +898,32 @@ async function emitWasmPlanWithGpu(
       maximumByteRank: columns.maximumByteRank,
       signed64AtomCount: columns.signed64AtomCount,
       signed64HighWordBytes: columns.highWords.byteLength,
-      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize,
+      dispatchedInvocationCount: workgroupCount * wasmWorkgroupSize * 2 +
+        lengthLevelRegions.reduce(
+          (count, region) =>
+            count + Math.ceil(region.lengthCount / wasmWorkgroupSize) *
+              wasmWorkgroupSize,
+          0,
+        ) + resolvedOffsets.scheduledInvocationCount,
       submissionBatchSize: submission.submissionBatchSize,
       payloadBatchSize: 1,
       queueWaitMilliseconds: submission.queueWaitMilliseconds,
+      timings: {
+        totalMilliseconds: performance.now() - totalStart,
+        planInspectionMilliseconds,
+        columnConstructionMilliseconds,
+        planAnalysisAndColumnMilliseconds,
+        contextMilliseconds,
+        allocationAndUploadMilliseconds,
+        commandEncodingMilliseconds,
+        submissionMilliseconds,
+        queueWaitMilliseconds: submission.queueWaitMilliseconds,
+        deviceCompletionMilliseconds: submission.deviceCompletionMilliseconds,
+        mappingCompletionMilliseconds,
+        readbackCopyMilliseconds,
+        scope: "payload",
+        completionWitness: "mapping",
+      },
     };
   } catch (error) {
     const reason = compilerGpuUnavailabilityReason("Wasm emission", error);
@@ -859,13 +931,14 @@ async function emitWasmPlanWithGpu(
     throw error;
   } finally {
     if (readbackMapped) readback.unmap();
-    buffers.forEach((buffer) => buffer.destroy());
+    resolvedOffsets?.ownedBuffers.forEach((buffer) => buffer.destroy());
+    leases.forEach((lease) => lease.release());
   }
 }
 
 function atomColumns(
   atoms: readonly WasmAtom[],
-  analysis: WasmBinaryPlanAnalysis,
+  analysis: WasmBinaryPlanStructure,
   requestedLowWordLayout: GpuWasmLowWordLayout,
 ): {
   readonly kinds: Uint32Array;
@@ -880,12 +953,7 @@ function atomColumns(
   readonly signed64AtomCount: number;
   readonly sparseSigned64HighWords: boolean;
 } {
-  const {
-    atomByteOffsets,
-    byteAtomCount,
-    maximumByteRank,
-    signed64AtomCount,
-  } = analysis;
+  const { byteAtomCount, maximumByteRank, signed64AtomCount } = analysis;
   const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
   const byteRankCount = Math.ceil(atoms.length / 8);
   const byteRankWords = byteRankBitWidth === 16
@@ -954,8 +1022,7 @@ function atomColumns(
       }
     } else {
       encodedKind = atomLength;
-      lowWord = atomByteOffsets[atom.rangeStart + atom.rangeCount] -
-        atomByteOffsets[atom.rangeStart];
+      lowWord = 0;
     }
     kindWord |= encodedKind << ((index & 7) << 2);
     if ((index & 7) === 7 || index + 1 === atoms.length) {
@@ -993,7 +1060,6 @@ function atomColumns(
 
 function representationFlags(job: PreparedWasmGpuJob): number {
   return (job.columns.sparseSigned64HighWords ? 1 : 0) |
-    (job.resolvedOffsetBitWidth === 16 ? 2 : 0) |
     (job.columns.lowWordLayout === "ranked" ? 4 : 0) |
     (job.columns.byteRankBitWidth === 16 ? 8 : 0);
 }
@@ -1008,12 +1074,23 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
       requireCompilerGpuCapacity(device, {
         kind: "pipelineBindings",
         label: "Wasm emission",
-        storageBufferCount: 7,
+        storageBufferCount: 8,
         uniformBufferCount: 1,
       });
-      const module = device.createShaderModule({ code: emissionShader });
-      const compilationMessages = (await module.getCompilationInfo()).messages
-        .filter((message) => message.type === "error");
+      requireCompilerGpuCapacity(device, {
+        kind: "pipelineBindings",
+        label: "Wasm sizing",
+        storageBufferCount: 6,
+        uniformBufferCount: 1,
+      });
+      const emissionModule = device.createShaderModule({
+        code: emissionShader,
+      });
+      const sizingModule = device.createShaderModule({ code: sizingShader });
+      const compilationMessages = [
+        ...(await emissionModule.getCompilationInfo()).messages,
+        ...(await sizingModule.getCompilationInfo()).messages,
+      ].filter((message) => message.type === "error");
       if (compilationMessages.length > 0) {
         throw new Error(
           `WebGPU Wasm emitter shader failed: ${
@@ -1021,14 +1098,33 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
           }`,
         );
       }
-      const emissionPipeline = await device.createComputePipelineAsync({
-        layout: "auto",
-        compute: { module, entryPoint: "emit_atoms" },
-      });
+      const [
+        emissionPipeline,
+        initialSizingPipeline,
+        lengthSizingPipeline,
+        scanPipelines,
+      ] = await Promise.all([
+        device.createComputePipelineAsync({
+          layout: "auto",
+          compute: { module: emissionModule, entryPoint: "emit_atoms" },
+        }),
+        device.createComputePipelineAsync({
+          layout: "auto",
+          compute: { module: sizingModule, entryPoint: "size_scalar_atoms" },
+        }),
+        device.createComputePipelineAsync({
+          layout: "auto",
+          compute: { module: sizingModule, entryPoint: "size_length_atoms" },
+        }),
+        requestGpuExclusiveScanPipelines(device),
+      ]);
       return {
         status: "available",
         device,
         emissionPipeline,
+        initialSizingPipeline,
+        lengthSizingPipeline,
+        scanPipelines,
       };
     } catch (error) {
       return {
@@ -1052,26 +1148,24 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
   return pendingContext;
 }
 
-function createBuffer(
+function acquireUploadedBuffer(
   device: GPUDevice,
   label: string,
   words: Uint32Array,
   usage: GPUBufferUsageFlags,
-): GPUBuffer {
+): CompilerGpuBufferLease {
   const binding = (usage & GPUBufferUsage.UNIFORM) !== 0
     ? "uniform"
     : "storage";
-  const buffer = createCompilerGpuBuffer(
+  const lease = acquireCompilerGpuBuffer(
     device,
     label,
     {
       size: Math.max(4, words.byteLength),
-      usage,
-      mappedAtCreation: true,
+      usage: usage | GPUBufferUsage.COPY_DST,
     },
     binding,
   );
-  new Uint32Array(buffer.getMappedRange()).set(words);
-  buffer.unmap();
-  return buffer;
+  if (words.byteLength > 0) device.queue.writeBuffer(lease.buffer, 0, words);
+  return lease;
 }

@@ -15,6 +15,7 @@ declare const coreSignatureIdBrand: unique symbol;
 declare const coreFunctionIdBrand: unique symbol;
 declare const coreBlockIdBrand: unique symbol;
 declare const coreValueIdBrand: unique symbol;
+declare const constructedDucklangCoreBrand: unique symbol;
 
 export type CoreTypeId = number & { readonly [coreTypeIdBrand]: true };
 export type CoreSignatureId = number & {
@@ -209,9 +210,31 @@ export type DucklangCoreModule = {
   readonly entryFunction: CoreFunctionId;
 };
 
+export type ConstructedDucklangCoreModule = DucklangCoreModule & {
+  readonly [constructedDucklangCoreBrand]: true;
+};
+
+const constructedCandidateBounds = new WeakMap<
+  ConstructedDucklangCoreModule,
+  { readonly maximumF32x4SlpRuleHeadCountPerBlock: number }
+>();
+
+export function ducklangCoreConstructionCandidateBounds(
+  module: ConstructedDucklangCoreModule,
+): { readonly maximumF32x4SlpRuleHeadCountPerBlock: number } {
+  const bounds = constructedCandidateBounds.get(module);
+  if (bounds === undefined) {
+    throw new Error(
+      `${module.file}: constructed Core omitted candidate bounds`,
+    );
+  }
+  return bounds;
+}
+
 type MutableCoreBlock = {
   readonly id: CoreBlockId;
   regionDepth: number;
+  f32x4SlpRuleHeadCount: number;
   readonly parameters: {
     readonly value: CoreValueId;
     readonly type: CoreTypeId;
@@ -251,7 +274,10 @@ type CoreFunctionSource = {
 
 export function lowerDucklangToCore(
   module: TypedDucklangModule,
-): DucklangCoreModule {
+): ConstructedDucklangCoreModule {
+  const constructionCandidateBounds = {
+    maximumF32x4SlpRuleHeadCountPerBlock: 0,
+  };
   const functionPlan = planCoreFunctions(module);
   const mainFunctionId = functionPlan.sources.length as CoreFunctionId;
   const signatures: DucklangCoreSignature[] = [];
@@ -314,6 +340,7 @@ export function lowerDucklangToCore(
       types,
       functionPlan,
       functionSignatures,
+      constructionCandidateBounds,
     ).lower(
       source.id,
       source.name,
@@ -332,6 +359,7 @@ export function lowerDucklangToCore(
       types,
       functionPlan,
       functionSignatures,
+      constructionCandidateBounds,
     ).lower(
       mainFunctionId,
       "main",
@@ -353,7 +381,9 @@ export function lowerDucklangToCore(
     entryFunction: mainFunctionId,
   });
   validateDucklangCore(core);
-  return core;
+  const constructed = core as ConstructedDucklangCoreModule;
+  constructedCandidateBounds.set(constructed, constructionCandidateBounds);
+  return constructed;
 }
 
 type CoreFunctionPlan = {
@@ -667,6 +697,11 @@ class CoreTypeRegistry {
     );
   }
 
+  isF32Scalar(type: CoreTypeId): boolean {
+    const entry = this.#types[type];
+    return entry?.kind === "scalar" && entry.scalar === "f32";
+  }
+
   #resolve(
     type: Exclude<Type, { readonly kind: "variable" }>,
     span: SourceSpan,
@@ -769,7 +804,11 @@ class CoreFunctionLowerer {
   readonly #types: CoreTypeRegistry;
   readonly #functionPlan: CoreFunctionPlan;
   readonly #functionSignatures: ReadonlyMap<number, CoreSignatureId>;
+  readonly #constructionCandidateBounds: {
+    maximumF32x4SlpRuleHeadCountPerBlock: number;
+  };
   readonly #blocks: MutableCoreBlock[] = [];
+  readonly #numberConstants = new Map<CoreValueId, number>();
   #nextValue = 0;
   #currentFunctionId: CoreFunctionId | undefined;
   #loopHeader: MutableCoreBlock | undefined;
@@ -783,11 +822,15 @@ class CoreFunctionLowerer {
     types: CoreTypeRegistry,
     functionPlan: CoreFunctionPlan,
     functionSignatures: ReadonlyMap<number, CoreSignatureId>,
+    constructionCandidateBounds: {
+      maximumF32x4SlpRuleHeadCountPerBlock: number;
+    },
   ) {
     this.#module = module;
     this.#types = types;
     this.#functionPlan = functionPlan;
     this.#functionSignatures = functionSignatures;
+    this.#constructionCandidateBounds = constructionCandidateBounds;
   }
 
   lower(
@@ -954,14 +997,45 @@ class CoreFunctionLowerer {
           [expression.left, expression.right],
           block,
           environment,
-          (current, operands) =>
-            this.#operation(current, {
+          (current, operands) => {
+            const typeName = expression.type.kind === "constructor"
+              ? expression.type.name
+              : undefined;
+            const integerScalar = typeName === "i32" || typeName === "i64";
+            const left = operands[0];
+            const right = operands[1];
+            if (
+              integerScalar && expression.operator === "+" &&
+              this.#numberConstants.get(right) === 0
+            ) {
+              return { terminated: false, block: current, value: left };
+            }
+            if (
+              integerScalar && expression.operator === "+" &&
+              this.#numberConstants.get(left) === 0
+            ) {
+              return { terminated: false, block: current, value: right };
+            }
+            if (
+              integerScalar && expression.operator === "*" &&
+              this.#numberConstants.get(right) === 1
+            ) {
+              return { terminated: false, block: current, value: left };
+            }
+            if (
+              integerScalar && expression.operator === "*" &&
+              this.#numberConstants.get(left) === 1
+            ) {
+              return { terminated: false, block: current, value: right };
+            }
+            return this.#operation(current, {
               kind: "scalar.binary",
               operator: expression.operator,
               type: this.#types.require(expression.type, expression.span),
               operands,
               span: expression.span,
-            }),
+            });
+          },
         );
       case "hostCall":
         return this.#operands(
@@ -1592,6 +1666,22 @@ class CoreFunctionLowerer {
     }
     const result = this.#nextValue++ as CoreValueId;
     block.operations.push({ ...operation, result } as DucklangCoreOperation);
+    if (
+      operation.kind === "scalar.binary" &&
+      this.#types.isF32Scalar(operation.type) &&
+      ["+", "-", "*", "/"].includes(operation.operator)
+    ) {
+      block.f32x4SlpRuleHeadCount += 1;
+      this.#constructionCandidateBounds
+        .maximumF32x4SlpRuleHeadCountPerBlock = Math.max(
+          this.#constructionCandidateBounds
+            .maximumF32x4SlpRuleHeadCountPerBlock,
+          block.f32x4SlpRuleHeadCount,
+        );
+    }
+    if (operation.kind === "constant" && typeof operation.value === "number") {
+      this.#numberConstants.set(result, operation.value);
+    }
     const region = this.#regions.at(-1);
     if (
       region !== undefined && operation.kind === "primitive" &&
@@ -1619,6 +1709,7 @@ class CoreFunctionLowerer {
     const block: MutableCoreBlock = {
       id: this.#blocks.length as CoreBlockId,
       regionDepth: this.#regions.length,
+      f32x4SlpRuleHeadCount: 0,
       parameters: parameters.map((parameter) => ({
         ...parameter,
         value: this.#nextValue++ as CoreValueId,

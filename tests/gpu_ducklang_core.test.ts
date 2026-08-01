@@ -1,6 +1,9 @@
 import { rewriteFlatDucklangCore } from "../src/ducklang_core_rewrite.ts";
 import { lowerDucklangToCore } from "../src/ducklang_core.ts";
-import { flattenDucklangCore } from "../src/flat_ducklang_core.ts";
+import {
+  FlatDucklangCoreKind,
+  flattenDucklangCore,
+} from "../src/flat_ducklang_core.ts";
 import { runDucklangCoreGpuPass } from "../src/gpu_ducklang_core.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
@@ -9,13 +12,14 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
 Deno.test("WebGPU proposes the same Core rewrites as the CPU", async () => {
   const snapshot = await flat(
     `let value = 21
-let first = value + 0
-let integer_result = first * 1
+let first = value + 17
+let integer_result = first * 19
 let unmatched = integer_result + 2
 let float_value = 2.0f32
 let float_result = float_value * 1.0f32
 unmatched - 2
 `,
+    [[17, 0], [19, 1]],
   );
   const expected = rewriteFlatDucklangCore(snapshot);
 
@@ -104,8 +108,11 @@ Deno.test("throughput batch discards every empty Core rewrite frontier", async (
   }
 });
 
-async function flat(source: string) {
-  return flattenDucklangCore(
+async function flat(
+  source: string,
+  replacements: readonly (readonly [number, number])[] = [],
+) {
+  const snapshot = flattenDucklangCore(
     lowerDucklangToCore(
       inferDucklangModule(
         resolveDucklangModule(
@@ -114,6 +121,33 @@ async function flat(source: string) {
       ),
     ),
   );
+  if (replacements.length === 0) return snapshot;
+  const attributeLowWords = snapshot.attributeLowWords.slice();
+  const attributeHighWords = snapshot.attributeHighWords.slice();
+  for (const [from, to] of replacements) {
+    const fromWords = numberWords(from);
+    const toWords = numberWords(to);
+    const attributeId = [...snapshot.attributeKinds].findIndex((kind, index) =>
+      kind === FlatDucklangCoreKind.attribute.number &&
+      snapshot.attributeLowWords[index] === fromWords.low &&
+      snapshot.attributeHighWords[index] === fromWords.high
+    );
+    if (attributeId < 0) {
+      throw new Error(`fixture has no numeric Core constant ${from}`);
+    }
+    attributeLowWords[attributeId] = toWords.low;
+    attributeHighWords[attributeId] = toWords.high;
+  }
+  return { ...snapshot, attributeLowWords, attributeHighWords };
+}
+
+function numberWords(
+  value: number,
+): { readonly low: number; readonly high: number } {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, true);
+  return { low: view.getUint32(0, true), high: view.getUint32(4, true) };
 }
 
 function columns(package_: Record<string, unknown>): string {

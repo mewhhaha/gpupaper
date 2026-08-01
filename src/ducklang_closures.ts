@@ -24,12 +24,29 @@ export type DucklangSpecializationMetrics = {
   readonly distinctSpecializationKeyCount: number;
   readonly specializationCacheHitCount: number;
   readonly pendingSpecializationCycleCount: number;
+  readonly functionConstructingIntrinsicFoldCount: number;
+  readonly rejectedOptionalRequestCount: number;
+  readonly widenedRequestCount: 0;
+  readonly requestsByFunction: readonly DucklangFunctionSpecializationMetrics[];
   readonly distinctFunctionAnalysisCount: number;
   readonly functionAnalysisCacheHitCount: number;
   readonly rewrittenBlockCount: number;
   readonly avoidedEnvironmentEntryCopyCount: number;
   readonly nodeCountCacheHitCount: number;
   readonly nodeCountCacheHitNodeCount: number;
+};
+
+export type DucklangFunctionSpecializationMetrics = {
+  readonly functionId: number;
+  readonly file: string;
+  readonly start: number;
+  readonly end: number;
+  readonly sourceBodyNodeCount: number;
+  readonly emittedRequestCount: number;
+  readonly reusedRequestCount: number;
+  readonly pendingCycleCount: number;
+  readonly emittedNodeCount: number;
+  readonly residualNodeAmplification: number;
 };
 
 export type DucklangSpecializationResult = {
@@ -77,6 +94,16 @@ type SpecializationContext = {
     number,
     TypedDucklangExpression
   >[];
+  readonly requestFunctions: Map<number, {
+    readonly functionId: number;
+    readonly file: string;
+    readonly start: number;
+    readonly end: number;
+    readonly body: TypedDucklangExpression;
+    readonly emittedExpressions: TypedDucklangExpression[];
+    reusedRequestCount: number;
+    pendingCycleCount: number;
+  }>;
   nextFunctionId: number;
   nextValueId: number;
   cacheHitCount: number;
@@ -85,6 +112,8 @@ type SpecializationContext = {
   functionAnalysisCacheHitCount: number;
   rewrittenBlockCount: number;
   avoidedEnvironmentEntryCopyCount: number;
+  rejectedOptionalRequestCount: number;
+  functionConstructingIntrinsicFoldCount: number;
 };
 
 export function specializeStaticDucklangClosures(
@@ -173,6 +202,7 @@ export function specializeStaticDucklangClosures(
     typeIdentities: new WeakMap(),
     valueIds: new WeakMap(),
     substitutionEnvironments: [],
+    requestFunctions: new Map(),
     nextFunctionId: 0,
     nextValueId: 0,
     cacheHitCount: 0,
@@ -181,6 +211,8 @@ export function specializeStaticDucklangClosures(
     functionAnalysisCacheHitCount: 0,
     rewrittenBlockCount: 0,
     avoidedEnvironmentEntryCopyCount: 0,
+    rejectedOptionalRequestCount: 0,
+    functionConstructingIntrinsicFoldCount: 0,
   };
   const frontierMilliseconds = performance.now() - frontierStart;
 
@@ -298,6 +330,31 @@ export function specializeStaticDucklangClosures(
     nodeCounts.set(expression, count);
     return count;
   };
+  const requestsByFunction = [...specialization.requestFunctions.values()]
+    .toSorted((left, right) => left.functionId - right.functionId)
+    .map((requestFunction): DucklangFunctionSpecializationMetrics => {
+      const sourceBodyNodeCount = nodeCount(requestFunction.body);
+      const emittedNodeCount = requestFunction.emittedExpressions.reduce(
+        (total, expression) => total + nodeCount(expression),
+        0,
+      );
+      const inputNodeCount = sourceBodyNodeCount *
+        requestFunction.emittedExpressions.length;
+      return {
+        functionId: requestFunction.functionId,
+        file: requestFunction.file,
+        start: requestFunction.start,
+        end: requestFunction.end,
+        sourceBodyNodeCount,
+        emittedRequestCount: requestFunction.emittedExpressions.length,
+        reusedRequestCount: requestFunction.reusedRequestCount,
+        pendingCycleCount: requestFunction.pendingCycleCount,
+        emittedNodeCount,
+        residualNodeAmplification: inputNodeCount === 0
+          ? 0
+          : emittedNodeCount / inputNodeCount,
+      };
+    });
   const metrics = {
     inputBindingCount: module.bindings.length,
     demandedBindingCount: demandedInputBindings.length,
@@ -325,6 +382,11 @@ export function specializeStaticDucklangClosures(
     distinctSpecializationKeyCount: specialization.requests.size,
     specializationCacheHitCount: specialization.cacheHitCount,
     pendingSpecializationCycleCount: specialization.pendingCycleCount,
+    functionConstructingIntrinsicFoldCount:
+      specialization.functionConstructingIntrinsicFoldCount,
+    rejectedOptionalRequestCount: specialization.rejectedOptionalRequestCount,
+    widenedRequestCount: 0 as const,
+    requestsByFunction,
     distinctFunctionAnalysisCount: specialization.distinctFunctionAnalysisCount,
     functionAnalysisCacheHitCount: specialization.functionAnalysisCacheHitCount,
     rewrittenBlockCount: specialization.rewrittenBlockCount,
@@ -1095,6 +1157,7 @@ function rewriteExpression(
     !specializesUnionParameter && !specializesProductParameter &&
     !specializesIntrinsicParameter && !specializesCompileTimeParameter
   ) {
+    specialization.rejectedOptionalRequestCount += 1;
     return collapseEmptyBlock(rewritten);
   }
   let functionId = specialization.functionIds.get(factory);
@@ -1102,6 +1165,20 @@ function rewriteExpression(
     functionId = specialization.nextFunctionId;
     specialization.nextFunctionId += 1;
     specialization.functionIds.set(factory, functionId);
+  }
+  let requestFunction = specialization.requestFunctions.get(functionId);
+  if (requestFunction === undefined) {
+    requestFunction = {
+      functionId,
+      file: factory.span.file,
+      start: factory.span.start,
+      end: factory.span.end,
+      body: analysis.body,
+      emittedExpressions: [],
+      reusedRequestCount: 0,
+      pendingCycleCount: 0,
+    };
+    specialization.requestFunctions.set(functionId, requestFunction);
   }
   const environmentIdentity = [...analysis.referencedSymbols]
     .filter((symbolId) =>
@@ -1128,10 +1205,12 @@ function rewriteExpression(
   const cached = specialization.requests.get(requestKey);
   if (cached?.status === "complete") {
     specialization.cacheHitCount += 1;
+    requestFunction.reusedRequestCount += 1;
     return cached.expression;
   }
   if (cached?.status === "pending") {
     specialization.pendingCycleCount += 1;
+    requestFunction.pendingCycleCount += 1;
     return collapseEmptyBlock(rewritten);
   }
   specialization.requests.set(requestKey, { status: "pending" });
@@ -1156,6 +1235,7 @@ function rewriteExpression(
     status: "complete",
     expression: specialized,
   });
+  requestFunction.emittedExpressions.push(specialized);
   return specialized;
 }
 
@@ -1964,6 +2044,7 @@ function foldStaticIntrinsic(
     arguments_[1].type.kind === "function" &&
     arguments_[1].parameters.length === 1
   ) {
+    specialization.functionConstructingIntrinsicFoldCount += 1;
     const parameter = arguments_[1].parameters[0];
     const parameterReference: TypedDucklangExpression = {
       kind: "reference",
@@ -2001,6 +2082,7 @@ function foldStaticIntrinsic(
     arguments_[0].parameters.length === 1 &&
     arguments_[1].kind === "function"
   ) {
+    specialization.functionConstructingIntrinsicFoldCount += 1;
     const parameter = arguments_[0].parameters[0];
     const predicateResultType = arguments_[0].body.type;
     const parameterReference: TypedDucklangExpression = {

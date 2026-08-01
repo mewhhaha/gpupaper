@@ -1274,7 +1274,7 @@ return { .result = result }
   assertEquals(inflateFlatFcgPackage(artifact.flatFcg), artifact.fcg);
 });
 
-Deno.test("Ducklang Core and Wasm jobs reach the GPU passes", async () => {
+Deno.test("Ducklang canonical Core avoids GPU work while Wasm reaches the GPU", async () => {
   const artifact = await compileModuleSource(
     "test.duck",
     "let answer = comptime 6 * 7\nanswer\n",
@@ -1284,6 +1284,8 @@ Deno.test("Ducklang Core and Wasm jobs reach the GPU passes", async () => {
   assertEquals(artifact.gpuWasmResult === undefined, false);
   if (artifact.gpuCoreResult?.status === "completed") {
     assertEquals(artifact.timings.cpuCoreRewriteMilliseconds, 0);
+    assertEquals(artifact.gpuCoreResult.backend, "identity");
+    assertEquals(artifact.gpuCoreResult.submissionBatchSize, 0);
   }
   assertEquals(await runMain(artifact.wasm), 42);
 });

@@ -5,7 +5,10 @@ import {
 } from "../src/comptime.ts";
 import { proposeDucklangCoreRewrites } from "../src/ducklang_core_rewrite.ts";
 import { lowerDucklangToCore } from "../src/ducklang_core.ts";
-import { flattenDucklangCore } from "../src/flat_ducklang_core.ts";
+import {
+  FlatDucklangCoreKind,
+  flattenDucklangCore,
+} from "../src/flat_ducklang_core.ts";
 import { runDucklangCoreGpuPass } from "../src/gpu_ducklang_core.ts";
 import { parseDucklangModule } from "../src/ducklang_parser.ts";
 import { resolveDucklangModule } from "../src/ducklang_resolution.ts";
@@ -89,13 +92,13 @@ Deno.test("generated compile-time bytecode matches independently evaluated arith
   if (gpu.status === "completed") assertEquals(gpu.values, cpu.values);
 });
 
-Deno.test("generated Core identities match on CPU and GPU without touching floats", async () => {
+Deno.test("generated noncanonical Core identities match on CPU and GPU without touching floats", async () => {
   for (const seed of generatedSeeds) {
     await withSeed(seed, async (random) => {
       const base = random.integer(2_000);
       const source = `let base = ${base}
-let sum = base + 0
-let product = sum * 1
+let sum = base + 17
+let product = sum * 19
 let float_value = ${random.integer(10) + 1}.0f32
 let float_identity = float_value * 1.0f32
 product
@@ -104,11 +107,12 @@ product
         `generated_${seed}.duck`,
         source,
       );
-      const snapshot = flattenDucklangCore(
+      const constructed = flattenDucklangCore(
         lowerDucklangToCore(
           inferDucklangModule(resolveDucklangModule(parsed)),
         ),
       );
+      const snapshot = replaceNumberAttributes(constructed, [[17, 0], [19, 1]]);
       const expected = proposeDucklangCoreRewrites(snapshot);
       assertEquals(
         expected.map((proposal) => proposal.rule),
@@ -124,6 +128,38 @@ product
     });
   }
 });
+
+function replaceNumberAttributes(
+  snapshot: ReturnType<typeof flattenDucklangCore>,
+  replacements: readonly (readonly [number, number])[],
+): ReturnType<typeof flattenDucklangCore> {
+  const attributeLowWords = snapshot.attributeLowWords.slice();
+  const attributeHighWords = snapshot.attributeHighWords.slice();
+  for (const [from, to] of replacements) {
+    const fromWords = numberWords(from);
+    const toWords = numberWords(to);
+    const attributeId = [...snapshot.attributeKinds].findIndex((kind, index) =>
+      kind === FlatDucklangCoreKind.attribute.number &&
+      snapshot.attributeLowWords[index] === fromWords.low &&
+      snapshot.attributeHighWords[index] === fromWords.high
+    );
+    if (attributeId < 0) {
+      throw new Error(`generated Core has no numeric constant ${from}`);
+    }
+    attributeLowWords[attributeId] = toWords.low;
+    attributeHighWords[attributeId] = toWords.high;
+  }
+  return { ...snapshot, attributeLowWords, attributeHighWords };
+}
+
+function numberWords(
+  value: number,
+): { readonly low: number; readonly high: number } {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, true);
+  return { low: view.getUint32(0, true), high: view.getUint32(4, true) };
+}
 
 Deno.test("generated Wasm plans emit valid byte-identical modules", async () => {
   for (const seed of generatedSeeds) {

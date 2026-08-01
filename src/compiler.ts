@@ -35,11 +35,10 @@ import {
   type DucklangCoreModule,
   lowerDucklangToCore,
 } from "./ducklang_core.ts";
-import { rewriteTrustedFlatDucklangCore } from "./ducklang_core_rewrite.ts";
 import {
   type FlatDucklangCore,
-  flattenTrustedDucklangCore,
-  inflateFlatDucklangCore,
+  flattenConstructedDucklangCore,
+  flattenValidatedDucklangCore,
 } from "./flat_ducklang_core.ts";
 import {
   createDucklangBackendFunctionCache,
@@ -74,7 +73,7 @@ import {
   createDucklangRuntimeImports,
 } from "./ducklang_runtime.ts";
 import { ducklangRuntimeImportModule } from "./ducklang_primitives.ts";
-import { vectorizeDucklangCore } from "./ducklang_vectorize.ts";
+import { vectorizeConstructedDucklangCore } from "./ducklang_vectorize.ts";
 import {
   formatDucklangType,
   inferDucklangEffectModule,
@@ -84,8 +83,8 @@ import {
 import { type FcgModule, lowerToFcgAndWasm } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
 import {
+  completeCanonicalDucklangCoreConstruction,
   type GpuDucklangCoreResult,
-  runTrustedDucklangCoreGpuPass,
 } from "./gpu_ducklang_core.ts";
 import { emitWasmPlanOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
 import type { CompilerGpuSchedulingPolicy } from "./gpu_device.ts";
@@ -213,6 +212,16 @@ export type DucklangCompilationTimingDetails = {
   readonly gpuCoreInitializationMilliseconds: number;
   readonly gpuCoreQueueWaitMilliseconds: number;
   readonly gpuWasmQueueWaitMilliseconds: number;
+  readonly gpuWasmPlanInspectionMilliseconds: number;
+  readonly gpuWasmColumnConstructionMilliseconds: number;
+  readonly gpuWasmPlanAnalysisAndColumnMilliseconds: number;
+  readonly gpuWasmContextMilliseconds: number;
+  readonly gpuWasmAllocationAndUploadMilliseconds: number;
+  readonly gpuWasmCommandEncodingMilliseconds: number;
+  readonly gpuWasmSubmissionMilliseconds: number;
+  readonly gpuWasmDeviceCompletionMilliseconds: number;
+  readonly gpuWasmMappingCompletionMilliseconds: number;
+  readonly gpuWasmReadbackCopyMilliseconds: number;
   readonly gpuCoreExecutionMilliseconds: number;
   readonly gpuCoreTransferMilliseconds: number;
   readonly gpuCoreCommitMilliseconds: number;
@@ -266,6 +275,11 @@ export type DucklangCompilationWork = {
   readonly specializationDistinctKeyCount: number;
   readonly specializationCacheHitCount: number;
   readonly specializationPendingCycleCount: number;
+  readonly specializationFunctionConstructingIntrinsicFoldCount: number;
+  readonly specializationEmittedRequestCount: number;
+  readonly specializationRejectedOptionalRequestCount: number;
+  readonly specializationWidenedRequestCount: number;
+  readonly specializationMaximumResidualNodeAmplification: number;
   readonly specializationDistinctFunctionAnalysisCount: number;
   readonly specializationFunctionAnalysisCacheHitCount: number;
   readonly specializationRewrittenBlockCount: number;
@@ -1257,6 +1271,16 @@ async function elaborateDucklangModuleSource(
         gpuCoreInitializationMilliseconds: 0,
         gpuCoreQueueWaitMilliseconds: 0,
         gpuWasmQueueWaitMilliseconds: 0,
+        gpuWasmPlanInspectionMilliseconds: 0,
+        gpuWasmColumnConstructionMilliseconds: 0,
+        gpuWasmPlanAnalysisAndColumnMilliseconds: 0,
+        gpuWasmContextMilliseconds: 0,
+        gpuWasmAllocationAndUploadMilliseconds: 0,
+        gpuWasmCommandEncodingMilliseconds: 0,
+        gpuWasmSubmissionMilliseconds: 0,
+        gpuWasmDeviceCompletionMilliseconds: 0,
+        gpuWasmMappingCompletionMilliseconds: 0,
+        gpuWasmReadbackCopyMilliseconds: 0,
         gpuCoreExecutionMilliseconds: 0,
         gpuCoreTransferMilliseconds: 0,
         gpuCoreCommitMilliseconds: 0,
@@ -1353,6 +1377,36 @@ async function elaborateDucklangModuleSource(
           preComptimeSpecialization.metrics.pendingSpecializationCycleCount +
           (postComptimeSpecialization?.metrics
             .pendingSpecializationCycleCount ?? 0),
+        specializationFunctionConstructingIntrinsicFoldCount:
+          preComptimeSpecialization.metrics
+            .functionConstructingIntrinsicFoldCount +
+          (postComptimeSpecialization?.metrics
+            .functionConstructingIntrinsicFoldCount ?? 0),
+        specializationEmittedRequestCount:
+          preComptimeSpecialization.metrics.requestsByFunction.reduce(
+            (total, function_) => total + function_.emittedRequestCount,
+            0,
+          ) +
+          (postComptimeSpecialization?.metrics.requestsByFunction.reduce(
+            (total, function_) => total + function_.emittedRequestCount,
+            0,
+          ) ?? 0),
+        specializationRejectedOptionalRequestCount:
+          preComptimeSpecialization.metrics.rejectedOptionalRequestCount +
+          (postComptimeSpecialization?.metrics
+            .rejectedOptionalRequestCount ?? 0),
+        specializationWidenedRequestCount:
+          preComptimeSpecialization.metrics.widenedRequestCount +
+          (postComptimeSpecialization?.metrics.widenedRequestCount ?? 0),
+        specializationMaximumResidualNodeAmplification: Math.max(
+          0,
+          ...preComptimeSpecialization.metrics.requestsByFunction.map(
+            (function_) => function_.residualNodeAmplification,
+          ),
+          ...(postComptimeSpecialization?.metrics.requestsByFunction.map(
+            (function_) => function_.residualNodeAmplification,
+          ) ?? []),
+        ),
         specializationDistinctFunctionAnalysisCount:
           preComptimeSpecialization.metrics.distinctFunctionAnalysisCount +
           (postComptimeSpecialization?.metrics.distinctFunctionAnalysisCount ??
@@ -1579,6 +1633,16 @@ async function compileDucklangModuleSource(
             gpuCoreInitializationMilliseconds: 0,
             gpuCoreQueueWaitMilliseconds: 0,
             gpuWasmQueueWaitMilliseconds: 0,
+            gpuWasmPlanInspectionMilliseconds: 0,
+            gpuWasmColumnConstructionMilliseconds: 0,
+            gpuWasmPlanAnalysisAndColumnMilliseconds: 0,
+            gpuWasmContextMilliseconds: 0,
+            gpuWasmAllocationAndUploadMilliseconds: 0,
+            gpuWasmCommandEncodingMilliseconds: 0,
+            gpuWasmSubmissionMilliseconds: 0,
+            gpuWasmDeviceCompletionMilliseconds: 0,
+            gpuWasmMappingCompletionMilliseconds: 0,
+            gpuWasmReadbackCopyMilliseconds: 0,
             gpuCoreExecutionMilliseconds: 0,
             gpuCoreTransferMilliseconds: 0,
             gpuCoreCommitMilliseconds: 0,
@@ -1646,71 +1710,36 @@ async function compileDucklangModuleSource(
   const effectClosed = closeDucklangEffectBoundary(specialized, core);
   const coreMilliseconds = performance.now() - coreStart;
   const flatCoreStart = performance.now();
-  const trustedFlatCore = flattenTrustedDucklangCore(core);
+  const trustedFlatCore = flattenConstructedDucklangCore(core);
   const flatCore = trustedFlatCore.package;
   const flatCoreMilliseconds = performance.now() - flatCoreStart;
 
-  const gpuCorePassStart = performance.now();
-  const gpuCoreResult = gpuMode === "off"
-    ? undefined
-    : await runTrustedDucklangCoreGpuPass(trustedFlatCore, {
-      scheduling: options.gpuScheduling,
-    });
-  const gpuCorePassMilliseconds = gpuMode === "off"
-    ? 0
-    : performance.now() - gpuCorePassStart;
-  if (gpuCoreResult?.status === "unavailable" && gpuMode === "required") {
-    throw new Error(gpuCoreResult.reason);
-  }
-  if (gpuCoreResult?.status === "invalid") {
-    throw new Error(
-      `${file}: GPU rejected CPU-validated flat Core: ${gpuCoreResult.reason}`,
-    );
-  }
-  let optimizedFlatCore: FlatDucklangCore;
-  let cpuCoreRewriteMilliseconds = 0;
-  let cpuCoreRewriteProposalCount = 0;
-  let cpuCoreRewriteAcceptedCount = 0;
-  let cpuCoreValidationMilliseconds = 0;
-  let cpuCoreMatchingMilliseconds = 0;
-  let cpuCoreConflictResolutionMilliseconds = 0;
-  let cpuCoreRebuildMilliseconds = 0;
-  if (gpuCoreResult?.status === "completed") {
-    optimizedFlatCore = gpuCoreResult.package;
-  } else {
-    const coreRewriteStart = performance.now();
-    const coreRewrite = rewriteTrustedFlatDucklangCore(trustedFlatCore);
-    optimizedFlatCore = coreRewrite.package;
-    cpuCoreRewriteProposalCount = coreRewrite.proposals.length;
-    cpuCoreRewriteAcceptedCount = coreRewrite.accepted.length;
-    cpuCoreValidationMilliseconds = coreRewrite.timings.validationMilliseconds;
-    cpuCoreMatchingMilliseconds = coreRewrite.timings.matchingMilliseconds;
-    cpuCoreConflictResolutionMilliseconds =
-      coreRewrite.timings.conflictResolutionMilliseconds;
-    cpuCoreRebuildMilliseconds = coreRewrite.timings.rebuildMilliseconds;
-    cpuCoreRewriteMilliseconds = performance.now() - coreRewriteStart;
-  }
-
-  let optimizedCore = core;
-  let coreInflationMilliseconds = 0;
-  if (optimizedFlatCore !== flatCore) {
-    const coreInflationStart = performance.now();
-    optimizedCore = inflateFlatDucklangCore(optimizedFlatCore);
-    coreInflationMilliseconds = performance.now() - coreInflationStart;
-  }
+  const gpuCoreResult: GpuDucklangCoreResult =
+    completeCanonicalDucklangCoreConstruction(trustedFlatCore);
+  const gpuCorePassMilliseconds = 0;
+  let optimizedFlatCore: FlatDucklangCore = flatCore;
+  const cpuCoreRewriteMilliseconds = 0;
+  const cpuCoreRewriteProposalCount = 0;
+  const cpuCoreRewriteAcceptedCount = 0;
+  const cpuCoreValidationMilliseconds = 0;
+  const cpuCoreMatchingMilliseconds = 0;
+  const cpuCoreConflictResolutionMilliseconds = 0;
+  const cpuCoreRebuildMilliseconds = 0;
+  let optimizedCore: DucklangCoreModule = core;
+  const coreInflationMilliseconds = 0;
 
   const wasmTarget = options.wasmTarget ?? "wasm-simd128";
   const coreVectorizationStart = performance.now();
   const scalarOptimizedCore = optimizedCore;
   const vectorization = wasmTarget === "wasm-simd128"
-    ? vectorizeDucklangCore(optimizedCore)
+    ? vectorizeConstructedDucklangCore(core)
     : undefined;
   let vectorFlatCoreMilliseconds = 0;
   if (vectorization !== undefined) {
     optimizedCore = vectorization.module;
     if (vectorization.module !== scalarOptimizedCore) {
       const vectorFlatCoreStart = performance.now();
-      optimizedFlatCore = flattenTrustedDucklangCore(optimizedCore).package;
+      optimizedFlatCore = flattenValidatedDucklangCore(optimizedCore).package;
       vectorFlatCoreMilliseconds = performance.now() - vectorFlatCoreStart;
     }
   }
@@ -1807,6 +1836,40 @@ async function compileDucklangModuleSource(
         : 0,
       gpuWasmQueueWaitMilliseconds: gpuWasmResult?.status === "completed"
         ? gpuWasmResult.queueWaitMilliseconds
+        : 0,
+      gpuWasmPlanInspectionMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.planInspectionMilliseconds
+        : 0,
+      gpuWasmColumnConstructionMilliseconds:
+        gpuWasmResult?.status === "completed"
+          ? gpuWasmResult.timings.columnConstructionMilliseconds
+          : 0,
+      gpuWasmPlanAnalysisAndColumnMilliseconds:
+        gpuWasmResult?.status === "completed"
+          ? gpuWasmResult.timings.planAnalysisAndColumnMilliseconds
+          : 0,
+      gpuWasmContextMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.contextMilliseconds
+        : 0,
+      gpuWasmAllocationAndUploadMilliseconds:
+        gpuWasmResult?.status === "completed"
+          ? gpuWasmResult.timings.allocationAndUploadMilliseconds
+          : 0,
+      gpuWasmCommandEncodingMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.commandEncodingMilliseconds
+        : 0,
+      gpuWasmSubmissionMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.submissionMilliseconds
+        : 0,
+      gpuWasmDeviceCompletionMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.deviceCompletionMilliseconds
+        : 0,
+      gpuWasmMappingCompletionMilliseconds:
+        gpuWasmResult?.status === "completed"
+          ? gpuWasmResult.timings.mappingCompletionMilliseconds
+          : 0,
+      gpuWasmReadbackCopyMilliseconds: gpuWasmResult?.status === "completed"
+        ? gpuWasmResult.timings.readbackCopyMilliseconds
         : 0,
       gpuCoreExecutionMilliseconds: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.gpuMilliseconds

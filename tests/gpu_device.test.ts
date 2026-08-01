@@ -1,9 +1,11 @@
 import {
+  acquireCompilerGpuBuffer,
   awaitCompilerGpuCommand,
   compilerGpuCapacityViolation,
   type CompilerGpuLimits,
   compilerGpuUnavailabilityReason,
   createCompilerGpuBatchQueue,
+  submitCompilerGpuCommandWithReadback,
 } from "../src/gpu_device.ts";
 
 const limits: CompilerGpuLimits = {
@@ -142,6 +144,180 @@ Deno.test("GPU out-of-memory errors are classified as unavailability", () => {
   );
 });
 
+Deno.test("GPU buffer leases exclude concurrent reuse and reuse after release", () => {
+  const created: FakeGpuBuffer[] = [];
+  const device = fakeGpuDevice(created);
+  const descriptor = {
+    size: 65,
+    usage: GPUBufferUsage.STORAGE,
+  };
+  const first = acquireCompilerGpuBuffer(
+    device,
+    "first arena",
+    descriptor,
+    "storage",
+  );
+  const concurrent = acquireCompilerGpuBuffer(
+    device,
+    "concurrent arena",
+    descriptor,
+    "storage",
+  );
+  assertEquals(first.byteLength, 128);
+  assertEquals(concurrent.byteLength, 128);
+  assertEquals(first.buffer === concurrent.buffer, false);
+
+  first.release();
+  const reused = acquireCompilerGpuBuffer(
+    device,
+    "reused arena",
+    descriptor,
+    "storage",
+  );
+  assertEquals(reused.buffer === first.buffer, true);
+  concurrent.release();
+  reused.release();
+  assertEquals(created.length, 2);
+});
+
+Deno.test("GPU buffer leases reject mapping at acquisition", () => {
+  const device = fakeGpuDevice([]);
+  try {
+    acquireCompilerGpuBuffer(
+      device,
+      "mapped arena",
+      {
+        size: 4,
+        usage: GPUBufferUsage.STORAGE,
+        mappedAtCreation: true,
+      },
+      "storage",
+    );
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      /cannot be mapped at creation/.test(error.message)
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("mapped pooled buffer acquisition was accepted");
+});
+
+Deno.test("GPU buffer leases reject a second release", () => {
+  const device = fakeGpuDevice([]);
+  const lease = acquireCompilerGpuBuffer(
+    device,
+    "single-owner arena",
+    { size: 4, usage: GPUBufferUsage.STORAGE },
+    "storage",
+  );
+
+  lease.release();
+  try {
+    lease.release();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /single-owner arena lease was released twice/.test(error.message)
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("pooled GPU buffer lease accepted a second release");
+});
+
+Deno.test("GPU device loss invalidates released and leased buffers", async () => {
+  const created: FakeGpuBuffer[] = [];
+  let loseDevice = (_loss: GPUDeviceLostInfo): void => {};
+  const lost = new Promise<GPUDeviceLostInfo>((resolve) => {
+    loseDevice = resolve;
+  });
+  const device = fakeGpuDevice(created, lost);
+  const released = acquireCompilerGpuBuffer(
+    device,
+    "released arena",
+    { size: 4, usage: GPUBufferUsage.STORAGE },
+    "storage",
+  );
+  const leased = acquireCompilerGpuBuffer(
+    device,
+    "leased arena",
+    { size: 4, usage: GPUBufferUsage.STORAGE },
+    "storage",
+  );
+  released.release();
+
+  loseDevice({ reason: "destroyed", message: "test loss" });
+  await lost;
+  await Promise.resolve();
+  assertEquals(created[0]!.destroyed, true);
+  assertEquals(created[1]!.destroyed, false);
+
+  leased.release();
+  assertEquals(created[1]!.destroyed, true);
+  try {
+    acquireCompilerGpuBuffer(
+      device,
+      "post-loss arena",
+      { size: 4, usage: GPUBufferUsage.STORAGE },
+      "storage",
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /post-loss arena cannot be acquired after device loss/.test(error.message)
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("pooled GPU buffer acquisition succeeded after device loss");
+});
+
+Deno.test("failed readback still waits for device completion before lease-safe rejection", async () => {
+  let completeDevice = () => {};
+  const deviceCompletion = new Promise<void>((resolve) => {
+    completeDevice = resolve;
+  });
+  const device = {
+    lost: new Promise(() => {}),
+    pushErrorScope() {},
+    popErrorScope: () => Promise.resolve(null),
+    queue: {
+      submit() {},
+      onSubmittedWorkDone: () => deviceCompletion,
+    },
+  } as unknown as GPUDevice;
+  const readback = {
+    mapAsync: () => Promise.reject(new Error("mapping failed")),
+  } as unknown as GPUBuffer;
+  let settled = false;
+  const submission = submitCompilerGpuCommandWithReadback(
+    device,
+    "failed readback",
+    {} as GPUCommandBuffer,
+    readback,
+  ).then(
+    () => {
+      settled = true;
+      return "completed";
+    },
+    (cause) => {
+      settled = true;
+      throw cause;
+    },
+  );
+
+  await Promise.resolve();
+  await Promise.resolve();
+  assertEquals(settled, false);
+  completeDevice();
+  await assertRejects(() => submission, /mapping failed/);
+});
+
 Deno.test("throughput GPU jobs retain order in one payload batch", async () => {
   const executions: number[][] = [];
   const queue = createCompilerGpuBatchQueue((inputs: readonly number[]) => {
@@ -227,6 +403,28 @@ function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) {
     throw new Error(`expected ${String(expected)}; received ${String(actual)}`);
   }
+}
+
+type FakeGpuBuffer = GPUBuffer & { destroyed: boolean };
+
+function fakeGpuDevice(
+  created: FakeGpuBuffer[],
+  lost: Promise<GPUDeviceLostInfo> = new Promise(() => {}),
+): GPUDevice {
+  return {
+    limits,
+    lost,
+    createBuffer() {
+      const buffer = {
+        destroyed: false,
+        destroy() {
+          buffer.destroyed = true;
+        },
+      } as FakeGpuBuffer;
+      created.push(buffer);
+      return buffer;
+    },
+  } as unknown as GPUDevice;
 }
 
 async function assertRejects(

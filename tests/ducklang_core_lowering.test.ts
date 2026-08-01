@@ -1,8 +1,10 @@
 import type {
+  ConstructedDucklangCoreModule,
   DucklangCoreFunction,
   DucklangCoreModule,
 } from "../src/ducklang_core.ts";
 import {
+  ducklangCoreConstructionCandidateBounds,
   lowerDucklangToCore,
   validateDucklangCore,
 } from "../src/ducklang_core.ts";
@@ -113,6 +115,41 @@ Deno.test("Core lowers lexical shadowing to distinct value identities", async ()
   // The result is the last shadowed version, not the first.
   assertEquals(returned.values.length, 1);
   assertEquals(returned.values[0], Math.max(...results));
+});
+
+Deno.test("Core construction omits integer identity operations", async () => {
+  const { module, function_ } = await lower(
+    "let f = (value: I32) => (value + 0) * 1\nf(42)\n",
+    "f",
+  );
+
+  assertEquals(
+    function_.blocks.flatMap((block) => block.operations).filter((operation) =>
+      operation.kind === "scalar.binary"
+    ).length,
+    0,
+  );
+  const returned = function_.blocks[0].terminator;
+  if (returned.kind !== "return") throw new Error("expected a return");
+  assertEquals(returned.values[0], function_.blocks[0].parameters[0].value);
+  assertEquals(
+    ducklangCoreConstructionCandidateBounds(module)
+      .maximumF32x4SlpRuleHeadCountPerBlock,
+    0,
+  );
+});
+
+Deno.test("Core construction records the vector rule-head upper bound", async () => {
+  const { module } = await lower(
+    "let f = (a: F32, b: F32, c: F32, d: F32) => a + b + c + d + a\nf(1.0f32, 2.0f32, 3.0f32, 4.0f32)\n",
+    "f",
+  );
+
+  assertEquals(
+    ducklangCoreConstructionCandidateBounds(module)
+      .maximumF32x4SlpRuleHeadCountPerBlock,
+    4,
+  );
 });
 
 Deno.test("Core preserves a nested branch boundary", async () => {
@@ -557,7 +594,7 @@ async function lower(
   functionName: string,
 ): Promise<
   {
-    readonly module: DucklangCoreModule;
+    readonly module: ConstructedDucklangCoreModule;
     readonly function_: DucklangCoreFunction;
   }
 > {

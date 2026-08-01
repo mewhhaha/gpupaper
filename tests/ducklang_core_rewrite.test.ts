@@ -7,6 +7,7 @@ import {
 } from "../src/ducklang_core_rewrite.ts";
 import { lowerDucklangToCore } from "../src/ducklang_core.ts";
 import {
+  FlatDucklangCoreKind,
   flattenDucklangCore,
   inflateFlatDucklangCore,
   validateFlatDucklangCore,
@@ -18,10 +19,11 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
 Deno.test("Core rewrites match identity constants through value definitions", async () => {
   const snapshot = await flat(
     `let value = 42
-let zero = 0
+let zero = 17
 let intervening = 7
 value + zero
 `,
+    [[17, 0]],
   );
 
   const proposals = proposeDucklangCoreRewrites(snapshot);
@@ -38,7 +40,8 @@ value + zero
 
 Deno.test("Core rewrites rebuild a new valid snapshot and preserve the original", async () => {
   const snapshot = await flat(
-    "let value = 21\nlet first = value + 0\nfirst * 1\n",
+    "let value = 21\nlet first = value + 17\nfirst * 19\n",
+    [[17, 0], [19, 1]],
   );
   const before = columns(snapshot);
 
@@ -93,7 +96,8 @@ left + right
 
 Deno.test("Core commit rejects a structurally valid false rewrite", async () => {
   const snapshot = await flat(
-    "let value = 42\nlet zero = 0\nvalue + zero\n",
+    "let value = 42\nlet zero = 17\nvalue + zero\n",
+    [[17, 0]],
   );
   const proposal = proposeDucklangCoreRewrites(snapshot)[0];
   const operandStart = snapshot.operationOperandStarts[proposal.operationId];
@@ -109,13 +113,43 @@ Deno.test("Core commit rejects a structurally valid false rewrite", async () => 
   );
 });
 
-async function flat(source: string) {
+async function flat(
+  source: string,
+  replacements: readonly (readonly [number, number])[] = [],
+) {
   const parsed = await parseDucklangModule("rewrite_core.duck", source);
-  return flattenDucklangCore(
+  const snapshot = flattenDucklangCore(
     lowerDucklangToCore(
       inferDucklangModule(resolveDucklangModule(parsed)),
     ),
   );
+  if (replacements.length === 0) return snapshot;
+  const attributeLowWords = snapshot.attributeLowWords.slice();
+  const attributeHighWords = snapshot.attributeHighWords.slice();
+  for (const [from, to] of replacements) {
+    const fromWords = numberWords(from);
+    const toWords = numberWords(to);
+    const attributeId = [...snapshot.attributeKinds].findIndex((kind, index) =>
+      kind === FlatDucklangCoreKind.attribute.number &&
+      snapshot.attributeLowWords[index] === fromWords.low &&
+      snapshot.attributeHighWords[index] === fromWords.high
+    );
+    if (attributeId < 0) {
+      throw new Error(`fixture has no numeric Core constant ${from}`);
+    }
+    attributeLowWords[attributeId] = toWords.low;
+    attributeHighWords[attributeId] = toWords.high;
+  }
+  return { ...snapshot, attributeLowWords, attributeHighWords };
+}
+
+function numberWords(
+  value: number,
+): { readonly low: number; readonly high: number } {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, true);
+  return { low: view.getUint32(0, true), high: view.getUint32(4, true) };
 }
 
 function columns(package_: Record<string, unknown>): string {

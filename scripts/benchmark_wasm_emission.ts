@@ -1,5 +1,9 @@
 import { compileModuleSource } from "../src/compiler.ts";
 import { lowerDucklangCoreToFcgAndWasm } from "../src/ducklang_core_wasm.ts";
+import {
+  type FlatDucklangCore,
+  inflateFlatDucklangCore,
+} from "../src/flat_ducklang_core.ts";
 import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "../src/wasm.ts";
 import {
   emitWasmPlanOnGpu,
@@ -16,6 +20,27 @@ const targets = [
 ] as const;
 const sampleCount = requestedSampleCount(Deno.args);
 const preparedTargets = await Promise.all(targets.map(prepareTarget));
+const planningSamples = new Map(
+  preparedTargets.map((prepared) => [
+    prepared.name,
+    [] as ReturnType<typeof measureFlatCorePlanning>[],
+  ]),
+);
+for (const prepared of preparedTargets) {
+  for (let warmup = 0; warmup < 3; warmup += 1) {
+    measureFlatCorePlanning(prepared);
+  }
+}
+for (let sample = 0; sample < sampleCount; sample += 1) {
+  const orderedTargets = sample % 2 === 0
+    ? preparedTargets
+    : [...preparedTargets].reverse();
+  for (const prepared of orderedTargets) {
+    planningSamples.get(prepared.name)!.push(
+      measureFlatCorePlanning(prepared),
+    );
+  }
+}
 const cpuSampleCount = 101;
 const cpuSamples = new Map(
   preparedTargets.map((prepared) => [prepared.name, [] as number[]]),
@@ -44,7 +69,10 @@ for (const prepared of preparedTargets) {
 const samples = new Map(
   preparedTargets.map((prepared) => [
     prepared.name,
-    { dense: [] as number[], ranked: [] as number[] },
+    {
+      dense: [] as Awaited<ReturnType<typeof measureEmission>>[],
+      ranked: [] as Awaited<ReturnType<typeof measureEmission>>[],
+    },
   ]),
 );
 const work = new Map<
@@ -67,9 +95,7 @@ for (let sample = 0; sample < sampleCount; sample += 1) {
       : [...measuredLayouts].reverse();
     for (const lowWordLayout of orderedLayouts) {
       const measurement = await measureEmission(prepared, lowWordLayout);
-      samples.get(prepared.name)![lowWordLayout].push(
-        measurement.milliseconds,
-      );
+      samples.get(prepared.name)![lowWordLayout].push(measurement);
       const targetWork = work.get(prepared.name) ?? {};
       targetWork[lowWordLayout] = measurement;
       work.set(prepared.name, targetWork);
@@ -78,29 +104,57 @@ for (let sample = 0; sample < sampleCount; sample += 1) {
 }
 
 console.log(JSON.stringify({
+  schemaVersion: 2,
+  validity: {
+    status: "diagnostic",
+    reason: "Wasm benchmark does not inspect competing process or GPU load",
+  },
   sampleCount,
   warmupCountPerLayout: 1,
   targetOrder: "alternatingForwardReverse",
   layoutOrder: "alternatingDenseRanked",
   cpuSampleCount,
+  planningWarmupCountPerTarget: 3,
+  planningBoundaryId:
+    "validated-flat-core-through-object-stackifier-to-wasm-plan",
+  planningMeasuredBoundary:
+    "validated flat Core through object reconstruction and stackification to Wasm plan",
   cpuWarmupCountPerTarget: 10,
   cpuTargetOrder: "alternatingForwardReverse",
   cpuMeasuredBoundary: "planValidationThroughCpuByteEmission",
+  cpuBoundaryId: "wasm-plan-to-cpu-bytes",
   measuredBoundary: "hostPlanAnalysisThroughMappedGpuReadbackAndByteCopy",
+  boundaryId: "wasm-plan-to-gpu-bytes-and-mapped-readback",
   targets: preparedTargets.map((prepared) => {
     const targetSamples = samples.get(prepared.name)!;
     const targetWork = work.get(prepared.name)!;
-    const denseMedian = median(targetSamples.dense);
-    const rankedMedian = median(targetSamples.ranked);
+    const targetPlanning = planningSamples.get(prepared.name)!;
+    const planningTotals = targetPlanning.map((sample) =>
+      sample.totalMilliseconds
+    );
+    const denseMedian = median(
+      targetSamples.dense.map((sample) => sample.milliseconds),
+    );
+    const rankedMedian = median(
+      targetSamples.ranked.map((sample) => sample.milliseconds),
+    );
     return {
       target: prepared.name,
       atomCount: prepared.plan.atoms.length,
       wasmBytes: prepared.expectedBytes.length,
+      planning: {
+        medianMilliseconds: median(planningTotals),
+        p95Milliseconds: percentile(planningTotals, 0.95),
+        minimumMilliseconds: Math.min(...planningTotals),
+        maximumMilliseconds: Math.max(...planningTotals),
+        rawMeasurements: targetPlanning,
+      },
       cpuOracle: {
         medianMilliseconds: median(cpuSamples.get(prepared.name)!),
         p95Milliseconds: percentile(cpuSamples.get(prepared.name)!, 0.95),
         minimumMilliseconds: Math.min(...cpuSamples.get(prepared.name)!),
         maximumMilliseconds: Math.max(...cpuSamples.get(prepared.name)!),
+        rawMilliseconds: cpuSamples.get(prepared.name)!,
       },
       dense: reportLayout(targetSamples.dense, targetWork.dense!),
       ranked: reportLayout(targetSamples.ranked, targetWork.ranked!),
@@ -111,6 +165,7 @@ console.log(JSON.stringify({
 
 type PreparedTarget = {
   readonly name: string;
+  readonly flatCore: FlatDucklangCore;
   readonly plan: WasmBinaryPlan;
   readonly expectedBytes: Uint8Array;
 };
@@ -130,10 +185,39 @@ async function prepareTarget(
   }
   return {
     name: target_.name,
+    flatCore: artifact.optimizedFlatCore,
     plan: lowerDucklangCoreToFcgAndWasm(artifact.optimizedCore, {
       emission: "planOnly",
     }).wasmPlan,
     expectedBytes: artifact.wasm,
+  };
+}
+
+function measureFlatCorePlanning(prepared: PreparedTarget): {
+  readonly totalMilliseconds: number;
+  readonly objectInflationMilliseconds: number;
+  readonly objectStackificationAndPlanningMilliseconds: number;
+} {
+  const start = performance.now();
+  const core = inflateFlatDucklangCore(prepared.flatCore);
+  const objectInflationMilliseconds = performance.now() - start;
+  const planningStart = performance.now();
+  const plan = lowerDucklangCoreToFcgAndWasm(core, {
+    emission: "planOnly",
+  }).wasmPlan;
+  const objectStackificationAndPlanningMilliseconds = performance.now() -
+    planningStart;
+  const totalMilliseconds = performance.now() - start;
+  const bytes = emitWasmPlanOnCpu(plan);
+  if (!equalBytes(bytes, prepared.expectedBytes)) {
+    throw new Error(
+      `${prepared.name} flat Core planning benchmark changed Wasm output`,
+    );
+  }
+  return {
+    totalMilliseconds,
+    objectInflationMilliseconds,
+    objectStackificationAndPlanningMilliseconds,
   };
 }
 
@@ -161,6 +245,7 @@ async function measureEmission(
   }
   return {
     milliseconds,
+    timings: emitted.timings,
     atomInputBytes: emitted.atomInputBytes,
     resolvedOffsetBytes: emitted.resolvedOffsetBytes,
     resolvedOffsetBitWidth: emitted.resolvedOffsetBitWidth,
@@ -188,14 +273,20 @@ function measureCpuEmission(prepared: PreparedTarget): number {
 }
 
 function reportLayout(
-  samples: readonly number[],
+  samples: readonly Awaited<ReturnType<typeof measureEmission>>[],
   work: Awaited<ReturnType<typeof measureEmission>>,
 ) {
+  const wallMilliseconds = samples.map((sample) => sample.milliseconds);
   return {
-    medianMilliseconds: median(samples),
-    p95Milliseconds: percentile(samples, 0.95),
-    minimumMilliseconds: Math.min(...samples),
-    maximumMilliseconds: Math.max(...samples),
+    medianMilliseconds: median(wallMilliseconds),
+    p95Milliseconds: percentile(wallMilliseconds, 0.95),
+    minimumMilliseconds: Math.min(...wallMilliseconds),
+    maximumMilliseconds: Math.max(...wallMilliseconds),
+    rawMilliseconds: wallMilliseconds,
+    rawGpuTimings: samples.map((sample) => sample.timings),
+    rawHarnessMinusGpuTotalMilliseconds: samples.map((sample) =>
+      sample.milliseconds - sample.timings.totalMilliseconds
+    ),
     atomInputBytes: work.atomInputBytes,
     lowWordBytes: work.lowWordBytes,
     byteRankBitWidth: work.byteRankBitWidth,

@@ -8,6 +8,8 @@ export type CompilerGpuSchedulingPolicy = "latency" | "throughput";
 export type CompilerGpuSubmissionMetrics = {
   readonly submissionBatchSize: number;
   readonly queueWaitMilliseconds: number;
+  readonly deviceCompletionMilliseconds: number;
+  readonly completionWitnessMilliseconds: number;
 };
 
 export type CompilerGpuBatchResult<Output> = {
@@ -21,6 +23,12 @@ export type CompilerGpuBatchQueue<Input, Output> = {
     input: Input,
     scheduling?: CompilerGpuSchedulingPolicy,
   ): Promise<CompilerGpuBatchResult<Output>>;
+};
+
+export type CompilerGpuBufferLease = {
+  readonly buffer: GPUBuffer;
+  readonly byteLength: number;
+  release(): void;
 };
 
 export type CompilerGpuLimits = {
@@ -61,12 +69,20 @@ const scheduledSubmissionFlushes = new WeakMap<
 >();
 const maximumThroughputSubmissionBatchSize = 16;
 const maximumThroughputQueueDelayMilliseconds = 2;
+const bufferPools = new WeakMap<GPUDevice, CompilerGpuBufferPool>();
+
+type CompilerGpuBufferPool = {
+  readonly available: Map<string, GPUBuffer>;
+  readonly leased: Set<GPUBuffer>;
+  invalid: boolean;
+};
 
 type CompilerGpuSubmission = {
   readonly subject: string;
   readonly command: GPUCommandBuffer;
   readonly enqueuedAt: number;
   readonly scheduling: CompilerGpuSchedulingPolicy;
+  readonly completion: (() => Promise<unknown>) | undefined;
   readonly resolve: (metrics: CompilerGpuSubmissionMetrics) => void;
   readonly reject: (cause: unknown) => void;
 };
@@ -145,6 +161,10 @@ export function createCompilerGpuBatchQueue<Input, Output>(
           resolve,
           reject,
         });
+        if (scheduling === "latency") {
+          void flush();
+          return;
+        }
         schedule();
       });
     },
@@ -230,6 +250,38 @@ export function submitCompilerGpuCommand(
   command: GPUCommandBuffer,
   scheduling: CompilerGpuSchedulingPolicy = "latency",
 ): Promise<CompilerGpuSubmissionMetrics> {
+  return enqueueCompilerGpuCommand(
+    device,
+    subject,
+    command,
+    scheduling,
+    undefined,
+  );
+}
+
+export function submitCompilerGpuCommandWithReadback(
+  device: GPUDevice,
+  subject: string,
+  command: GPUCommandBuffer,
+  readback: GPUBuffer,
+  scheduling: CompilerGpuSchedulingPolicy = "latency",
+): Promise<CompilerGpuSubmissionMetrics> {
+  return enqueueCompilerGpuCommand(
+    device,
+    subject,
+    command,
+    scheduling,
+    () => readback.mapAsync(GPUMapMode.READ),
+  );
+}
+
+function enqueueCompilerGpuCommand(
+  device: GPUDevice,
+  subject: string,
+  command: GPUCommandBuffer,
+  scheduling: CompilerGpuSchedulingPolicy,
+  completion: (() => Promise<unknown>) | undefined,
+): Promise<CompilerGpuSubmissionMetrics> {
   return new Promise<CompilerGpuSubmissionMetrics>((resolve, reject) => {
     const pending = pendingSubmissions.get(device);
     const submission = {
@@ -237,17 +289,26 @@ export function submitCompilerGpuCommand(
       command,
       enqueuedAt: performance.now(),
       scheduling,
+      completion,
       resolve,
       reject,
     };
     if (pending !== undefined) {
       pending.push(submission);
-      scheduleCompilerGpuSubmissionFlush(device, pending);
+      if (scheduling === "latency") {
+        void flushCompilerGpuSubmissions(device);
+      } else {
+        scheduleCompilerGpuSubmissionFlush(device, pending);
+      }
       return;
     }
     const submissions = [submission];
     pendingSubmissions.set(device, submissions);
-    scheduleCompilerGpuSubmissionFlush(device, submissions);
+    if (scheduling === "latency") {
+      void flushCompilerGpuSubmissions(device);
+    } else {
+      scheduleCompilerGpuSubmissionFlush(device, submissions);
+    }
   });
 }
 
@@ -256,13 +317,7 @@ function scheduleCompilerGpuSubmissionFlush(
   submissions: readonly CompilerGpuSubmission[],
 ): void {
   const scheduledFlush = scheduledSubmissionFlushes.get(device);
-  const requiresLatencyFlush = submissions.some((submission) =>
-    submission.scheduling === "latency"
-  );
-  if (
-    submissions.length >= maximumThroughputSubmissionBatchSize ||
-    requiresLatencyFlush
-  ) {
+  if (submissions.length >= maximumThroughputSubmissionBatchSize) {
     if (scheduledFlush !== undefined) clearTimeout(scheduledFlush);
     const timeout = setTimeout(() => {
       scheduledSubmissionFlushes.delete(device);
@@ -304,10 +359,35 @@ async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
     device.pushErrorScope("validation");
     validationScopePending = true;
     device.queue.submit(submissions.map((submission) => submission.command));
-    await awaitCompilerGpuCommand(
+    const completionStart = performance.now();
+    const deviceCompletion = device.queue.onSubmittedWorkDone().then(() =>
+      performance.now() - completionStart
+    );
+    const completionWitnesses = submissions.map((submission) =>
+      submission.completion === undefined
+        ? Promise.resolve(0)
+        : submission.completion().then(() =>
+          performance.now() - completionStart
+        )
+    );
+    const completionResults = await awaitCompilerGpuCommand(
       device,
       submissions.map((submission) => submission.subject).join(", "),
-      device.queue.onSubmittedWorkDone(),
+      Promise.allSettled([deviceCompletion, ...completionWitnesses]),
+    );
+    const failedCompletion = completionResults.find((result) =>
+      result.status === "rejected"
+    );
+    if (failedCompletion?.status === "rejected") {
+      throw failedCompletion.reason;
+    }
+    const deviceCompletionMilliseconds = completedGpuDuration(
+      completionResults[0],
+      "device completion",
+    );
+    const completionWitnessMilliseconds = completionResults.slice(1).map(
+      (result, index) =>
+        completedGpuDuration(result, `completion witness ${index}`),
     );
     const validationError = await device.popErrorScope();
     validationScopePending = false;
@@ -320,6 +400,8 @@ async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
       submission.resolve({
         submissionBatchSize: submissions.length,
         queueWaitMilliseconds: queueWaits[index]!,
+        deviceCompletionMilliseconds,
+        completionWitnessMilliseconds: completionWitnessMilliseconds[index]!,
       });
     }
   } catch (cause) {
@@ -328,6 +410,14 @@ async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
     if (validationScopePending) await device.popErrorScope();
     release();
   }
+}
+
+function completedGpuDuration(
+  result: PromiseSettledResult<number> | undefined,
+  subject: string,
+): number {
+  if (result?.status === "fulfilled") return result.value;
+  throw new Error(`GPU ${subject} omitted its fulfilled duration`);
 }
 
 export function compilerGpuUnavailabilityReason(
@@ -432,6 +522,95 @@ export function createCompilerGpuBuffer(
   });
   if (reason !== undefined) throw new CompilerGpuCapacityError(reason);
   return device.createBuffer(descriptor);
+}
+
+export function acquireCompilerGpuBuffer(
+  device: GPUDevice,
+  label: string,
+  descriptor: GPUBufferDescriptor,
+  binding: CompilerGpuBinding,
+  bindingByteLength?: number,
+): CompilerGpuBufferLease {
+  if (descriptor.mappedAtCreation === true) {
+    throw new TypeError(
+      `pooled GPU buffer ${label} cannot be mapped at creation; upload through the queue after acquiring its lease`,
+    );
+  }
+  const requestedByteLength = Number(descriptor.size);
+  const byteLength = compilerGpuPoolBucketByteLength(
+    requestedByteLength,
+    device.limits.maxBufferSize,
+  );
+  const pooledDescriptor = { ...descriptor, size: byteLength };
+  const pool = compilerGpuBufferPool(device);
+  if (pool.invalid) {
+    throw new CompilerGpuUnavailableError(
+      `pooled GPU buffer ${label} cannot be acquired after device loss`,
+    );
+  }
+  const key = `${Number(descriptor.usage)}:${byteLength}`;
+  const available = pool.available.get(key);
+  if (available !== undefined) pool.available.delete(key);
+  const buffer = available ?? createCompilerGpuBuffer(
+    device,
+    label,
+    pooledDescriptor,
+    binding,
+    bindingByteLength ?? requestedByteLength,
+  );
+  pool.leased.add(buffer);
+  let released = false;
+  return {
+    buffer,
+    byteLength,
+    release() {
+      if (released) {
+        throw new Error(`pooled GPU buffer ${label} lease was released twice`);
+      }
+      released = true;
+      if (!pool.leased.delete(buffer)) {
+        throw new Error(
+          `pooled GPU buffer ${label} lease is absent from its device pool`,
+        );
+      }
+      if (pool.invalid || pool.available.has(key)) {
+        buffer.destroy();
+        return;
+      }
+      pool.available.set(key, buffer);
+    },
+  };
+}
+
+function compilerGpuBufferPool(device: GPUDevice): CompilerGpuBufferPool {
+  const existing = bufferPools.get(device);
+  if (existing !== undefined) return existing;
+  const pool: CompilerGpuBufferPool = {
+    available: new Map(),
+    leased: new Set(),
+    invalid: false,
+  };
+  bufferPools.set(device, pool);
+  void device.lost.then(() => {
+    pool.invalid = true;
+    pool.available.forEach((buffer) => buffer.destroy());
+    pool.available.clear();
+  });
+  return pool;
+}
+
+function compilerGpuPoolBucketByteLength(
+  requestedByteLength: number,
+  maximumByteLength: number,
+): number {
+  if (!Number.isSafeInteger(requestedByteLength) || requestedByteLength < 1) {
+    return requestedByteLength;
+  }
+  const exponent = Math.ceil(Math.log2(Math.max(4, requestedByteLength)));
+  const bucketByteLength = 2 ** exponent;
+  return bucketByteLength <= maximumByteLength
+    ? bucketByteLength
+    : requestedByteLength;
 }
 
 export function requireCompilerGpuCapacity(

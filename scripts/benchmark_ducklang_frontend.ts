@@ -107,6 +107,11 @@ try {
 
     console.log(JSON.stringify({
       file,
+      validity: {
+        status: "diagnostic",
+        reason:
+          "frontend benchmark does not inspect competing process or GPU load",
+      },
       sourceBytes: new TextEncoder().encode(source).length,
       parser: {
         coldStatus: cold.status,
@@ -122,6 +127,7 @@ try {
       compilation: {
         pairOrder: "alternatingCpuFirst",
         pairCount: warmIterationCount / 2,
+        gpuWasmVerification: "none",
         ...(compilations.pairedGpuMinusCpu === undefined
           ? {}
           : { pairedGpuMinusCpu: compilations.pairedGpuMinusCpu }),
@@ -199,6 +205,7 @@ async function measureCompilation(
   try {
     const artifact = await compileModuleSource(file, source, {
       gpuMode,
+      gpuWasmVerification: "none",
       ...(hostInterface === undefined ? {} : { hostInterface }),
     });
     if (artifact.language !== "ducklang") {
@@ -223,6 +230,7 @@ type CompilationModeReport = {
   readonly warmIterationCount: number;
   readonly warmTotalMilliseconds: readonly number[];
   readonly warmMedianTotalMilliseconds: number;
+  readonly warmProfiles?: readonly DucklangCompilationProfile[];
   readonly warmRepresentativeProfile?: DucklangCompilationProfile;
   readonly warmHotStages?: readonly {
     readonly stage: keyof DucklangCompilationProfile["stages"];
@@ -320,6 +328,7 @@ function summarizeCompilationMode(
     ),
     ...(completed.length === warm.length
       ? {
+        warmProfiles: completed.map((measurement) => measurement.profile),
         warmRepresentativeProfile: representativeCompilationProfile(
           completed.map((measurement) => measurement.profile),
         ),
