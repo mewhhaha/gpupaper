@@ -9,6 +9,7 @@ export const BuiltinTypeId = {
   text: 7,
   bytes: 8,
   unit: 9,
+  f32x4Mask: 10,
 } as const;
 
 export type BuiltinTypeId = typeof BuiltinTypeId[keyof typeof BuiltinTypeId];
@@ -62,6 +63,21 @@ export const PrimitiveId = {
   bytesFill: 45,
   bufferEqual: 46,
   f32Format: 47,
+  f32x4ExtractLane0: 48,
+  f32x4ExtractLane1: 49,
+  f32x4ExtractLane2: 50,
+  f32x4ExtractLane3: 51,
+  f32x4ReplaceLane0: 52,
+  f32x4ReplaceLane1: 53,
+  f32x4ReplaceLane2: 54,
+  f32x4ReplaceLane3: 55,
+  f32x4Equal: 56,
+  f32x4NotEqual: 57,
+  f32x4LessThan: 58,
+  f32x4LessThanOrEqual: 59,
+  f32x4GreaterThan: 60,
+  f32x4GreaterThanOrEqual: 61,
+  f32x4Select: 62,
 } as const;
 
 export type PrimitiveId = typeof PrimitiveId[keyof typeof PrimitiveId];
@@ -526,6 +542,79 @@ export const primitiveDescriptors: readonly PrimitiveDescriptor[] = [
     lowering: "buffer.format_f32",
     sourceNames: ["@format_f32"],
     imports: runtimeImports(["format_f32"]),
+  },
+  ...([0, 1, 2, 3] as const).map((lane) => ({
+    id: [
+      PrimitiveId.f32x4ExtractLane0,
+      PrimitiveId.f32x4ExtractLane1,
+      PrimitiveId.f32x4ExtractLane2,
+      PrimitiveId.f32x4ExtractLane3,
+    ][lane],
+    name: `f32x4.extract_lane_${lane}`,
+    signature: {
+      operands: [BuiltinTypeId.f32x4],
+      result: BuiltinTypeId.f32,
+    },
+    stages: ["runtime"] as const,
+    effects: pure,
+    lowering: `wasm.f32x4.extract_lane ${lane}`,
+    sourceNames: [`@f32x4_extract_lane_${lane}`],
+    imports: [],
+  })),
+  ...([0, 1, 2, 3] as const).map((lane) => ({
+    id: [
+      PrimitiveId.f32x4ReplaceLane0,
+      PrimitiveId.f32x4ReplaceLane1,
+      PrimitiveId.f32x4ReplaceLane2,
+      PrimitiveId.f32x4ReplaceLane3,
+    ][lane],
+    name: `f32x4.replace_lane_${lane}`,
+    signature: {
+      operands: [BuiltinTypeId.f32x4, BuiltinTypeId.f32],
+      result: BuiltinTypeId.f32x4,
+    },
+    stages: ["runtime"] as const,
+    effects: pure,
+    lowering: `wasm.f32x4.replace_lane ${lane}`,
+    sourceNames: [`@f32x4_replace_lane_${lane}`],
+    imports: [],
+  })),
+  ...([
+    [PrimitiveId.f32x4Equal, "equal", "eq"],
+    [PrimitiveId.f32x4NotEqual, "not_equal", "ne"],
+    [PrimitiveId.f32x4LessThan, "less_than", "lt"],
+    [PrimitiveId.f32x4LessThanOrEqual, "less_than_or_equal", "le"],
+    [PrimitiveId.f32x4GreaterThan, "greater_than", "gt"],
+    [PrimitiveId.f32x4GreaterThanOrEqual, "greater_than_or_equal", "ge"],
+  ] as const).map(([id, name, source]) => ({
+    id,
+    name: `f32x4.${name}`,
+    signature: {
+      operands: [BuiltinTypeId.f32x4, BuiltinTypeId.f32x4],
+      result: BuiltinTypeId.f32x4Mask,
+    },
+    stages: ["runtime"] as const,
+    effects: pure,
+    lowering: `wasm.f32x4.${source}`,
+    sourceNames: [`@f32x4_${source}`],
+    imports: [],
+  })),
+  {
+    id: PrimitiveId.f32x4Select,
+    name: "f32x4.select",
+    signature: {
+      operands: [
+        BuiltinTypeId.f32x4Mask,
+        BuiltinTypeId.f32x4,
+        BuiltinTypeId.f32x4,
+      ],
+      result: BuiltinTypeId.f32x4,
+    },
+    stages: ["runtime"],
+    effects: pure,
+    lowering: "wasm.v128.bitselect",
+    sourceNames: ["@f32x4_select"],
+    imports: [],
   },
   {
     id: PrimitiveId.panic,

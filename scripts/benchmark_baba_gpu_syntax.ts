@@ -3,14 +3,26 @@ import {
   CpuFrontend,
 } from "@mewhhaha/baba/runtime/webgpu";
 import { BabaGpuSyntaxSession } from "../src/baba_gpu_syntax.ts";
+import { lowerBlotResidentSyntax } from "../src/blot_gpu_lowering.ts";
 
 const bindingCounts = [32, 512, 8_192, 32_768] as const;
+const resolutionBindingCounts = [32, 512, 2_048] as const;
 const sampleCount = requestedSampleCount(Deno.args);
 const plan = await Deno.readFile(
   new URL("../grammar/blot/generated/parser.plan", import.meta.url),
 );
 const cpu = CpuFrontend.create(plan);
 
+const benchmarkAdapter = await navigator.gpu?.requestAdapter({
+  powerPreference: "high-performance",
+});
+if (benchmarkAdapter?.info?.isFallbackAdapter !== false) {
+  throw new Error(
+    `Blot benchmark requires a hardware adapter; received ${
+      benchmarkAdapter?.info?.description ?? "none"
+    }`,
+  );
+}
 const gpu = await BabaGpuSyntaxSession.create(plan);
 
 try {
@@ -19,6 +31,23 @@ try {
     throw new Error(
       `Blot GPU syntax warmup failed: ${diagnosticSummary(warmup.diagnostics)}`,
     );
+  }
+  for (
+    const strategy of ["direct-ordinal-fused", "segmented-scan"] as const
+  ) {
+    const source = blotSource(1);
+    const resident = await gpu.submitResidentSyntax(source);
+    try {
+      await lowerBlotResidentSyntax(
+        "warmup.blot",
+        source,
+        gpu.device,
+        resident,
+        strategy,
+      );
+    } finally {
+      resident.dispose();
+    }
   }
 
   const measurements = [];
@@ -40,6 +69,16 @@ try {
     const ownedGpuMilliseconds = [];
     const residentSubmissionMilliseconds = [];
     const residentCompletionMilliseconds = [];
+    const directOrdinalLoweringMilliseconds = [];
+    const segmentedLoweringMilliseconds = [];
+    let directOrdinalReadbackBytes = 0;
+    let declarationCapacity = 0;
+    let scheduledDeclarationInvocationCount = 0;
+    let segmentedScanDispatchCount = 0;
+    let segmentedScanAdditionWork = 0;
+    let segmentedScanAdditionWorkUpperBound = 0;
+    let segmentedScanScheduledInvocationCount = 0;
+    let segmentedScanTemporaryBytes = 0;
     for (let sample = 0; sample < sampleCount; sample += 1) {
       const cpuStart = performance.now();
       const cpuResult = cpu.ingest(source);
@@ -67,6 +106,49 @@ try {
       await gpu.waitForSubmittedWork();
       residentCompletionMilliseconds.push(performance.now() - residentStart);
       resident.dispose();
+
+      for (
+        const strategy of ["direct-ordinal-fused", "segmented-scan"] as const
+      ) {
+        const loweringResident = await gpu.submitResidentSyntax(source);
+        await gpu.waitForSubmittedWork();
+        try {
+          const lowering = await lowerBlotResidentSyntax(
+            "benchmark.blot",
+            source,
+            gpu.device,
+            loweringResident,
+            strategy,
+          );
+          if (lowering.bindings.length !== bindingCount) {
+            throw new Error(
+              `resident payload has ${lowering.bindings.length} bindings; expected ${bindingCount}`,
+            );
+          }
+          if (strategy === "direct-ordinal-fused") {
+            directOrdinalLoweringMilliseconds.push(
+              lowering.completionMilliseconds,
+            );
+            directOrdinalReadbackBytes = lowering.residentReadbackBytes;
+            declarationCapacity = lowering.declarationCapacity;
+            scheduledDeclarationInvocationCount =
+              lowering.scheduledDeclarationInvocationCount;
+          } else {
+            segmentedLoweringMilliseconds.push(
+              lowering.completionMilliseconds,
+            );
+            segmentedScanDispatchCount = lowering.scanDispatchCount;
+            segmentedScanAdditionWork = lowering.scanAdditionWork;
+            segmentedScanAdditionWorkUpperBound =
+              lowering.scanAdditionWorkUpperBound;
+            segmentedScanScheduledInvocationCount =
+              lowering.scanScheduledInvocationCount;
+            segmentedScanTemporaryBytes = lowering.scanTemporaryBytes;
+          }
+        } finally {
+          loweringResident.dispose();
+        }
+      }
     }
     measurements.push({
       bindingCount,
@@ -74,6 +156,9 @@ try {
       tokenCount: actual.program.tokens.length / 4,
       nodeCount: actual.program.nodes.length / 8,
       edgeCount: actual.program.edges.length / 4,
+      declarationCapacity,
+      paddedDeclarationLaneCount: declarationCapacity - bindingCount - 1,
+      scheduledDeclarationInvocationCount,
       cpuMilliseconds,
       cpuMedianMilliseconds: median(cpuMilliseconds),
       ownedGpuMilliseconds,
@@ -86,17 +171,71 @@ try {
       residentCompletionMedianMilliseconds: median(
         residentCompletionMilliseconds,
       ),
+      directOrdinalLoweringMilliseconds,
+      directOrdinalLoweringMedianMilliseconds: median(
+        directOrdinalLoweringMilliseconds,
+      ),
+      directOrdinalReadbackBytes,
+      segmentedLoweringMilliseconds,
+      segmentedLoweringMedianMilliseconds: median(
+        segmentedLoweringMilliseconds,
+      ),
+      segmentedScanDispatchCount,
+      segmentedScanAdditionWork,
+      segmentedScanAdditionWorkUpperBound,
+      segmentedScanScheduledInvocationCount,
+      segmentedScanTemporaryBytes,
+      directOrdinalSpeedupOverSegmented: median(segmentedLoweringMilliseconds) /
+        median(directOrdinalLoweringMilliseconds),
     });
   }
 
   const ownedBreakEven = measurements.find((measurement) =>
     measurement.ownedGpuMedianMilliseconds <= measurement.cpuMedianMilliseconds
   );
+  const resolutionMeasurements = [];
+  for (const bindingCount of resolutionBindingCounts) {
+    const source = blotResolutionSource(bindingCount);
+    const directOrdinalLoweringMilliseconds = [];
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      const resident = await gpu.submitResidentSyntax(source);
+      await gpu.waitForSubmittedWork();
+      try {
+        const lowering = await lowerBlotResidentSyntax(
+          "resolution-benchmark.blot",
+          source,
+          gpu.device,
+          resident,
+          "direct-ordinal-fused",
+        );
+        if (lowering.bindings.length !== bindingCount) {
+          throw new Error(
+            `resolution payload has ${lowering.bindings.length} bindings; expected ${bindingCount}`,
+          );
+        }
+        directOrdinalLoweringMilliseconds.push(
+          lowering.completionMilliseconds,
+        );
+      } finally {
+        resident.dispose();
+      }
+    }
+    resolutionMeasurements.push({
+      bindingCount,
+      sourceBytes: new TextEncoder().encode(source).byteLength,
+      predecessorCandidateComparisons: bindingCount * (bindingCount + 1) / 2,
+      directOrdinalLoweringMilliseconds,
+      directOrdinalLoweringMedianMilliseconds: median(
+        directOrdinalLoweringMilliseconds,
+      ),
+    });
+  }
   console.log(JSON.stringify({
     adapter: gpu.capabilities,
     sampleCount,
     ...gpu.setupTimings,
     measurements,
+    resolutionMeasurements,
     ownedBreakEven: ownedBreakEven === undefined
       ? {
         status: "not-observed",
@@ -120,6 +259,14 @@ function blotSource(bindingCount: number): string {
     (_, index) => `let value_${index} = ${index};`,
   );
   return `${bindings.join("\n")}\nreturn value_${bindingCount - 1};\n`;
+}
+
+function blotResolutionSource(bindingCount: number): string {
+  const bindings = ["let root = 0;"];
+  for (let index = 1; index < bindingCount; index += 1) {
+    bindings.push(`let value_${index} = root;`);
+  }
+  return `${bindings.join("\n")}\nreturn root;\n`;
 }
 
 function assertProgramEqual(

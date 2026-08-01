@@ -45,6 +45,7 @@ import {
   createDucklangBackendFunctionCache,
   type DucklangBackendFunctionCache,
   ducklangTextLiteralsSectionName,
+  type DucklangWasmTarget,
   lowerDucklangCoreToFcgAndWasm,
 } from "./ducklang_core_wasm.ts";
 import {
@@ -73,6 +74,7 @@ import {
   createDucklangRuntimeImports,
 } from "./ducklang_runtime.ts";
 import { ducklangRuntimeImportModule } from "./ducklang_primitives.ts";
+import { vectorizeDucklangCore } from "./ducklang_vectorize.ts";
 import {
   formatDucklangType,
   inferDucklangEffectModule,
@@ -106,10 +108,11 @@ export type CompilationOptions = {
   readonly gpuScheduling?: GpuSchedulingPolicy;
   readonly hostInterface?: string;
   readonly session?: DucklangCompilationSession;
+  readonly wasmTarget?: DucklangWasmTarget;
 };
 
 export type CompilationBackends = {
-  readonly typeCheck: "cpu";
+  readonly typeCheck: "cpu" | "gpu";
   readonly comptime: "cpu" | "notApplicable";
   readonly coreRewrite: "cpu" | "gpu" | "identity" | "notApplicable";
   readonly wasmEmission: "cpu" | "gpu";
@@ -156,6 +159,7 @@ export type DucklangCompilationStageTimings = {
   readonly gpuCorePassMilliseconds: number;
   readonly cpuCoreRewriteMilliseconds: number;
   readonly coreInflationMilliseconds: number;
+  readonly coreVectorizationMilliseconds: number;
   readonly wasmPlanningAndCpuEmissionMilliseconds: number;
   readonly gpuWasmEmissionMilliseconds: number;
   readonly wasmSelectionMilliseconds: number;
@@ -202,6 +206,10 @@ export type DucklangCompilationTimingDetails = {
   readonly cpuCoreMatchingMilliseconds: number;
   readonly cpuCoreConflictResolutionMilliseconds: number;
   readonly cpuCoreRebuildMilliseconds: number;
+  readonly vectorValidationMilliseconds: number;
+  readonly vectorPlanningMilliseconds: number;
+  readonly vectorRebuildMilliseconds: number;
+  readonly vectorFlatCoreMilliseconds: number;
   readonly gpuCoreInitializationMilliseconds: number;
   readonly gpuCoreQueueWaitMilliseconds: number;
   readonly gpuWasmQueueWaitMilliseconds: number;
@@ -273,6 +281,16 @@ export type DucklangCompilationWork = {
   readonly flatCoreValueCount: number;
   readonly coreRewriteProposalCount: number;
   readonly coreRewriteAcceptedCount: number;
+  readonly vectorCandidateWindowCount: number;
+  readonly vectorProposedPlanCount: number;
+  readonly vectorAcceptedPlanCount: number;
+  readonly vectorScalarOperationCount: number;
+  readonly vectorOperationCount: number;
+  readonly vectorPackCount: number;
+  readonly vectorSplatCount: number;
+  readonly vectorExtractCount: number;
+  readonly vectorEstimatedScalarCost: number;
+  readonly vectorEstimatedCost: number;
   readonly gpuRewriteCandidateCount: number;
   readonly gpuRewriteCandidateDescriptorBytes: number;
   readonly gpuCoreLogicalDeviceBufferBytes: number;
@@ -345,6 +363,7 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly gpuCoreResult: GpuDucklangCoreResult | undefined;
   readonly abi: DucklangManagedAbi;
   readonly profile: DucklangCompilationProfile;
+  readonly wasmTarget: DucklangWasmTarget;
 };
 
 export type BlotCompilationTimings = BlotGpuFrontendTimings & {
@@ -509,7 +528,7 @@ async function compileBlotModuleSource(
     finalTypes: ["main :: I64"],
     gpuWasmResult,
     backends: {
-      typeCheck: "cpu",
+      typeCheck: "gpu",
       comptime: "notApplicable",
       coreRewrite: "notApplicable",
       wasmEmission: "gpu",
@@ -738,6 +757,7 @@ async function prepareDucklangModuleSource(
       hostInterface: hostInterfaceIdentity,
       gpuMode: options.gpuMode ?? "off",
       gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+      wasmTarget: options.wasmTarget ?? "wasm-simd128",
     });
     semanticContextMilliseconds = performance.now() - semanticContextStart;
   }
@@ -788,6 +808,7 @@ async function prepareDucklangModuleSource(
         hostInterface: hostInterfaceIdentity,
         gpuMode: options.gpuMode ?? "off",
         gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+        wasmTarget: options.wasmTarget ?? "wasm-simd128",
       });
       semanticIdentities.set(sessionContextIdentity, sessionSemanticIdentity);
     }
@@ -1166,6 +1187,7 @@ async function elaborateDucklangModuleSource(
         gpuCorePassMilliseconds: 0,
         cpuCoreRewriteMilliseconds: 0,
         coreInflationMilliseconds: 0,
+        coreVectorizationMilliseconds: 0,
         wasmPlanningAndCpuEmissionMilliseconds: 0,
         gpuWasmEmissionMilliseconds: 0,
         wasmSelectionMilliseconds: 0,
@@ -1228,6 +1250,10 @@ async function elaborateDucklangModuleSource(
         cpuCoreMatchingMilliseconds: 0,
         cpuCoreConflictResolutionMilliseconds: 0,
         cpuCoreRebuildMilliseconds: 0,
+        vectorValidationMilliseconds: 0,
+        vectorPlanningMilliseconds: 0,
+        vectorRebuildMilliseconds: 0,
+        vectorFlatCoreMilliseconds: 0,
         gpuCoreInitializationMilliseconds: 0,
         gpuCoreQueueWaitMilliseconds: 0,
         gpuWasmQueueWaitMilliseconds: 0,
@@ -1359,6 +1385,16 @@ async function elaborateDucklangModuleSource(
         flatCoreValueCount: 0,
         coreRewriteProposalCount: 0,
         coreRewriteAcceptedCount: 0,
+        vectorCandidateWindowCount: 0,
+        vectorProposedPlanCount: 0,
+        vectorAcceptedPlanCount: 0,
+        vectorScalarOperationCount: 0,
+        vectorOperationCount: 0,
+        vectorPackCount: 0,
+        vectorSplatCount: 0,
+        vectorExtractCount: 0,
+        vectorEstimatedScalarCost: 0,
+        vectorEstimatedCost: 0,
         gpuRewriteCandidateCount: 0,
         gpuRewriteCandidateDescriptorBytes: 0,
         gpuCoreLogicalDeviceBufferBytes: 0,
@@ -1471,6 +1507,7 @@ async function compileDucklangModuleSource(
         gpuCorePassMilliseconds: 0,
         cpuCoreRewriteMilliseconds: 0,
         coreInflationMilliseconds: 0,
+        coreVectorizationMilliseconds: 0,
         wasmPlanningAndCpuEmissionMilliseconds: 0,
         gpuWasmEmissionMilliseconds: 0,
         wasmSelectionMilliseconds: 0,
@@ -1535,6 +1572,10 @@ async function compileDucklangModuleSource(
             cpuCoreMatchingMilliseconds: 0,
             cpuCoreConflictResolutionMilliseconds: 0,
             cpuCoreRebuildMilliseconds: 0,
+            vectorValidationMilliseconds: 0,
+            vectorPlanningMilliseconds: 0,
+            vectorRebuildMilliseconds: 0,
+            vectorFlatCoreMilliseconds: 0,
             gpuCoreInitializationMilliseconds: 0,
             gpuCoreQueueWaitMilliseconds: 0,
             gpuWasmQueueWaitMilliseconds: 0,
@@ -1658,6 +1699,25 @@ async function compileDucklangModuleSource(
     coreInflationMilliseconds = performance.now() - coreInflationStart;
   }
 
+  const wasmTarget = options.wasmTarget ?? "wasm-simd128";
+  const coreVectorizationStart = performance.now();
+  const scalarOptimizedCore = optimizedCore;
+  const vectorization = wasmTarget === "wasm-simd128"
+    ? vectorizeDucklangCore(optimizedCore)
+    : undefined;
+  let vectorFlatCoreMilliseconds = 0;
+  if (vectorization !== undefined) {
+    optimizedCore = vectorization.module;
+    if (vectorization.module !== scalarOptimizedCore) {
+      const vectorFlatCoreStart = performance.now();
+      optimizedFlatCore = flattenTrustedDucklangCore(optimizedCore).package;
+      vectorFlatCoreMilliseconds = performance.now() - vectorFlatCoreStart;
+    }
+  }
+  const coreVectorizationMilliseconds = wasmTarget === "wasm-simd128"
+    ? performance.now() - coreVectorizationStart
+    : 0;
+
   const wasmStart = performance.now();
   const backendFunctions = options.session?.backendFunctions;
   const backendFunctionAnalysesBefore = backendFunctions?.analyses ?? 0;
@@ -1667,6 +1727,7 @@ async function compileDucklangModuleSource(
       ? "cpu"
       : "planOnly",
     functions: backendFunctions,
+    target: wasmTarget,
   });
   const wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
@@ -1710,6 +1771,7 @@ async function compileDucklangModuleSource(
     gpuCorePassMilliseconds,
     cpuCoreRewriteMilliseconds,
     coreInflationMilliseconds,
+    coreVectorizationMilliseconds,
     wasmPlanningAndCpuEmissionMilliseconds: wasmMilliseconds,
     gpuWasmEmissionMilliseconds: gpuMode === "off" ? 0 : gpuWasmMilliseconds,
     wasmSelectionMilliseconds,
@@ -1733,6 +1795,10 @@ async function compileDucklangModuleSource(
       cpuCoreMatchingMilliseconds,
       cpuCoreConflictResolutionMilliseconds,
       cpuCoreRebuildMilliseconds,
+      vectorValidationMilliseconds: vectorization?.validationMilliseconds ?? 0,
+      vectorPlanningMilliseconds: vectorization?.planningMilliseconds ?? 0,
+      vectorRebuildMilliseconds: vectorization?.rebuildMilliseconds ?? 0,
+      vectorFlatCoreMilliseconds,
       gpuCoreInitializationMilliseconds: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.initializationMilliseconds
         : 0,
@@ -1782,6 +1848,19 @@ async function compileDucklangModuleSource(
       coreRewriteAcceptedCount: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.accepted.length
         : cpuCoreRewriteAcceptedCount,
+      vectorCandidateWindowCount: vectorization?.metrics.candidateWindowCount ??
+        0,
+      vectorProposedPlanCount: vectorization?.metrics.proposedPlanCount ?? 0,
+      vectorAcceptedPlanCount: vectorization?.metrics.acceptedPlanCount ?? 0,
+      vectorScalarOperationCount: vectorization?.metrics.scalarOperationCount ??
+        0,
+      vectorOperationCount: vectorization?.metrics.vectorOperationCount ?? 0,
+      vectorPackCount: vectorization?.metrics.packCount ?? 0,
+      vectorSplatCount: vectorization?.metrics.splatCount ?? 0,
+      vectorExtractCount: vectorization?.metrics.extractCount ?? 0,
+      vectorEstimatedScalarCost: vectorization?.metrics.estimatedScalarCost ??
+        0,
+      vectorEstimatedCost: vectorization?.metrics.estimatedVectorCost ?? 0,
       gpuRewriteCandidateCount: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.rewriteCandidateCount
         : 0,
@@ -1888,6 +1967,7 @@ async function compileDucklangModuleSource(
     gpuCoreResult,
     abi,
     profile,
+    wasmTarget,
     initialTypes: frontend.initialTypes,
     finalTypes: frontend.initialTypes,
     gpuWasmResult,

@@ -192,7 +192,7 @@ async function useBlotGpuFrontend(
   const adapter = await navigator.gpu.requestAdapter({
     powerPreference: "high-performance",
   });
-  if (adapter === null) return;
+  if (adapter?.info?.isFallbackAdapter !== false) return;
 
   const gpu = await BabaGpuSyntaxSession.create(blotPlan);
   try {

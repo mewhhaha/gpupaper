@@ -79,6 +79,8 @@ deno task benchmark:frontend
 deno task benchmark:syntax
 deno task benchmark:rebuild
 deno task benchmark:break-even
+deno task benchmark:branch-hints
+deno task benchmark:simd
 deno task benchmark:peers
 deno task experiments
 deno task run examples/all.hs
@@ -93,6 +95,12 @@ budgets, and repeated byte identity.
 
 Recorded RTX 4080 SUPER measurements, device limits, and the measured break-even
 interval are in [Ducklang frontend performance](PERFORMANCE.md).
+
+The Wasm backend emits standardized branch-likelihood metadata for the
+successful arm of the final aggregate bounds check. It does not annotate source
+conditionals or loops without evidence. The hint section is semantically
+erasable, is emitted identically by CPU and GPU binary paths, and is measured by
+`deno task benchmark:branch-hints` on the supported Deno/V8 target.
 
 Ducklang compilation artifacts include a non-overlapping stage profile. It
 records the accounted and unattributed wall time, detailed parser and
@@ -217,11 +225,13 @@ Duck is not admitted by the GPU-only language path. Its existing complete Wasm
 parser is a transitional payload-lowering reference, not a fallback. The copied
 Blot grammar is guard-free and exercises Baba's GPU lexer, delimiter validator,
 island parser, and compact syntax allocation with exact accepted-output parity.
-Its closed `I64` let/return fragment consumes owned GPU syntax, lowers through a
-typed payload IR, and requires GPU Wasm emission. Resident syntax-to-payload
-lowering and the rest of Blot remain explicit future boundaries. Run
-`deno task benchmark:syntax`; CPU syntax exists only as a differential oracle
-outside the admitted production session.
+Its closed `I64` let/return fragment consumes Baba GPU syntax, lowers through a
+typed payload IR, and requires GPU Wasm emission. Production Blot lowering now
+consumes resident syntax directly with a proved scan-free `let*; return` path; a
+segmented scan is retained as a differential reference for binding ordinals. It
+is not yet a variable-cardinality payload emitter. The rest of Blot remains an
+explicit future boundary. Run `deno task benchmark:syntax`; CPU syntax exists
+only as a differential oracle outside the admitted production session.
 
 ## Deliberate boundaries
 
@@ -234,8 +244,9 @@ outside the admitted production session.
   one-shot algebraic effect implementation.
 - Managed `Text`, `Bytes`, aggregates, and closures use opaque runtime handles.
   GPU kernels compile the payload; they do not execute its buffer operations.
-- The semantic frontend, ownership/effect policy, type oracle, and host-ABI
-  policy run on the CPU. Production GPU stages handle flat-Core rewrite matching
+- Duck's semantic frontend, ownership/effect policy, type oracle, and host-ABI
+  policy run on the CPU. Admitted Blot syntax and its closed payload fragment
+  run on the GPU. Production GPU stages also handle flat-Core rewrite matching
   and Wasm binary emission. Type equality and scalar bytecode retain direct GPU
   conformance experiments outside ordinary compilation.
 - The separate Haskell-like frontend remains eager and rank-1. It is an

@@ -69,6 +69,14 @@ add(20, 22)
       details.cpuCoreRebuildMilliseconds,
     "CPU Core rewrite",
   );
+  assertContains(
+    stages.coreVectorizationMilliseconds,
+    details.vectorValidationMilliseconds +
+      details.vectorPlanningMilliseconds +
+      details.vectorRebuildMilliseconds +
+      details.vectorFlatCoreMilliseconds,
+    "Core vectorization",
+  );
   if (stages.gpuCorePassMilliseconds !== 0) {
     throw new Error(
       `CPU compilation reported ${stages.gpuCorePassMilliseconds}ms of GPU Core work`,

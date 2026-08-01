@@ -86,6 +86,10 @@ export class BabaGpuSyntaxSession {
     return this.#frontend.ingestResident(source, options);
   }
 
+  get device(): GPUDevice {
+    return this.#runtime.device;
+  }
+
   waitForSubmittedWork(): Promise<void> {
     return this.#runtime.device.queue.onSubmittedWorkDone();
   }

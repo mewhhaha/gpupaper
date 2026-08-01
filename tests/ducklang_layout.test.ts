@@ -35,7 +35,7 @@ Deno.test("Ducklang scalar layouts match their Wasm storage", () => {
     { kind: "scalar", scalar: "i64" },
     { kind: "scalar", scalar: "f32" },
     { kind: "scalar", scalar: "f64" },
-    { kind: "scalar", scalar: "f32x4" },
+    { kind: "vector", lanes: 4, element: "f32" },
     { kind: "scalar", scalar: "unit" },
   ]);
   const sizes = plan.typeLayouts.map((id) => plan.layouts[id].size);

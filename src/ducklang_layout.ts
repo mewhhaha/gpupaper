@@ -193,6 +193,9 @@ function computeLayout(
   switch (entry.kind) {
     case "scalar":
       return { kind: "scalar", ...scalarLayout(entry.scalar) };
+    case "vector":
+    case "mask":
+      return { kind: "scalar", size: 16, alignment: 16 };
     case "buffer": {
       // The managed payload ABI preserves runtime identity across ownership
       // transitions, so both states intentionally share this representation.
@@ -254,7 +257,7 @@ function computeLayout(
 }
 
 function scalarLayout(
-  scalar: "i32" | "i64" | "f32" | "f64" | "f32x4" | "unit",
+  scalar: "i32" | "i64" | "f32" | "f64" | "unit",
 ): { readonly size: number; readonly alignment: number } {
   switch (scalar) {
     case "i32":
@@ -263,8 +266,6 @@ function scalarLayout(
     case "i64":
     case "f64":
       return { size: 8, alignment: 8 };
-    case "f32x4":
-      return { size: 16, alignment: 16 };
     case "unit":
       // Unit occupies no storage, but alignment one keeps it usable as a field.
       return { size: 0, alignment: 1 };

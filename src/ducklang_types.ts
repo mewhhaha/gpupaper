@@ -384,6 +384,11 @@ const booleanType: Type = {
 const textType: Type = { kind: "constructor", name: "text", arguments: [] };
 const bytesType: Type = { kind: "constructor", name: "bytes", arguments: [] };
 const f32x4Type: Type = { kind: "constructor", name: "f32x4", arguments: [] };
+const f32x4MaskType: Type = {
+  kind: "constructor",
+  name: "f32x4Mask",
+  arguments: [],
+};
 const unitType: Type = { kind: "constructor", name: "unit", arguments: [] };
 const typeDescriptorType: Type = {
   kind: "constructor",
@@ -3051,6 +3056,8 @@ class DucklangInference {
         return f64Type;
       case BuiltinTypeId.f32x4:
         return f32x4Type;
+      case BuiltinTypeId.f32x4Mask:
+        return f32x4MaskType;
       case BuiltinTypeId.bool:
         return booleanType;
       case BuiltinTypeId.text:
@@ -3125,6 +3132,7 @@ class DucklangInference {
     if (reference.name === "F32") return f32Type;
     if (reference.name === "F64") return f64Type;
     if (reference.name === "F32x4") return f32x4Type;
+    if (reference.name === "F32x4Mask") return f32x4MaskType;
     if (reference.name === "Bool") return booleanType;
     if (reference.name === "Text") return textType;
     if (reference.name === "Bytes") return bytesType;
@@ -4410,6 +4418,7 @@ function sourceTypeName(type: Type): string {
   if (type.name === "f32") return "F32";
   if (type.name === "f64") return "F64";
   if (type.name === "f32x4") return "F32x4";
+  if (type.name === "f32x4Mask") return "F32x4Mask";
   if (type.name === "bool") return "Bool";
   if (type.name === "text") return "Text";
   if (type.name === "bytes") return "Bytes";

@@ -3,7 +3,7 @@ import { requestCompilerGpuDevice } from "../src/gpu_device.ts";
 
 const targets = [
   target("editor", 24_460, 5_000, "editor/host.duck"),
-  target("codex", 226_134, 10_000, "codex/host.duck"),
+  target("codex", 226_211, 10_000, "codex/host.duck"),
   target("grep", 3_911, 3_000, "grep/host.duck"),
   target("tar", 26_106, 3_000, "tar/host.duck"),
   target("wav", 2_520, 3_000),

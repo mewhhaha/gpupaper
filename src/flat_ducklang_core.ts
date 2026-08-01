@@ -20,7 +20,7 @@ import type { PrimitiveId } from "./ducklang_primitives.ts";
 import type { DucklangBinaryOperator } from "./ducklang_types.ts";
 import type { SourceSpan } from "./syntax.ts";
 
-export const flatDucklangCoreSchemaVersion = 1 as const;
+export const flatDucklangCoreSchemaVersion = 2 as const;
 
 export type FlatDucklangCore = {
   readonly schemaVersion: typeof flatDucklangCoreSchemaVersion;
@@ -127,13 +127,23 @@ const absent = 0xffff_ffff;
 const parameterDefinition = 0;
 const operationDefinition = 1;
 
-const typeKinds = ["scalar", "buffer", "product", "sum", "function"] as const;
-const scalarKinds = ["i32", "i64", "f32", "f64", "f32x4", "unit"] as const;
+const typeKinds = [
+  "scalar",
+  "vector",
+  "mask",
+  "buffer",
+  "product",
+  "sum",
+  "function",
+] as const;
+const scalarKinds = ["i32", "i64", "f32", "f64", "unit"] as const;
+const vectorElementKinds = ["i32", "i64", "f32", "f64"] as const;
 const bufferKinds = ["text", "bytes"] as const;
 const operationKinds = [
   "constant",
   "scalar.binary",
   "primitive",
+  "vector.shuffle",
   "product.make",
   "product.project",
   "product.update",
@@ -956,6 +966,8 @@ function validateFlatStructure(
     const auxiliary = package_.typeAuxiliaries[typeId];
     if (
       (kind === "scalar" && auxiliary >= scalarKinds.length) ||
+      ((kind === "vector" || kind === "mask") &&
+        !validVectorAuxiliary(auxiliary)) ||
       (kind === "buffer" && auxiliary >= bufferKinds.length) ||
       (kind === "function" &&
         auxiliary >= package_.signatureResultTypeIds.length)
@@ -1178,6 +1190,22 @@ function validateFlatStructure(
   return { strings, sourceLocations };
 }
 
+function validVectorAuxiliary(auxiliary: number): boolean {
+  const element = vectorElementKinds[auxiliary & 0xff];
+  if (element === undefined) return false;
+  const lanes = auxiliary >>> 8;
+  return lanes * (element === "i64" || element === "f64" ? 64 : 32) === 128;
+}
+
+function vectorLaneCount(auxiliary: number): 2 | 4 {
+  if (!validVectorAuxiliary(auxiliary)) {
+    throw new RangeError(
+      `invalid flat Ducklang Core vector auxiliary ${auxiliary}`,
+    );
+  }
+  return (auxiliary >>> 8) as 2 | 4;
+}
+
 function inflateValidatedFlatCore(
   package_: FlatDucklangCore,
   tables: ValidatedTables,
@@ -1200,6 +1228,15 @@ function inflateValidatedFlatCore(
             kind: "scalar",
             scalar: scalarKinds[package_.typeAuxiliaries[typeId]],
           };
+        case "vector":
+        case "mask": {
+          const auxiliary = package_.typeAuxiliaries[typeId];
+          return {
+            kind: typeKinds[kindId],
+            lanes: vectorLaneCount(auxiliary),
+            element: vectorElementKinds[auxiliary & 0xff],
+          };
+        }
         case "buffer":
           return {
             kind: "buffer",
@@ -1372,6 +1409,8 @@ function inflateOperation(
     case "primitive":
       requireAttributeCount(kind, attributes, 1);
       return { ...base, kind, primitiveId: attributes[0] as PrimitiveId };
+    case "vector.shuffle":
+      return { ...base, kind, lanes: attributes as number[] };
     case "product.project":
       requireAttributeCount(kind, attributes, 1);
       return { ...base, kind, index: attributes[0] as number };
@@ -1525,6 +1564,9 @@ function appendOperationAttributes(
       return;
     case "primitive":
       pushUnsigned(operation.primitiveId);
+      return;
+    case "vector.shuffle":
+      operation.lanes.forEach(pushUnsigned);
       return;
     case "product.project":
       pushUnsigned(operation.index);
@@ -1710,6 +1752,10 @@ function valueKey(functionId: number, localValueId: number): string {
 function typeAuxiliary(type: DucklangCoreType): number {
   if (type.kind === "scalar") {
     return requiredKindId(scalarKinds, type.scalar, "scalar");
+  }
+  if (type.kind === "vector" || type.kind === "mask") {
+    return (type.lanes << 8) |
+      requiredKindId(vectorElementKinds, type.element, "vector element");
   }
   if (type.kind === "buffer") {
     return requiredKindId(bufferKinds, type.buffer, "buffer");

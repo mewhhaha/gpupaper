@@ -3,10 +3,12 @@ import {
   emitWasmPlanOnCpu,
   validateWasmBinaryPlan,
   wasmBinaryPlanByteLength,
+  wasmBranchHintSectionName,
   wasmInstruction,
   WasmModuleBuilder,
   wasmType,
 } from "../src/wasm.ts";
+import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
 
 /**
  * Binary sizes and offsets are calculated by count-scan-write.
@@ -76,6 +78,126 @@ Deno.test("Ducklang Wasm plan byte length equals emitted length", () => {
   const plan = buildModule(4).finishPlan();
 
   assertEquals(wasmBinaryPlanByteLength(plan), emitWasmPlanOnCpu(plan).length);
+});
+
+Deno.test("Wasm branch hints use function-relative instruction offsets", () => {
+  const hinted = new WasmModuleBuilder();
+  const hintedType = hinted.addFunctionType([wasmType.i32], [wasmType.i32]);
+  const hintedFunction = hinted.addFunction(
+    hintedType,
+    [wasmType.i32, wasmType.i64],
+    [
+      ...wasmInstruction.localGet(0),
+      ...wasmInstruction.branchHint("likely"),
+      ...wasmInstruction.ifI32,
+      ...wasmInstruction.i32Constant(11),
+      ...wasmInstruction.else,
+      ...wasmInstruction.i32Constant(22),
+      ...wasmInstruction.end,
+    ],
+  );
+  hinted.exportFunction("main", hintedFunction);
+
+  const unhinted = new WasmModuleBuilder();
+  const unhintedType = unhinted.addFunctionType(
+    [wasmType.i32],
+    [wasmType.i32],
+  );
+  const unhintedFunction = unhinted.addFunction(
+    unhintedType,
+    [wasmType.i32, wasmType.i64],
+    [
+      ...wasmInstruction.localGet(0),
+      ...wasmInstruction.ifI32,
+      ...wasmInstruction.i32Constant(11),
+      ...wasmInstruction.else,
+      ...wasmInstruction.i32Constant(22),
+      ...wasmInstruction.end,
+    ],
+  );
+  unhinted.exportFunction("main", unhintedFunction);
+
+  const hintedBytes = hinted.finish();
+  const unhintedBytes = unhinted.finish();
+  const module = new WebAssembly.Module(
+    new Uint8Array(hintedBytes).buffer as ArrayBuffer,
+  );
+  const sections = WebAssembly.Module.customSections(
+    module,
+    wasmBranchHintSectionName,
+  );
+
+  assertEquals(sections.length, 1);
+  assertEquals([...new Uint8Array(sections[0])], [1, 0, 1, 7, 1, 1]);
+  assertEquals(sectionIds(hintedBytes), [1, 3, 7, 0, 10]);
+  assertEquals(hintedBytes.length - unhintedBytes.length, 34);
+  assertEquals(
+    [...removeBranchHintSection(hintedBytes)],
+    [...unhintedBytes],
+  );
+  const hintedMain = new WebAssembly.Instance(module).exports.main as (
+    condition: number,
+  ) => number;
+  const unhintedMain = new WebAssembly.Instance(
+    new WebAssembly.Module(
+      new Uint8Array(unhintedBytes).buffer as ArrayBuffer,
+    ),
+  ).exports.main as (condition: number) => number;
+  assertEquals([hintedMain(0), hintedMain(1)], [22, 11]);
+  assertEquals([hintedMain(0), hintedMain(1)], [
+    unhintedMain(0),
+    unhintedMain(1),
+  ]);
+});
+
+Deno.test("Wasm branch hints encode multi-byte offsets and GPU-identical bytes", async () => {
+  const builder = new WasmModuleBuilder();
+  const type = builder.addFunctionType([], [wasmType.i32]);
+  const functionIndex = builder.addFunction(type, [], [
+    ...wasmInstruction.blockVoid,
+    ...Array.from({ length: 130 }, () => wasmInstruction.nop).flat(),
+    ...wasmInstruction.i32Constant(0),
+    ...wasmInstruction.branchHint("unlikely"),
+    ...wasmInstruction.branchIf(0),
+    ...wasmInstruction.end,
+    ...wasmInstruction.i32Constant(7),
+  ]);
+  builder.exportFunction("main", functionIndex);
+  const plan = builder.finishPlan();
+  const cpuBytes = emitWasmPlanOnCpu(plan);
+  const section = WebAssembly.Module.customSections(
+    new WebAssembly.Module(
+      new Uint8Array(cpuBytes).buffer as ArrayBuffer,
+    ),
+    wasmBranchHintSectionName,
+  )[0];
+  const contents = new Uint8Array(section);
+  const decodedOffset = decodeUnsigned(contents, 3);
+
+  assertEquals(decodedOffset.value, 135);
+  assertEquals([...contents.slice(decodedOffset.end)], [1, 0]);
+
+  const gpu = await emitWasmPlanOnGpu(plan);
+  if (gpu.status === "unavailable") return;
+  assertEquals([...gpu.bytes], [...cpuBytes]);
+});
+
+Deno.test("Wasm branch hints reject unattached metadata", () => {
+  const builder = new WasmModuleBuilder();
+  const type = builder.addFunctionType([], [wasmType.i32]);
+
+  assertThrows(
+    () =>
+      builder.addFunction(type, [], [
+        ...wasmInstruction.branchHint("likely"),
+        ...wasmInstruction.i32Constant(0),
+      ]),
+    /branch hint at instruction 0 must immediately precede if or br_if/,
+  );
+  assertThrows(
+    () => wasmInstruction.branchHint("sometimes" as "likely"),
+    /branch likelihood must be likely or unlikely; received sometimes/,
+  );
 });
 
 Deno.test("Ducklang Wasm analysis resolves exact atom byte boundaries", () => {
@@ -178,5 +300,74 @@ function assertEquals(actual: unknown, expected: unknown): void {
         JSON.stringify(actual)
       }`,
     );
+  }
+}
+
+function assertThrows(action: () => unknown, expected: RegExp): void {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error && expected.test(error.message)) return;
+    throw error;
+  }
+  throw new Error(`expected action to throw ${expected}`);
+}
+
+function removeBranchHintSection(bytes: Uint8Array): Uint8Array {
+  const retained = [bytes.slice(0, 8)];
+  let sectionStart = 8;
+  while (sectionStart < bytes.length) {
+    const sectionId = bytes[sectionStart];
+    const sectionSize = decodeUnsigned(bytes, sectionStart + 1);
+    const sectionEnd = sectionSize.end + sectionSize.value;
+    let remove = false;
+    if (sectionId === 0) {
+      const nameLength = decodeUnsigned(bytes, sectionSize.end);
+      const nameEnd = nameLength.end + nameLength.value;
+      const name = new TextDecoder().decode(
+        bytes.slice(nameLength.end, nameEnd),
+      );
+      remove = name === wasmBranchHintSectionName;
+    }
+    if (!remove) retained.push(bytes.slice(sectionStart, sectionEnd));
+    sectionStart = sectionEnd;
+  }
+  const byteLength = retained.reduce(
+    (length, section) => length + section.length,
+    0,
+  );
+  const result = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const section of retained) {
+    result.set(section, offset);
+    offset += section.length;
+  }
+  return result;
+}
+
+function sectionIds(bytes: Uint8Array): number[] {
+  const ids: number[] = [];
+  let sectionStart = 8;
+  while (sectionStart < bytes.length) {
+    ids.push(bytes[sectionStart]);
+    const sectionSize = decodeUnsigned(bytes, sectionStart + 1);
+    sectionStart = sectionSize.end + sectionSize.value;
+  }
+  return ids;
+}
+
+function decodeUnsigned(
+  bytes: Uint8Array,
+  start: number,
+): { readonly value: number; readonly end: number } {
+  let value = 0;
+  let scale = 1;
+  let offset = start;
+  while (true) {
+    const current = bytes[offset];
+    value += (current & 0x7f) * scale;
+    offset += 1;
+    if ((current & 0x80) === 0) return { value, end: offset };
+    scale *= 128;
   }
 }

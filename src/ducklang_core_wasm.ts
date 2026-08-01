@@ -50,7 +50,10 @@ export type DucklangCoreWasmArtifact = {
 export type DucklangCoreWasmOptions = {
   readonly emission: "cpu" | "planOnly";
   readonly functions?: DucklangBackendFunctionCache;
+  readonly target?: DucklangWasmTarget;
 };
+
+export type DucklangWasmTarget = "wasm-scalar" | "wasm-simd128";
 
 export type DucklangBackendFunctionCache = {
   instantiate<Artifact>(
@@ -125,6 +128,8 @@ export function lowerDucklangCoreToFcgAndWasm(
   options: DucklangCoreWasmOptions = { emission: "cpu" },
 ): DucklangCoreWasmArtifact {
   validateDucklangCore(core);
+  validateDucklangCoreWasmTarget(core, options.target ?? "wasm-simd128");
+  validateDucklangJavaScriptBoundary(core);
   const textLiterals = collectTextLiterals(core);
   const textHandles = new Map(
     textLiterals.map((literal, index) => [literal, index + 1]),
@@ -924,6 +929,24 @@ function emitOperation(
       ),
     ]);
   }
+  if (operation.kind === "vector.shuffle") {
+    const type = core.types[operation.type];
+    if (
+      type.kind !== "vector" || type.lanes !== 4 || type.element !== "f32"
+    ) {
+      throw new TypeError(
+        `${operation.span.file}:${operation.span.start}: Wasm backend supports shuffle only for f32x4`,
+      );
+    }
+    return finish([
+      ...getOperands(),
+      ...wasmInstruction.i8x16Shuffle(
+        operation.lanes.flatMap((lane) =>
+          [0, 1, 2, 3].map((byteOffset) => lane * 4 + byteOffset)
+        ),
+      ),
+    ]);
+  }
   if (operation.kind === "primitive") {
     if (operation.primitiveId === PrimitiveId.bytesGenerate) {
       return emitBytesGenerate(
@@ -946,6 +969,36 @@ function emitOperation(
         ...wasmInstruction.f32x4ReplaceLane(2),
         ...getValue(operation.operands[3]),
         ...wasmInstruction.f32x4ReplaceLane(3),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.f32x4ExtractLane0 &&
+      operation.primitiveId <= PrimitiveId.f32x4ExtractLane3
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.f32x4ExtractLane(
+          operation.primitiveId - PrimitiveId.f32x4ExtractLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.f32x4ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.f32x4ReplaceLane3
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.f32x4ReplaceLane(
+          operation.primitiveId - PrimitiveId.f32x4ReplaceLane0,
+        ),
+      ]);
+    }
+    if (operation.primitiveId === PrimitiveId.f32x4Select) {
+      return finish([
+        ...getValue(operation.operands[1]),
+        ...getValue(operation.operands[2]),
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.v128BitSelect,
       ]);
     }
     const direct = emitDirectPrimitive(
@@ -1407,6 +1460,7 @@ function emitProductSelection(
         ...getValue(index),
         ...wasmInstruction.i32Constant(valueIndex),
         ...wasmInstruction.i32Equal,
+        ...wasmInstruction.branchHint("likely"),
         ...ifInstruction(resultType),
         ...getValue(values[valueIndex]),
         ...wasmInstruction.else,
@@ -1607,6 +1661,19 @@ function emitDirectPrimitive(
     [PrimitiveId.f32x4Subtract, wasmInstruction.f32x4Subtract],
     [PrimitiveId.f32x4Multiply, wasmInstruction.f32x4Multiply],
     [PrimitiveId.f32x4Divide, wasmInstruction.f32x4Divide],
+    [PrimitiveId.f32x4Equal, wasmInstruction.f32x4Equal],
+    [PrimitiveId.f32x4NotEqual, wasmInstruction.f32x4NotEqual],
+    [PrimitiveId.f32x4LessThan, wasmInstruction.f32x4LessThan],
+    [
+      PrimitiveId.f32x4LessThanOrEqual,
+      wasmInstruction.f32x4LessThanOrEqual,
+    ],
+    [PrimitiveId.f32x4GreaterThan, wasmInstruction.f32x4GreaterThan],
+    [
+      PrimitiveId.f32x4GreaterThanOrEqual,
+      wasmInstruction.f32x4GreaterThanOrEqual,
+    ],
+    [PrimitiveId.f32x4Select, wasmInstruction.v128BitSelect],
   ]).get(primitiveId);
   return instruction;
 }
@@ -1651,7 +1718,9 @@ function emitNegation(
 }
 
 function isDirectPrimitive(primitiveId: PrimitiveIdType): boolean {
-  return primitiveId <= PrimitiveId.f32x4Divide;
+  return primitiveId <= PrimitiveId.f32x4Divide ||
+    (primitiveId >= PrimitiveId.f32x4ExtractLane0 &&
+      primitiveId <= PrimitiveId.f32x4Select);
 }
 
 function aggregateImportName(
@@ -1771,12 +1840,80 @@ function wasmValueType(
   typeId: CoreTypeId,
 ): number {
   const type = core.types[typeId];
+  if (type.kind === "vector" || type.kind === "mask") return wasmType.v128;
   if (type.kind !== "scalar") return wasmType.i32;
   if (type.scalar === "i64") return wasmType.i64;
   if (type.scalar === "f32") return wasmType.f32;
   if (type.scalar === "f64") return wasmType.f64;
-  if (type.scalar === "f32x4") return wasmType.v128;
   return wasmType.i32;
+}
+
+export function validateDucklangCoreWasmTarget(
+  core: DucklangCoreModule,
+  target: DucklangWasmTarget,
+): void {
+  if (target === "wasm-simd128") return;
+  const vectorType = core.types.findIndex((type) =>
+    type.kind === "vector" || type.kind === "mask"
+  );
+  if (vectorType !== -1) {
+    throw new TypeError(
+      `${core.file}: target ${target} cannot represent Core ${
+        core.types[vectorType].kind
+      } type ${vectorType}; select wasm-simd128`,
+    );
+  }
+}
+
+function validateDucklangJavaScriptBoundary(core: DucklangCoreModule): void {
+  const entry = core.functions[core.entryFunction];
+  const resultTypeId = core.signatures[entry.signature].result;
+  const resultType = core.types[resultTypeId];
+  if (resultType.kind === "vector" || resultType.kind === "mask") {
+    throw new TypeError(
+      `${entry.span.file}:${entry.span.start}: managed JavaScript ABI cannot return Core ${resultType.kind} type ${resultTypeId} from ${entry.name}`,
+    );
+  }
+  for (const function_ of core.functions) {
+    for (const block of function_.blocks) {
+      for (const operation of block.operations) {
+        if (operation.kind !== "host.call") continue;
+        const boundaryTypes = [
+          operation.type,
+          ...operation.operands.map((operand) =>
+            coreValueTypeAtBoundary(function_, operand)
+          ),
+        ];
+        const vectorType = boundaryTypes.find((typeId) => {
+          const type = core.types[typeId];
+          return type.kind === "vector" || type.kind === "mask";
+        });
+        if (vectorType === undefined) continue;
+        throw new TypeError(
+          `${operation.span.file}:${operation.span.start}: managed JavaScript ABI cannot carry Core vector type ${vectorType} through ${operation.effectName}.${operation.operationName}`,
+        );
+      }
+    }
+  }
+}
+
+function coreValueTypeAtBoundary(
+  function_: DucklangCoreFunction,
+  value: CoreValueId,
+): CoreTypeId {
+  for (const block of function_.blocks) {
+    const parameter = block.parameters.find((candidate) =>
+      candidate.value === value
+    );
+    if (parameter !== undefined) return parameter.type;
+    const operation = block.operations.find((candidate) =>
+      candidate.result === value
+    );
+    if (operation !== undefined) return operation.type;
+  }
+  throw new Error(
+    `Core function ${function_.name} has no type for boundary value ${value}`,
+  );
 }
 
 function wasmScalarName(

@@ -10,7 +10,19 @@ export type WasmAtom =
     readonly dependencyLevel: number;
   };
 
-export type WasmInstruction = Exclude<WasmAtom, { readonly kind: "length" }>;
+type EncodedWasmInstruction = Exclude<
+  WasmAtom,
+  { readonly kind: "length" }
+>;
+
+export type WasmBranchLikelihood = "likely" | "unlikely";
+
+type WasmBranchHint = {
+  readonly kind: "branchHint";
+  readonly likelihood: WasmBranchLikelihood;
+};
+
+export type WasmInstruction = EncodedWasmInstruction | WasmBranchHint;
 
 export type WasmBinaryPlan = {
   readonly atoms: readonly WasmAtom[];
@@ -50,8 +62,18 @@ type WasmBinaryPlanInspection = {
 };
 
 type WasmNode =
-  | WasmInstruction
+  | EncodedWasmInstruction
   | { readonly kind: "sized"; readonly contents: readonly WasmNode[] };
+
+type WasmFunctionBranchHints = {
+  readonly functionIndex: number;
+  readonly hints: readonly {
+    readonly instructionOffset: number;
+    readonly likelihood: WasmBranchLikelihood;
+  }[];
+};
+
+export const wasmBranchHintSectionName = "metadata.code.branch_hint";
 
 export class WasmModuleBuilder {
   readonly #types: WasmNode[][] = [];
@@ -63,6 +85,7 @@ export class WasmModuleBuilder {
   readonly #exportNames = new Set<string>();
   readonly #globals: WasmNode[][] = [];
   readonly #codes: WasmNode[][] = [];
+  readonly #functionBranchHints: WasmFunctionBranchHints[] = [];
   readonly #customSections: {
     readonly name: string;
     readonly contents: Uint8Array;
@@ -117,14 +140,25 @@ export class WasmModuleBuilder {
       );
     }
     const functionIndex = this.#imports.length + this.#functions.length;
-    this.#functions.push(typeIndex);
-    const body: WasmNode[] = [
+    const localDeclarations: EncodedWasmInstruction[] = [
       unsigned(locals.length),
       ...locals.flatMap((type) => [unsigned(1), byte(type)]),
-      ...instructions,
+    ];
+    const { encodedInstructions, hints } = collectFunctionBranchHints(
+      functionIndex,
+      encodedInstructionSequenceByteLength(localDeclarations),
+      instructions,
+    );
+    this.#functions.push(typeIndex);
+    const body: WasmNode[] = [
+      ...localDeclarations,
+      ...encodedInstructions,
       byte(0x0b),
     ];
     this.#codes.push([{ kind: "sized", contents: body }]);
+    if (hints.length > 0) {
+      this.#functionBranchHints.push({ functionIndex, hints });
+    }
     return functionIndex;
   }
 
@@ -153,7 +187,8 @@ export class WasmModuleBuilder {
     ]);
     this.#elements.push([
       byte(0x00),
-      ...wasmInstruction.i32Constant(0),
+      byte(0x41),
+      { kind: "signed32", value: 0 },
       byte(0x0b),
       ...vector(functionIndices.map(unsigned)),
     ]);
@@ -239,6 +274,9 @@ export class WasmModuleBuilder {
     }
     if (this.#elements.length > 0) {
       module.push(...section(9, this.#elements));
+    }
+    if (this.#functionBranchHints.length > 0) {
+      module.push(...branchHintSection(this.#functionBranchHints));
     }
     if (this.#codes.length > 0) {
       module.push(...section(10, this.#codes));
@@ -710,6 +748,17 @@ const simdInstruction = (opcode: number): readonly WasmInstruction[] => [
 ];
 
 export const wasmInstruction = {
+  branchHint(likelihood: WasmBranchLikelihood): readonly WasmInstruction[] {
+    if (likelihood !== "likely" && likelihood !== "unlikely") {
+      throw new TypeError(
+        `Wasm branch likelihood must be likely or unlikely; received ${
+          String(likelihood)
+        }`,
+      );
+    }
+    return [{ kind: "branchHint", likelihood }];
+  },
+  nop: instruction(0x01),
   localGet(index: number): readonly WasmInstruction[] {
     return [byte(0x20), unsigned(index)];
   },
@@ -827,6 +876,12 @@ export const wasmInstruction = {
   i32ReinterpretF32: instruction(0xbc),
   f32ReinterpretI32: instruction(0xbe),
   f32x4Splat: simdInstruction(19),
+  f32x4ExtractLane(lane: number): readonly WasmInstruction[] {
+    if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
+      throw new RangeError(`f32x4 lane must be in 0..3; received ${lane}`);
+    }
+    return [byte(0xfd), unsigned(31), byte(lane)];
+  },
   f32x4ReplaceLane(lane: number): readonly WasmInstruction[] {
     if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
       throw new RangeError(`f32x4 lane must be in 0..3; received ${lane}`);
@@ -837,6 +892,26 @@ export const wasmInstruction = {
   f32x4Subtract: simdInstruction(229),
   f32x4Multiply: simdInstruction(230),
   f32x4Divide: simdInstruction(231),
+  f32x4Equal: simdInstruction(65),
+  f32x4NotEqual: simdInstruction(66),
+  f32x4LessThan: simdInstruction(67),
+  f32x4GreaterThan: simdInstruction(68),
+  f32x4LessThanOrEqual: simdInstruction(69),
+  f32x4GreaterThanOrEqual: simdInstruction(70),
+  v128BitSelect: simdInstruction(82),
+  i8x16Shuffle(lanes: readonly number[]): readonly WasmInstruction[] {
+    if (
+      lanes.length !== 16 ||
+      lanes.some((lane) => !Number.isSafeInteger(lane) || lane < 0 || lane > 31)
+    ) {
+      throw new RangeError(
+        `i8x16 shuffle requires 16 lanes in 0..31; received [${
+          lanes.join(", ")
+        }]`,
+      );
+    }
+    return [byte(0xfd), unsigned(13), ...lanes.map(byte)];
+  },
   ifI32: [byte(0x04), byte(0x7f)],
   ifI64: [byte(0x04), byte(0x7e)],
   ifF32: [byte(0x04), byte(0x7d)],
@@ -894,14 +969,14 @@ export function encodeSigned64(value: bigint): number[] {
   }
 }
 
-function byte(value: number): WasmInstruction {
+function byte(value: number): EncodedWasmInstruction {
   if (!Number.isSafeInteger(value) || value < 0 || value > 0xff) {
     throw new RangeError(`Wasm byte must fit u8; received ${value}`);
   }
   return { kind: "byte", value };
 }
 
-function unsigned(value: number): WasmInstruction {
+function unsigned(value: number): EncodedWasmInstruction {
   if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
     throw new RangeError(`Wasm unsigned value must fit u32; received ${value}`);
   }
@@ -915,6 +990,105 @@ function vector(values: readonly WasmNode[]): readonly WasmNode[] {
 function name(value: string): readonly WasmNode[] {
   const bytes = new TextEncoder().encode(value);
   return [unsigned(bytes.length), ...Array.from(bytes, byte)];
+}
+
+function branchHintSection(
+  functions: readonly WasmFunctionBranchHints[],
+): readonly WasmNode[] {
+  return [
+    byte(0),
+    {
+      kind: "sized",
+      contents: [
+        ...name(wasmBranchHintSectionName),
+        unsigned(functions.length),
+        ...functions.flatMap((function_) => [
+          unsigned(function_.functionIndex),
+          unsigned(function_.hints.length),
+          ...function_.hints.flatMap((hint) => [
+            unsigned(hint.instructionOffset),
+            unsigned(1),
+            byte(hint.likelihood === "likely" ? 1 : 0),
+          ]),
+        ]),
+      ],
+    },
+  ];
+}
+
+function collectFunctionBranchHints(
+  functionIndex: number,
+  firstInstructionOffset: number,
+  instructions: readonly WasmInstruction[],
+): {
+  readonly encodedInstructions: readonly EncodedWasmInstruction[];
+  readonly hints: WasmFunctionBranchHints["hints"];
+} {
+  const encodedInstructions: EncodedWasmInstruction[] = [];
+  const hints: {
+    instructionOffset: number;
+    likelihood: WasmBranchLikelihood;
+  }[] = [];
+  let instructionOffset = firstInstructionOffset;
+  let pendingHint: WasmBranchHint | undefined;
+  for (const [instructionIndex, instruction] of instructions.entries()) {
+    if (instruction.kind === "branchHint") {
+      if (pendingHint !== undefined) {
+        throw new TypeError(
+          `Wasm function ${functionIndex} has consecutive branch hints at instruction ${instructionIndex}`,
+        );
+      }
+      pendingHint = instruction;
+      continue;
+    }
+    if (pendingHint !== undefined) {
+      const isHintableBranch = instruction.kind === "byte" &&
+        (instruction.value === 0x04 || instruction.value === 0x0d);
+      if (!isHintableBranch) {
+        throw new TypeError(
+          `Wasm function ${functionIndex} branch hint at instruction ${
+            instructionIndex - 1
+          } must immediately precede if or br_if`,
+        );
+      }
+      hints.push({
+        instructionOffset,
+        likelihood: pendingHint.likelihood,
+      });
+      pendingHint = undefined;
+    }
+    encodedInstructions.push(instruction);
+    instructionOffset += encodedInstructionByteLength(instruction);
+  }
+  if (pendingHint !== undefined) {
+    throw new TypeError(
+      `Wasm function ${functionIndex} ends with an unattached branch hint`,
+    );
+  }
+  return { encodedInstructions, hints };
+}
+
+function encodedInstructionSequenceByteLength(
+  instructions: readonly EncodedWasmInstruction[],
+): number {
+  return instructions.reduce(
+    (byteLength, instruction) =>
+      byteLength + encodedInstructionByteLength(instruction),
+    0,
+  );
+}
+
+function encodedInstructionByteLength(
+  instruction: EncodedWasmInstruction,
+): number {
+  if (instruction.kind === "byte") return 1;
+  if (instruction.kind === "unsigned") {
+    return unsignedEncodingByteLength(instruction.value);
+  }
+  if (instruction.kind === "signed32") {
+    return signed32EncodingByteLength(instruction.value);
+  }
+  return signed64EncodingByteLength(instruction.value);
 }
 
 function section(

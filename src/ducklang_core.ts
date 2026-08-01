@@ -24,10 +24,23 @@ export type CoreFunctionId = number & { readonly [coreFunctionIdBrand]: true };
 export type CoreBlockId = number & { readonly [coreBlockIdBrand]: true };
 export type CoreValueId = number & { readonly [coreValueIdBrand]: true };
 
+export type DucklangCoreScalar = "i32" | "i64" | "f32" | "f64" | "unit";
+export type DucklangCoreVectorElement = "i32" | "i64" | "f32" | "f64";
+
 export type DucklangCoreType =
   | {
     readonly kind: "scalar";
-    readonly scalar: "i32" | "i64" | "f32" | "f64" | "f32x4" | "unit";
+    readonly scalar: DucklangCoreScalar;
+  }
+  | {
+    readonly kind: "vector";
+    readonly lanes: 2 | 4;
+    readonly element: DucklangCoreVectorElement;
+  }
+  | {
+    readonly kind: "mask";
+    readonly lanes: 2 | 4;
+    readonly element: DucklangCoreVectorElement;
   }
   | {
     readonly kind: "buffer";
@@ -70,6 +83,10 @@ export type DucklangCoreOperation =
   | (CoreOperationBase & {
     readonly kind: "primitive";
     readonly primitiveId: PrimitiveId;
+  })
+  | (CoreOperationBase & {
+    readonly kind: "vector.shuffle";
+    readonly lanes: readonly number[];
   })
   | (CoreOperationBase & {
     readonly kind: "product.make";
@@ -665,12 +682,25 @@ class CoreTypeRegistry {
         ),
       };
     }
+    if (type.name === "f32x4" || type.name === "F32x4") {
+      return {
+        kind: "vector" as const,
+        lanes: 4 as const,
+        element: "f32" as const,
+      };
+    }
+    if (type.name === "f32x4Mask" || type.name === "F32x4Mask") {
+      return {
+        kind: "mask" as const,
+        lanes: 4 as const,
+        element: "f32" as const,
+      };
+    }
     const scalar = {
       i32: "i32",
       i64: "i64",
       f32: "f32",
       f64: "f64",
-      f32x4: "f32x4",
       bool: "i32",
       char: "i32",
       unit: "unit",
@@ -682,9 +712,7 @@ class CoreTypeRegistry {
       Bool: "i32",
       Char: "i32",
       Unit: "unit",
-    }[type.name] as DucklangCoreType extends infer _
-      ? "i32" | "i64" | "f32" | "f64" | "f32x4" | "unit" | undefined
-      : never;
+    }[type.name] as DucklangCoreScalar | undefined;
     if (scalar !== undefined) return { kind: "scalar" as const, scalar };
     if (type.name === "text" || type.name === "Text") {
       return { kind: "buffer" as const, buffer: "text" as const };
@@ -1674,6 +1702,17 @@ class CoreFunctionLowerer {
 }
 
 export function validateDucklangCore(module: DucklangCoreModule): void {
+  for (const [typeId, type] of module.types.entries()) {
+    if (type.kind !== "vector" && type.kind !== "mask") continue;
+    const elementBits = type.element === "i64" || type.element === "f64"
+      ? 64
+      : 32;
+    if (type.lanes * elementBits !== 128) {
+      throw new TypeError(
+        `Core ${type.kind} type ${typeId} has ${type.lanes} ${type.element} lanes; expected 128 bits`,
+      );
+    }
+  }
   requireIndex(module.entryFunction, module.functions.length, "entry function");
   for (const [functionIndex, function_] of module.functions.entries()) {
     if (function_.id !== functionIndex) {
@@ -1777,6 +1816,44 @@ function validateCoreCallOperation(
   function_: DucklangCoreFunction,
   operation: DucklangCoreOperation,
 ): void {
+  if (operation.kind === "vector.shuffle") {
+    requireCoreOperationOperands(function_, operation, 2);
+    const resultType = module.types[operation.type];
+    if (resultType.kind !== "vector") {
+      throw new TypeError(
+        `Core vector.shuffle ${function_.name}:${operation.result} has non-vector result type ${operation.type}`,
+      );
+    }
+    for (const operand of operation.operands) {
+      if (coreValueType(function_, operand) !== operation.type) {
+        throw new TypeError(
+          `Core vector.shuffle ${function_.name}:${operation.result} changes operand type`,
+        );
+      }
+    }
+    if (
+      operation.lanes.length !== resultType.lanes ||
+      operation.lanes.some((lane) =>
+        !Number.isSafeInteger(lane) || lane < 0 || lane >= 2 * resultType.lanes
+      )
+    ) {
+      throw new RangeError(
+        `Core vector.shuffle ${function_.name}:${operation.result} has lanes [${
+          operation.lanes.join(", ")
+        }]; expected ${resultType.lanes} indices in 0..${
+          2 * resultType.lanes - 1
+        }`,
+      );
+    }
+    return;
+  }
+  if (
+    operation.kind === "primitive" && validateCoreSimdPrimitive(
+      module,
+      function_,
+      operation,
+    )
+  ) return;
   if (
     operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
@@ -1904,6 +1981,88 @@ function validateCoreCallOperation(
       `Core indirect call ${function_.name}:${operation.result} has result type ${operation.type}; signature returns ${signature.result}`,
     );
   }
+}
+
+function validateCoreSimdPrimitive(
+  module: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  operation: Extract<DucklangCoreOperation, { readonly kind: "primitive" }>,
+): boolean {
+  const extractIds = [
+    PrimitiveId.f32x4ExtractLane0,
+    PrimitiveId.f32x4ExtractLane1,
+    PrimitiveId.f32x4ExtractLane2,
+    PrimitiveId.f32x4ExtractLane3,
+  ] as const;
+  const replaceIds = [
+    PrimitiveId.f32x4ReplaceLane0,
+    PrimitiveId.f32x4ReplaceLane1,
+    PrimitiveId.f32x4ReplaceLane2,
+    PrimitiveId.f32x4ReplaceLane3,
+  ] as const;
+  const arithmeticIds = [
+    PrimitiveId.f32x4Add,
+    PrimitiveId.f32x4Subtract,
+    PrimitiveId.f32x4Multiply,
+    PrimitiveId.f32x4Divide,
+  ] as const;
+  const comparisonIds = [
+    PrimitiveId.f32x4Equal,
+    PrimitiveId.f32x4NotEqual,
+    PrimitiveId.f32x4LessThan,
+    PrimitiveId.f32x4LessThanOrEqual,
+    PrimitiveId.f32x4GreaterThan,
+    PrimitiveId.f32x4GreaterThanOrEqual,
+  ] as const;
+  const simdIds: readonly PrimitiveId[] = [
+    PrimitiveId.f32x4Make,
+    PrimitiveId.f32x4Splat,
+    ...arithmeticIds,
+    ...extractIds,
+    ...replaceIds,
+    ...comparisonIds,
+    PrimitiveId.f32x4Select,
+  ];
+  if (!simdIds.includes(operation.primitiveId)) return false;
+
+  const operandTypes = operation.operands.map((operand) =>
+    module.types[coreValueType(function_, operand)]
+  );
+  const resultType = module.types[operation.type];
+  const isF32 = (type: DucklangCoreType): boolean =>
+    type.kind === "scalar" && type.scalar === "f32";
+  const isF32x4 = (type: DucklangCoreType): boolean =>
+    type.kind === "vector" && type.lanes === 4 && type.element === "f32";
+  const isF32x4Mask = (type: DucklangCoreType): boolean =>
+    type.kind === "mask" && type.lanes === 4 && type.element === "f32";
+
+  const valid = operation.primitiveId === PrimitiveId.f32x4Make
+    ? operandTypes.length === 4 && operandTypes.every(isF32) &&
+      isF32x4(resultType)
+    : operation.primitiveId === PrimitiveId.f32x4Splat
+    ? operandTypes.length === 1 && isF32(operandTypes[0]) && isF32x4(resultType)
+    : arithmeticIds.includes(operation.primitiveId as never)
+    ? operandTypes.length === 2 && operandTypes.every(isF32x4) &&
+      isF32x4(resultType)
+    : extractIds.includes(operation.primitiveId as never)
+    ? operandTypes.length === 1 && isF32x4(operandTypes[0]) && isF32(resultType)
+    : replaceIds.includes(operation.primitiveId as never)
+    ? operandTypes.length === 2 && isF32x4(operandTypes[0]) &&
+      isF32(operandTypes[1]) && isF32x4(resultType)
+    : comparisonIds.includes(operation.primitiveId as never)
+    ? operandTypes.length === 2 && operandTypes.every(isF32x4) &&
+      isF32x4Mask(resultType)
+    : operandTypes.length === 3 && isF32x4Mask(operandTypes[0]) &&
+      isF32x4(operandTypes[1]) && isF32x4(operandTypes[2]) &&
+      isF32x4(resultType);
+  if (!valid) {
+    throw new TypeError(
+      `Core SIMD primitive ${
+        primitiveDescriptor(operation.primitiveId).name
+      } ${function_.name}:${operation.result} has an invalid signature`,
+    );
+  }
+  return true;
 }
 
 function requireCoreOperationOperands(

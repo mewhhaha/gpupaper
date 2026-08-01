@@ -1,4 +1,5 @@
 import { compileModuleSource, runMain } from "../src/compiler.ts";
+import { wasmBranchHintSectionName } from "../src/wasm.ts";
 
 /**
  * Out-of-bounds traps for buffer and aggregate indexing.
@@ -40,6 +41,21 @@ Deno.test("Ducklang aggregate indexing traps only outside its bounds", async () 
   assertEquals(await runMain(wasm, { input: { index: 1 } }), 22);
   await assertTraps(wasm, 2);
   await assertTraps(wasm, 7);
+});
+
+Deno.test("Ducklang aggregate bounds checks hint their successful path", async () => {
+  const wasm = await compile("struct_bounds.duck", structIndex);
+  const sections = WebAssembly.Module.customSections(
+    new WebAssembly.Module(
+      new Uint8Array(wasm).buffer as ArrayBuffer,
+    ),
+    wasmBranchHintSectionName,
+  );
+
+  assertEquals(sections.length, 1);
+  const contents = new Uint8Array(sections[0]);
+  assertEquals(contents[0], 1);
+  assertEquals(contents.at(-1), 1);
 });
 
 Deno.test("Ducklang out-of-bounds traps repeat for the same input", async () => {

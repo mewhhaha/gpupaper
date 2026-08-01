@@ -1,8 +1,10 @@
-import {
-  type CompactFrontendProgram,
-  decodeGpuFrontendPlan,
-} from "@mewhhaha/baba/runtime/webgpu";
+import { type CompactFrontendProgram } from "@mewhhaha/baba/runtime/webgpu";
 import { BabaGpuSyntaxSession } from "./baba_gpu_syntax.ts";
+import {
+  type BlotGpuPayloadStrategy,
+  type BlotResidentExpression,
+  lowerBlotResidentSyntax,
+} from "./blot_gpu_lowering.ts";
 import {
   type WasmBinaryPlan,
   type WasmInstruction,
@@ -57,7 +59,18 @@ export type BlotGpuFrontendTimings = {
   readonly runtimeInitializationMilliseconds: number;
   readonly planCompilationMilliseconds: number;
   readonly syntaxMilliseconds: number;
+  readonly syntaxUploadMilliseconds: number;
+  readonly syntaxSubmitMilliseconds: number;
   readonly payloadLoweringMilliseconds: number;
+  readonly payloadStrategy: BlotGpuPayloadStrategy;
+  readonly payloadScanDispatchCount: number;
+  readonly payloadScanAdditionWork: number;
+  readonly payloadScanAdditionWorkUpperBound: number;
+  readonly payloadScanScheduledInvocationCount: number;
+  readonly payloadScanTemporaryBytes: number;
+  readonly payloadDeclarationCapacity: number;
+  readonly payloadScheduledDeclarationInvocationCount: number;
+  readonly payloadReadbackBytes: number;
   readonly totalMilliseconds: number;
 };
 
@@ -93,56 +106,89 @@ type CompactEdge =
 export async function compileBlotPayload(
   file: string,
   source: string,
+  options: {
+    readonly payloadStrategy?: BlotGpuPayloadStrategy;
+  } = {},
 ): Promise<BlotPayloadCompilation> {
   const totalStart = performance.now();
   const plan = await Deno.readFile(blotPlanUrl);
-  const decodedPlan = decodeGpuFrontendPlan(plan);
-  const ruleNames = new Map(
-    decodedPlan.islands.map((island) => [island.ruleId, island.ruleName]),
-  );
   const session = await BabaGpuSyntaxSession.create(plan);
-  let syntaxResult;
+  let resident;
   const syntaxStart = performance.now();
   try {
-    syntaxResult = await session.parseAndValidate(source);
+    resident = await session.submitResidentSyntax(source);
+    const syntaxMilliseconds = performance.now() - syntaxStart;
+    const payload = await lowerBlotResidentSyntax(
+      file,
+      source,
+      session.device,
+      resident,
+      options.payloadStrategy ?? "direct-ordinal-fused",
+    );
+    const expression = (
+      residentExpression: BlotResidentExpression,
+    ): BlotI64Expression => {
+      const span = sourceSpan(
+        file,
+        residentExpression.start,
+        residentExpression.end,
+      );
+      if (residentExpression.kind === "integer") {
+        return {
+          kind: "integer",
+          value: BigInt(residentExpression.value),
+          span,
+        };
+      }
+      return {
+        kind: "binding",
+        binding: residentExpression.binding,
+        name: source.slice(residentExpression.start, residentExpression.end),
+        span,
+      };
+    };
+    const core: BlotI64Module = {
+      file,
+      bindings: payload.bindings.map((binding) => ({
+        id: binding.id,
+        name: source.slice(binding.nameStart, binding.nameEnd),
+        value: expression(binding.value),
+        span: sourceSpan(file, binding.start, binding.end),
+      })),
+      result: expression(payload.result),
+      span: sourceSpan(file, payload.start, payload.end),
+    };
+    const wasmPlan = lowerBlotI64ModuleToWasm(core);
+    return {
+      core,
+      wasmPlan,
+      timings: {
+        runtimeInitializationMilliseconds:
+          session.setupTimings.runtimeInitializationMilliseconds,
+        planCompilationMilliseconds:
+          session.setupTimings.planCompilationMilliseconds,
+        syntaxMilliseconds,
+        syntaxUploadMilliseconds: resident.timings.uploadMs,
+        syntaxSubmitMilliseconds: resident.timings.submitMs,
+        payloadLoweringMilliseconds: payload.completionMilliseconds,
+        payloadStrategy: payload.strategy,
+        payloadScanDispatchCount: payload.scanDispatchCount,
+        payloadScanAdditionWork: payload.scanAdditionWork,
+        payloadScanAdditionWorkUpperBound: payload.scanAdditionWorkUpperBound,
+        payloadScanScheduledInvocationCount:
+          payload.scanScheduledInvocationCount,
+        payloadScanTemporaryBytes: payload.scanTemporaryBytes,
+        payloadDeclarationCapacity: payload.declarationCapacity,
+        payloadScheduledDeclarationInvocationCount:
+          payload.scheduledDeclarationInvocationCount,
+        payloadReadbackBytes: payload.residentReadbackBytes,
+        totalMilliseconds: performance.now() - totalStart,
+      },
+    };
   } finally {
+    resident?.dispose();
     session.dispose();
   }
-  const syntaxMilliseconds = performance.now() - syntaxStart;
-  if (!syntaxResult.ok) {
-    const diagnostic = syntaxResult.diagnostics[0];
-    if (diagnostic === undefined) {
-      throw new SyntaxError(
-        `${file}: Blot GPU syntax rejected without evidence`,
-      );
-    }
-    throw new SyntaxError(
-      `${file}:${diagnostic.start}: ${diagnostic.code} at [${diagnostic.start}, ${diagnostic.end})`,
-    );
-  }
-
-  const payloadStart = performance.now();
-  const core = lowerBlotCompactProgram(
-    file,
-    source,
-    syntaxResult.program,
-    ruleNames,
-  );
-  const wasmPlan = lowerBlotI64ModuleToWasm(core);
-  const payloadLoweringMilliseconds = performance.now() - payloadStart;
-  return {
-    core,
-    wasmPlan,
-    timings: {
-      runtimeInitializationMilliseconds:
-        session.setupTimings.runtimeInitializationMilliseconds,
-      planCompilationMilliseconds:
-        session.setupTimings.planCompilationMilliseconds,
-      syntaxMilliseconds,
-      payloadLoweringMilliseconds,
-      totalMilliseconds: performance.now() - totalStart,
-    },
-  };
 }
 
 export function lowerBlotCompactProgram(

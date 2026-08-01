@@ -1,11 +1,17 @@
 import {
   CpuFrontend,
   decodeGpuFrontendPlan,
+  WebGpuRuntime,
 } from "@mewhhaha/baba/runtime/webgpu";
 import {
+  compileBlotPayload,
   lowerBlotCompactProgram,
   lowerBlotI64ModuleToWasm,
 } from "../src/blot_compiler.ts";
+import {
+  blotGpuCompactSchema,
+  lowerBlotResidentSyntax,
+} from "../src/blot_gpu_lowering.ts";
 import { parseCommandLine } from "../src/cli.ts";
 import { compileModuleSource, runMain } from "../src/compiler.ts";
 import { emitWasmPlanOnCpu } from "../src/wasm.ts";
@@ -20,6 +26,46 @@ const ruleNames = new Map(
     island.ruleName,
   ]),
 );
+
+Deno.test("Blot resident schema matches the pinned Baba compact IDs", () => {
+  const source = "let answer = 42; return answer;";
+  const result = cpuFrontend.ingest(source);
+  if (!result.ok) throw new Error("schema witness did not parse");
+  const terminals = new Map<string, number>();
+  for (let offset = 0; offset < result.program.tokens.length; offset += 4) {
+    const start = result.program.tokens[offset + 1];
+    const end = result.program.tokens[offset + 2];
+    terminals.set(source.slice(start, end), result.program.tokens[offset]);
+  }
+  assertEquals(terminals.get("let"), blotGpuCompactSchema.terminals.let);
+  assertEquals(
+    terminals.get("answer"),
+    blotGpuCompactSchema.terminals.identifier,
+  );
+  assertEquals(terminals.get("42"), blotGpuCompactSchema.terminals.integer);
+  assertEquals(terminals.get("="), blotGpuCompactSchema.terminals.equals);
+  assertEquals(terminals.get(";"), blotGpuCompactSchema.terminals.semicolon);
+  assertEquals(terminals.get("return"), blotGpuCompactSchema.terminals.return);
+
+  const rules = new Set<number>();
+  for (let offset = 0; offset < result.program.nodes.length; offset += 8) {
+    rules.add(result.program.nodes[offset]);
+  }
+  for (const rule of Object.values(blotGpuCompactSchema.rules)) {
+    if (!rules.has(rule)) {
+      throw new Error(`schema witness did not produce compact rule ${rule}`);
+    }
+  }
+  const fields = new Set<number>();
+  for (let offset = 0; offset < result.program.edges.length; offset += 4) {
+    fields.add(result.program.edges[offset] >>> 0);
+  }
+  for (const field of Object.values(blotGpuCompactSchema.fields)) {
+    if (!fields.has(field)) {
+      throw new Error(`schema witness did not produce compact field ${field}`);
+    }
+  }
+});
 
 Deno.test("Blot I64 payload evaluates a literal return", async () => {
   const wasm = compileCompactOracle("return 42;");
@@ -115,13 +161,104 @@ Deno.test("Blot compilation uses GPU syntax and GPU Wasm emission", async () => 
 
   assertEquals(artifact.language, "blot");
   assertEquals(artifact.backends, {
-    typeCheck: "cpu",
+    typeCheck: "gpu",
     comptime: "notApplicable",
     coreRewrite: "notApplicable",
     wasmEmission: "gpu",
     wasmVerification: "cpuDifferential",
   });
   assertEquals(await runMain(artifact.wasm), 42n);
+});
+
+Deno.test("Blot direct-ordinal and segmented resident lowering agree with the compact oracle", async () => {
+  if (!(await hasWebGpuAdapter())) return;
+  const source =
+    "// UTF-16 😀\nlet answer = 41; let answer = answer; return answer;";
+  const expected = lowerCompactOracle(source);
+
+  const direct = await compileBlotPayload("test.blot", source, {
+    payloadStrategy: "direct-ordinal-fused",
+  });
+  const segmented = await compileBlotPayload("test.blot", source, {
+    payloadStrategy: "segmented-scan",
+  });
+
+  assertEquals(direct.core, expected);
+  assertEquals(segmented.core, expected);
+  assertEquals(direct.timings.payloadScanDispatchCount, 0);
+  if (segmented.timings.payloadScanDispatchCount === 0) {
+    throw new Error(
+      "segmented Blot lowering did not execute its reference scan",
+    );
+  }
+});
+
+Deno.test("Blot resident kernels agree on every available WebGPU adapter", async () => {
+  if (navigator.gpu === undefined) return;
+  const adapter = await navigator.gpu.requestAdapter();
+  if (adapter === null) return;
+  const source =
+    "// UTF-16 😀\nlet answer = 41; let answer = answer; return answer;";
+  const expected = lowerCompactOracle(source);
+  const runtime = await WebGpuRuntime.create({ allowFallbackAdapter: true });
+  const frontend = await runtime.compileFrontend(plan);
+  let resident;
+  try {
+    resident = await frontend.ingestResident(source);
+    const direct = await lowerBlotResidentSyntax(
+      "test.blot",
+      source,
+      runtime.device,
+      resident,
+      "direct-ordinal-fused",
+    );
+    const segmented = await lowerBlotResidentSyntax(
+      "test.blot",
+      source,
+      runtime.device,
+      resident,
+      "segmented-scan",
+    );
+
+    assertEquals(
+      direct.bindings.map((binding) => ({
+        id: binding.id,
+        name: source.slice(binding.nameStart, binding.nameEnd),
+      })),
+      expected.bindings.map((binding) => ({
+        id: binding.id,
+        name: binding.name,
+      })),
+    );
+    assertEquals(direct.bindings[0].value, {
+      kind: "integer",
+      value: 41,
+      start: expected.bindings[0].value.span.start,
+      end: expected.bindings[0].value.span.end,
+    });
+    assertEquals(direct.bindings[1].value, {
+      kind: "binding",
+      binding: 0,
+      start: expected.bindings[1].value.span.start,
+      end: expected.bindings[1].value.span.end,
+    });
+    assertEquals(direct.result, {
+      kind: "binding",
+      binding: 1,
+      start: expected.result.span.start,
+      end: expected.result.span.end,
+    });
+    assertEquals(segmented.bindings, direct.bindings);
+    assertEquals(segmented.result, direct.result);
+    assertEquals(direct.scanDispatchCount, 0);
+    if (segmented.scanDispatchCount === 0) {
+      throw new Error("segmented Blot lowering did not execute its scan");
+    }
+  } finally {
+    resident?.dispose();
+    frontend.dispose();
+    runtime.dispose();
+  }
 });
 
 function lowerCompactOracle(source: string) {
@@ -149,23 +286,28 @@ function compileCompactOracle(source: string): Uint8Array {
 
 async function hasWebGpuAdapter(): Promise<boolean> {
   if (navigator.gpu === undefined) return false;
-  return await navigator.gpu.requestAdapter({
+  const adapter = await navigator.gpu.requestAdapter({
     powerPreference: "high-performance",
-  }) !== null;
+  });
+  return adapter?.info?.isFallbackAdapter === false;
 }
 
 function assertEquals(actual: unknown, expected: unknown): void {
   if (actual === expected) return;
+  const serialize = (value: unknown): string | undefined =>
+    JSON.stringify(
+      value,
+      (_key, nested) =>
+        typeof nested === "bigint" ? `${nested.toString()}n` : nested,
+    );
   if (actual instanceof Uint8Array && expected instanceof Uint8Array) {
     if (
       actual.length === expected.length &&
       actual.every((value, index) => value === expected[index])
     ) return;
-  } else if (JSON.stringify(actual) === JSON.stringify(expected)) {
-    return;
-  }
+  } else if (serialize(actual) === serialize(expected)) return;
   throw new Error(
-    `expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
+    `expected ${serialize(expected)}, received ${serialize(actual)}`,
   );
 }
 
