@@ -5690,6 +5690,43 @@ indirect calls, explicit exports, and fused calls; the complete suite is the
 differential/conformance boundary. This is executable validation plus the
 closed-world reachability argument above, not a linker-level theorem.
 
+#### 7.13.8 Total-pure unique-use sinking
+
+Within one block, let a scalar definition `v = o(args)` have exactly one use in
+that same block. The admitted operations are scalar constants and scalar binary
+operations other than division and remainder. They are deterministic, total,
+read no mutable state, perform no effects, and cannot trap. The backend may omit
+`v`'s local and emit `o(args)` recursively at its unique use. The rule applies
+only inside a certified natural loop or its certified fused diamond; cross-block
+values, multiple-use values, managed operations, calls, effects, and partial
+division/remainder remain materialized.
+
+Let the original block order contain `o; s_1; ...; s_k; use(v)`. Dependency
+validation proves that none of the intervening operations consumes `v`, since
+the use is unique. Because `o` is total and pure, exchanging it with each
+independent `s_i` preserves values, effects, traps, and divergence. Repeated
+exchange yields `s_1; ...; s_k; o; use(v)`, after which ordinary stack
+composition replaces the local set/get pair. Recursing over unique-use
+dependencies is acyclic by SSA dominance. This is a commuting-conversion proof;
+it does not justify sinking partial or effectful computations.
+
+For each sunk definition, static local declarations fall by one and dynamic
+execution removes one `local.set` plus its matching `local.get`. Work remains
+`Theta(N)` for `N` block operations: one pass records use counts and use-block
+sets, and allocation queries them in expected `O(1)` time. The maps consume
+`Theta(V + U)` entries for `V` values and distinct value/use-block pairs `U`.
+Code size can grow if recursively reproduced constants have large encodings, but
+the unique-use condition prevents expression duplication. Peak Wasm operand
+stack depth can grow by the expression-tree height; the current 16-operation
+fusion bound caps that increase for an inlined diamond.
+
+The implementation applies this rule to the surrounding natural loop and to
+the separately alpha-renamed inline layout. A removed inline definition remains
+in the immutable result-to-operation map so recursive stack emission can recover
+its expression. Differential Zero tests cover signed boundary values and a
+partial division that is deliberately not admitted. This establishes executable
+validation for the selected total subset, not general effect-aware scheduling.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9915,6 +9952,25 @@ diagnostic is consistent with the theorem's zero dynamic-work prediction and
 does not establish a runtime change. The remaining performance question is now
 inside the fused loop: local allocation and redundant value transfers, followed
 by loop scheduling/unrolling, rather than module reachability.
+
+### 2026-08-02: total-pure sinking refutes local traffic as the runtime cause
+
+Section 7.13.8 implements same-block unique-use sinking only for total pure
+scalar operations. The generated Zero function falls from 20 declared locals to
+seven; its steady-state path falls from roughly 31 local transfers to 11. The
+partial division in the fusion conformance case remains materialized. All 643
+tests pass, and the four deterministic Ducklang artifact sentinels are unchanged
+from the fusion iteration.
+
+`measurements/zero-stack-sinking-diagnostic-2026-08-02.json` records one
+contended 30-pair process. Zero shrank from 222 to 142 bytes, a 36.0% reduction,
+and is 61.7% smaller than Rust's 371-byte module. It measured 2.837 ns/iteration
+against Rust's 1.465, for a paired ratio of 1.927. The previous diagnostic ratio
+was 1.918. Removing thirteen declared locals and about twenty dynamic local
+instructions without a corresponding runtime improvement refutes local traffic
+as the dominant V8 bottleneck for this workload; the engine evidently removes
+most of that administrative work itself. Branch selection and bounded unrolling
+remain the two visible differences with Rust's optimized loop.
 
 ## References
 

@@ -1,4 +1,5 @@
 import type {
+  CoreBlockId,
   CoreFunctionId,
   CoreSignatureId,
   CoreTypeId,
@@ -814,16 +815,22 @@ function planFunctionValues(
   const typeByValue = valueTypes(function_);
   const operationByResult = new Map<CoreValueId, DucklangCoreOperation>();
   const useCounts = new Map<CoreValueId, number>();
+  const useBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
   const returnedValues = new Set<CoreValueId>();
-  const countUse = (value: CoreValueId): void => {
+  const countUse = (value: CoreValueId, block: CoreBlockId): void => {
     useCounts.set(value, (useCounts.get(value) ?? 0) + 1);
+    const blocks = useBlocks.get(value) ?? new Set<CoreBlockId>();
+    blocks.add(block);
+    useBlocks.set(value, blocks);
   };
   for (const block of function_.blocks) {
     for (const operation of block.operations) {
       operationByResult.set(operation.result, operation);
-      operation.operands.forEach(countUse);
+      operation.operands.forEach((value) => countUse(value, block.id));
     }
-    coreTerminatorValues(block.terminator).forEach(countUse);
+    coreTerminatorValues(block.terminator).forEach((value) =>
+      countUse(value, block.id)
+    );
     if (block.terminator.kind === "return") {
       block.terminator.values.forEach((value) => returnedValues.add(value));
     }
@@ -835,6 +842,7 @@ function planFunctionValues(
   });
   const locals: number[] = [];
   let nextLocal = signature.parameters.length;
+  const naturalLoop = simpleNaturalLoop(function_);
   for (const block of function_.blocks) {
     for (const parameter of block.parameters) {
       if (localByValue.has(parameter.value)) continue;
@@ -843,14 +851,23 @@ function planFunctionValues(
       locals.push(wasmValueType(core, parameter.type));
     }
     for (const operation of block.operations) {
-      if (
-        function_.blocks.length === 1 &&
+      const stackifiesSingleBlock = function_.blocks.length === 1 &&
         !operationNeedsLocal(
           operation,
           useCounts.get(operation.result) ?? 0,
           returnedValues.has(operation.result),
-        )
-      ) {
+        );
+      const sinksInNaturalLoop = naturalLoop !== undefined &&
+        canSinkTotalScalarOperation(
+          core,
+          function_,
+          block,
+          operation,
+          typeByValue,
+          useCounts,
+          useBlocks,
+        );
+      if (stackifiesSingleBlock || sinksInNaturalLoop) {
         continue;
       }
       localByValue.set(operation.result, nextLocal);
@@ -862,7 +879,6 @@ function planFunctionValues(
     CoreValueId,
     InlineDiamondLayout
   >();
-  const naturalLoop = simpleNaturalLoop(function_);
   if (naturalLoop !== undefined) {
     for (const operation of naturalLoop.body.operations) {
       if (operation.kind !== "call.direct") continue;
@@ -874,6 +890,30 @@ function planFunctionValues(
       );
       if (inlineFunction === undefined) continue;
       const inlineLocalByValue = new Map<CoreValueId, number>();
+      const inlineTypeByValue = valueTypes(inlineFunction);
+      const inlineUseCounts = new Map<CoreValueId, number>();
+      const inlineUseBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
+      for (const block of inlineFunction.blocks) {
+        for (const inlineOperation of block.operations) {
+          for (const operand of inlineOperation.operands) {
+            inlineUseCounts.set(
+              operand,
+              (inlineUseCounts.get(operand) ?? 0) + 1,
+            );
+            const blocks = inlineUseBlocks.get(operand) ??
+              new Set<CoreBlockId>();
+            blocks.add(block.id);
+            inlineUseBlocks.set(operand, blocks);
+          }
+        }
+        for (const value of coreTerminatorValues(block.terminator)) {
+          inlineUseCounts.set(value, (inlineUseCounts.get(value) ?? 0) + 1);
+          const blocks = inlineUseBlocks.get(value) ??
+            new Set<CoreBlockId>();
+          blocks.add(block.id);
+          inlineUseBlocks.set(value, blocks);
+        }
+      }
       for (const block of inlineFunction.blocks) {
         for (const parameter of block.parameters) {
           inlineLocalByValue.set(parameter.value, nextLocal);
@@ -881,6 +921,19 @@ function planFunctionValues(
           locals.push(wasmValueType(core, parameter.type));
         }
         for (const inlineOperation of block.operations) {
+          if (
+            canSinkTotalScalarOperation(
+              core,
+              inlineFunction,
+              block,
+              inlineOperation,
+              inlineTypeByValue,
+              inlineUseCounts,
+              inlineUseBlocks,
+            )
+          ) {
+            continue;
+          }
           inlineLocalByValue.set(inlineOperation.result, nextLocal);
           nextLocal += 1;
           locals.push(wasmValueType(core, inlineOperation.type));
@@ -889,7 +942,7 @@ function planFunctionValues(
       inlineDiamondByCallResult.set(operation.result, {
         function: inlineFunction,
         localByValue: inlineLocalByValue,
-        typeByValue: valueTypes(inlineFunction),
+        typeByValue: inlineTypeByValue,
         operationByResult: new Map(
           inlineFunction.blocks.flatMap((block) =>
             block.operations.map((operation) =>
@@ -1690,14 +1743,23 @@ function emitInlineDiamond(
     inlineDiamondByCallResult: new Map(),
   };
   const getInlineValue = (value: CoreValueId): readonly WasmInstruction[] =>
-    wasmInstruction.localGet(
-      requiredLocal(inlineValueLayout, inline.function, value),
+    emitStackValue(
+      core,
+      inline.function,
+      value,
+      inlineValueLayout,
+      importedFunctions,
+      functionIndices,
+      closureTargets,
+      closureTypeIndices,
+      textHandles,
     );
   const emitBlockOperations = (
     block: DucklangCoreFunction["blocks"][number],
   ): readonly WasmInstruction[] =>
-    block.operations.flatMap((operation) =>
-      emitOperation(
+    block.operations.flatMap((operation) => {
+      if (!inline.localByValue.has(operation.result)) return [];
+      return emitOperation(
         core,
         inline.function,
         operation,
@@ -1708,8 +1770,8 @@ function emitInlineDiamond(
         closureTypeIndices,
         textHandles,
         getInlineValue,
-      )
-    );
+      );
+    });
   if (diamond.entry.terminator.kind !== "conditional_branch") {
     throw new Error(
       `Core inline target ${inline.function.name} has no diamond condition`,
@@ -2358,6 +2420,38 @@ function operationNeedsLocal(
   if (operation.kind === "constant") return false;
   if (returnedDirectly && isStackifiableOperation(operation)) return false;
   return true;
+}
+
+function canSinkTotalScalarOperation(
+  core: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  block: DucklangCoreFunction["blocks"][number],
+  operation: DucklangCoreOperation,
+  typeByValue: ReadonlyMap<CoreValueId, CoreTypeId>,
+  useCounts: ReadonlyMap<CoreValueId, number>,
+  useBlocks: ReadonlyMap<CoreValueId, ReadonlySet<CoreBlockId>>,
+): boolean {
+  if (useCounts.get(operation.result) !== 1) return false;
+  const blocks = useBlocks.get(operation.result);
+  if (blocks?.size !== 1 || !blocks.has(block.id)) return false;
+  if (operation.kind === "constant") {
+    return core.types[operation.type]?.kind === "scalar";
+  }
+  if (
+    operation.kind !== "scalar.binary" || operation.operator === "/" ||
+    operation.operator === "%"
+  ) {
+    return false;
+  }
+  const operand = operation.operands[0];
+  if (operand === undefined) return false;
+  const operandType = typeByValue.get(operand);
+  if (operandType === undefined) {
+    throw new Error(
+      `Core function ${function_.name} has no type for value ${operand}`,
+    );
+  }
+  return core.types[operandType]?.kind === "scalar";
 }
 
 function isStackifiableOperation(
