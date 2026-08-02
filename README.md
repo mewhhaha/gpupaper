@@ -25,7 +25,7 @@ defines gpupaper's architecture or public target boundary.
 ## Install
 
 ```sh
-deno add jsr:@mewhhaha/gpupaper@0.1.0
+deno add jsr:@mewhhaha/gpupaper@0.1.1
 ```
 
 The default entrypoint contains Core, Core-to-Wasm lowering, TypeScript CPU
@@ -429,8 +429,9 @@ See [`PERFORMANCE.md`](PERFORMANCE.md) for current measurements and
 ## Current limits
 
 - Core is monomorphic and each function has one result.
-- The package publishes source TypeScript and a checked-in Rust/WebAssembly
-  emitter module; it does not publish a native binary.
+- The package publishes source TypeScript and a generated module containing the
+  checked Rust/WebAssembly emitter bytes; it does not publish a native binary or
+  read an adjacent checkout at runtime.
 - Host calls are synchronous and memory32-based.
 - The managed JavaScript boundary cannot carry vector or mask values.
 - `wasm-scalar` rejects all vector and mask types.

@@ -1,15 +1,8 @@
 #![no_std]
 
-#[inline(always)]
 fn step(value: i32) -> i32 {
-    let mixed = value
-        .wrapping_mul(1_664_525)
-        .wrapping_add(1_013_904_223);
-    if mixed < 0 {
-        mixed.wrapping_add(12_345)
-    } else {
-        mixed.wrapping_sub(12_345)
-    }
+    let mixed = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    if mixed < 0 { mixed.wrapping_add(12_345) } else { mixed.wrapping_sub(12_345) }
 }
 
 #[unsafe(no_mangle)]
@@ -24,6 +17,4 @@ pub extern "C" fn run(seed: i32, rounds: i32) -> i32 {
 }
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    loop {}
-}
+fn panic(_: &core::panic::PanicInfo<'_>) -> ! { loop {} }

@@ -1,7 +1,6 @@
 import { compileZeroSource } from "../examples/zero/compiler.ts";
+import { zeroWorkloads } from "../examples/zero/workloads.ts";
 import { emitWasmPlanOnCpu } from "../src/wasm.ts";
-
-const kernelUrl = new URL("../examples/zero/kernel.zero", import.meta.url);
 
 Deno.test("Zero lowers shadowing, calls, and conditional values", async () => {
   const compiled = await compileZeroSource(
@@ -19,32 +18,37 @@ Deno.test("Zero lowers shadowing, calls, and conditional values", async () => {
   assertEquals(choose(2), -3);
 });
 
-Deno.test("Zero repeat agrees with its bounded-fold reference semantics", async () => {
-  const source = await Deno.readTextFile(kernelUrl);
-  const compiled = await compileZeroSource("kernel.zero", source);
-  const instance = await instantiate(compiled.wasm);
-  const run = exportedFunction(instance, "run");
-  for (
-    const [seed, rounds] of [
-      [0, -1],
-      [0, 0],
-      [1, 1],
-      [-1, 2],
-      [1, 10],
-      [2_147_483_647, 31],
-    ] as const
-  ) {
-    assertEquals(run(seed, rounds), referenceRun(seed, rounds));
+Deno.test("Zero complexity workloads agree with their reference semantics", async () => {
+  for (const workload of zeroWorkloads) {
+    const source = await Deno.readTextFile(workload.zeroSourceUrl);
+    const compiled = await compileZeroSource(
+      workload.zeroSourceUrl.pathname,
+      source,
+    );
+    const run = exportedFunction(await instantiate(compiled.wasm), "run");
+    for (
+      const [seed, rounds] of [[0, -1], [0, 0], [1, 1], [-1, 2], [1, 10], [
+        2_147_483_647,
+        31,
+      ]] as const
+    ) {
+      assertEquals(run(seed, rounds), workload.reference(seed, rounds));
+    }
   }
 });
 
-Deno.test("Zero Rust/Wasm emission is byte-identical to CPU plan emission", async () => {
-  const source = await Deno.readTextFile(kernelUrl);
-  const compiled = await compileZeroSource("kernel.zero", source);
-  assertEquals(
-    Array.from(compiled.wasm),
-    Array.from(emitWasmPlanOnCpu(compiled.wasmPlan)),
-  );
+Deno.test("every Zero workload has byte-identical Rust/Wasm and CPU plan emission", async () => {
+  for (const workload of zeroWorkloads) {
+    const source = await Deno.readTextFile(workload.zeroSourceUrl);
+    const compiled = await compileZeroSource(
+      workload.zeroSourceUrl.pathname,
+      source,
+    );
+    assertEquals(
+      Array.from(compiled.wasm),
+      Array.from(emitWasmPlanOnCpu(compiled.wasmPlan)),
+    );
+  }
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {
@@ -136,15 +140,6 @@ function exportedFunction(
     throw new Error(`Zero module has no function export ${name}`);
   }
   return exported as (...arguments_: number[]) => number;
-}
-
-function referenceRun(seed: number, rounds: number): number {
-  let state = seed | 0;
-  for (let remaining = rounds; remaining > 0; remaining -= 1) {
-    const mixed = (Math.imul(state, 1_664_525) + 1_013_904_223) | 0;
-    state = mixed < 0 ? (mixed + 12_345) | 0 : (mixed - 12_345) | 0;
-  }
-  return state;
 }
 
 async function assertRejects(

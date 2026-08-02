@@ -36,11 +36,19 @@ deno test --allow-read tests/zero.test.ts
 deno task benchmark:zero
 ```
 
-The benchmark compiles [`kernel.zero`](kernel.zero) through the pipeline above
-and [`kernel.rs`](kernel.rs) directly with
-`rustc --target
-wasm32-unknown-unknown -C opt-level=3`. It differentially
-verifies both payloads before measuring compilation boundaries, module
-construction, instantiation, and hot execution. Compiler timings are
-deliberately not expressed as a ratio: an in-process frontend and a fresh
-`rustc` process are different boundaries.
+The [`workloads`](workloads) directory contains paired Zero and Rust programs
+that form a structural complexity ladder: arithmetic, a control-flow diamond, a
+call graph, nested predicates, nested loops, and a broad module. The benchmark
+compiles every pair through its respective pipeline and checks both against an
+independent recurrence before measuring compilation boundaries, module
+construction, instantiation, and hot execution.
+
+Run one rung while developing with `--workload`:
+
+```sh
+deno task benchmark:zero --workload=05-nested-loop --samples=30
+```
+
+Runtime comparisons are meaningful within one paired workload. Compiler timings
+are deliberately not expressed as a ratio: an initialized in-process frontend
+and a fresh `rustc` process are different boundaries.

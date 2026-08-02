@@ -1,0 +1,8 @@
+fn mix(value) = value * 1664525 + 1013904223;
+fn negative(value) = value * 3 + 7;
+fn positive(value) = value * 5 - 11;
+fn choose(value) = if value < 0 then negative(value) else positive(value);
+fn step(value) = choose(mix(value));
+
+export fn run(seed, rounds) =
+  repeat rounds from seed as value { step(value) };

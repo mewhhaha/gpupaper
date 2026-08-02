@@ -1,6 +1,6 @@
 {
   "name": "@mewhhaha/gpupaper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -16,7 +16,6 @@
       "gpu.ts",
       "rewrite.ts",
       "src/**/*.ts",
-      "src/generated/*.wasm",
       "README.md",
       "LICENSE",
       "PAPER.md",
