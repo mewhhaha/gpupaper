@@ -5646,6 +5646,50 @@ and that zero iterations never enter the callee. These are executable
 validations of the simulation obligations; the performance inequality remains
 an empirical hypothesis until measured.
 
+#### 7.13.7 Residual call-graph reachability
+
+After fusion, define the residual reference relation `f -> g` when a reachable
+operation in `f` is either a non-fused direct call to `g` or constructs a closure
+whose code is `g`. A fused call contributes no edge because Section 7.13.6 has
+already substituted its complete behavior. For public roots `E`, the emitted
+function set is the least fixed point
+
+```text
+R_0     = E
+R_(k+1) = R_k union { g | exists f in R_k. f -> g }
+R       = union_k R_k.
+```
+
+The table is finite, so the ascending chain stabilizes after at most `|F|`
+insertions. A worklist computes `R` in `Theta(|R| + |A_R|)` time, where `A_R`
+is the set of operations scanned in reachable functions, and uses `Theta(|F|)`
+set entries plus a worklist. Emitted functions receive dense Wasm indices in original
+function order; source Core IDs remain unchanged and map to those indices.
+
+For any invocation through `E`, induction over dynamic calls proves that the
+current function lies in `R`: the base invocation is a root, a residual direct
+call follows an edge in the definition, and every indirect target must first be
+introduced by a reachable `closure.make` edge. Fused calls are simulated by
+Section 7.13.6. Therefore no execution through the published interface can
+enter a function outside `R`. Removing those bodies, their otherwise-unused
+function types, imports, closure-table entries, and text literals preserves all
+published return, trap, effect, and divergence observations.
+
+This theorem depends on Core being a closed module with no reflective function
+lookup, late linker references, or fabricated table indices. Applying the rule
+to an open object file would be unsound without additional external roots.
+Treating every indirect call as an edge to every function would be sound but
+would discard closure-construction precision and much of the benefit. Pruning
+only bodies while retaining their imports and literals would preserve execution
+but falsify the claimed artifact reduction, so all derived module components use
+the same reachable set.
+
+The backend implements this fixed point before module planning. Existing tests
+cover residual internal direct calls, recursive calls, closure construction and
+indirect calls, explicit exports, and fused calls; the complete suite is the
+differential/conformance boundary. This is executable validation plus the
+closed-world reachability argument above, not a linker-level theorem.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9852,6 +9896,25 @@ The deterministic size sentinels were updated only after all executable corpus
 semantics passed. These four observations show that local/control encoding can
 offset duplication, but they do not identify runtime wins or a general size
 law.
+
+### 2026-08-02: residual reachability removes the fused callee
+
+Section 7.13.7 now computes the least residual call/closure fixed point from
+published exports before planning any module component. Function types, bodies,
+imports, text literals, closure-table entries, FCG functions, and Wasm indices
+all use the same source-ordered reachable set. The complete 642-test suite
+passes, including recursive and indirect-call cases; the deterministic Ducklang
+artifact sizes from the fusion iteration remain unchanged.
+
+`measurements/zero-reachability-diagnostic-2026-08-02.json` retains one
+contended 30-pair process. Removing the now-unreferenced `step` body and type cut
+Zero from 334 to 222 bytes, a 33.5% reduction, and made it 40.2% smaller than the
+371-byte Rust artifact. Zero measured 2.827 ns/iteration, Rust 1.469, and the
+paired ratio was 1.918. The 1.8% Zero difference from the previous independent
+diagnostic is consistent with the theorem's zero dynamic-work prediction and
+does not establish a runtime change. The remaining performance question is now
+inside the fused loop: local allocation and redundant value transfers, followed
+by loop scheduling/unrolling, rather than module reachability.
 
 ## References
 

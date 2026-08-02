@@ -156,12 +156,25 @@ export function lowerDucklangCoreToFcgAndWasm(
   validateDucklangCore(core);
   validateDucklangCoreWasmTarget(core, options.target ?? "wasm-simd128");
   validateDucklangJavaScriptBoundary(core);
-  const textLiterals = collectTextLiterals(core);
+  const exports = options.exports ?? [{
+    name: "main",
+    functionId: core.entryFunction,
+  }];
+  validateCoreExports(core, exports);
+  const reachableFunctionIds = findReachableFunctions(core, exports);
+  const reachableFunctions = core.functions.filter((function_) =>
+    reachableFunctionIds.has(function_.id)
+  );
+  const textLiterals = collectTextLiterals(reachableFunctions);
   const textHandles = new Map(
     textLiterals.map((literal, index) => [literal, index + 1]),
   );
-  const closureTargets = collectClosureTargets(core);
-  const requirements = collectImportRequirements(core, closureTargets);
+  const closureTargets = collectClosureTargets(core, reachableFunctions);
+  const requirements = collectImportRequirements(
+    core,
+    reachableFunctions,
+    closureTargets,
+  );
   const builder = new WasmModuleBuilder();
   const importedFunctions = new Map<string, number>();
   for (const requirement of requirements.values()) {
@@ -179,13 +192,14 @@ export function lowerDucklangCoreToFcgAndWasm(
     );
   }
 
-  const functionTypeIndices = core.functions.map((function_) => {
+  const functionTypeIndices = core.functions.map(() => -1);
+  for (const function_ of reachableFunctions) {
     const signature = core.signatures[function_.signature];
-    return builder.addFunctionType(
+    functionTypeIndices[function_.id] = builder.addFunctionType(
       signature.parameters.map((type) => wasmValueType(core, type)),
       [wasmValueType(core, signature.result)],
     );
-  });
+  }
   const closureTypeIndices = new Map<CoreSignatureId, number>();
   for (const target of closureTargets) {
     if (closureTypeIndices.has(target.signature)) continue;
@@ -201,7 +215,7 @@ export function lowerDucklangCoreToFcgAndWasm(
       ),
     );
   }
-  for (const function_ of core.functions) {
+  for (const function_ of reachableFunctions) {
     for (const block of function_.blocks) {
       for (const operation of block.operations) {
         if (
@@ -225,9 +239,12 @@ export function lowerDucklangCoreToFcgAndWasm(
     }
   }
 
-  const functionIndices = core.functions.map((function_) =>
-    requirements.size + function_.id
-  );
+  const functionIndices = core.functions.map(() => -1);
+  let nextFunctionIndex = requirements.size;
+  for (const function_ of reachableFunctions) {
+    functionIndices[function_.id] = nextFunctionIndex;
+    nextFunctionIndex += 1;
+  }
   const backendEnvironmentIdentity = options.functions === undefined
     ? undefined
     : contentIdentity({
@@ -244,7 +261,7 @@ export function lowerDucklangCoreToFcgAndWasm(
       ),
     });
   const fcgFunctions: FcgFunction[] = [];
-  for (const function_ of core.functions) {
+  for (const function_ of reachableFunctions) {
     let loweredFunction: {
       readonly layout: FunctionValueLayout;
       readonly instructions: readonly WasmInstruction[];
@@ -329,22 +346,8 @@ export function lowerDucklangCoreToFcgAndWasm(
     addBlotAbiModuleShell(builder, options.blotAbiManifest);
   }
 
-  const exports = options.exports ?? [{
-    name: "main",
-    functionId: core.entryFunction,
-  }];
-  const exportNames = new Set<string>();
   for (const exported of exports) {
-    if (exportNames.has(exported.name)) {
-      throw new TypeError(`Core Wasm options repeat export ${exported.name}`);
-    }
-    exportNames.add(exported.name);
     const functionIndex = functionIndices[exported.functionId];
-    if (functionIndex === undefined) {
-      throw new RangeError(
-        `Core Wasm export ${exported.name} uses function ${exported.functionId}; ${core.functions.length} functions are defined`,
-      );
-    }
     builder.exportFunction(exported.name, functionIndex);
   }
   for (const section of options.customSections ?? []) {
@@ -503,9 +506,59 @@ export function addBlotAbiModuleShell(
   return { realloc, heap };
 }
 
-function collectTextLiterals(core: DucklangCoreModule): readonly string[] {
+function validateCoreExports(
+  core: DucklangCoreModule,
+  exports: readonly {
+    readonly name: string;
+    readonly functionId: CoreFunctionId;
+  }[],
+): void {
+  const names = new Set<string>();
+  for (const exported of exports) {
+    if (names.has(exported.name)) {
+      throw new TypeError(`Core Wasm options repeat export ${exported.name}`);
+    }
+    names.add(exported.name);
+    if (core.functions[exported.functionId] === undefined) {
+      throw new RangeError(
+        `Core Wasm export ${exported.name} uses function ${exported.functionId}; ${core.functions.length} functions are defined`,
+      );
+    }
+  }
+}
+
+function findReachableFunctions(
+  core: DucklangCoreModule,
+  exports: readonly { readonly functionId: CoreFunctionId }[],
+): ReadonlySet<CoreFunctionId> {
+  const reachable = new Set(exports.map((exported) => exported.functionId));
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const functionId = pending.pop()!;
+    const function_ = core.functions[functionId];
+    for (const block of function_.blocks) {
+      for (const operation of block.operations) {
+        const target = operation.kind === "closure.make"
+          ? operation.functionId
+          : operation.kind === "call.direct" &&
+              inlineableLoopCall(core, function_, block, operation) ===
+                undefined
+          ? operation.functionId
+          : undefined;
+        if (target === undefined || reachable.has(target)) continue;
+        reachable.add(target);
+        pending.push(target);
+      }
+    }
+  }
+  return reachable;
+}
+
+function collectTextLiterals(
+  functions: readonly DucklangCoreFunction[],
+): readonly string[] {
   const literals = new Set<string>();
-  for (const function_ of core.functions) {
+  for (const function_ of functions) {
     for (const block of function_.blocks) {
       for (const operation of block.operations) {
         if (
@@ -521,9 +574,10 @@ function collectTextLiterals(core: DucklangCoreModule): readonly string[] {
 
 function collectClosureTargets(
   core: DucklangCoreModule,
+  functions: readonly DucklangCoreFunction[],
 ): readonly ClosureTarget[] {
   const signatures = new Map<CoreFunctionId, CoreSignatureId>();
-  for (const function_ of core.functions) {
+  for (const function_ of functions) {
     for (const block of function_.blocks) {
       for (const operation of block.operations) {
         if (operation.kind !== "closure.make") continue;
@@ -557,6 +611,7 @@ function collectClosureTargets(
 
 function collectImportRequirements(
   core: DucklangCoreModule,
+  functions: readonly DucklangCoreFunction[],
   closureTargets: readonly ClosureTarget[],
 ): ReadonlyMap<string, ImportRequirement> {
   const requirements = new Map<string, ImportRequirement>();
@@ -602,7 +657,7 @@ function collectImportRequirements(
     );
   }
   const needsIndirectCall = closureTargets.length > 0 ||
-    core.functions.some((function_) =>
+    functions.some((function_) =>
       function_.blocks.some((block) =>
         block.operations.some((operation) =>
           operation.kind === "call.indirect" ||
@@ -624,7 +679,7 @@ function collectImportRequirements(
     );
   }
 
-  for (const function_ of core.functions) {
+  for (const function_ of functions) {
     const types = valueTypes(function_);
     for (const block of function_.blocks) {
       for (const operation of block.operations) {
@@ -811,10 +866,13 @@ function planFunctionValues(
   if (naturalLoop !== undefined) {
     for (const operation of naturalLoop.body.operations) {
       if (operation.kind !== "call.direct") continue;
-      const inlineFunction = core.functions[operation.functionId];
+      const inlineFunction = inlineableLoopCall(
+        core,
+        function_,
+        naturalLoop.body,
+        operation,
+      );
       if (inlineFunction === undefined) continue;
-      const diamond = inlineableScalarDiamond(core, inlineFunction);
-      if (diamond === undefined) continue;
       const inlineLocalByValue = new Map<CoreValueId, number>();
       for (const block of inlineFunction.blocks) {
         for (const parameter of block.parameters) {
@@ -1153,6 +1211,21 @@ function inlineableScalarDiamond(
     return undefined;
   }
   return diamond;
+}
+
+function inlineableLoopCall(
+  core: DucklangCoreModule,
+  caller: DucklangCoreFunction,
+  block: DucklangCoreFunction["blocks"][number],
+  operation: Extract<DucklangCoreOperation, { readonly kind: "call.direct" }>,
+): DucklangCoreFunction | undefined {
+  const naturalLoop = simpleNaturalLoop(caller);
+  if (naturalLoop?.body.id !== block.id) return undefined;
+  const target = core.functions[operation.functionId];
+  return target !== undefined &&
+      inlineableScalarDiamond(core, target) !== undefined
+    ? target
+    : undefined;
 }
 
 function simpleNaturalLoop(

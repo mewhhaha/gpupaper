@@ -65,6 +65,82 @@ Deno.test("generic Core API emits an executable exported function", async () => 
   }
 });
 
+Deno.test("closed Core emission removes imports reachable only from dead functions", async () => {
+  const i32 = 0 as CoreTypeId;
+  const signature = 0 as CoreSignatureId;
+  const main = 0 as CoreFunctionId;
+  const dead = 1 as CoreFunctionId;
+  const entry = 0 as CoreBlockId;
+  const value = 0 as CoreValueId;
+  const span = { file: "reachability.example", start: 0, end: 1 };
+  const core: CoreModule = {
+    schemaVersion: 1,
+    file: span.file,
+    types: [{ kind: "scalar", scalar: "i32" }],
+    signatures: [{ parameters: [], result: i32 }],
+    functions: [{
+      id: main,
+      name: "main",
+      sourceSymbolId: undefined,
+      signature,
+      entryBlock: entry,
+      blocks: [{
+        id: entry,
+        parameters: [],
+        operations: [{
+          kind: "constant",
+          result: value,
+          type: i32,
+          operands: [],
+          value: 42,
+          span,
+        }],
+        terminator: { kind: "return", values: [value], span },
+      }],
+      span,
+    }, {
+      id: dead,
+      name: "dead",
+      sourceSymbolId: undefined,
+      signature,
+      entryBlock: entry,
+      blocks: [{
+        id: entry,
+        parameters: [],
+        operations: [{
+          kind: "host.call",
+          effectName: "Dead",
+          operationName: "observe",
+          result: value,
+          type: i32,
+          operands: [],
+          span,
+        }],
+        terminator: { kind: "return", values: [value], span },
+      }],
+      span,
+    }],
+    entryFunction: main,
+  };
+
+  const lowered = lowerCoreToWasm(core, {
+    emission: "planOnly",
+    target: "wasm-scalar",
+    exports: [{ name: "main", functionId: main }],
+  });
+  const module = await WebAssembly.compile(
+    Uint8Array.from(emitWasmPlanOnCpu(lowered.wasmPlan)),
+  );
+  if (WebAssembly.Module.imports(module).length !== 0) {
+    throw new Error("dead Core function retained its host import");
+  }
+  const instance = await WebAssembly.instantiate(module);
+  const exported = instance.exports.main;
+  if (!(exported instanceof Function) || exported() !== 42) {
+    throw new Error("reachable Core export changed after dead-code removal");
+  }
+});
+
 Deno.test("canonical natural loop preserves reverse edges and parallel assignments", async () => {
   const i32 = 0 as CoreTypeId;
   const signature = 0 as CoreSignatureId;
