@@ -3939,15 +3939,20 @@ The required invariants are:
 6. **Semantic noninterference:** batching changes compiler scheduling only. It
    neither executes nor reorders a Blot host effect.
 
-The throughput cap remains `K=16`, so a logical batch of `n` admitted modules is
-partitioned into `ceil(n/K)` contiguous physical plans. Contiguous partitioning
-preserves ordinals without a sort. For `A=sum_i a_i` atoms and total maximum
-encoded capacity `Y=sum_i Y_i`, packing, column construction, scan, emission,
-boundary readback, and artifact copying require `O(A+n+Y)` work and `O(A+Y+n)`
-space. Compared with `n` separate emissions, it changes `n` atom scans, output
-arenas, mappings, and payload command buffers into `ceil(n/K)` of each. It does
-not remove Blot's `sum_i T_prepare_i`, gpupaper's `sum_i T_plan_i`, the total
-atom work, or the final `Theta(Y)` host copy.
+The current throughput cap is `K=16`, so a logical batch of `n` admitted modules
+is partitioned into `ceil(n/K)` contiguous physical plans. This value is inherited
+from the general command queue; it is an implementation limit, not a derived GPU
+capacity or an established optimum. Contiguous partitioning preserves ordinals
+without a sort. For `A=sum_i a_i` atoms and total maximum encoded capacity
+`Y=sum_i Y_i`, packing, column construction, scan, emission, boundary readback,
+and artifact copying require `O(A+n+Y)` work and `O(A+Y+n)` space. Compared with
+`n` separate emissions, it changes `n` atom scans, output arenas, mappings, and
+payload command buffers into `ceil(n/K)` of each. It does not remove Blot's
+`sum_i T_prepare_i`, gpupaper's `sum_i T_plan_i`, or the total atom work. The
+present owned-artifact API copies `Y` bytes from mapped GPU memory into one
+packed host array and then copies the same `Y` bytes into isolated artifact
+arrays. Thus it performs exactly two linear host-copy passes after mapping,
+although its asymptotic host-copy work remains `Theta(Y)`.
 
 With per-physical-batch fixed cost `H`, per-module GPU work `g_i`, and packed
 overhead `r(n,A)`, the first break-even condition is
@@ -4018,6 +4023,142 @@ and the p50 ratio was 7.084. All 53 outputs, totalling 173,721 bytes, were
 identical. This is admissible empirical evidence for the stated warm-process,
 warm-Blot-cache corpus boundary. It is not a cold-build result, an uncertainty
 interval, or evidence that one module benefits.
+
+#### Derived batch frontier and next proof obligations
+
+The measurements reject a constant numerical interpretation of `H`. Dividing
+the observed saving by the number of removed physical boundaries gives 1.118 ms
+at four modules, 0.914 ms at 16, and 1.813 ms at 64. The real 53-module target
+removed 49 boundaries and saved 799.411 ms, or 16.315 ms per removed boundary if
+all of the saving is attributed to that count. These incompatible estimates do
+not invalidate amortization; they show that `H` abbreviates queueing, allocation,
+mapping, validation, JavaScript scheduling, and contention whose costs depend on
+the surrounding workload. Treating any one quotient as an adapter constant
+would be an unverified and contradicted model.
+
+Two calculations remain useful without that assumption. First, the 53-module
+packed path retains 14.117% of the old median wall time and removes 85.883%.
+Therefore all work unchanged by packing is bounded above by 131.401 ms for this
+run, but the measurement does not identify how much of that remainder is Blot
+preparation, Wasm planning, GPU service, validation, or copying. Second, within
+the diagnostic packed series, adding 15 modules to the singleton added 2.349 ms,
+or 0.157 ms per added module, while moving from 16 to 64 added 10.646 ms, or
+0.222 ms per added module. These are empirical slopes over two intervals, not
+per-module constants. They establish that payload work remains after the fixed
+boundary is shared and that the next benchmark must expose the remainder by
+stage.
+
+The physical partition should consequently be derived from resources rather
+than a payload count. Associate plan `i` with the monotone resource vector
+
+\[w_i=(a_i,Y_i,d_i,s_i,r_i),\]
+
+where `a_i` is atom count, `Y_i` is output capacity, `d_i` is length-sizing
+dependency work, `s_i` is the largest storage-binding requirement contributed
+by its columns, and `r_i` is readback boundary count. For a contiguous interval
+`[j,k)`, the existing plan analysis can calculate the exact combined buffer and
+dispatch requirements before allocation. Define `F(j,k)` when every resulting
+buffer, binding, dispatch, safe-integer, and implementation-memory constraint is
+satisfied. `F` is interval-hereditary: if `[j,k)` is feasible, every contiguous
+subinterval is feasible because removing plans cannot add atoms, bytes,
+dependencies, or boundaries. This property must be tested for every adaptive
+column representation; capacity admission must consider every supported
+representation rather than let a heuristic representation choice make a larger
+interval feasible when one of its subintervals is refused.
+
+Under the restricted objective “minimize the number of physical boundaries”
+with a fixed cost per feasible partition, greedily selecting the longest
+feasible stable prefix is optimal. Let its first endpoint be `g`. Any feasible
+partition has first endpoint `e<=g`. If `g` crosses later partitions of an
+alternative, remove every consumed partition and retain only the unconsumed
+suffix of the last crossed one; interval heredity makes that suffix feasible.
+The transformed alternative begins with `[j,g)` and uses no more partitions.
+Induction on the remaining suffix proves optimality. This is a proof for
+boundary count only. It does not prove minimum latency when large plans change
+shader occupancy, length-level divergence, allocation bucket size, or queue
+overlap. For that objective, measured interval cost `C(j,k)` leads to the
+ordered recurrence
+
+\[D(k)=\min_{0\le j<k,\ F(j,k)}(D(j)+C(j,k)),\qquad D(0)=0.\]
+
+The recurrence has `O(nK)` work if measurement or a proven capacity bound limits
+predecessors to `K`, and `O(n^2)` otherwise. Introducing it before stage timings
+would fit noise rather than structure. The next implementation step is therefore
+capacity-derived maximal-prefix packing, retaining 16 only as a measured guard
+until larger admissible prefixes are tested. Size-sorting modules is not needed:
+compilation purity would permit restoring ordinals after a physical reorder, but
+stable prefixes already minimize boundary count under a single hereditary
+capacity predicate and avoid a new permutation, failure-attribution, and memory
+cost.
+
+There is a second independent frontier between sequential source preparation
+and GPU emission. Let `c_j` be CPU preparation plus planning time for physical
+batch `j`, and `g_j` its GPU emission plus readback time. In the idealized
+non-overlapped model, preparing every module before submitting any packed work
+has makespan
+
+\[T_{serial}=\sum_j c_j+\sum_j g_j.\]
+
+A two-stage, stable pipeline can submit batch `j` as soon as it is planned while
+the CPU prepares `j+1`. With `P_j=sum_{h<=j} c_h`, GPU completion obeys
+
+\[E_j=\max(E_{j-1},P_j)+g_j,\qquad E_{-1}=0.\]
+
+and the makespan for `m` batches is `E_{m-1}`. Its lower bound is
+`max(sum_j c_j,sum_j g_j)`; the exact recurrence accounts for pipeline fill and
+drain. Its semantics are unchanged because planning is pure over admitted
+immutable HIR and result ordinals remain stable. Naively preparing Blot modules
+on multiple JavaScript workers is not yet justified: the frontend caches and
+ownership of their mutable state have not been modeled. Overlap on one host
+thread after GPU submission requires no such shared-state proof. It does require
+batch-local failure cancellation and a bounded number of in-flight arenas so
+that overlap does not turn `O(max_j(A_j+Y_j))` live GPU storage into
+`O(sum_j(A_j+Y_j))`.
+
+The singleton counterexample supplies a lawful specialization. Since
+`pack([P])=P` by construction and singleton equivalence is already executable,
+the plural API may route `n=1` through the direct emitter. This removes the
+second host copy and the packed-boundary bookkeeping while preserving bytes and
+failure semantics. The observed 0.835% regression is evidence to test this
+specialization, not enough samples to claim its expected speedup.
+
+For `n>1`, eliminating the second `Y`-byte host copy conflicts with the current
+byte-isolation invariant. JavaScript `Uint8Array` values are mutable and expose
+their backing `ArrayBuffer`; disjoint views into one packed array are therefore
+not owned artifacts. A sound zero-extra-copy boundary must instead retain an
+opaque readback arena and expose closed consumption operations such as “write
+artifact `i` to this path” without returning a view or buffer to caller code.
+The arena remains live until all asynchronous writes settle, then is released as
+one region. A generic caller-provided sink would not suffice if it received and
+could retain the view. This changes the API and lifetime proof, so it is not an
+implementation detail. Returning ordinary typed-array views and documenting
+them as immutable is a counterexample, not an ownership model.
+
+The required next evidence is thus ordered rather than speculative:
+
+1. Add per-module and per-physical-batch timings for Blot preparation,
+   residual-to-HIR conversion, plan construction, packing and inspection,
+   column construction, GPU allocation/upload, device completion, mapping,
+   artifact isolation, Wasm validation, and manifest validation. For the
+   non-overlapped baseline, timings must sum to the measured boundary up to an
+   explicitly reported unaccounted term; an overlapped implementation must also
+   report critical-path and overlapped time rather than summing concurrent work.
+2. Record each plan's resource vector and the adapter limits, then compare
+   count-16 partitions with longest-feasible-prefix partitions on the same
+   randomized order and exact output differential.
+3. Test the singleton direct specialization with counterbalanced process-level
+   samples; retain it only if its paired distribution improves without changing
+   bytes, manifests, or error classification.
+4. Measure a bounded two-stage pipeline at in-flight depths one and two. Reject
+   it if overlap is absent or peak leased bytes violate its declared bound.
+5. Consider an opaque arena sink only after profiling shows the second `Y`-byte
+   copy is material. Owned byte arrays remain the smaller proved interface until
+   then.
+
+The partition-count theorem and singleton identity are proved properties of the
+stated model. Plan and Wasm differentials are executable validations. The
+reported slopes and ratios are empirical measurements. Capacity-derived packing,
+CPU/GPU overlap, and an opaque arena sink remain unimplemented hypotheses.
 
 #### Canonical ABI and call-scoped result regions
 
