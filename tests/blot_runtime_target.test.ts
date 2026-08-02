@@ -1078,6 +1078,238 @@ Deno.test("Blot Runtime target validates and reclaims dynamic canonical Text", a
   }
 });
 
+Deno.test("Blot Runtime target formats every dynamic I64 boundary as Text", async () => {
+  const module: BlotRuntimeModule = {
+    format: "blot-runtime-hir",
+    schemaVersion: 1,
+    source: "format-i64.blot",
+    types: [
+      { kind: "unit" },
+      { kind: "signed-integer-64" },
+      { kind: "text" },
+    ],
+    signatures: [
+      { parameters: [0], result: 1, effects: ["Source"] },
+      { parameters: [2], result: 0, effects: ["Sink"] },
+      { parameters: [], result: 0, effects: ["Sink", "Source"] },
+    ],
+    functions: [{
+      id: 0,
+      name: "format_i64",
+      signature: 2,
+      entryBlock: 0,
+      blocks: [{
+        id: 0,
+        parameters: [],
+        operations: [
+          unitOperation(0),
+          {
+            kind: "host.call",
+            result: 1,
+            type: 1,
+            operands: [0],
+            ownership: "plain",
+            capability: "Source",
+            operation: "read",
+            span,
+          },
+          {
+            kind: "text.from-i64",
+            result: 2,
+            type: 2,
+            operands: [1],
+            ownership: "owned",
+            span,
+          },
+          {
+            kind: "host.call",
+            result: 3,
+            type: 0,
+            operands: [2],
+            ownership: "plain",
+            capability: "Sink",
+            operation: "write",
+            span,
+          },
+        ],
+        terminator: { kind: "return", value: 3, span },
+      }],
+      span,
+    }],
+    capabilities: [{
+      name: "Sink",
+      operations: [{ name: "write", signature: 1 }],
+    }, {
+      name: "Source",
+      operations: [{ name: "read", signature: 0 }],
+    }],
+    exports: [runtimeExport("default", "blot:default", 0, 2)],
+  };
+  const artifact = compileBlotRuntimeModule(module);
+  if (artifact.wasm === undefined) throw new Error("target omitted CPU Wasm");
+  const compiled = await WebAssembly.compile(artifact.wasm as BufferSource);
+
+  for (const value of [-(1n << 63n), 0n, (1n << 63n) - 1n]) {
+    let observed = "";
+    const instance = await WebAssembly.instantiate(compiled, {
+      "blot:host/Source": { read: () => value },
+      "blot:host/Sink": {
+        write(pointer: number, length: number) {
+          observed = new TextDecoder().decode(
+            new Uint8Array(requiredMemory(instance).buffer, pointer, length),
+          );
+        },
+      },
+    });
+    call(instance, "blot:default");
+    assertEquals(observed, value.toString());
+  }
+});
+
+Deno.test("Blot Runtime target exchanges dynamic I64 records with host effects", async () => {
+  const fields = Array.from({ length: 17 }, (_, index) => ({
+    name: `field_${String(index).padStart(2, "0")}`,
+    type: 1,
+  }));
+  const module: BlotRuntimeModule = {
+    format: "blot-runtime-hir",
+    schemaVersion: 1,
+    source: "records.blot",
+    types: [
+      { kind: "unit" },
+      { kind: "signed-integer-64" },
+      {
+        kind: "product",
+        name: "Event",
+        fields: [
+          { name: "kind", type: 1 },
+          { name: "target", type: 1 },
+          { name: "value", type: 1 },
+        ],
+      },
+      { kind: "product", name: "Command", fields },
+      { kind: "boolean" },
+    ],
+    signatures: [
+      { parameters: [0], result: 2, effects: ["Source"] },
+      { parameters: [3], result: 0, effects: ["Sink"] },
+      { parameters: [], result: 0, effects: ["Sink", "Source"] },
+    ],
+    functions: [{
+      id: 0,
+      name: "records",
+      signature: 2,
+      entryBlock: 0,
+      blocks: [{
+        id: 0,
+        parameters: [],
+        operations: [
+          unitOperation(0),
+          {
+            kind: "host.call",
+            result: 1,
+            type: 2,
+            operands: [0],
+            ownership: "owned",
+            capability: "Source",
+            operation: "read",
+            span,
+          },
+          {
+            kind: "product.project",
+            result: 2,
+            type: 1,
+            operands: [1],
+            ownership: "plain",
+            field: 0,
+            span,
+          },
+          constant(3, 1, 1n),
+          {
+            kind: "scalar",
+            result: 4,
+            type: 1,
+            operands: [2, 3],
+            ownership: "plain",
+            operator: "add",
+            span,
+          },
+          {
+            kind: "product.make",
+            result: 5,
+            type: 3,
+            operands: fields.map(() => 4),
+            ownership: "owned",
+            span,
+          },
+          {
+            kind: "host.call",
+            result: 6,
+            type: 0,
+            operands: [5],
+            ownership: "plain",
+            capability: "Sink",
+            operation: "write",
+            span,
+          },
+        ],
+        terminator: { kind: "return", value: 6, span },
+      }],
+      span,
+    }],
+    capabilities: [{
+      name: "Sink",
+      operations: [{ name: "write", signature: 1 }],
+    }, {
+      name: "Source",
+      operations: [{ name: "read", signature: 0 }],
+    }],
+    exports: [runtimeExport("default", "blot:default", 0, 2)],
+  };
+  const artifact = compileBlotRuntimeModule(module);
+  if (artifact.wasm === undefined) throw new Error("target omitted CPU Wasm");
+  const compiled = await WebAssembly.compile(artifact.wasm as BufferSource);
+  let observed = false;
+  const instance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": {
+      read(pointer: number) {
+        const view = new DataView(requiredMemory(instance).buffer);
+        view.setBigInt64(pointer, 42n, true);
+        view.setBigInt64(pointer + 8, 7n, true);
+        view.setBigInt64(pointer + 16, 9n, true);
+      },
+    },
+    "blot:host/Sink": {
+      write(pointer: number) {
+        const view = new DataView(requiredMemory(instance).buffer);
+        for (let offset = 0; offset < fields.length * 8; offset += 8) {
+          assertEquals(view.getBigInt64(pointer + offset, true), 43n);
+        }
+        observed = true;
+      },
+    },
+  });
+
+  call(instance, "blot:default");
+  assertEquals(observed, true);
+
+  const overflowInstance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": {
+      read(pointer: number) {
+        const view = new DataView(requiredMemory(overflowInstance).buffer);
+        view.setBigInt64(pointer, (1n << 63n) - 1n, true);
+        view.setBigInt64(pointer + 8, 0n, true);
+        view.setBigInt64(pointer + 16, 0n, true);
+      },
+    },
+    "blot:host/Sink": { write() {} },
+  });
+  assertThrows(
+    () => call(overflowInstance, "blot:default"),
+    /unreachable|RuntimeError/i,
+  );
+});
+
 Deno.test("Blot Runtime target compares dynamic Text in Unicode scalar order", async () => {
   const module = dynamicTextModule({
     comparisonText: "\uE000",

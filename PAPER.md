@@ -5103,45 +5103,71 @@ deliberately refused because they would violate the single-region stack law.
 This is executable validation and a local simulation argument, not a general
 proof for multiple outstanding results or asynchronous calls.
 
-Dynamic direct scalar export parameters and non-unit scalar host results now
-cross the direct Core path without staging: an executable `i64 -> i64` export
+Dynamic direct scalar export parameters and non-unit scalar host results cross
+the direct Core path without staging: an executable `i64 -> i64` export
 preserves two boundary values and an imported `i64 -> i64` result flows into the
 export result. The import module is exactly `blot:host/<capability>`. The direct
-admission predicate enforces the 16-flat-parameter limit. General parameter
-lifting, boolean input validation, host operations returning indirect canonical
-values other than `Text`, asynchronous effects, dynamic composite production,
-and malformed caller-memory validation remain outside the admitted target. The
-zero-parameter staged composite subset has no untrusted composite caller value
-to validate; extending it requires canonical lifting checks rather than
-broadening the template proof.
+admission predicate enforces the 16-flat-parameter limit. The module-local
+canonical path additionally admits first-order products whose leaves are `Unit`,
+`Bool`, `I64`, or `Text`. It represents a product in SSA as the recursive
+concatenation of its name-sorted field representations. Thus construction is
+concatenation, projection is a statically known slice, and a block argument
+copies the same flattened sequence. This is a structural product model: field
+names determine canonical order and no runtime descriptor or managed handle is
+introduced.
+
+At a host call, a parameter with at most 16 flattened components is passed
+directly. A larger parameter is lowered once into its recursively aligned
+canonical memory record and the import receives its pointer. A result with zero
+or one component is returned directly; a larger result uses caller-allocated
+canonical memory and is lifted back into SSA components. Lifting validates that
+every Boolean is 0 or 1, every text range lies in memory, and every text payload
+is UTF-8. Record offsets and leaf order are derived from the same sorted ABI
+type, so the lowering invariant is that flattening a stored record yields the
+same leaf sequence as its SSA representation. The executable target test
+`Blot Runtime target exchanges dynamic I64 records with host effects` covers an
+indirect three-field result and a 17-field indirect argument, including product
+projection and construction, and traps an overflowing `I64` addition on that
+canonical path. This is executable validation, not a proof for recursive or
+variant-bearing values.
 
 The remaining composite boundary cannot be obtained by wrapping the current
 general Core representation. Core products, sums, stores, and text are opaque
-managed-runtime handles of one `i32`, whereas Blot ABI text alone flattens to
+managed-runtime handles of one `i32`, whereas Blot ABI text flattens to
 `(i32,i32)` and nested aggregates are canonical memory graphs. There is no
 representation-preserving cast from a caller graph to an opaque handle, nor a
-way to lower a returned handle without the private projection tables. A bridge
-would have to traverse `N` boundary nodes in `Theta(N)` work, allocate private
+way to lower a returned handle without private projection tables. A bridge would
+have to traverse `N` boundary nodes in `Theta(N)` work, allocate private
 handles, and add undeclared JavaScript imports; the latter would violate the
 published Blot module contract. Reusing the closed template would instead make
-dynamic values constant. The implemented `Text` fragment therefore uses a
-module-local canonical lowering whose ordinary operations use the same memory
-representation as its adapters. General dynamic aggregates must extend that
-route rather than introduce a hidden managed bridge or template generalization;
-both remain rejected alternatives.
+dynamic values constant. The implemented first-order fragment therefore uses a
+module-local canonical lowering whose ordinary text and product operations use
+the same flattened representation as its adapters. Arrays, payload-bearing
+variants, seals, floats, asynchronous effects, and untrusted composite export
+parameters remain outside this path; they must extend the same lifting/lowering
+model rather than introduce a hidden managed bridge or template generalization.
 
-For the admitted dynamic `Text` calculus the selected module-local canonical
-representation is two `i32` SSA components `(p,n)`, not a managed handle. Text
-block arguments copy both components, while ordinary scalar values copy one.
-Static UTF-8 literals occupy immutable active data. Concatenation allocates
-`n_1+n_2` bytes through the exported `cabi_realloc` and performs two bounded
-copies. Comparison scans the two valid UTF-8 byte sequences lexicographically;
-UTF-8 preserves Unicode scalar ordering, so the byte order implements Blot's
-declared text comparison without decoding scalar values. A host returning `Text`
-uses Canonical ABI indirect-result form: the module passes an eight-byte result
+For admitted dynamic `Text`, the selected module-local canonical representation
+is two `i32` SSA components `(p,n)`, not a managed handle. Text block arguments
+copy both components, while ordinary scalar values copy one. Static UTF-8
+literals occupy immutable active data. Concatenation allocates `n_1+n_2` bytes
+through the exported `cabi_realloc` and performs two bounded copies. Comparison
+scans the two valid UTF-8 byte sequences lexicographically; UTF-8 preserves
+Unicode scalar ordering, so the byte order implements Blot's declared text
+comparison without decoding scalar values. A host returning `Text` uses
+Canonical ABI indirect-result form: the module passes an eight-byte result
 header, the host writes `(p,n)` and allocates the payload with the module's
 allocator, and the module validates the range and UTF-8 before use.
 `Text -> Unit` imports receive the two flat components directly [46].
+
+`I64 -> Text` reserves the maximum signed decimal width of 20 bytes and writes
+digits from the end of that region. Signed remainder and division let it format
+`-2^63` without first negating the unrepresentable magnitude; only each
+remainder in `[-9,9]` is negated. The returned `(p,n)` names the populated
+suffix. The formatter performs between one and 19 digit iterations plus an
+optional sign store, allocates exactly 20 bytes, and uses constant auxiliary
+state. The executable target test covers `-2^63`, zero, and `2^63-1` through a
+dynamic host result rather than a staged literal.
 
 Every top-level direct-result call checkpoints the bump frontier and restores it
 on every return, so host-returned and concatenated text have the same region
@@ -5154,6 +5180,18 @@ constant auxiliary space. Packing text into a single opaque `i32`, importing
 JavaScript text operations, or treating host memory as trusted would
 respectively violate the ABI shape, module import contract, or
 boundary-validation rule and are rejected alternatives.
+
+For a first-order record with `F` flattened leaves and canonical memory size
+`S`, direct calls perform `Theta(F)` local transfers and allocate no record.
+Indirect lowering or lifting performs `Theta(F)` loads or stores and allocates
+`S` bytes in the call-scoped region; product construction and projection
+allocate no linear memory. The region checkpoint therefore bounds transient
+record memory by the sum of indirect values live during one call and reclaims it
+in `O(1)` at return. The representation adds one Wasm local per scalar leaf and
+two per text leaf. It is preferable to a heap handle while `F` is small enough
+that boundary flattening is required anyway; for large internal aggregates a
+future handle representation may reduce local pressure, but it cannot cross this
+ABI without the explicit `Theta(F)` adapter just derived [46].
 
 Blot exposes this target explicitly as `blot build --target=gpupaper`. That
 command checks and stages in the Blot checkout, validates Runtime HIR once, and
@@ -5558,12 +5596,12 @@ source-level oracle.
 #### 7.13.5 Explicit module roots
 
 A Zero program distinguishes its finite function table `F` from a nonempty set
-of public roots `E ⊆ F`. The declaration `export fn f(...) = e;` places
-`f` in `E`; an unmarked declaration remains callable by functions in `F` but is
-not observable through the standalone module boundary. Requiring `E` to be
-nonempty makes an accidentally closed benchmark module a frontend error instead
-of silently producing an artifact with no callable experiment. This visibility
-rule changes neither expression evaluation nor the Core call graph.
+of public roots `E ⊆ F`. The declaration `export fn f(...) = e;` places `f` in
+`E`; an unmarked declaration remains callable by functions in `F` but is not
+observable through the standalone module boundary. Requiring `E` to be nonempty
+makes an accidentally closed benchmark module a frontend error instead of
+silently producing an artifact with no callable experiment. This visibility rule
+changes neither expression evaluation nor the Core call graph.
 
 The lowering maps every member of `E`, in source order, to one WebAssembly
 function export with the same name and dense function ID. Every direct call is
@@ -5578,8 +5616,8 @@ For an internal function named `step`, removing its Wasm export removes
 `1 + leb(|step|) + |step| + 1 + leb(index) = 7` bytes while all relevant lengths
 fit in one-byte LEB encodings. It removes no function body or runtime call. The
 expected runtime delta is therefore zero; a material timing change would be
-evidence of measurement instability rather than an optimization. Computing
-`E` and its first member takes `Theta(|F|)` work and `Theta(|E|)` output space,
+evidence of measurement instability rather than an optimization. Computing `E`
+and its first member takes `Theta(|F|)` work and `Theta(|E|)` output space,
 already bounded by the existing function-table pass. Export-driven dead-code
 elimination is deliberately separate: deleting an unexported but reachable
 callee would be unsound, while deleting an unreachable function requires a

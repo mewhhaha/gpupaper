@@ -949,11 +949,17 @@ export const wasmInstruction = {
   i32Load(alignmentExponent = 2, offset = 0): readonly WasmInstruction[] {
     return [byte(0x28), unsigned(alignmentExponent), unsigned(offset)];
   },
+  i64Load(alignmentExponent = 3, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x29), unsigned(alignmentExponent), unsigned(offset)];
+  },
   i32Load8Unsigned(offset = 0): readonly WasmInstruction[] {
     return [byte(0x2d), unsigned(0), unsigned(offset)];
   },
   i32Store(alignmentExponent = 2, offset = 0): readonly WasmInstruction[] {
     return [byte(0x36), unsigned(alignmentExponent), unsigned(offset)];
+  },
+  i32Store8(offset = 0): readonly WasmInstruction[] {
+    return [byte(0x3a), unsigned(0), unsigned(offset)];
   },
   i64Store(alignmentExponent = 3, offset = 0): readonly WasmInstruction[] {
     return [byte(0x37), unsigned(alignmentExponent), unsigned(offset)];

@@ -1,9 +1,14 @@
-import type { BlotAbiManifest, BlotAbiType } from "./blot_runtime_abi.ts";
+import type {
+  BlotAbiFunction,
+  BlotAbiManifest,
+  BlotAbiType,
+} from "./blot_runtime_abi.ts";
 import { flattenedAbiType } from "./blot_runtime_abi.ts";
 import type {
   BlotRuntimeFunction,
   BlotRuntimeModule,
   BlotRuntimeOperation,
+  BlotRuntimeType,
 } from "./blot_runtime_hir.ts";
 import { addBlotAbiModuleShell } from "./ducklang_core_wasm.ts";
 import {
@@ -26,13 +31,21 @@ export function supportsBlotCanonicalTextAbi(
   module: BlotRuntimeModule,
   manifest: BlotAbiManifest,
 ): boolean {
-  const admittedTypes = new Set(["unit", "boolean", "integer-32", "text"]);
+  const admittedTypes = new Set([
+    "unit",
+    "boolean",
+    "integer-32",
+    "signed-integer-64",
+    "text",
+    "product",
+  ]);
   if (
     module.types.some((type) =>
-      admittedTypes.has(type.kind) ? false : type.kind !== "sum" ||
+      !admittedTypes.has(type.kind) &&
+      (type.kind !== "sum" ||
         type.cases.some((case_) =>
           module.types[case_.payloadType].kind !== "unit"
-        )
+        ))
     )
   ) return false;
   for (const exported of manifest.exports) {
@@ -86,19 +99,25 @@ export function compileBlotCanonicalTextAbi(
   }
   const heapStart = alignTo(staticEnd, 8);
   const builder = new WasmModuleBuilder();
-  const importedFunctions = new Map<string, number>();
+  const importedFunctions = new Map<
+    string,
+    { readonly index: number; readonly function: BlotAbiFunction }
+  >();
   for (const imported of manifest.imports) {
-    const parameters = imported.function.parameters.flatMap(flattenedAbiType);
+    let parameters = imported.function.parameters.flatMap(flattenedAbiType);
+    if (parameters.length > manifest.abi.maximumFlatParameters) {
+      parameters = ["i32"];
+    }
     const results = flattenedAbiType(imported.function.result);
     if (results.length > 1) parameters.push("i32");
     const type = builder.addFunctionType(
       parameters.map(flatWasmType),
       results.length <= 1 ? results.map(flatWasmType) : [],
     );
-    importedFunctions.set(
-      importKey(imported.capability, imported.operation),
-      builder.addFunctionImport(imported.module, imported.name, type),
-    );
+    importedFunctions.set(importKey(imported.capability, imported.operation), {
+      index: builder.addFunctionImport(imported.module, imported.name, type),
+      function: imported.function,
+    });
   }
   const shell = addBlotAbiModuleShell(
     builder,
@@ -115,6 +134,7 @@ export function compileBlotCanonicalTextAbi(
   const requireContinuation = addUtf8Continuation(builder);
   const validateText = addUtf8Validator(builder, requireContinuation);
   const compareText = addTextComparison(builder);
+  const formatI64 = addI64TextFormatter(builder, shell.realloc);
   const activeExport = builder.addI32Global(wasmType.i32, 0, true);
 
   const functionIndices = new Map<number, number>();
@@ -127,7 +147,7 @@ export function compileBlotCanonicalTextAbi(
   for (const function_ of module.functions) {
     if (!exportedFunctions.has(function_.id)) {
       throw new TypeError(
-        `${module.source}: canonical text calculus does not admit non-exported runtime function ${function_.name}`,
+        `${module.source}: canonical first-order calculus does not admit non-exported runtime function ${function_.name}`,
       );
     }
     const signature = module.signatures[function_.signature];
@@ -136,7 +156,7 @@ export function compileBlotCanonicalTextAbi(
       module.types[signature.result].kind !== "unit"
     ) {
       throw new TypeError(
-        `${module.source}: canonical text export ${function_.name} must have type Unit -> Unit`,
+        `${module.source}: canonical first-order export ${function_.name} must have type Unit -> Unit`,
       );
     }
     const layout = planValueLocals(module, function_);
@@ -164,6 +184,7 @@ export function compileBlotCanonicalTextAbi(
       literalLocations,
       validateText,
       compareText,
+      formatI64,
     );
     functionIndices.set(
       function_.id,
@@ -195,13 +216,17 @@ function emitFunction(
   shell: { readonly realloc: number; readonly heap: number },
   activeExport: number,
   callId: number,
-  importedFunctions: ReadonlyMap<string, number>,
+  importedFunctions: ReadonlyMap<
+    string,
+    { readonly index: number; readonly function: BlotAbiFunction }
+  >,
   literals: ReadonlyMap<
     string,
     { readonly pointer: number; readonly length: number }
   >,
   validateText: number,
   compareText: number,
+  formatI64: number,
 ): readonly WasmInstruction[] {
   const instructions: WasmInstruction[] = [
     ...wasmInstruction.globalGet(activeExport),
@@ -237,6 +262,7 @@ function emitFunction(
         literals,
         validateText,
         compareText,
+        formatI64,
       ));
     }
     instructions.push(...emitTerminator(
@@ -266,13 +292,17 @@ function emitOperation(
   values: ValueLocals,
   resultHeaderLocal: number,
   realloc: number,
-  importedFunctions: ReadonlyMap<string, number>,
+  importedFunctions: ReadonlyMap<
+    string,
+    { readonly index: number; readonly function: BlotAbiFunction }
+  >,
   literals: ReadonlyMap<
     string,
     { readonly pointer: number; readonly length: number }
   >,
   validateText: number,
   compareText: number,
+  formatI64: number,
 ): readonly WasmInstruction[] {
   const result = requiredLocals(values, function_, operation.result);
   if (operation.kind === "constant") {
@@ -290,13 +320,22 @@ function emitOperation(
         ...wasmInstruction.localSet(result[1]),
       ];
     }
-    const encoded = operation.value === null
-      ? 0
-      : typeof operation.value === "boolean"
-      ? operation.value ? 1 : 0
-      : typeof operation.value === "bigint"
-      ? Number(operation.value)
-      : operation.value;
+    if (typeof operation.value === "bigint") {
+      if (result.length !== 1) {
+        throw new TypeError(
+          `${module.source}: invalid canonical i64 constant layout`,
+        );
+      }
+      return [
+        ...wasmInstruction.i64Constant(operation.value),
+        ...wasmInstruction.localSet(result[0]),
+      ];
+    }
+    let encoded: number;
+    if (operation.value === null) encoded = 0;
+    else if (typeof operation.value === "boolean") {
+      encoded = operation.value ? 1 : 0;
+    } else encoded = operation.value;
     if (!Number.isSafeInteger(encoded) || result.length !== 1) {
       throw new TypeError(
         `${module.source}: invalid canonical scalar constant`,
@@ -310,13 +349,78 @@ function emitOperation(
   if (operation.kind === "scalar") {
     const left = requiredScalarLocal(values, function_, operation.operands[0]);
     const right = requiredScalarLocal(values, function_, operation.operands[1]);
-    const instruction = scalarInstruction(operation.operator);
+    const operandType = module.types[
+      valueType(module, function_, operation.operands[0])
+    ];
+    if (
+      operandType.kind === "signed-integer-64" &&
+      (operation.operator === "add" || operation.operator === "subtract" ||
+        operation.operator === "multiply")
+    ) {
+      return checkedI64ScalarInstructions(
+        operation.operator,
+        left,
+        right,
+        result[0],
+      );
+    }
+    const instruction = scalarInstruction(operation.operator, operandType.kind);
     return [
       ...wasmInstruction.localGet(left),
       ...wasmInstruction.localGet(right),
       ...instruction,
       ...wasmInstruction.localSet(result[0]),
     ];
+  }
+  if (operation.kind === "product.make") {
+    const type = module.types[operation.type];
+    if (type.kind !== "product") {
+      throw new TypeError(
+        `${module.source}: product.make has non-product type`,
+      );
+    }
+    const instructions: WasmInstruction[] = [];
+    let resultOffset = 0;
+    for (const field of [...type.fields].sort(byName)) {
+      const sourceIndex = type.fields.findIndex((candidate) =>
+        candidate.name === field.name
+      );
+      const operand = operation.operands[sourceIndex];
+      const source = requiredLocals(values, function_, operand);
+      for (const local of source) {
+        instructions.push(
+          ...wasmInstruction.localGet(local),
+          ...wasmInstruction.localSet(result[resultOffset]),
+        );
+        resultOffset += 1;
+      }
+    }
+    return instructions;
+  }
+  if (operation.kind === "product.project") {
+    const operand = operation.operands[0];
+    const sourceType = module.types[valueType(module, function_, operand)];
+    if (sourceType.kind !== "product") {
+      throw new TypeError(
+        `${module.source}: product.project has non-product operand`,
+      );
+    }
+    const field = sourceType.fields[operation.field];
+    if (field === undefined) {
+      throw new TypeError(
+        `${module.source}: product.project field ${operation.field} is absent`,
+      );
+    }
+    const source = productFieldLocals(
+      module,
+      sourceType,
+      requiredLocals(values, function_, operand),
+      field.name,
+    );
+    return source.flatMap((local, index) => [
+      ...wasmInstruction.localGet(local),
+      ...wasmInstruction.localSet(result[index]),
+    ]);
   }
   if (operation.kind === "text.compare") {
     const left = requiredTextLocals(values, function_, operation.operands[0]);
@@ -327,6 +431,19 @@ function emitOperation(
       ...wasmInstruction.localGet(right[0]),
       ...wasmInstruction.localGet(right[1]),
       ...wasmInstruction.call(compareText),
+      ...wasmInstruction.localSet(result[0]),
+    ];
+  }
+  if (operation.kind === "text.from-i64") {
+    const value = requiredScalarLocal(
+      values,
+      function_,
+      operation.operands[0],
+    );
+    return [
+      ...wasmInstruction.localGet(value),
+      ...wasmInstruction.call(formatI64),
+      ...wasmInstruction.localSet(result[1]),
       ...wasmInstruction.localSet(result[0]),
     ];
   }
@@ -371,43 +488,72 @@ function emitOperation(
       );
     }
     const argument = operation.operands[0];
-    const argumentType = module.types[valueType(module, function_, argument)];
-    const argumentInstructions = argumentType.kind === "unit"
-      ? []
-      : requiredTextLocals(values, function_, argument).flatMap((local) =>
+    const argumentType = imported.function.parameters[0];
+    if (argumentType === undefined) {
+      throw new Error(
+        `${module.source}: ${operation.capability}.${operation.operation} omitted its argument type`,
+      );
+    }
+    const argumentLocals = requiredLocals(values, function_, argument);
+    const flatArgument = flattenedAbiType(argumentType);
+    let argumentInstructions: readonly WasmInstruction[];
+    if (flatArgument.length === 0) argumentInstructions = [];
+    else if (flatArgument.length <= 16) {
+      argumentInstructions = argumentLocals.flatMap((local) =>
         wasmInstruction.localGet(local)
       );
+    } else {
+      argumentInstructions = [
+        ...allocateCanonicalValue(
+          argumentType,
+          argumentLocals,
+          resultHeaderLocal,
+          realloc,
+        ),
+        ...wasmInstruction.localGet(resultHeaderLocal),
+      ];
+    }
     const resultType = module.types[operation.type];
     if (resultType.kind === "unit") {
       return [
         ...argumentInstructions,
-        ...wasmInstruction.call(imported),
+        ...wasmInstruction.call(imported.index),
         ...wasmInstruction.i32Constant(0),
         ...wasmInstruction.localSet(result[0]),
       ];
     }
-    if (resultType.kind !== "text") {
-      throw new TypeError(
-        `${module.source}: unsupported canonical host result`,
-      );
+    const flatResult = flattenedAbiType(imported.function.result);
+    if (flatResult.length === 1) {
+      const instructions: WasmInstruction[] = [
+        ...argumentInstructions,
+        ...wasmInstruction.call(imported.index),
+      ];
+      if (imported.function.result.kind === "boolean") {
+        instructions.push(
+          ...wasmInstruction.localTee(result[0]),
+          ...wasmInstruction.i32Constant(1),
+          ...wasmInstruction.i32GreaterThanUnsigned,
+          ...trapIfTrue(),
+        );
+      } else instructions.push(...wasmInstruction.localSet(result[0]));
+      return instructions;
     }
+    const resultLayout = memoryLayout(imported.function.result);
     return [
+      ...argumentInstructions,
       ...wasmInstruction.i32Constant(0),
       ...wasmInstruction.i32Constant(0),
-      ...wasmInstruction.i32Constant(4),
-      ...wasmInstruction.i32Constant(8),
+      ...wasmInstruction.i32Constant(resultLayout.alignment),
+      ...wasmInstruction.i32Constant(resultLayout.size),
       ...wasmInstruction.call(realloc),
       ...wasmInstruction.localTee(resultHeaderLocal),
-      ...wasmInstruction.call(imported),
-      ...wasmInstruction.localGet(resultHeaderLocal),
-      ...wasmInstruction.i32Load(),
-      ...wasmInstruction.localSet(result[0]),
-      ...wasmInstruction.localGet(resultHeaderLocal),
-      ...wasmInstruction.i32Load(2, 4),
-      ...wasmInstruction.localSet(result[1]),
-      ...wasmInstruction.localGet(result[0]),
-      ...wasmInstruction.localGet(result[1]),
-      ...wasmInstruction.call(validateText),
+      ...wasmInstruction.call(imported.index),
+      ...loadCanonicalValue(
+        imported.function.result,
+        result,
+        resultHeaderLocal,
+        validateText,
+      ),
     ];
   }
   if (
@@ -500,11 +646,10 @@ function planValueLocals(
   const locals: number[] = [];
   const assign = (value: number, type: number): void => {
     if (values.has(value)) return;
-    const width = module.types[type].kind === "text" ? 2 : 1;
     const assigned: number[] = [];
-    for (let index = 0; index < width; index += 1) {
+    for (const localType of runtimeLocalTypes(module, type)) {
       assigned.push(locals.length);
-      locals.push(wasmType.i32);
+      locals.push(flatWasmType(localType));
     }
     values.set(value, assigned);
   };
@@ -517,6 +662,212 @@ function planValueLocals(
     }
   }
   return { values, locals };
+}
+
+function runtimeLocalTypes(
+  module: BlotRuntimeModule,
+  typeId: number,
+): readonly ("i32" | "i64")[] {
+  const type = module.types[typeId];
+  if (
+    type.kind === "unit" || type.kind === "boolean" ||
+    type.kind === "integer-32" || type.kind === "sum"
+  ) return ["i32"];
+  if (type.kind === "signed-integer-64") return ["i64"];
+  if (type.kind === "text") return ["i32", "i32"];
+  if (type.kind === "product") {
+    return [...type.fields].sort(byName).flatMap((field) =>
+      runtimeLocalTypes(module, field.type)
+    );
+  }
+  throw new TypeError(
+    `${module.source}: ${type.kind} has no canonical first-order local layout`,
+  );
+}
+
+function productFieldLocals(
+  module: BlotRuntimeModule,
+  type: Extract<BlotRuntimeType, { readonly kind: "product" }>,
+  locals: readonly number[],
+  name: string,
+): readonly number[] {
+  let offset = 0;
+  for (const field of [...type.fields].sort(byName)) {
+    const width = runtimeLocalTypes(module, field.type).length;
+    if (field.name === name) return locals.slice(offset, offset + width);
+    offset += width;
+  }
+  throw new Error(
+    `${module.source}: product ${type.name} has no field ${name}`,
+  );
+}
+
+function allocateCanonicalValue(
+  type: BlotAbiType,
+  locals: readonly number[],
+  pointerLocal: number,
+  realloc: number,
+): readonly WasmInstruction[] {
+  const layout = memoryLayout(type);
+  return [
+    ...wasmInstruction.i32Constant(0),
+    ...wasmInstruction.i32Constant(0),
+    ...wasmInstruction.i32Constant(layout.alignment),
+    ...wasmInstruction.i32Constant(layout.size),
+    ...wasmInstruction.call(realloc),
+    ...wasmInstruction.localSet(pointerLocal),
+    ...storeCanonicalValue(type, locals, pointerLocal, 0).instructions,
+  ];
+}
+
+function storeCanonicalValue(
+  type: BlotAbiType,
+  locals: readonly number[],
+  pointerLocal: number,
+  offset: number,
+): {
+  readonly instructions: readonly WasmInstruction[];
+  readonly used: number;
+} {
+  if (type.kind === "unit") return { instructions: [], used: 0 };
+  if (type.kind === "boolean") {
+    return {
+      instructions: [
+        ...wasmInstruction.localGet(pointerLocal),
+        ...wasmInstruction.localGet(locals[0]),
+        ...wasmInstruction.i32Store8(offset),
+      ],
+      used: 1,
+    };
+  }
+  if (type.kind === "signed-integer-64") {
+    return {
+      instructions: [
+        ...wasmInstruction.localGet(pointerLocal),
+        ...wasmInstruction.localGet(locals[0]),
+        ...wasmInstruction.i64Store(3, offset),
+      ],
+      used: 1,
+    };
+  }
+  if (type.kind === "text") {
+    return {
+      instructions: [
+        ...wasmInstruction.localGet(pointerLocal),
+        ...wasmInstruction.localGet(locals[0]),
+        ...wasmInstruction.i32Store(2, offset),
+        ...wasmInstruction.localGet(pointerLocal),
+        ...wasmInstruction.localGet(locals[1]),
+        ...wasmInstruction.i32Store(2, offset + 4),
+      ],
+      used: 2,
+    };
+  }
+  if (type.kind === "record") {
+    const instructions: WasmInstruction[] = [];
+    let used = 0;
+    for (const field of recordLayout(type)) {
+      const stored = storeCanonicalValue(
+        field.type,
+        locals.slice(used),
+        pointerLocal,
+        offset + field.offset,
+      );
+      instructions.push(...stored.instructions);
+      used += stored.used;
+    }
+    return { instructions, used };
+  }
+  throw new TypeError(`canonical ${type.kind} argument is not admitted`);
+}
+
+function loadCanonicalValue(
+  type: BlotAbiType,
+  locals: readonly number[],
+  pointerLocal: number,
+  validateText: number,
+  offset = 0,
+): readonly WasmInstruction[] {
+  if (type.kind === "unit") return [];
+  if (type.kind === "boolean") {
+    return [
+      ...wasmInstruction.localGet(pointerLocal),
+      ...wasmInstruction.i32Load8Unsigned(offset),
+      ...wasmInstruction.localTee(locals[0]),
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32GreaterThanUnsigned,
+      ...trapIfTrue(),
+    ];
+  }
+  if (type.kind === "signed-integer-64") {
+    return [
+      ...wasmInstruction.localGet(pointerLocal),
+      ...wasmInstruction.i64Load(3, offset),
+      ...wasmInstruction.localSet(locals[0]),
+    ];
+  }
+  if (type.kind === "text") {
+    return [
+      ...wasmInstruction.localGet(pointerLocal),
+      ...wasmInstruction.i32Load(2, offset),
+      ...wasmInstruction.localSet(locals[0]),
+      ...wasmInstruction.localGet(pointerLocal),
+      ...wasmInstruction.i32Load(2, offset + 4),
+      ...wasmInstruction.localSet(locals[1]),
+      ...wasmInstruction.localGet(locals[0]),
+      ...wasmInstruction.localGet(locals[1]),
+      ...wasmInstruction.call(validateText),
+    ];
+  }
+  if (type.kind === "record") {
+    const instructions: WasmInstruction[] = [];
+    let used = 0;
+    for (const field of recordLayout(type)) {
+      const width = flattenedAbiType(field.type).length;
+      instructions.push(...loadCanonicalValue(
+        field.type,
+        locals.slice(used, used + width),
+        pointerLocal,
+        validateText,
+        offset + field.offset,
+      ));
+      used += width;
+    }
+    return instructions;
+  }
+  throw new TypeError(`canonical ${type.kind} result is not admitted`);
+}
+
+function memoryLayout(type: BlotAbiType): { alignment: number; size: number } {
+  if (type.kind === "unit") return { alignment: 1, size: 0 };
+  if (type.kind === "boolean") return { alignment: 1, size: 1 };
+  if (type.kind === "signed-integer-64") return { alignment: 8, size: 8 };
+  if (type.kind === "text") return { alignment: 4, size: 8 };
+  if (type.kind === "record") {
+    const fields = recordLayout(type);
+    const alignment = fields.reduce(
+      (maximum, field) => Math.max(maximum, memoryLayout(field.type).alignment),
+      1,
+    );
+    const end = fields.reduce(
+      (maximum, field) =>
+        Math.max(maximum, field.offset + memoryLayout(field.type).size),
+      0,
+    );
+    return { alignment, size: alignTo(end, alignment) };
+  }
+  throw new TypeError(`canonical ${type.kind} memory layout is not admitted`);
+}
+
+function recordLayout(type: Extract<BlotAbiType, { kind: "record" }>) {
+  let offset = 0;
+  return [...type.fields].sort(byName).map((field) => {
+    const layout = memoryLayout(field.type);
+    offset = alignTo(offset, layout.alignment);
+    const result = { ...field, offset };
+    offset += layout.size;
+    return result;
+  });
 }
 
 function addUtf8Continuation(builder: WasmModuleBuilder): number {
@@ -750,15 +1101,107 @@ function addTextComparison(builder: WasmModuleBuilder): number {
   ]);
 }
 
+function addI64TextFormatter(
+  builder: WasmModuleBuilder,
+  realloc: number,
+): number {
+  const type = builder.addFunctionType([wasmType.i64], [
+    wasmType.i32,
+    wasmType.i32,
+  ]);
+  const bufferLocal = 1;
+  const cursorLocal = 2;
+  const remainderLocal = 3;
+  const negativeLocal = 4;
+  return builder.addFunction(type, [
+    wasmType.i32,
+    wasmType.i32,
+    wasmType.i64,
+    wasmType.i32,
+  ], [
+    ...wasmInstruction.localGet(0),
+    ...wasmInstruction.i64Constant(0n),
+    ...wasmInstruction.i64LessThanSigned,
+    ...wasmInstruction.localSet(negativeLocal),
+    ...wasmInstruction.i32Constant(0),
+    ...wasmInstruction.i32Constant(0),
+    ...wasmInstruction.i32Constant(1),
+    ...wasmInstruction.i32Constant(20),
+    ...wasmInstruction.call(realloc),
+    ...wasmInstruction.localSet(bufferLocal),
+    ...wasmInstruction.i32Constant(20),
+    ...wasmInstruction.localSet(cursorLocal),
+    ...wasmInstruction.loopVoid,
+    ...wasmInstruction.localGet(0),
+    ...wasmInstruction.i64Constant(10n),
+    ...wasmInstruction.i64RemainderSigned,
+    ...wasmInstruction.localSet(remainderLocal),
+    ...wasmInstruction.localGet(cursorLocal),
+    ...wasmInstruction.i32Constant(1),
+    ...wasmInstruction.i32Subtract,
+    ...wasmInstruction.localTee(cursorLocal),
+    ...wasmInstruction.localGet(bufferLocal),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.localGet(remainderLocal),
+    ...wasmInstruction.i64Constant(0n),
+    ...wasmInstruction.i64LessThanSigned,
+    ...wasmInstruction.ifI64,
+    ...wasmInstruction.i64Constant(0n),
+    ...wasmInstruction.localGet(remainderLocal),
+    ...wasmInstruction.i64Subtract,
+    ...wasmInstruction.else,
+    ...wasmInstruction.localGet(remainderLocal),
+    ...wasmInstruction.end,
+    ...wasmInstruction.i32WrapI64,
+    ...wasmInstruction.i32Constant(48),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.i32Store8(),
+    ...wasmInstruction.localGet(0),
+    ...wasmInstruction.i64Constant(10n),
+    ...wasmInstruction.i64DivideSigned,
+    ...wasmInstruction.localTee(0),
+    ...wasmInstruction.i64Constant(0n),
+    ...wasmInstruction.i64NotEqual,
+    ...wasmInstruction.branchIf(0),
+    ...wasmInstruction.end,
+    ...wasmInstruction.localGet(negativeLocal),
+    ...wasmInstruction.ifVoid,
+    ...wasmInstruction.localGet(cursorLocal),
+    ...wasmInstruction.i32Constant(1),
+    ...wasmInstruction.i32Subtract,
+    ...wasmInstruction.localTee(cursorLocal),
+    ...wasmInstruction.localGet(bufferLocal),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.i32Constant(45),
+    ...wasmInstruction.i32Store8(),
+    ...wasmInstruction.end,
+    ...wasmInstruction.localGet(bufferLocal),
+    ...wasmInstruction.localGet(cursorLocal),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.i32Constant(20),
+    ...wasmInstruction.localGet(cursorLocal),
+    ...wasmInstruction.i32Subtract,
+  ]);
+}
+
 function admittedOperation(operation: BlotRuntimeOperation): boolean {
   return operation.kind === "constant" || operation.kind === "scalar" ||
     operation.kind === "text.append" || operation.kind === "text.compare" ||
     operation.kind === "host.call" || operation.kind === "sum.make" ||
-    operation.kind === "sum.tag" || operation.kind === "sum.payload";
+    operation.kind === "sum.tag" || operation.kind === "sum.payload" ||
+    operation.kind === "product.make" || operation.kind === "product.project" ||
+    operation.kind === "text.from-i64";
 }
 
 function admittedAbiType(type: BlotAbiType): boolean {
-  return type.kind === "unit" || type.kind === "text";
+  if (
+    type.kind === "unit" || type.kind === "boolean" ||
+    type.kind === "signed-integer-64" || type.kind === "text"
+  ) return true;
+  if (type.kind === "record") {
+    return type.fields.every((field) => admittedAbiType(field.type));
+  }
+  return false;
 }
 
 function collectTextLiterals(module: BlotRuntimeModule): readonly string[] {
@@ -833,10 +1276,95 @@ function requiredTextLocals(
   return [locals[0], locals[1]];
 }
 
+function checkedI64ScalarInstructions(
+  operator: "add" | "subtract" | "multiply",
+  left: number,
+  right: number,
+  result: number,
+): readonly WasmInstruction[] {
+  const arithmetic = operator === "add"
+    ? wasmInstruction.i64Add
+    : operator === "subtract"
+    ? wasmInstruction.i64Subtract
+    : wasmInstruction.i64Multiply;
+  const instructions: WasmInstruction[] = [
+    ...wasmInstruction.localGet(left),
+    ...wasmInstruction.localGet(right),
+    ...arithmetic,
+    ...wasmInstruction.localSet(result),
+  ];
+  if (operator === "add" || operator === "subtract") {
+    if (operator === "add") {
+      instructions.push(
+        ...wasmInstruction.localGet(left),
+        ...wasmInstruction.localGet(result),
+      );
+    } else {
+      instructions.push(
+        ...wasmInstruction.localGet(left),
+        ...wasmInstruction.localGet(right),
+      );
+    }
+    instructions.push(...wasmInstruction.i64Xor);
+    if (operator === "add") {
+      instructions.push(
+        ...wasmInstruction.localGet(right),
+        ...wasmInstruction.localGet(result),
+      );
+    } else {
+      instructions.push(
+        ...wasmInstruction.localGet(left),
+        ...wasmInstruction.localGet(result),
+      );
+    }
+    instructions.push(
+      ...wasmInstruction.i64Xor,
+      ...wasmInstruction.i64And,
+      ...wasmInstruction.i64Constant(0n),
+      ...wasmInstruction.i64LessThanSigned,
+      ...trapIfTrue(),
+    );
+    return instructions;
+  }
+
+  instructions.push(
+    ...wasmInstruction.localGet(right),
+    ...wasmInstruction.i64Constant(0n),
+    ...wasmInstruction.i64Equal,
+    ...wasmInstruction.ifVoid,
+    ...wasmInstruction.else,
+    ...wasmInstruction.localGet(left),
+    ...wasmInstruction.i64Constant(-(1n << 63n)),
+    ...wasmInstruction.i64Equal,
+    ...wasmInstruction.localGet(right),
+    ...wasmInstruction.i64Constant(-1n),
+    ...wasmInstruction.i64Equal,
+    ...wasmInstruction.i32And,
+    ...wasmInstruction.localGet(left),
+    ...wasmInstruction.i64Constant(-1n),
+    ...wasmInstruction.i64Equal,
+    ...wasmInstruction.localGet(right),
+    ...wasmInstruction.i64Constant(-(1n << 63n)),
+    ...wasmInstruction.i64Equal,
+    ...wasmInstruction.i32And,
+    ...wasmInstruction.i32Or,
+    ...trapIfTrue(),
+    ...wasmInstruction.localGet(result),
+    ...wasmInstruction.localGet(right),
+    ...wasmInstruction.i64DivideSigned,
+    ...wasmInstruction.localGet(left),
+    ...wasmInstruction.i64NotEqual,
+    ...trapIfTrue(),
+    ...wasmInstruction.end,
+  );
+  return instructions;
+}
+
 function scalarInstruction(
   operator: Extract<BlotRuntimeOperation, { kind: "scalar" }>["operator"],
+  type: BlotRuntimeType["kind"],
 ): readonly WasmInstruction[] {
-  const instructions = {
+  const i32Instructions = {
     add: wasmInstruction.i32Add,
     subtract: wasmInstruction.i32Subtract,
     multiply: wasmInstruction.i32Multiply,
@@ -849,7 +1377,24 @@ function scalarInstruction(
     "greater-than": wasmInstruction.i32GreaterThanSigned,
     "greater-than-or-equal": wasmInstruction.i32GreaterThanOrEqualSigned,
   } as const;
-  return instructions[operator];
+  if (type === "integer-32") return i32Instructions[operator];
+  if (type !== "signed-integer-64") {
+    throw new TypeError(`canonical scalar operation has ${type} operands`);
+  }
+  const i64Instructions = {
+    add: wasmInstruction.i64Add,
+    subtract: wasmInstruction.i64Subtract,
+    multiply: wasmInstruction.i64Multiply,
+    divide: wasmInstruction.i64DivideSigned,
+    remainder: wasmInstruction.i64RemainderSigned,
+    equal: wasmInstruction.i64Equal,
+    "not-equal": wasmInstruction.i64NotEqual,
+    "less-than": wasmInstruction.i64LessThanSigned,
+    "less-than-or-equal": wasmInstruction.i64LessThanOrEqualSigned,
+    "greater-than": wasmInstruction.i64GreaterThanSigned,
+    "greater-than-or-equal": wasmInstruction.i64GreaterThanOrEqualSigned,
+  } as const;
+  return i64Instructions[operator];
 }
 
 function trapIfTrue(): readonly WasmInstruction[] {
@@ -875,4 +1420,13 @@ function flatWasmType(type: "i32" | "i64" | "f32" | "f64"): number {
 
 function alignTo(value: number, alignment: number): number {
   return Math.ceil(value / alignment) * alignment;
+}
+
+function byName(
+  left: { readonly name: string },
+  right: { readonly name: string },
+): number {
+  if (left.name < right.name) return -1;
+  if (left.name > right.name) return 1;
+  return 0;
 }
