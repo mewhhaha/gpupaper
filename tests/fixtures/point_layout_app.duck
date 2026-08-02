@@ -1,6 +1,0 @@
-type Point = struct { .b = Int, .a = Int }
-
-const open { .unrelated = unrelated } = import "./point_layout_module.duck" ()
-
-let p: Point = [1, 2]
-p.a

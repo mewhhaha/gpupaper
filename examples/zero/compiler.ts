@@ -321,7 +321,7 @@ class ZeroCoreFunctionBuilder {
     return {
       id: this.#id,
       name: this.#function.name,
-      sourceSymbolId: undefined,
+      sourceIdentity: undefined,
       signature: this.#signature,
       entryBlock: entry.id,
       blocks: this.#blocks.map((block): CoreBlock => {

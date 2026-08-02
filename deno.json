@@ -5,39 +5,19 @@
   },
   "minimumDependencyAge": {
     "age": "P7D",
-    "exclude": ["jsr:@mewhhaha/baba", "jsr:@mewhhaha/gpufuck"]
+    "exclude": ["jsr:@mewhhaha/baba"]
   },
   "tasks": {
-    "check": "deno fmt --check deno.json README.md src tests scripts examples grammar && deno lint src tests scripts && deno check --unstable-webgpu src/cli.ts tests/*.test.ts scripts/*.ts && deno task rust-wasm:check",
+    "check": "deno fmt --check deno.json README.md PAPER.md PERFORMANCE.md TASKS.md src tests scripts examples grammar && deno lint src tests scripts examples/zero/compiler.ts && deno check --unstable-webgpu src/*.ts tests/*.test.ts scripts/*.ts examples/zero/compiler.ts && deno task rust-wasm:check",
     "test": "deno test --unstable-webgpu --allow-read --allow-write=/tmp tests",
-    "compile": "deno run --unstable-webgpu --allow-read --allow-write src/cli.ts compile",
-    "run": "deno run --unstable-webgpu --allow-read src/cli.ts run",
-    "experiments": "deno run --unstable-webgpu --allow-read src/cli.ts experiments examples/all.hs",
-    "benchmark:frontend": "deno run --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_ducklang_frontend.ts",
-    "benchmark:rebuild": "deno run --unstable-webgpu --allow-read --allow-write=/tmp --allow-run=git,ps,nvidia-smi scripts/benchmark_ducklang_rebuild.ts",
-    "benchmark:break-even": "deno run --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_gpu_break_even.ts",
-    "benchmark:wasm": "deno run --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_wasm_emission.ts",
     "benchmark:branch-hints": "deno run --allow-read --allow-run=git,ps scripts/benchmark_wasm_branch_hints.ts",
-    "benchmark:simd": "deno run --unstable-webgpu --allow-read --allow-run=git,ps scripts/benchmark_ducklang_simd.ts",
     "benchmark:zero": "deno run --allow-read --allow-write=/tmp --allow-run=git,ps,rustc scripts/benchmark_zero_runtime.ts",
-    "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno,git,ps,nvidia-smi scripts/benchmark_peer_compilers.ts",
-    "benchmark:blot-targets": "deno run --config=../blot/deno.json --unstable-webgpu --allow-read --allow-write --allow-run=git,ps,nvidia-smi scripts/benchmark_blot_targets.ts",
-    "benchmark:blot-batch": "deno run --config=../blot/deno.json --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_blot_batch.ts",
-    "benchmark:blot-crossover": "deno run --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_blot_crossover.ts",
     "rust-wasm:build": "deno run --allow-read --allow-write=src/generated --allow-run=cargo scripts/build_rust_wasm_emitter.ts",
     "rust-wasm:check": "cargo fmt --manifest-path rust-wasm-emitter/Cargo.toml -- --check && cargo clippy --manifest-path rust-wasm-emitter/Cargo.toml --target wasm32-unknown-unknown --release --locked -- -D warnings && deno run --allow-read --allow-run=cargo scripts/build_rust_wasm_emitter.ts --check",
     "benchmark:record": "deno run --allow-read --allow-write=measurements --allow-run=deno scripts/record_benchmark_processes.ts",
-    "blot:corpus": "deno run --config=../blot/deno.json --allow-read scripts/compile_blot_corpus.ts",
-    "blot:verify": "deno run --config=../blot/deno.json --allow-read scripts/verify_blot_target.ts",
-    "release:gpu": "deno task check && deno task test && deno run --unstable-webgpu --allow-read scripts/release_gpu.ts",
-    "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_baba_parser.ts ducklang grammar/duck.baba grammar/duck.baba.json grammar/generated",
-    "duck:contract": "deno run --allow-read --allow-write scripts/import_ducklang_contract.ts ../binned/examples/manifest.ts examples/binned/contract.json && deno fmt examples/binned/contract.json",
     "zero:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts zero grammar/zero.baba grammar/zero.baba.json grammar/zero-generated"
   },
   "imports": {
-    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.10.0",
-    "@mewhhaha/baba/runtime/webgpu": "jsr:@mewhhaha/baba@7.10.0/runtime/webgpu",
-    "@std/path": "jsr:@std/path@1.1.6",
-    "gpufuck": "jsr:@mewhhaha/gpufuck@0.9.0"
+    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.10.0"
   }
 }

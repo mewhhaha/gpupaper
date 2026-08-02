@@ -1,4 +1,0 @@
-const { length } = import "duck:prelude/runtime" ()
-
-let message = freeze "shared"
-length(message) * 7

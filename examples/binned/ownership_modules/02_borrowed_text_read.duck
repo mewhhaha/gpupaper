@@ -1,7 +1,0 @@
-const { length } = import "duck:prelude/runtime" ()
-
-let measure = (message: Text) => {
-  length(&message)
-}
-
-measure("interaction") + 31

@@ -1,4 +1,0 @@
-const provider = import "./offset_provider.duck"
-const { make } = provider()
-
-make()

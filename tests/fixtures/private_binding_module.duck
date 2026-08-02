@@ -1,6 +1,0 @@
-module () where
-
-const helper = 100
-let get = value => helper + value
-
-return { get }

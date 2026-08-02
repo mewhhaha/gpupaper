@@ -1,7 +1,0 @@
-module () where
-
-type Point = struct { .a = Int, .b = Int }
-
-const unrelated = 7
-
-return { unrelated }

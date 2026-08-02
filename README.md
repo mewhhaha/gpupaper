@@ -78,7 +78,7 @@ const core: CoreModule = {
   functions: [{
     id: main,
     name: "answer",
-    sourceSymbolId: undefined,
+    sourceIdentity: undefined,
     signature,
     entryBlock: entry,
     blocks: [{

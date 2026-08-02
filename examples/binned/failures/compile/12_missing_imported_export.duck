@@ -1,3 +1,0 @@
-const dependency = import "./missing_import_dependency.duck"
-const { .missing = missing } = dependency()
-missing

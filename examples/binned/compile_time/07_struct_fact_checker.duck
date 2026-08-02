@@ -1,7 +1,0 @@
-const { struct } = import "duck:prelude" ()
-
-type Player = struct { .name = Text, .score = Int }
-
-let score = (player: Player) => player.score
-let player: Player = ["Ada", 42]
-score(player)

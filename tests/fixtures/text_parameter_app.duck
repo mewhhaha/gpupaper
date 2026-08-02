@@ -1,6 +1,0 @@
-const text_parameter_module = import "./text_parameter_module.duck"
-
-const capabilities = [.label = "hello"]
-
-let application = text_parameter_module(capabilities)
-application.described

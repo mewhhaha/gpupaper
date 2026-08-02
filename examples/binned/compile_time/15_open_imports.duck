@@ -1,3 +1,0 @@
-const open { .compose = _, .pipe = pipe2 } = import "./open_module.duck" ()
-
-pipe2(42, identity)

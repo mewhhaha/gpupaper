@@ -1,8 +1,0 @@
-type Result = | `Ok Int | `Err Text
-let result = `Ok ("wrong")
-
-if let `Ok value = result {
-  value
-} else {
-  0
-}

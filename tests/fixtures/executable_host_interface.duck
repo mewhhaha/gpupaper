@@ -1,7 +1,0 @@
-module () where
-
-declare effect Input { read: () => I32 }
-declare Init { input: Input }
-
-let answer = 42
-return {}

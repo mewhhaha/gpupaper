@@ -1,6 +1,0 @@
-let escape = (message: Text) => {
-  &message
-}
-
-let message: Text = "a" <> "b"
-escape(message)

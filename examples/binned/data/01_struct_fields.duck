@@ -1,8 +1,0 @@
-const { struct } = import "duck:prelude" ()
-const { length } = import "duck:prelude/runtime" ()
-
-type User = struct { .name = Text, .age = Int }
-
-let user: User = ["Ada", 36]
-
-user.age + length(user.name)

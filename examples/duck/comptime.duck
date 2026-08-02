@@ -1,2 +1,0 @@
-let answer = comptime (6 * 7)
-answer

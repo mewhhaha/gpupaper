@@ -12,17 +12,8 @@ const benchmarkArguments = Deno.args.filter((argument) =>
   argument === "--allow-contended" || argument.startsWith("--samples=")
 );
 const supportedTasks = new Set([
-  "benchmark:frontend",
-  "benchmark:rebuild",
-  "benchmark:break-even",
-  "benchmark:wasm",
   "benchmark:branch-hints",
-  "benchmark:simd",
   "benchmark:zero",
-  "benchmark:peers",
-  "benchmark:blot-targets",
-  "benchmark:blot-batch",
-  "benchmark:blot-crossover",
 ]);
 if (!supportedTasks.has(task)) {
   throw new TypeError(
@@ -39,7 +30,7 @@ for (let process = 0; process < processCount; process += 1) {
   for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     const child = await runBenchmark(task, benchmarkArguments);
     if (child.success) {
-      completed = parseBenchmarkOutput(task, child.stdout);
+      completed = parseBenchmarkOutput(child.stdout);
       break;
     }
     if (child.code !== 2) {
@@ -63,23 +54,8 @@ for (let process = 0; process < processCount; process += 1) {
   processes.push({ process, refusedAttempts, result: completed });
 }
 
-function parseBenchmarkOutput(task: string, stdout: string): unknown {
-  if (task !== "benchmark:rebuild") return JSON.parse(stdout);
-  const records = stdout.split("\n").map((line) => JSON.parse(line));
-  const start = records[0];
-  const end = records.at(-1);
-  if (
-    start?.recordType !== "benchmarkStart" ||
-    end?.recordType !== "benchmarkEnd"
-  ) {
-    throw new Error("rebuild benchmark omitted its start/end protocol records");
-  }
-  return {
-    ...start,
-    ...end,
-    recordType: "benchmarkRun",
-    measurements: records.slice(1, -1),
-  };
+function parseBenchmarkOutput(stdout: string): unknown {
+  return JSON.parse(stdout);
 }
 
 const record = {

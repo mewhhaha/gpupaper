@@ -25,7 +25,7 @@ Deno.test("generic Core API emits an executable exported function", async () => 
     functions: [{
       id: main,
       name: "answer",
-      sourceSymbolId: undefined,
+      sourceIdentity: undefined,
       signature,
       entryBlock: entry,
       blocks: [{
@@ -81,7 +81,7 @@ Deno.test("closed Core emission removes imports reachable only from dead functio
     functions: [{
       id: main,
       name: "main",
-      sourceSymbolId: undefined,
+      sourceIdentity: undefined,
       signature,
       entryBlock: entry,
       blocks: [{
@@ -101,7 +101,7 @@ Deno.test("closed Core emission removes imports reachable only from dead functio
     }, {
       id: dead,
       name: "dead",
-      sourceSymbolId: undefined,
+      sourceIdentity: undefined,
       signature,
       entryBlock: entry,
       blocks: [{
@@ -156,7 +156,7 @@ Deno.test("canonical natural loop preserves reverse edges and parallel assignmen
     functions: [{
       id: rotate,
       name: "rotate",
-      sourceSymbolId: undefined,
+      sourceIdentity: undefined,
       signature,
       entryBlock: block(0),
       blocks: [{

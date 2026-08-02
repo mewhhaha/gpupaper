@@ -1,6 +1,0 @@
-const helper = 1
-
-const private_binding_module = import "./private_binding_module.duck"
-const { get } = private_binding_module()
-
-get(0)
