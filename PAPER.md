@@ -3726,7 +3726,68 @@ The next implementation should not reorder source evaluation. It should:
 The first six steps expose compiler parallelism without changing Ducklang. Step
 seven is a new optimization with its own validation and remains unimplemented.
 
-### 7.12 Blot Runtime HIR as a backend-neutral target
+### 7.12 General high-level-IR target
+
+Gpupaper's reusable language boundary is not Ducklang or Blot source. It is the
+monomorphic typed SSA/CFG module $C$ consumed by Core validation and Wasm
+lowering. The current TypeScript names retain the historical `DucklangCore`
+prefix, but the schema contains no parser node, module lookup rule, source type
+variable, or Ducklang-only binding construct. It consists of type, signature,
+function, block, value, operation, terminator, span, and entry tables. Therefore
+a language frontend $F$ targets gpupaper when it establishes
+
+\[F:S\rightharpoonup C\]
+
+for its accepted source domain $S$ and supplies the source-language proof
+obligations erased before $C$: resolution, typing, effect permission, ownership,
+specialization, and calling-convention policy. Gpupaper then implements the
+partial backend function
+
+\[G:C\rightharpoonup P\rightharpoonup B,\]
+
+where $P$ is a validated deterministic Wasm binary plan and $B$ its unique byte
+string. Calling the project a general compiler means that $G$ is reusable by
+independent $F$ implementations; it does not mean gpupaper accepts arbitrary
+source text or reconstructs a frontend's theorems.
+
+The Core validator checks closed table indices, stable function and block IDs,
+type-correct entry parameters, single SSA definition, dominance, typed CFG edge
+arguments, function results, call signatures, Store operations, 128-bit vector
+shapes, SIMD operations, representation-preserving seals, and resource/region
+operation shapes. Wasm target validation adds physical restrictions such as
+rejecting vectors on `wasm-scalar` and at the managed JavaScript boundary. The
+validator does not infer a source effect row or prove that an ownership-labelled
+transition was permitted by the source calculus; those facts belong to $F$.
+
+The backend currently represents scalars, 128-bit vectors and masks, products,
+sums, buffers, Stores, functions and closures; typed branches, back-edges,
+returns, and traps; aggregate, call, host-call, resource, and region operations;
+explicit exports and custom sections; functional-graph rewrites; structured Wasm
+lowering; stackification; and deterministic plan construction. The plan can be
+emitted by TypeScript, Rust compiled to WebAssembly, or WebGPU without changing
+its byte semantics. Thus backend selection is below $C$ and cannot change the
+source language admitted by $F$.
+
+For a source program with frontend work $W_F$, Core size $|C|$, backend graph
+work $W_G(C)$, plan atom/dependency counts $(A,D)$, and output bytes $y$, the
+complete work is
+
+\[W_{total}=W_F+W_G(C)+\Theta(A+D+y).\]
+
+Only the final term is shared by the three binary emitters. A claim that GPU
+emission accelerates an entire language compiler must therefore report all three
+terms and the CPU--GPU transfer and completion latencies; emitter-only speedup
+cannot be substituted for source-to-Wasm speedup. This separation is the reason
+the public documentation leads with Core and labels the bundled languages as
+conformance frontends.
+
+Executable validation includes direct synthetic Core modules, generated
+CPU/Rust/GPU binary-plan differentials, engine validation, and two independent
+source producers. This proves exercised cases, not universality over every
+possible frontend $F$. A new language integration is complete only when its own
+source oracle and ABI observations agree with $G(F(s))$ on its declared corpus.
+
+#### Blot Runtime HIR as a conformance producer
 
 The copied Blot grammar and the earlier `let*; return` payload were not a sound
 route to full Blot compilation and have now been deleted. Blot's checker owns
