@@ -18,6 +18,7 @@ const supportedTasks = new Set([
   "benchmark:wasm",
   "benchmark:branch-hints",
   "benchmark:simd",
+  "benchmark:zero",
   "benchmark:peers",
   "benchmark:blot-targets",
   "benchmark:blot-batch",

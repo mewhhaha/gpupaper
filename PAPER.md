@@ -3730,11 +3730,13 @@ seven is a new optimization with its own validation and remains unimplemented.
 
 Gpupaper's reusable language boundary is not Ducklang or Blot source. It is the
 monomorphic typed SSA/CFG module $C$ consumed by Core validation and Wasm
-lowering. The current TypeScript names retain the historical `DucklangCore`
-prefix, but the schema contains no parser node, module lookup rule, source type
-variable, or Ducklang-only binding construct. It consists of type, signature,
-function, block, value, operation, terminator, span, and entry tables. Therefore
-a language frontend $F$ targets gpupaper when it establishes
+lowering. The internal implementation types retain historical names, while the
+consumer facade exports neutral `CoreModule`, `CoreType`, `CoreOperation`,
+`validateCore`, and `lowerCoreToWasm` names from `src/core.ts` and
+`src/core_wasm.ts`. The schema contains no parser node, module lookup rule,
+source type variable, or language-specific binding construct. It consists of
+type, signature, function, block, value, operation, terminator, span, and entry
+tables. Therefore a language frontend $F$ targets gpupaper when it establishes
 
 \[F:S\rightharpoonup C\]
 
@@ -3786,6 +3788,9 @@ CPU/Rust/GPU binary-plan differentials, engine validation, and two independent
 source producers. This proves exercised cases, not universality over every
 possible frontend $F$. A new language integration is complete only when its own
 source oracle and ABI observations agree with $G(F(s))$ on its declared corpus.
+The neutral public facade has an executable import-level test that constructs a
+Core module without a bundled frontend, validates and lowers it, emits its plan,
+instantiates the Wasm, and observes the exported result.
 
 #### Blot Runtime HIR as a conformance producer
 
@@ -5379,6 +5384,120 @@ emission was 63.7% of gpupaper's median. Throughput scheduling reached 65.1,
 201.7, 524.4, and 456.0 modules/s at requested batches 1, 4, 16, and 64. These
 figures establish measurement coverage and the output-size direction; they are
 not admissible release performance evidence.
+
+### 7.13 Zero: a controlled end-to-end benchmark language
+
+Zero is the repository's consumer example and controlled benchmark frontend. It
+is deliberately not a second production language specification. Its purpose is
+to exercise one reproducible path from a generated Baba parser through the
+public Core boundary and the Rust/WebAssembly plan emitter to an executable
+WebAssembly payload.
+
+#### 7.13.1 Calculus and dynamic semantics
+
+Zero has one runtime type, WebAssembly `i32`. A program is a finite table of
+first-order functions. Expressions are integer literals, variables, strict
+left-to-right binary operations, lexical `let`, direct calls, conditionals, and
+the bounded fold
+
+```text
+repeat n from z as x { e }
+```
+
+where `x` is bound only in `e`. Integer arithmetic is WebAssembly wrapping
+arithmetic; signed division follows WebAssembly and traps on zero and signed
+overflow. Comparisons produce canonical `0` or `1`, and a conditional selects
+its first arm exactly when its condition is nonzero. Function calls are strict
+and first-order. Every parameter and result has type `i32`; duplicate function
+or parameter names, unbound variables, unknown callees, arity mismatches, and
+integer literals outside signed 32-bit range are rejected at the frontend
+boundary.
+
+The repeat form is the primitive recursion
+
+```text
+R(n, z, f) = z                       when n <= 0
+R(n, z, f) = R(n - 1, f(z), f)       when n > 0
+```
+
+with `f(x) = e`. The count and initial value are evaluated once, in that order.
+Each positive iteration evaluates the body once. The decrement cannot overflow
+because it occurs only while the signed count is positive. This is a pure fold,
+not a mutable source variable, and termination follows from the natural-valued
+variant `max(n, 0)`.
+
+#### 7.13.2 Representation and lowering derivation
+
+Baba's checked grammar produces a cursor forest. The Zero adapter materializes
+only the small expression tree needed for semantic checks, then predeclares the
+finite function/signature table before lowering bodies. A lexical environment
+maps each source binder to its fresh SSA value. `let` extends a copied
+environment after its value is lowered, preserving lexical shadowing and
+left-to-right evaluation. A direct call names the predeclared function ID.
+
+Conditionals lower to a condition block, two arm blocks, and one join block. The
+join has one `i32` block parameter and each arm supplies exactly one edge
+argument. Repeat lowers to a header with `(remaining, state)` block parameters,
+a body back-edge carrying `(remaining - 1, next_state)`, and an exit parameter
+carrying the final state. Thus the source fold equation becomes ordinary SSA
+recurrence rather than source mutation.
+
+The lowering preserves these executable invariants:
+
+1. every function, block, signature, type, and value ID is stable and dense;
+2. every use is dominated by one definition;
+3. every edge has the exact arity and types of its target parameters;
+4. each source expression is evaluated once and in source order except for the
+   mutually exclusive conditional arms;
+5. each repeat back-edge decreases a positive signed count by one;
+6. every exported Zero function has the direct `(i32*) -> i32` Wasm ABI;
+7. emitted bytes come from the Rust emitter compiled to WebAssembly and pass
+   `WebAssembly.validate`.
+
+The existing Core validator independently checks the first three properties and
+the Wasm target. Zero conformance tests check parsing, shadowing, conditional
+selection, zero and positive repeat counts, calls, diagnostics, Rust/Wasm versus
+TypeScript-emitter byte identity, and executable results.
+
+#### 7.13.3 Benchmark contract and cost model
+
+The retained runtime workload is a deterministic wrapping recurrence. The Zero
+and Rust sources export the same `run(seed, rounds) -> i32` function and use the
+same signed loop condition and arithmetic. Before timing, the harness compares
+both implementations over boundary and generated inputs; a mismatch invalidates
+the run.
+
+For `r = max(rounds, 0)`, useful payload work is `Theta(r)` with a constant
+number of integer operations and one branch per iteration, and payload memory is
+`Theta(1)`. Let `t_z(r)` and `t_r(r)` be paired invocation times after both Wasm
+modules are compiled, instantiated, and warmed. The reported runtime quantity is
+the paired log-ratio
+
+```text
+rho(r) = exp(median_i(log(t_z_i(r) / t_r_i(r))))
+```
+
+rather than a ratio of unrelated medians. Invocation order alternates within
+each pair. The harness also reports raw observations, robust summaries, module
+byte lengths, instantiation observations, repository/runtime identity, and
+content hashes.
+
+Compilation measurements have intentionally different boundaries and therefore
+must not be presented as a compiler speedup ratio. The Zero path records Baba
+parser initialization and parsing, AST-to-Core validation/lowering, Wasm
+planning, Rust/Wasm-emitter initialization, and plan emission. The Rust path is
+one fresh `rustc` process targeting `wasm32-unknown-unknown` at optimization
+level 3. Those measurements locate costs; they do not claim that an incremental
+in-process frontend and a whole external toolchain are equivalent.
+
+JavaScript-to-Wasm call overhead can dominate tiny payloads. The benchmark
+therefore performs the recurrence inside each Wasm invocation and uses enough
+rounds that the `Theta(r)` term dominates the constant boundary cost. This does
+not establish performance on allocation, memory bandwidth, SIMD, host effects,
+or larger programs. It is one scalar control/arithmetic case study. Kalibera and
+Jones [38] justify independent process-level analysis and explicit uncertainty;
+the project benchmark discipline in Section 7.10 supplies the robust summaries
+and evidence classification.
 
 ## 8. Soundness and compiler obligations
 
@@ -9493,6 +9612,35 @@ The cost-state tuple now includes the previously used but undefined upload term
 so an uploaded byte may contribute to both terms. This repairs the dimensional
 definition without claiming the additive calibration model fits the current
 adapter.
+
+### 2026-08-02: Zero closes a controlled source-to-runtime comparison
+
+Section 7.13 introduces Zero as the sole consumer example language and runtime
+comparison fixture. The implemented path uses a 66,344-byte Baba plan and the
+17,983-byte Baba parser engine, materializes a checked first-order expression
+tree, lowers lexical values and the bounded repeat fold to validated Core, plans
+Wasm, and emits the payload through the Rust compiler compiled to WebAssembly.
+Seven conformance tests independently exercise shadowing, calls, conditional
+joins, nonpositive and positive repeat counts, signed boundary inputs, exact
+Rust/Wasm-versus-TypeScript plan bytes, and three semantic rejection classes.
+The benchmark adds a further 70-probe differential check against both an
+independent JavaScript recurrence and an optimized Rust-to-Wasm implementation
+before timing either payload.
+
+A 30-pair local execution with 100,000 iterations in each of eight calls per
+sample is retained in `measurements/zero-runtime-diagnostic-2026-08-02.json` as
+diagnostic observation, not admissible speedup evidence, because other Node
+compiler-agent processes were active. Zero produced 299 bytes and Rust produced
+371 bytes. The warm Zero source-to-Wasm median was 1.188 ms (p95 2.091 ms); a
+fresh `rustc` process median was 41.340 ms (p95 47.059 ms). These compilation
+boundaries are explicitly incomparable. Hot payload execution measured 4.045
+ns/iteration for Zero and 1.497 ns/iteration for Rust, with a paired median
+log-ratio of 2.702. This falsifies any current claim of Rust-equivalent
+generated scalar-loop performance. The likely object of the next investigation
+is the generic multi-block dispatch structure, but that attribution is an
+unverified hypothesis until instruction-level and engine-profile evidence
+separates it from local assignment, branch shape, and tiering. Zero's smaller
+artifact and faster measured instantiation do not discharge that runtime gap.
 
 ## References
 

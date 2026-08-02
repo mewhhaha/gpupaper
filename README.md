@@ -19,15 +19,12 @@ The source program never becomes a GPU kernel. WebGPU, when selected, executes
 the compiler's count/scan/write work. The resulting payload is an ordinary Wasm
 module.
 
-Ducklang and Blot are conformance frontends and workload corpora. They exercise
-the backend, but neither language defines gpupaper's architecture or its public
-target boundary.
+Bundled and external frontends exercise the backend, but no source language
+defines gpupaper's architecture or public target boundary.
 
 ## What a frontend supplies
 
-The public target is `DucklangCoreModule` in
-[`src/ducklang_core.ts`](src/ducklang_core.ts). The historical `Ducklang` prefix
-remains in the TypeScript names; the representation itself is a
+The public target is `CoreModule` in [`src/core.ts`](src/core.ts): a
 language-independent, monomorphic typed SSA/CFG module.
 
 A frontend supplies:
@@ -57,13 +54,13 @@ Rust/WebAssembly backend:
 import type {
   CoreBlockId,
   CoreFunctionId,
+  CoreModule,
   CoreSignatureId,
   CoreTypeId,
   CoreValueId,
-  DucklangCoreModule,
-} from "./src/ducklang_core.ts";
-import { validateDucklangCore } from "./src/ducklang_core.ts";
-import { lowerDucklangCoreToFcgAndWasm } from "./src/ducklang_core_wasm.ts";
+} from "./src/core.ts";
+import { validateCore } from "./src/core.ts";
+import { lowerCoreToWasm } from "./src/core_wasm.ts";
 import { emitWasmPlanOnRustWasm } from "./src/rust_wasm_emitter.ts";
 
 const i32 = 0 as CoreTypeId;
@@ -73,7 +70,7 @@ const entry = 0 as CoreBlockId;
 const answer = 0 as CoreValueId;
 const span = { file: "answer.example", start: 0, end: 9 };
 
-const core: DucklangCoreModule = {
+const core: CoreModule = {
   schemaVersion: 1,
   file: span.file,
   types: [{ kind: "scalar", scalar: "i32" }],
@@ -102,8 +99,8 @@ const core: DucklangCoreModule = {
   entryFunction: main,
 };
 
-validateDucklangCore(core);
-const lowered = lowerDucklangCoreToFcgAndWasm(core, {
+validateCore(core);
+const lowered = lowerCoreToWasm(core, {
   emission: "planOnly",
   target: "wasm-scalar",
   exports: [{ name: "answer", functionId: main }],
@@ -121,6 +118,37 @@ The same adapter pattern scales to a complete language: assign stable IDs while
 lowering the frontend's typed representation, translate source control into
 blocks and branch arguments, and choose an emission backend only after Core has
 validated.
+
+## Complete reference frontend
+
+[`examples/zero/`](examples/zero/) contains Zero, the repository's controlled
+example language. It demonstrates the complete integration without making its
+source semantics part of gpupaper:
+
+```text
+Zero source
+  -> Baba-generated Wasm parser
+  -> cursor-to-Core frontend adapter
+  -> validated Core and deterministic Wasm plan
+  -> Rust compiled to WebAssembly plan emitter
+  -> payload .wasm
+```
+
+Zero has one wrapping `i32` type, first-order functions, lexical bindings,
+direct calls, conditionals, and a bounded fold. That is enough to exercise SSA
+values, multi-function calls, CFG joins, loops, validation, and executable
+output while keeping the source-to-Core mapping auditable.
+
+```sh
+deno task zero:grammar
+deno test --allow-read tests/zero.test.ts
+deno task benchmark:zero
+```
+
+The benchmark differentially checks Zero-generated Wasm against an equivalent
+Rust-to-Wasm program before measuring their runtime. It reports compiler stages,
+module construction, instantiation, output size, and paired hot-execution
+samples separately.
 
 ## Mapping a language into Core
 
@@ -264,15 +292,15 @@ does this across frozen and generated plans.
 
 The backend exposes reuse at distinct semantic boundaries:
 
-- `createDucklangBackendFunctionCache()` reuses unchanged per-function backend
-  analysis under an explicit environment identity;
+- `createBackendFunctionCache()` reuses unchanged per-function backend analysis
+  under an explicit environment identity;
 - Rust resident plans reuse validated, encoded bytes;
 - GPU resident plans reuse validated device columns while allocating fresh
   scratch and owned outputs per emission;
 - `emitWasmPlansOnGpu()` packs independent logical plans into capacity-safe
   physical batches;
 - a language frontend can cache its own immutable typed modules and final
-  artifacts by semantic revision, as demonstrated by the Blot fixture.
+  artifacts by semantic revision.
 
 Cache the latest proven representation, not merely source text. A cache key must
 include every target option observable in bytes, diagnostics, or profiling.
@@ -302,29 +330,24 @@ Gpupaper owns:
 
 Direct scalar exports can be named with the `exports` option shown above.
 Language-specific canonical ABIs can add wrappers and embed their manifest with
-`customSections`. Blot's ABI adapter is one executable example, not a required
-runtime.
+`customSections`.
 
-## Blot and Ducklang
+## Integration pattern
 
-Blot demonstrates how a separate language repository can target gpupaper:
+A separate language repository targets gpupaper in four steps:
 
-1. Blot parses, checks, specializes, and proves ownership in its own compiler.
-2. Its adapter exports validated first-order Runtime HIR.
-3. Gpupaper translates that HIR into the general Core boundary.
-4. The production Blot target emits cache misses with Rust/WebAssembly and
-   retains final artifacts by Blot revision.
+1. Parse, resolve, check, specialize, and prove source-language obligations in
+   the frontend.
+2. Assign stable type, signature, function, block, and value IDs while lowering
+   the settled program into `CoreModule`.
+3. Validate and lower Core into a Wasm plan.
+4. Select an emitter, validate the resulting module and ABI metadata, then cache
+   the owned artifact by semantic revision.
 
-See
-[Blot's gpupaper adapter](https://github.com/mewhhaha/blot/blob/main/src/backend/gpupaper.ts)
-and [`src/blot_runtime_target.ts`](src/blot_runtime_target.ts). Blot is used for
-integration, ABI, effects, ownership, incremental, and corpus testing; consumers
-do not need Blot to implement another language.
-
-Ducklang is the repository's larger source-to-Core conformance frontend. Its
-application corpus exercises closures, modules, handlers, protocols, ownership,
-text, stores, SIMD, structured control, and managed host capabilities. Its CLI
-is useful for backend development, but the general integration point is Core.
+Keep frontend and backend caches separate. A frontend cache may reuse checked
+semantic facts; the backend cache may reuse Core analysis, binary plans, or
+final bytes. Neither cache may infer equality from a path alone when imports,
+target options, effects, or ABI configuration can change the result.
 
 ## Requirements
 
@@ -374,8 +397,9 @@ Run the retained harnesses rather than timing an unverified CLI wall clock:
 
 ```sh
 deno task benchmark:wasm
-deno task benchmark:blot-crossover
-deno task benchmark:blot-batch
+deno task benchmark:break-even
+deno task benchmark:branch-hints
+deno task benchmark:zero
 ```
 
 Benchmark records include repository and runtime identity, input/output hashes,
@@ -391,7 +415,7 @@ See [`PERFORMANCE.md`](PERFORMANCE.md) for current measurements and
 
 - Core is monomorphic and each function has one result.
 - The general API is currently source-level TypeScript imported from the local
-  checkout; package names still carry historical Ducklang terminology.
+  checkout.
 - Host calls are synchronous and memory32-based.
 - The managed JavaScript boundary cannot carry vector or mask values.
 - `wasm-scalar` rejects all vector and mask types.
@@ -413,15 +437,10 @@ properties, executable validation, measurements, and hypotheses.
 
 Principal consumer-facing files:
 
-- [`src/ducklang_core.ts`](src/ducklang_core.ts): general typed Core schema and
-  validator;
-- [`src/ducklang_core_wasm.ts`](src/ducklang_core_wasm.ts): Core-to-FCG and Wasm
-  plan lowering;
+- [`src/core.ts`](src/core.ts): general typed Core schema and validator;
+- [`src/core_wasm.ts`](src/core_wasm.ts): Core-to-FCG and Wasm plan lowering;
 - [`src/wasm.ts`](src/wasm.ts): deterministic plan model and TypeScript emitter;
 - [`src/rust_wasm_emitter.ts`](src/rust_wasm_emitter.ts): Rust/WebAssembly
   emitter and resident handles;
 - [`src/gpu_wasm.ts`](src/gpu_wasm.ts): GPU emission, batching, capacity, and
-  residency;
-- [`src/blot_runtime_hir.ts`](src/blot_runtime_hir.ts) and
-  [`src/blot_runtime_target.ts`](src/blot_runtime_target.ts): one
-  language-adapter example with a stronger effect/ownership trust boundary.
+  residency.

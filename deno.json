@@ -19,6 +19,7 @@
     "benchmark:wasm": "deno run --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_wasm_emission.ts",
     "benchmark:branch-hints": "deno run --allow-read --allow-run=git,ps scripts/benchmark_wasm_branch_hints.ts",
     "benchmark:simd": "deno run --unstable-webgpu --allow-read --allow-run=git,ps scripts/benchmark_ducklang_simd.ts",
+    "benchmark:zero": "deno run --allow-read --allow-write=/tmp --allow-run=git,ps,rustc scripts/benchmark_zero_runtime.ts",
     "benchmark:peers": "deno run --unstable-webgpu --allow-read --allow-run=deno,git,ps,nvidia-smi scripts/benchmark_peer_compilers.ts",
     "benchmark:blot-targets": "deno run --config=../blot/deno.json --unstable-webgpu --allow-read --allow-write --allow-run=git,ps,nvidia-smi scripts/benchmark_blot_targets.ts",
     "benchmark:blot-batch": "deno run --config=../blot/deno.json --unstable-webgpu --allow-read --allow-run=git,ps,nvidia-smi scripts/benchmark_blot_batch.ts",
@@ -30,7 +31,8 @@
     "blot:verify": "deno run --config=../blot/deno.json --allow-read scripts/verify_blot_target.ts",
     "release:gpu": "deno task check && deno task test && deno run --unstable-webgpu --allow-read scripts/release_gpu.ts",
     "duck:grammar": "deno run --allow-read --allow-write scripts/import_ducklang_grammar.ts grammar/ducklang-tree-sitter-grammar.json grammar/duck.baba && deno run --allow-read --allow-write scripts/update_duck_conflicts.ts grammar/duck.baba grammar/duck.baba.json && deno fmt grammar/duck.baba.json && deno run --allow-read --allow-write scripts/generate_baba_parser.ts ducklang grammar/duck.baba grammar/duck.baba.json grammar/generated",
-    "duck:contract": "deno run --allow-read --allow-write scripts/import_ducklang_contract.ts ../binned/examples/manifest.ts examples/binned/contract.json && deno fmt examples/binned/contract.json"
+    "duck:contract": "deno run --allow-read --allow-write scripts/import_ducklang_contract.ts ../binned/examples/manifest.ts examples/binned/contract.json && deno fmt examples/binned/contract.json",
+    "zero:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts zero grammar/zero.baba grammar/zero.baba.json grammar/zero-generated"
   },
   "imports": {
     "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.10.0",

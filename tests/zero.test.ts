@@ -1,0 +1,128 @@
+import { compileZeroSource } from "../examples/zero/compiler.ts";
+import { emitWasmPlanOnCpu } from "../src/wasm.ts";
+
+const kernelUrl = new URL("../examples/zero/kernel.zero", import.meta.url);
+
+Deno.test("Zero lowers shadowing, calls, and conditional values", async () => {
+  const compiled = await compileZeroSource(
+    "expressions.zero",
+    `
+      fn add(left, right) = left + right;
+      fn choose(value) =
+        let value = value + 1 in
+        if value > 10 then add(value, 2) else 0 - value;
+    `,
+  );
+  const instance = await instantiate(compiled.wasm);
+  const choose = exportedFunction(instance, "choose");
+  assertEquals(choose(10), 13);
+  assertEquals(choose(2), -3);
+});
+
+Deno.test("Zero repeat agrees with its bounded-fold reference semantics", async () => {
+  const source = await Deno.readTextFile(kernelUrl);
+  const compiled = await compileZeroSource("kernel.zero", source);
+  const instance = await instantiate(compiled.wasm);
+  const run = exportedFunction(instance, "run");
+  for (
+    const [seed, rounds] of [
+      [0, -1],
+      [0, 0],
+      [1, 1],
+      [-1, 2],
+      [1, 10],
+      [2_147_483_647, 31],
+    ] as const
+  ) {
+    assertEquals(run(seed, rounds), referenceRun(seed, rounds));
+  }
+});
+
+Deno.test("Zero Rust/Wasm emission is byte-identical to CPU plan emission", async () => {
+  const source = await Deno.readTextFile(kernelUrl);
+  const compiled = await compileZeroSource("kernel.zero", source);
+  assertEquals(
+    Array.from(compiled.wasm),
+    Array.from(emitWasmPlanOnCpu(compiled.wasmPlan)),
+  );
+});
+
+Deno.test("Zero rejects duplicate function parameters", async () => {
+  await assertRejects(
+    () => compileZeroSource("duplicate.zero", "fn run(value, value) = value;"),
+    /duplicate\.zero:\d+: duplicate parameter value/,
+  );
+});
+
+Deno.test("Zero rejects unbound variables", async () => {
+  await assertRejects(
+    () => compileZeroSource("unbound.zero", "fn run(value) = missing;"),
+    /unbound\.zero:\d+: unbound variable missing/,
+  );
+});
+
+Deno.test("Zero rejects direct-call arity mismatches", async () => {
+  await assertRejects(
+    () =>
+      compileZeroSource(
+        "arity.zero",
+        "fn add(left, right) = left + right; fn run(value) = add(value);",
+      ),
+    /arity\.zero:\d+: function add expects 2 arguments; received 1/,
+  );
+});
+
+Deno.test("Zero rejects integer literals outside signed i32", async () => {
+  await assertRejects(
+    () => compileZeroSource("literal.zero", "fn run() = 2147483648;"),
+    /literal\.zero:\d+: integer literal 2147483648 is outside signed i32/,
+  );
+});
+
+async function instantiate(wasm: Uint8Array): Promise<WebAssembly.Instance> {
+  const module = await WebAssembly.compile(Uint8Array.from(wasm));
+  return await WebAssembly.instantiate(module);
+}
+
+function exportedFunction(
+  instance: WebAssembly.Instance,
+  name: string,
+): (...arguments_: number[]) => number {
+  const exported = instance.exports[name];
+  if (!(exported instanceof Function)) {
+    throw new Error(`Zero module has no function export ${name}`);
+  }
+  return exported as (...arguments_: number[]) => number;
+}
+
+function referenceRun(seed: number, rounds: number): number {
+  let state = seed | 0;
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    const mixed = (Math.imul(state, 1_664_525) + 1_013_904_223) | 0;
+    state = mixed < 0 ? (mixed + 12_345) | 0 : (mixed - 12_345) | 0;
+  }
+  return state;
+}
+
+async function assertRejects(
+  operation: () => Promise<unknown>,
+  expected: RegExp,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (cause) {
+    if (cause instanceof Error && expected.test(cause.message)) return;
+    throw new Error(
+      `expected rejection ${expected}; received ${String(cause)}`,
+    );
+  }
+  throw new Error(`expected rejection ${expected}; operation completed`);
+}
+
+function assertEquals(actual: unknown, expected: unknown): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `expected ${JSON.stringify(actual)} to equal ${JSON.stringify(expected)}`,
+    );
+  }
+}
