@@ -2,9 +2,22 @@ import {
   compileModuleSource,
   type GpuSchedulingPolicy,
 } from "../src/compiler.ts";
+import {
+  inspectBenchmarkEnvironment,
+  repositoryIdentity,
+  runtimeIdentity,
+  sha256,
+} from "./benchmark_environment.ts";
+import {
+  median,
+  summarizePairedSamples,
+  summarizeSamples,
+} from "./benchmark_statistics.ts";
 
 const batchSizes = [1, 2, 4, 8, 16, 32, 64] as const;
+const policies = ["latency", "throughput"] as const;
 const sampleCount = requestedSampleCount(Deno.args);
+const allowContended = Deno.args.includes("--allow-contended");
 const sourceFile = new URL(
   "../examples/binned/live/case-studies/grep/grep.duck",
   import.meta.url,
@@ -14,100 +27,136 @@ const hostInterface = new URL(
   import.meta.url,
 ).pathname;
 const source = await Deno.readTextFile(sourceFile);
+const environmentAtStart = await inspectBenchmarkEnvironment();
+if (environmentAtStart.status !== "clear" && !allowContended) {
+  console.log(JSON.stringify({
+    status: "refused",
+    reason: "competing compiler or GPU work is active or inspection failed",
+    environment: environmentAtStart,
+  }));
+  Deno.exit(2);
+}
+const adapter = await navigator.gpu.requestAdapter();
+if (adapter === null) {
+  throw new Error("break-even benchmark has no GPU adapter");
+}
 
-await compile("cpu", "latency");
-await compile("gpu", "latency");
+type Cell = {
+  readonly gpuScheduling: GpuSchedulingPolicy;
+  readonly batchSize: number;
+};
+type CellSamples = {
+  readonly cpu: BatchMeasurement[];
+  readonly gpu: BatchMeasurement[];
+};
+const cells: readonly Cell[] = policies.flatMap((gpuScheduling) =>
+  batchSizes.map((batchSize) => ({ gpuScheduling, batchSize }))
+);
+const samplesByCell = new Map<string, CellSamples>(
+  cells.map((cell) => [cellKey(cell), { cpu: [], gpu: [] }]),
+);
 
-const policies = ["latency", "throughput"] as const;
-const policyMeasurements = [];
-for (const gpuScheduling of policies) {
-  const measurements: BatchReport[] = [];
-  for (const batchSize of batchSizes) {
-    const cpuSamples: BatchMeasurement[] = [];
-    const gpuSamples: BatchMeasurement[] = [];
-    for (let sample = 0; sample < sampleCount; sample += 1) {
-      if (sample % 2 === 0) {
-        cpuSamples.push(await measureBatch(batchSize, "cpu", gpuScheduling));
-        gpuSamples.push(await measureBatch(batchSize, "gpu", gpuScheduling));
-      } else {
-        gpuSamples.push(await measureBatch(batchSize, "gpu", gpuScheduling));
-        cpuSamples.push(await measureBatch(batchSize, "cpu", gpuScheduling));
-      }
-    }
-    const cpuMedianMilliseconds = median(
-      cpuSamples.map((sample) => sample.milliseconds),
-    );
-    const gpuMedianMilliseconds = median(
-      gpuSamples.map((sample) => sample.milliseconds),
-    );
-    const pairedGpuMinusCpuMilliseconds = gpuSamples.map((sample, index) =>
-      sample.milliseconds - cpuSamples[index]!.milliseconds
-    );
-    const pairedGpuMinusCpuMedianMilliseconds = median(
-      pairedGpuMinusCpuMilliseconds,
-    );
-    measurements.push({
-      batchSize,
-      cpuTotalMilliseconds: cpuSamples.map((sample) => sample.milliseconds),
-      cpuMedianMilliseconds,
-      cpuP95Milliseconds: percentile(
-        cpuSamples.map((sample) => sample.milliseconds),
-        0.95,
-      ),
-      gpuTotalMilliseconds: gpuSamples.map((sample) => sample.milliseconds),
-      gpuMedianMilliseconds,
-      gpuP95Milliseconds: percentile(
-        gpuSamples.map((sample) => sample.milliseconds),
-        0.95,
-      ),
-      pairedGpuMinusCpuMilliseconds,
-      pairedGpuMinusCpuMedianMilliseconds,
-      pairedGpuMinusCpuMedianAbsoluteDeviationMilliseconds: median(
-        pairedGpuMinusCpuMilliseconds.map((difference) =>
-          Math.abs(difference - pairedGpuMinusCpuMedianMilliseconds)
-        ),
-      ),
-      cpuMillisecondsPerCompilation: cpuMedianMilliseconds / batchSize,
-      gpuMillisecondsPerCompilation: gpuMedianMilliseconds / batchSize,
-      gpuToCpuRatio: gpuMedianMilliseconds / cpuMedianMilliseconds,
-      gpuCoreSubmissionBatchSize: median(
-        gpuSamples.map((sample) => sample.coreSubmissionBatchSize),
-      ),
-      gpuCorePayloadBatchSize: median(
-        gpuSamples.map((sample) => sample.corePayloadBatchSize),
-      ),
-      gpuWasmSubmissionBatchSize: median(
-        gpuSamples.map((sample) => sample.wasmSubmissionBatchSize),
-      ),
-      gpuWasmPayloadBatchSize: median(
-        gpuSamples.map((sample) => sample.wasmPayloadBatchSize),
-      ),
-      gpuQueueWaitMilliseconds: median(
-        gpuSamples.map((sample) => sample.queueWaitMilliseconds),
-      ),
-    });
+for (const cell of cells) {
+  await measurePair(cell, 0);
+}
+for (let sample = 0; sample < sampleCount; sample += 1) {
+  const orderedCells = sample % 2 === 0 ? cells : [...cells].reverse();
+  for (const cell of orderedCells) {
+    const pair = await measurePair(cell, sample);
+    const retained = samplesByCell.get(cellKey(cell))!;
+    retained.cpu.push(pair.cpu);
+    retained.gpu.push(pair.gpu);
   }
+}
+
+const policyMeasurements = policies.map((gpuScheduling) => {
+  const measurements = batchSizes.map((batchSize) => {
+    const samples = samplesByCell.get(cellKey({ gpuScheduling, batchSize }))!;
+    return reportBatch(batchSize, samples.cpu, samples.gpu);
+  });
   const observedBreakEven = measurements.find((measurement) =>
-    measurement.pairedGpuMinusCpuMedianMilliseconds <= 0
+    measurement.pairedGpuToCpu.difference.median <= 0
   );
-  policyMeasurements.push({
+  return {
     gpuScheduling,
     measurements,
     breakEven: observedBreakEven === undefined
       ? { status: "notObserved", maximumMeasuredBatchSize: batchSizes.at(-1)! }
       : { status: "observed", batchSize: observedBreakEven.batchSize },
-  });
-}
+  };
+});
 
+const environmentAtEnd = await inspectBenchmarkEnvironment();
+const environmentClear = environmentAtStart.status === "clear" &&
+  environmentAtEnd.status === "clear";
 console.log(JSON.stringify({
+  status: environmentClear || allowContended ? "completed" : "refused",
+  validity: environmentClear ? { status: "admissible" } : allowContended
+    ? {
+      status: "diagnostic",
+      reason: "competing compiler or GPU work was present during measurement",
+    }
+    : {
+      status: "refused",
+      reason: "competing compiler or GPU work appeared during measurement",
+    },
+  schemaVersion: 2,
   target: "grep",
+  inputSha256: await sha256(new TextEncoder().encode(source)),
   sampleCount,
+  warmupCountPerCell: 1,
   gpuMode: "required",
   gpuWasmVerification: "none",
-  pairOrder: "alternatingCpuFirst",
-  pairCount: sampleCount / 2,
+  backendOrder: "balancedCpuFirstAndGpuFirstPairs",
+  cellOrder: "balancedForwardAndReversePolicyBatchTraversal",
+  runtime: runtimeIdentity(),
+  repositories: {
+    gpupaper: await repositoryIdentity(
+      new URL("../", import.meta.url).pathname,
+    ),
+  },
+  adapter: {
+    vendor: adapter.info.vendor,
+    architecture: adapter.info.architecture,
+    device: adapter.info.device,
+    description: adapter.info.description,
+  },
+  environmentAtStart,
+  environmentAtEnd,
   policies: policyMeasurements,
 }));
+if (!environmentClear && !allowContended) Deno.exit(2);
+
+async function measurePair(
+  cell: Cell,
+  pairIndex: number,
+): Promise<{ readonly cpu: BatchMeasurement; readonly gpu: BatchMeasurement }> {
+  const order = pairIndex % 2 === 0
+    ? ["cpu", "gpu"] as const
+    : ["gpu", "cpu"] as const;
+  let cpu: BatchMeasurement | undefined;
+  let gpu: BatchMeasurement | undefined;
+  for (const backend of order) {
+    const measurement = await measureBatch(
+      cell.batchSize,
+      backend,
+      cell.gpuScheduling,
+    );
+    if (backend === "cpu") cpu = measurement;
+    else gpu = measurement;
+  }
+  if (cpu === undefined || gpu === undefined) {
+    throw new Error(`incomplete ${cellKey(cell)} CPU/GPU pair ${pairIndex}`);
+  }
+  if (cpu.wasmSha256 !== gpu.wasmSha256) {
+    throw new Error(
+      `${
+        cellKey(cell)
+      } pair ${pairIndex} emitted CPU ${cpu.wasmSha256} and GPU ${gpu.wasmSha256}`,
+    );
+  }
+  return { cpu, gpu };
+}
 
 async function measureBatch(
   batchSize: number,
@@ -116,13 +165,19 @@ async function measureBatch(
 ): Promise<BatchMeasurement> {
   const start = performance.now();
   const compilations = await Promise.all(
-    Array.from(
-      { length: batchSize },
-      () => compile(backend, gpuScheduling),
-    ),
+    Array.from({ length: batchSize }, () => compile(backend, gpuScheduling)),
   );
+  const firstWasm = compilations[0]!.wasm;
+  if (
+    compilations.some((compilation) => !equalBytes(firstWasm, compilation.wasm))
+  ) {
+    throw new Error(
+      `${backend} ${gpuScheduling} batch ${batchSize} emitted unequal artifacts`,
+    );
+  }
   return {
     milliseconds: performance.now() - start,
+    wasmSha256: await sha256(firstWasm),
     coreSubmissionBatchSize: Math.max(
       ...compilations.map((compilation) => compilation.coreSubmissionBatchSize),
     ),
@@ -141,46 +196,55 @@ async function measureBatch(
   };
 }
 
+function reportBatch(
+  batchSize: number,
+  cpuSamples: readonly BatchMeasurement[],
+  gpuSamples: readonly BatchMeasurement[],
+) {
+  const cpuMilliseconds = cpuSamples.map((sample) => sample.milliseconds);
+  const gpuMilliseconds = gpuSamples.map((sample) => sample.milliseconds);
+  const cpu = summarizeSamples(cpuMilliseconds);
+  const gpu = summarizeSamples(gpuMilliseconds);
+  return {
+    batchSize,
+    cpu: { ...cpu, rawMilliseconds: cpuMilliseconds },
+    gpu: { ...gpu, rawMilliseconds: gpuMilliseconds },
+    pairedGpuToCpu: summarizePairedSamples(gpuMilliseconds, cpuMilliseconds),
+    cpuMillisecondsPerCompilation: cpu.median / batchSize,
+    gpuMillisecondsPerCompilation: gpu.median / batchSize,
+    outputSha256: cpuSamples[0]!.wasmSha256,
+    gpuCoreSubmissionBatchSize: median(
+      gpuSamples.map((sample) => sample.coreSubmissionBatchSize),
+    ),
+    gpuCorePayloadBatchSize: median(
+      gpuSamples.map((sample) => sample.corePayloadBatchSize),
+    ),
+    gpuWasmSubmissionBatchSize: median(
+      gpuSamples.map((sample) => sample.wasmSubmissionBatchSize),
+    ),
+    gpuWasmPayloadBatchSize: median(
+      gpuSamples.map((sample) => sample.wasmPayloadBatchSize),
+    ),
+    gpuQueueWaitMilliseconds: median(
+      gpuSamples.map((sample) => sample.queueWaitMilliseconds),
+    ),
+  };
+}
+
 type BatchMeasurement = {
   readonly milliseconds: number;
+  readonly wasmSha256: string;
   readonly coreSubmissionBatchSize: number;
   readonly corePayloadBatchSize: number;
   readonly wasmSubmissionBatchSize: number;
   readonly wasmPayloadBatchSize: number;
   readonly queueWaitMilliseconds: number;
-};
-
-type BatchReport = {
-  readonly batchSize: number;
-  readonly cpuTotalMilliseconds: readonly number[];
-  readonly cpuMedianMilliseconds: number;
-  readonly cpuP95Milliseconds: number;
-  readonly gpuTotalMilliseconds: readonly number[];
-  readonly gpuMedianMilliseconds: number;
-  readonly gpuP95Milliseconds: number;
-  readonly pairedGpuMinusCpuMilliseconds: readonly number[];
-  readonly pairedGpuMinusCpuMedianMilliseconds: number;
-  readonly pairedGpuMinusCpuMedianAbsoluteDeviationMilliseconds: number;
-  readonly cpuMillisecondsPerCompilation: number;
-  readonly gpuMillisecondsPerCompilation: number;
-  readonly gpuToCpuRatio: number;
-  readonly gpuCoreSubmissionBatchSize: number;
-  readonly gpuCorePayloadBatchSize: number;
-  readonly gpuWasmSubmissionBatchSize: number;
-  readonly gpuWasmPayloadBatchSize: number;
-  readonly gpuQueueWaitMilliseconds: number;
 };
 
 async function compile(
   backend: "cpu" | "gpu",
   gpuScheduling: GpuSchedulingPolicy,
-): Promise<{
-  readonly coreSubmissionBatchSize: number;
-  readonly corePayloadBatchSize: number;
-  readonly wasmSubmissionBatchSize: number;
-  readonly wasmPayloadBatchSize: number;
-  readonly queueWaitMilliseconds: number;
-}> {
+) {
   const artifact = await compileModuleSource(sourceFile, source, {
     gpuMode: backend === "cpu" ? "off" : "required",
     gpuWasmVerification: backend === "cpu" ? "differential" : "none",
@@ -196,6 +260,7 @@ async function compile(
     throw new Error(`GPU break-even sample compiled ${artifact.language}`);
   }
   return {
+    wasm: artifact.wasm,
     coreSubmissionBatchSize: artifact.profile.work.gpuCoreSubmissionBatchSize,
     corePayloadBatchSize: artifact.profile.work.gpuCorePayloadBatchSize,
     wasmSubmissionBatchSize: artifact.profile.work.gpuWasmSubmissionBatchSize,
@@ -206,17 +271,13 @@ async function compile(
   };
 }
 
-function median(values: readonly number[]): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  const middle = ordered.length / 2;
-  return ordered.length % 2 === 0
-    ? (ordered[middle - 1] + ordered[middle]) / 2
-    : ordered[Math.floor(middle)];
+function cellKey(cell: Cell): string {
+  return `${cell.gpuScheduling}:${cell.batchSize}`;
 }
 
-function percentile(values: readonly number[], quantile: number): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil((ordered.length - 1) * quantile)]!;
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length &&
+    left.every((byte, index) => byte === right[index]);
 }
 
 function requestedSampleCount(arguments_: readonly string[]): number {

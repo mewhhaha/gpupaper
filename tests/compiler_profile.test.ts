@@ -430,7 +430,7 @@ Deno.test("GPU profile exposes canonical Core identity and compacted Wasm work",
       Math.ceil(work.wasmAtomCount / 8) * 4 +
         lowWordBytes +
         signed64HighWordBytes +
-        work.gpuWasmLengthAtomCount * 12 ||
+        work.gpuWasmLengthAtomCount * 16 + 4 ||
     work.gpuWasmDispatchedInvocationCount <=
       paddedInvocationCount(work.wasmAtomCount) ||
     work.wasmOutputBufferBytes !==

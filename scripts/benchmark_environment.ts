@@ -17,13 +17,23 @@ export type BenchmarkEnvironment = {
   readonly inspectionErrors: readonly string[];
 };
 
-export async function inspectBenchmarkEnvironment(): Promise<
+export type BenchmarkEnvironmentInspection = {
+  readonly gpuWork: "inspect" | "ignore";
+};
+
+export async function inspectBenchmarkEnvironment(
+  inspection: BenchmarkEnvironmentInspection = { gpuWork: "inspect" },
+): Promise<
   BenchmarkEnvironment
 > {
   const inspections = await Promise.allSettled([
     inspectCompilerProcesses(),
-    inspectNvidiaComputeProcesses(),
-    inspectNvidiaDevices(),
+    inspection.gpuWork === "inspect"
+      ? inspectNvidiaComputeProcesses()
+      : Promise.resolve([]),
+    inspection.gpuWork === "inspect"
+      ? inspectNvidiaDevices()
+      : Promise.resolve([]),
   ]);
   const inspectionErrors = inspections.flatMap((inspection) =>
     inspection.status === "rejected"
@@ -91,6 +101,22 @@ export async function repositoryIdentity(directory: string): Promise<{
   return { revision, status, trackedDiffSha256, untrackedFiles };
 }
 
+export function runtimeIdentity(): {
+  readonly deno: string;
+  readonly v8: string;
+  readonly typescript: string;
+  readonly os: string;
+  readonly architecture: string;
+} {
+  return {
+    deno: Deno.version.deno,
+    v8: Deno.version.v8,
+    typescript: Deno.version.typescript,
+    os: Deno.build.os,
+    architecture: Deno.build.arch,
+  };
+}
+
 async function inspectCompilerProcesses(): Promise<
   readonly { readonly pid: number; readonly command: string }[]
 > {
@@ -131,11 +157,19 @@ async function inspectCompilerProcesses(): Promise<
   }
   return records.flatMap(({ pid, command }) => {
     if (ancestors.has(pid)) return [];
-    if (!/(?:deno|node|cargo|cabal).*(?:test|bench|benchmark)/i.test(command)) {
+    if (!isCompetingCompilerCommand(command)) {
       return [];
     }
     return [{ pid, command }];
   });
+}
+
+export function isCompetingCompilerCommand(command: string): boolean {
+  const compiler =
+    /(?:^|\s)(?:\S*\/)?(?:cargo|rustc|cabal|ghc|clang|gcc|cc|c\+\+)(?:\s|$)/i
+      .test(command);
+  const runtimeWork = /(?:^|\s)(?:\S*\/)?(?:deno|node)(?:\s|$)/i.test(command);
+  return compiler || runtimeWork;
 }
 
 async function inspectNvidiaComputeProcesses(): Promise<
@@ -168,9 +202,6 @@ async function inspectNvidiaComputeProcesses(): Promise<
       );
       const pid = Number.parseInt(pidText, 10);
       if (pid === Deno.pid) return [];
-      if (!/(?:deno|node|cargo|cabal|gpupaper|gpufuck)/i.test(command)) {
-        return [];
-      }
       return [{
         pid,
         command,
@@ -232,7 +263,7 @@ async function runGit(
   return output.stdout;
 }
 
-async function sha256(bytes: Uint8Array): Promise<string> {
+export async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes)),

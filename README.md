@@ -1,132 +1,180 @@
-# GPU-backed Ducklang-to-Wasm compiler
+# gpupaper
 
-This repository contains an executable Ducklang compiler that accepts the frozen
-Binned application corpus, constructs validated semantic and SSA IR, runs
-bounded compiler passes through WebGPU, and emits an independently validated
-WebAssembly module.
+Gpupaper compiles admitted Ducklang programs and checked Blot Runtime HIR to
+deterministic WebAssembly. Production WebGPU work is count/scan/write Wasm
+emission. Canonical Core construction proves the production rewrite frontier
+empty before scheduling; the standalone GPU Core matcher remains a differential
+conformance tool. The source program does not become a GPU kernel, and Ducklang
+parsing, semantic analysis, ownership, effects, and type checking currently
+remain on the CPU.
 
-The production contract covers the six frozen applications—editor, Codex, grep,
-tar, wav, and raytracer—and all 23 frontend preludes they consume. A second
-compatibility contract covers the older 121-file Binned examples snapshot:
+This repository is currently consumed from a local checkout rather than as a
+published package. Choose the integration that owns your source language:
 
-- 94 successful programs;
-- 13 intended compile failures;
-- 4 intended runtime traps;
-- 1 source-test module;
-- 9 dependency modules exercised through their consumers.
+| Input                        | Entry point                                    | Output                                               |
+| ---------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| Ducklang source              | `deno task compile` or `compileModuleSource`   | Wasm plus a typed compilation artifact               |
+| Managed Ducklang application | `compileModuleSource` and `runDucklangManaged` | Wasm hosted by explicit JavaScript capabilities      |
+| Blot source                  | Blot's `build --target=gpupaper`               | Wasm plus a Blot ABI manifest                        |
+| Haskell-like experiments     | `deno task experiments`                        | Research results, not a production language contract |
 
-Production here is deliberately scoped. Every admitted source either produces
-the same deterministic artifact under the documented CPU and GPU policies or
-fails with source evidence. It is not a claim that every syntactically legal
-Ducklang program is supported. See
-[Ducklang corpus compatibility](duck-compatibility.md) for the exact semantic
-contract.
+Do not pass `.blot` files to `compileModuleSource`. Blot owns parsing, checking,
+staging, specialization, and ownership analysis; gpupaper accepts its validated
+Runtime HIR.
 
-Language semantics and compiler representations are governed by
-[the paper and specification](PAPER.md). That document records the selected
-models, soundness obligations, counterexamples, corpus measurements, cost
-calculations, primary research, and review triggers. Passing the corpus is not
-treated as a substitute for those obligations.
+## Requirements
 
-The repository also retains the smaller Haskell-like Experiments A–F described
-in
-[GPU-Parallel Type Resolution and Compile-Time Execution](type-resolution-and-comptime.md).
-Those experiments and Ducklang share scalar compile-time evaluation and Wasm
-emission infrastructure, but Ducklang has its own frontend and semantic
-pipeline. GPU type solving and scalar bytecode evaluation remain direct
-conformance experiments. Production compilation uses the authoritative CPU
-results and does not submit either redundant validation command.
+- Deno 2.
+- A WebGPU adapter and Deno's `--unstable-webgpu` support for either GPU mode.
+- An adjacent `../blot` checkout when using the Blot target.
 
-## Run it
+CPU compilation does not request a GPU. The repository tasks already supply the
+required Deno permissions and WebGPU flag. If you invoke the TypeScript entry
+points yourself, grant only the source read and artifact write permissions your
+application needs.
 
-Deno 2 with WebGPU is required for GPU execution.
+Validate a checkout before integrating it:
 
 ```sh
 deno task check
 deno task test
-deno task release:gpu
-
-deno task compile \
-  examples/binned/live/case-studies/editor/editor.duck \
-  editor.wasm \
-  --require-gpu \
-  --no-gpu-verification \
-  --host-interface examples/binned/live/case-studies/editor/host.duck
 ```
 
-The compiler has three GPU policies:
-
-- default CPU execution does not request WebGPU;
-- `--try-gpu` uses a GPU when available and falls back only when a GPU stage
-  reports device unavailability, device loss, capacity exhaustion, or
-  out-of-memory;
-- `--require-gpu` makes the same condition a compilation failure;
-- `--cpu` explicitly selects the default CPU policy.
-
-GPU Wasm emission is CPU-differential by default under either GPU policy. Pass
-`--no-gpu-verification` to make the GPU-produced byte buffer authoritative and
-avoid CPU encoding unless optional mode needs a fallback. GPU Core rewrite
-matching is authoritative in either GPU mode. Compilation output reports the
-backend that completed type checking, compile-time evaluation, Core rewriting,
-Wasm emission, and verification. `core=identity` means CPU validation proved the
-rewrite frontier empty and no Core command was submitted; it is not reported as
-GPU execution.
-
-Useful project commands are:
+On a machine intended to produce authoritative GPU artifacts, also run:
 
 ```sh
-deno task benchmark:frontend
-deno task benchmark:syntax
-deno task benchmark:rebuild
-deno task benchmark:break-even
-deno task benchmark:branch-hints
-deno task benchmark:simd
-deno task benchmark:peers
-deno task experiments
-deno task run examples/all.hs
-deno task run examples/duck/06_functions_and_blocks.duck
-cd ../blot && deno run --unstable-webgpu --allow-read --allow-write src/cli.ts build --target=gpupaper examples/minimal.blot
+deno task release:gpu
 ```
 
-The release gate runs formatting, linting, type checking, all CPU/GPU tests,
-malformed-input rejection, and two required-GPU differential compilations of
-each frozen application. It checks exact Wasm sizes, backend selection, timing
-budgets, and repeated byte identity.
+The GPU release gate runs formatting, linting, type checking, CPU/GPU tests,
+malformed-input rejection, and repeated differential compilations of the frozen
+applications. It checks exact Wasm sizes, backend selection, timing budgets, and
+byte identity.
 
-Recorded RTX 4080 SUPER measurements, device limits, and the measured break-even
-interval are in [Ducklang frontend performance](PERFORMANCE.md).
+## Compile Ducklang
 
-The Wasm backend emits standardized branch-likelihood metadata for the
-successful arm of the final aggregate bounds check. It does not annotate source
-conditionals or loops without evidence. The hint section is semantically
-erasable, is emitted identically by CPU and GPU binary paths, and is measured by
-`deno task benchmark:branch-hints` on the supported Deno/V8 target.
+Start with CPU compilation to establish that the program belongs to the
+supported semantic contract:
 
-Ducklang compilation artifacts include a non-overlapping stage profile. It
-records the accounted and unattributed wall time, detailed parser and
-elaboration boundaries, GPU queue wait, cache reuse, submission and payload
-packing, specialization retention and dirty-frontier size, and the amount of
-work presented to each stage. Pass a `createDucklangCompilationSession()` result
-as the `session` compilation option to retain immutable module, semantic, and
-per-function backend artifacts across rebuilds. Exact source and trailing-trivia
-edits also retain the lowered AST and semantic fingerprint. Use
-`gpuScheduling: "throughput"` for a bounded 2 ms batching window; the default
-`"latency"` policy flushes ready GPU work on the next scheduler turn.
+```sh
+deno task compile \
+  examples/duck/06_functions_and_blocks.duck \
+  example.wasm \
+  --cpu
+```
 
-## Managed applications
+Omit the output path to write beside the source with a `.wasm` extension. The
+compiler writes through a temporary file and refuses to overwrite the input. For
+an unmanaged module with a scalar `main`, compile and execute in one step:
 
-Dynamic `Text`, aggregate values, and host effects use a browser-compatible
-managed ABI. Wasm carries deterministic `i32` handles while JavaScript owns the
-runtime tables. The compilation artifact declares exact effect operations,
-capabilities, aggregate layouts, exports, and text literals; the selected Wasm
-imports and metadata are checked against that declaration before the artifact is
-returned.
+```sh
+deno task run examples/duck/06_functions_and_blocks.duck --cpu
+```
 
-Ducklang effects use canonical open rows, lexical handler identities, deep
-one-shot resumptions, and ownership-sensitive control multiplicity. Local
-handlers lower through tail capability passing or selective continuations before
-Core; only the closed root capability row reaches the managed ABI. Flat Core and
-the GPU contain no source handler or open effect row.
+Select the checked-in Rust/WebAssembly CPU emitter when you want the compiler
+itself to exercise that backend:
+
+```sh
+deno task compile \
+  examples/duck/06_functions_and_blocks.duck \
+  example.wasm \
+  --cpu \
+  --rust-wasm-emitter
+```
+
+This is a cold plan boundary for each compilation. It is useful for deployment
+and differential coverage, but the current measurements favor the default
+TypeScript emitter for one-off plans. Use the resident library API below when
+the same plan is emitted repeatedly.
+
+Use the GPU while retaining an independent CPU encoding comparison:
+
+```sh
+deno task compile \
+  examples/duck/06_functions_and_blocks.duck \
+  example.wasm \
+  --require-gpu
+```
+
+After the exact workload has passed the GPU release gate, the lower-overhead
+authoritative GPU path is:
+
+```sh
+deno task compile \
+  examples/duck/06_functions_and_blocks.duck \
+  example.wasm \
+  --require-gpu \
+  --no-gpu-verification
+```
+
+### GPU policy and verification
+
+GPU selection and GPU output verification are separate decisions:
+
+| CLI option              | Policy                                        | Intended use                                                                       |
+| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| no option or `--cpu`    | Do not request WebGPU                         | Portable builds and semantic debugging                                             |
+| `--try-gpu`             | Prefer WebGPU, with resource-related fallback | Applications where CPU output is acceptable when a device cannot complete the work |
+| `--require-gpu`         | Fail unless GPU stages complete               | Benchmarking and deployments that require the GPU backend                          |
+| `--rust-wasm-emitter`   | Use Rust/WebAssembly for required CPU bytes   | CPU output or the independent oracle in differential GPU mode                      |
+| `--no-gpu-verification` | Trust GPU Wasm bytes without CPU re-encoding  | Latency-sensitive builds already covered by differential release testing           |
+
+Without `--no-gpu-verification`, either GPU policy emits Wasm on both GPU and
+CPU and requires byte-for-byte agreement. Optional mode falls back only for GPU
+unavailability, device loss, capacity exhaustion, or out-of-memory. Invalid
+source, invalid IR, CPU/GPU disagreement, and malformed output are compilation
+failures under every policy.
+
+The CLI reports the backend selected for each stage. `core=identity` means
+canonical construction proved that the rewrite frontier was empty, so no Core
+matching or GPU command was needed.
+
+## Use the TypeScript API
+
+`compileModuleSource` returns the Wasm bytes, validated managed ABI, selected
+backends, and a detailed compilation profile. Reuse a compilation session for
+edits made within one process:
+
+```ts
+import {
+  compileModuleSource,
+  createDucklangCompilationSession,
+} from "./src/compiler.ts";
+
+const session = createDucklangCompilationSession();
+const file = "examples/duck/06_functions_and_blocks.duck" as const;
+const artifact = await compileModuleSource(
+  file,
+  await Deno.readTextFile(file),
+  {
+    gpuMode: "required",
+    gpuWasmVerification: "differential",
+    session,
+  },
+);
+
+await Deno.writeFile("example.wasm", artifact.wasm);
+console.log(artifact.backends, artifact.profile);
+```
+
+The session retains immutable module, semantic, and per-function backend
+artifacts. Exact-source and trailing-trivia edits can also reuse the lowered AST
+and semantic fingerprint. Use `gpuScheduling: "throughput"` to allow a bounded 2
+ms batching window when several compilations share a process. The default
+`"latency"` policy flushes ready GPU work on the next scheduler turn. Set
+`cpuWasmEmitter: "rust-wasm"` to use Rust/WebAssembly for CPU output or as the
+independent encoder in GPU differential mode.
+
+## Host managed Ducklang applications
+
+Dynamic `Text`, aggregate values, and host effects use a managed ABI. Wasm
+carries deterministic `i32` handles while JavaScript owns the runtime tables.
+The artifact declares its exact effect operations, capabilities, aggregate
+layouts, exports, and text literals; gpupaper checks the Wasm imports and
+metadata against that declaration before returning it.
+
+Pass a declaration-only host interface at compilation and provide the matching
+capabilities when the program starts:
 
 ```ts
 import { compileModuleSource } from "./src/compiler.ts";
@@ -143,7 +191,7 @@ const artifact = await compileModuleSource(
   },
 );
 
-await runDucklangManaged(artifact, {
+const exports = await runDucklangManaged(artifact, {
   terminal: {
     load: () => new Uint8Array(),
     read: () => ({ case: "End", value: undefined }),
@@ -153,10 +201,151 @@ await runDucklangManaged(artifact, {
     rows: () => 24,
   },
 });
+
+console.log(exports);
 ```
 
-Host interfaces are ordinary declaration-only Duck modules. The runtime never
-parses source to discover an artifact's ABI.
+The runtime uses the artifact ABI; it does not parse source to discover imports.
+Host operations are synchronous. Async effects, multi-shot handlers, and scoped
+higher-order effects are not silently approximated.
+
+## Compile Blot
+
+Run the target from the adjacent Blot checkout. Pass related inputs in one
+command so Blot can reuse its loaded graph, Runtime HIR, and artifact cache:
+
+```sh
+cd ../blot
+deno run \
+  --allow-read \
+  --allow-write \
+  src/cli.ts build \
+  --target=gpupaper \
+  examples/minimal.blot \
+  examples/arithmetic.blot
+```
+
+Each successful input produces `<name>.wasm` and `<name>.wasm.json`. The JSON
+manifest describes the public Blot ABI; the same manifest is embedded in the
+`blot:abi` custom section. Source failures remain local to their input. Once an
+admitted miss batch reaches Rust/WebAssembly emission, a failure rejects every
+miss rather than returning a partially trusted set of artifacts. Successful
+outcomes identify `wasmEmitter` as `rust-wasm`.
+
+Do not start one process per Blot file and do not manually split a small module
+into synthetic chunks. Blot exposes independent checked modules; gpupaper emits
+the stable cache-miss subsequence through one shared Rust/WebAssembly instance.
+A resident Blot process refreshes the loaded graph once per requested batch and
+reuses deeply frozen Runtime HIR for unchanged module revisions; rebuilding
+through one process preserves that reuse without permitting callers to mutate a
+later compilation. Successful artifacts are also revision-cached. Each outcome
+reports `artifactSource` as `compiled` or `revision-cache`, and returned Wasm
+and manifest arrays are defensive copies, so consumer mutation cannot corrupt
+the cache.
+
+Low-level consumers that emit the same validated Wasm plans repeatedly can
+retain the device columns explicitly:
+
+```ts
+import {
+  createGpuResidentWasmPlans,
+  emitResidentWasmPlansOnGpu,
+} from "./src/gpu_wasm.ts";
+
+const creation = await createGpuResidentWasmPlans(plans);
+if (creation.status === "unavailable") throw new Error(creation.reason);
+
+try {
+  const emission = await emitResidentWasmPlansOnGpu(creation.resident);
+  if (emission.status === "unavailable") throw new Error(emission.reason);
+  await consume(emission.bytes);
+} finally {
+  creation.resident.release();
+}
+```
+
+Creation validates the host plans, constructs dense payload-relative columns,
+uploads them once, and discards their host mirrors. Emission allocates fresh
+scratch space and returns independently owned exact artifact arrays. The handle
+is affine: release it exactly once; an emission already borrowing it may finish,
+while later use fails. This compatibility API amortizes preparation but does not
+make cold host-plan conversion GPU-native. Direct GPU production of the
+certified columns remains a separate lowering boundary.
+
+The same plan semantics also have a dependency-free Rust/WebAssembly CPU
+backend:
+
+```ts
+import { createRustWasmEmitter } from "./src/rust_wasm_emitter.ts";
+
+const { emitter, timings: initialization } = await createRustWasmEmitter();
+const resident = emitter.prepare(plan);
+try {
+  const first = resident.emit();
+  const second = resident.emit();
+  await consume(first.bytes, second.bytes, initialization);
+} finally {
+  resident.release();
+}
+```
+
+`emitter.emit(plan)` is the cold convenience path and includes serialization,
+copying, Rust validation, emission, and release. A resident handle retains the
+unique encoded bytes in WebAssembly linear memory, so repeated emission performs
+only handle selection and an owned-output copy. The checked-in module uses
+fixed-width WebAssembly `simd128` during preparation. Calls through one emitter
+instance are sequential; create independent emitter instances for parallel CPU
+jobs. Every returned byte array is owned by the caller.
+
+The generated module is checked in for consumers. Rebuild it after changing the
+Rust source:
+
+```sh
+deno task rust-wasm:build
+```
+
+## Operational considerations
+
+- **Supported inputs are deliberate.** Gpupaper covers the frozen Ducklang
+  application corpus and the validated Blot Runtime HIR contract; it is not a
+  promise to compile every syntactically legal program. Unsupported input fails
+  at the semantic boundary with source evidence.
+- **A GPU is not automatically faster.** WebGPU adapter, pipeline, submission,
+  and readback costs dominate small one-off modules. Reuse a process and
+  session, batch independent Blot modules, and measure your own workload before
+  choosing GPU compilation for latency.
+- **Choose the CPU boundary deliberately.** TypeScript direct emission is the
+  fastest cold path in current diagnostics. Rust/WebAssembly is the fastest
+  retained-plan path, but its one-time plan ingestion must be amortized.
+- **Differential mode does extra work by design.** It is the correctness mode,
+  not the fastest GPU path. Use authoritative GPU emission only after the same
+  device and corpus have passed `deno task release:gpu`.
+- **Fallback is narrow.** `--try-gpu` handles a device that cannot perform an
+  otherwise valid compilation. It never converts semantic or validation errors
+  into CPU success.
+- **The compiler is GPU-backed, not GPU-only.** Ducklang frontend semantics,
+  canonical Core construction, Wasm planning, and ABI policy run on the CPU.
+  Blot performs its own frontend work before the gpupaper boundary. Its current
+  production target emits with Rust/WebAssembly and does not require a GPU.
+- **Device capacity is checked before submission.** Buffer sizes, binding spans,
+  pipeline binding counts, and dispatches are admitted against the selected
+  adapter. Capacity grouping preserves input order.
+- **Managed values require the matching host.** Dynamic values are opaque Wasm
+  handles. Store the ABI with the Wasm artifact and instantiate it through the
+  managed runtime or an implementation of the same contract.
+
+The production Ducklang contract covers editor, Codex, grep, tar, wav, and
+raytracer plus their 23 frontend preludes. The compatibility contract for the
+older 121-file Binned snapshot contains 94 successful programs, 13 intended
+compile failures, 4 intended runtime traps, 1 source-test module, and 9
+dependency modules exercised through consumers. See
+[Ducklang corpus compatibility](duck-compatibility.md) for the exact contract
+and [Ducklang frontend performance](PERFORMANCE.md) for recorded RTX 4080 SUPER
+measurements and measured break-even intervals.
+
+Language semantics and compiler representations are governed by
+[the paper and specification](PAPER.md). It distinguishes proved properties,
+executable validation, empirical measurements, and unverified hypotheses.
 
 ## Compiler pipeline
 
@@ -175,7 +364,7 @@ Duck source
   -> closure conversion and structured control-flow lowering
   -> immutable typed SSA Core
   -> validated structure-of-arrays flat Core
-  -> authoritative GPU snapshot/propose/resolve/rebuild rewrites
+  -> construction-certified empty Core rewrite frontier
   -> structured Wasm regions, stackification, and binary plan
   -> GPU count/scan/write emission
   -> optional CPU byte differential
@@ -226,13 +415,57 @@ parser is a transitional payload-lowering reference, not a fallback. Blot owns
 its Baba frontend, checking, staging, specialization, and ownership analysis;
 gpupaper no longer carries a copied Blot grammar or reconstructs source
 semantics. The boundary is validated typed Runtime HIR. A multi-path Blot build
-packs the longest adapter-capacity-safe prefix of admitted Wasm plans into one
-rebased atom graph and performs one GPU sizing, scan, emission, and boundary
-readback per physical group. Every group reports its resource witness and the
-adapter limits used for admission. Run `deno task blot:verify` for semantic
-agreement, `deno task benchmark:blot-targets` for singleton and plan-level
-measurements, and `deno task benchmark:blot-batch` for the current 54-module
-target batch and its stage profile.
+emits its stable cache-miss subsequence through the shared Rust/WebAssembly
+emitter and keeps the resulting owned artifacts in the revision cache. The GPU
+batch API remains available for research measurements but is not the production
+Blot target. Run `deno task blot:verify` for semantic agreement,
+`deno task benchmark:blot-targets` for singleton and plan-level GPU comparison,
+and `deno task benchmark:blot-batch` for artifact-cache and experimental GPU
+batch profiles.
+
+## Benchmarking
+
+Benchmark results are admissible only when the harness fixes and hashes the
+input and output, names the measured boundary, balances order, retains every raw
+observation, records repository/runtime/adapter identity, and sees no competing
+compiler or GPU work before or after the run. The harnesses refuse otherwise.
+`--allow-contended` is useful for exploration but marks the result diagnostic.
+
+```sh
+deno task benchmark:frontend
+deno task benchmark:wasm
+deno task benchmark:blot-targets
+deno task benchmark:blot-batch
+deno task benchmark:blot-crossover
+```
+
+The Blot batch benchmark reports two distinct measurements. `incrementalRebuild`
+uses the public artifact cache; `compilerThroughput` calls the Runtime-HIR
+target directly and cannot hit it. The warmup records every non-admitted corpus
+file and its exact failure instead of silently treating a partial corpus as
+complete.
+
+`benchmark:blot-crossover` does not depend on Blot's moving source corpus. It
+compiles byte-checked synthetic Runtime HIR while varying code size and module
+count independently, and reports both plan-to-byte emission and the complete
+validated-HIR target. Use it to decide whether a workload is large enough for
+GPU emission; packed GPU throughput relative to singleton GPU submissions is not
+evidence that the GPU beats direct CPU emission.
+
+Use fresh-process recording for evidence intended for the paper:
+
+```sh
+deno task benchmark:record \
+  --task=benchmark:branch-hints \
+  --processes=6 \
+  --output=measurements/branch-hints-YYYY-MM-DD.json
+```
+
+The JSON retains the process hierarchy, raw paired differences and log-ratios,
+environment inspection, and exact revisions. Fewer than 20 observations report
+an insufficient tail estimate instead of calling the largest observation p95.
+See [the measurement ledger](measurements/README.md) and
+[performance history](PERFORMANCE.md).
 
 ## Deliberate boundaries
 
@@ -245,11 +478,12 @@ target batch and its stage profile.
   one-shot algebraic effect implementation.
 - Managed `Text`, `Bytes`, aggregates, and closures use opaque runtime handles.
   GPU kernels compile the payload; they do not execute its buffer operations.
-- Duck's semantic frontend, ownership/effect policy, type oracle, and host-ABI
-  policy run on the CPU. Blot owns its separate source semantics and hands
-  gpupaper validated Runtime HIR. Production GPU stages handle flat-Core rewrite
-  matching and packed Wasm binary emission. Type equality and scalar bytecode
-  retain direct GPU conformance experiments outside ordinary compilation.
+- Duck's semantic frontend, ownership/effect policy, type oracle, canonical Core
+  construction, and host-ABI policy run on the CPU. Blot owns its separate
+  source semantics and hands gpupaper validated Runtime HIR. The Blot target's
+  production Wasm emission is Rust/WebAssembly. Packed GPU emission, Core
+  rewriting, type equality, and scalar bytecode remain direct GPU conformance
+  experiments outside ordinary Blot compilation.
 - The separate Haskell-like frontend remains eager and rank-1. It is an
   experiment, not a GHC-compatible implementation.
 

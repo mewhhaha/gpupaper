@@ -31,6 +31,10 @@ export type GpuWasmEmissionResult =
     readonly atomCount: number;
     readonly byteCount: number;
     readonly outputBufferBytes: number;
+    readonly readbackMode: "capacity-single-map";
+    readonly physicalReadbackBytes: number;
+    readonly logicalReadbackBytes: number;
+    readonly readbackPaddingBytes: number;
     readonly lengthAtomCount: number;
     readonly sparseLengthSizing: boolean;
     readonly lengthSizingDependencyAtomCount: number;
@@ -81,6 +85,39 @@ export type GpuWasmBatchEmissionTimings = {
   readonly unaccountedMilliseconds: number;
 };
 
+export type GpuResidentWasmPlanCertificate = {
+  readonly payloadCount: number;
+  readonly atomCount: number;
+  readonly maximumOutputBytes: number;
+  readonly lengthAtomCount: number;
+  readonly lengthSizingDependencyAtomCount: number;
+  readonly physicalPlanCount: number;
+  readonly retainedInputBytes: number;
+};
+
+export type GpuResidentWasmPlanPreparationTimings = {
+  readonly totalMilliseconds: number;
+  readonly deviceRequestMilliseconds: number;
+  readonly partitioningMilliseconds: number;
+  readonly planInspectionMilliseconds: number;
+  readonly columnConstructionMilliseconds: number;
+  readonly allocationAndUploadMilliseconds: number;
+  readonly unaccountedMilliseconds: number;
+};
+
+export type GpuResidentWasmPlans = {
+  readonly certificate: GpuResidentWasmPlanCertificate;
+  readonly physicalPlans: readonly GpuWasmPhysicalPlan[];
+  readonly adapterLimits: CompilerGpuLimits;
+  readonly preparationTimings: GpuResidentWasmPlanPreparationTimings;
+  readonly released: boolean;
+  release(): void;
+};
+
+export type GpuResidentWasmPlanCreationResult =
+  | { readonly status: "completed"; readonly resident: GpuResidentWasmPlans }
+  | { readonly status: "unavailable"; readonly reason: string };
+
 export type GpuWasmPlanResources = {
   readonly payloadCount: number;
   readonly atomCount: number;
@@ -106,6 +143,11 @@ export type PackedWasmBinaryPlans = {
 export type PartitionedWasmBinaryPlans =
   & PackedWasmBinaryPlans
   & GpuWasmPhysicalPlan;
+
+type WasmPlanPartition = GpuWasmPhysicalPlan & {
+  readonly plans: readonly WasmBinaryPlan[];
+  readonly structures: readonly WasmBinaryPlanStructure[];
+};
 
 type WasmPlanResourceContribution = {
   readonly atomCount: number;
@@ -147,6 +189,7 @@ const atomUnsigned = 1;
 const atomSigned32 = 2;
 const atomSigned64 = 3;
 const atomLength = 4;
+const denseKindRepresentationFlag = 16;
 const wasmWorkgroupSize = 64;
 export type GpuWasmLowWordLayout = "adaptive" | "dense" | "ranked";
 let contextPromise: Promise<GpuWasmContextRequest> | undefined;
@@ -251,8 +294,12 @@ fn atom_low_word(index: u32, kind: u32, kind_word: u32) -> u32 {
 fn emit_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let index = invocation.x;
   if (index >= parameters.count) { return; }
-  let kind_word = atom_kinds[index >> 3u];
-  let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
+  var kind_word = atom_kinds[index >> 3u];
+  var kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
+  if ((parameters.representation_flags & ${denseKindRepresentationFlag}u) != 0u) {
+    kind = atom_kinds[index];
+    kind_word = kind;
+  }
   var low_word = 0u;
   if (kind == ${atomLength}u) {
     low_word = length_values[index];
@@ -416,8 +463,12 @@ fn signed64_size(low_word: u32, high_word: u32) -> u32 {
 fn size_scalar_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let index = invocation.x;
   if (index >= parameters.count) { return; }
-  let kind_word = atom_kinds[index >> 3u];
-  let kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
+  var kind_word = atom_kinds[index >> 3u];
+  var kind = (kind_word >> ((index & 7u) << 2u)) & 15u;
+  if ((parameters.representation_flags & ${denseKindRepresentationFlag}u) != 0u) {
+    kind = atom_kinds[index];
+    kind_word = kind;
+  }
   var low_word = 0u;
   if (kind != ${atomLength}u) {
     low_word = atom_low_word(index, kind, kind_word);
@@ -435,19 +486,22 @@ fn size_scalar_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   }
 }
 
-@group(1) @binding(0) var<storage, read> length_atom_indices: array<u32>;
-@group(1) @binding(1) var<storage, read> length_range_starts: array<u32>;
-@group(1) @binding(2) var<storage, read> length_range_counts: array<u32>;
-@group(1) @binding(3) var<storage, read_write> resolved_atom_sizes: array<u32>;
-@group(1) @binding(4) var<storage, read_write> resolved_length_values: array<u32>;
-@group(1) @binding(5) var<uniform> length_parameters: LengthParameters;
+@group(1) @binding(0) var<storage, read> local_length_atom_indices: array<u32>;
+@group(1) @binding(1) var<storage, read> length_payload_indices: array<u32>;
+@group(1) @binding(2) var<storage, read> local_length_range_starts: array<u32>;
+@group(1) @binding(3) var<storage, read> length_range_counts: array<u32>;
+@group(1) @binding(4) var<storage, read> payload_atom_bases: array<u32>;
+@group(1) @binding(5) var<storage, read_write> resolved_atom_sizes: array<u32>;
+@group(1) @binding(6) var<storage, read_write> resolved_length_values: array<u32>;
+@group(1) @binding(7) var<uniform> length_parameters: LengthParameters;
 
 @compute @workgroup_size(${wasmWorkgroupSize})
 fn size_length_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
   if (invocation.x >= length_parameters.length_count) { return; }
   let rank = length_parameters.first_length_rank + invocation.x;
-  let atom_index = length_atom_indices[rank];
-  let range_start = length_range_starts[rank];
+  let atom_base = payload_atom_bases[length_payload_indices[rank]];
+  let atom_index = atom_base + local_length_atom_indices[rank];
+  let range_start = atom_base + local_length_range_starts[rank];
   let range_end = range_start + length_range_counts[rank];
   var payload_size = 0u;
   for (var dependency = range_start; dependency < range_end; dependency += 1u) {
@@ -500,12 +554,38 @@ export function partitionWasmBinaryPlans(
   limits: CompilerGpuLimits,
   options: { readonly maximumPayloadCount?: number } = {},
 ): readonly PartitionedWasmBinaryPlans[] {
+  return partitionWasmPlanReferences(plans, limits, options).map((
+    partition,
+  ) => {
+    const packed = partition.plans.length === 1
+      ? {
+        plan: partition.plans[0]!,
+        endAtomIndices: [partition.plans[0]!.atoms.length],
+      }
+      : packValidatedWasmBinaryPlans(partition.plans);
+    return {
+      ...packed,
+      firstPayloadIndex: partition.firstPayloadIndex,
+      payloadCount: partition.payloadCount,
+      resources: partition.resources,
+    };
+  });
+}
+
+function partitionWasmPlanReferences(
+  plans: readonly WasmBinaryPlan[],
+  limits: CompilerGpuLimits,
+  options: { readonly maximumPayloadCount?: number } = {},
+): readonly WasmPlanPartition[] {
   if (plans.length === 0) return [];
   const maximumPayloadCount = requireMaximumWasmPayloadCount(
     options.maximumPayloadCount ?? plans.length,
   );
-  const contributions = plans.map(wasmPlanResourceContribution);
-  const partitions: PartitionedWasmBinaryPlans[] = [];
+  const structures = plans.map(inspectWasmBinaryPlanStructure);
+  const contributions = plans.map((plan, index) =>
+    wasmPlanResourceContribution(plan, structures[index]!)
+  );
+  const partitions: WasmPlanPartition[] = [];
   let firstPayloadIndex = 0;
   while (firstPayloadIndex < plans.length) {
     let aggregate = emptyWasmPlanResourceContribution();
@@ -532,18 +612,17 @@ export function partitionWasmBinaryPlans(
       endPayloadIndex += 1;
     }
     const partitionPlans = plans.slice(firstPayloadIndex, endPayloadIndex);
-    const packed = partitionPlans.length === 1
-      ? {
-        plan: partitionPlans[0]!,
-        endAtomIndices: [partitionPlans[0]!.atoms.length],
-      }
-      : packValidatedWasmBinaryPlans(partitionPlans);
+    const partitionStructures = structures.slice(
+      firstPayloadIndex,
+      endPayloadIndex,
+    );
     const resources = gpuWasmPlanResources(
       aggregate,
       partitionPlans.length,
     );
     partitions.push({
-      ...packed,
+      plans: partitionPlans,
+      structures: partitionStructures,
       firstPayloadIndex,
       payloadCount: partitionPlans.length,
       resources,
@@ -562,8 +641,8 @@ function requireMaximumWasmPayloadCount(value: number): number {
 
 function wasmPlanResourceContribution(
   plan: WasmBinaryPlan,
+  structure: WasmBinaryPlanStructure,
 ): WasmPlanResourceContribution {
-  const structure = inspectWasmBinaryPlanStructure(plan);
   return {
     atomCount: plan.atoms.length,
     maximumOutputBytes: structure.maximumEncodedByteLength,
@@ -666,6 +745,12 @@ function gpuWasmPlanCapacityViolation(
   resources: GpuWasmPlanResources,
   limits: CompilerGpuLimits,
 ): string | undefined {
+  if (resources.atomCount > 0xffff_ffff) {
+    return `Wasm atom count ${resources.atomCount} exceeds the u32 index domain`;
+  }
+  if (resources.maximumOutputBytes > 0xffff_ffff) {
+    return `Wasm maximum output ${resources.maximumOutputBytes} exceeds the u32 offset domain`;
+  }
   return compilerGpuCapacityViolation(limits, {
     kind: "buffer",
     label: "Wasm maximum storage binding",
@@ -741,22 +826,20 @@ export async function emitWasmPlansOnGpu(
   if (deviceRequest.status === "unavailable") return deviceRequest;
   const adapterLimits = compilerGpuLimits(deviceRequest.device.limits);
   const partitioningStart = performance.now();
-  const physicalPlans = partitionWasmBinaryPlans(plans, adapterLimits, {
+  const physicalPlans = partitionWasmPlanReferences(plans, adapterLimits, {
     maximumPayloadCount: options.maximumPhysicalPayloadCount,
   });
   const partitioningMilliseconds = performance.now() - partitioningStart;
   const gpuEmissionStart = performance.now();
   const emissions = await Promise.all(physicalPlans.map(async (packed) => {
-    const emission = await emitWasmPlanWithGpu(
-      packed.plan,
+    const emission = await emitPreparedWasmJobWithGpu(
+      prepareWasmGpuBatch(packed.plans, packed.structures),
       options.scheduling ?? "throughput",
-      options.lowWordLayout ?? "adaptive",
-      packed.endAtomIndices,
     );
     if (emission.status === "unavailable") return emission;
     return {
       ...emission,
-      payloadBatchSize: packed.endAtomIndices.length,
+      payloadBatchSize: packed.payloadCount,
       timings: { ...emission.timings, scope: "batch" as const },
     };
   }));
@@ -812,6 +895,243 @@ export async function emitWasmPlansOnGpu(
   };
 }
 
+export async function createGpuResidentWasmPlans(
+  plans: readonly WasmBinaryPlan[],
+  options: { readonly maximumPhysicalPayloadCount?: number } = {},
+): Promise<GpuResidentWasmPlanCreationResult> {
+  if (plans.length === 0) {
+    throw new TypeError(
+      "resident GPU Wasm preparation requires at least one plan",
+    );
+  }
+  if (options.maximumPhysicalPayloadCount !== undefined) {
+    requireMaximumWasmPayloadCount(options.maximumPhysicalPayloadCount);
+  }
+  const totalStart = performance.now();
+  const deviceRequestStart = performance.now();
+  const context = await requestGpuWasmContext();
+  const deviceRequestMilliseconds = performance.now() - deviceRequestStart;
+  if (context.status === "unavailable") return context;
+  const adapterLimits = compilerGpuLimits(context.device.limits);
+  const partitioningStart = performance.now();
+  const partitions = partitionWasmPlanReferences(plans, adapterLimits, {
+    maximumPayloadCount: options.maximumPhysicalPayloadCount,
+  });
+  const partitioningMilliseconds = performance.now() - partitioningStart;
+  const capacityViolation = partitions.map((partition) =>
+    gpuWasmPlanCapacityViolation(partition.resources, adapterLimits)
+  ).find((reason) => reason !== undefined);
+  if (capacityViolation !== undefined) {
+    return { status: "unavailable", reason: capacityViolation };
+  }
+  let planInspectionMilliseconds = 0;
+  let columnConstructionMilliseconds = 0;
+  let allocationAndUploadMilliseconds = 0;
+  const physical: ResidentWasmPhysicalPlan[] = [];
+  try {
+    for (const partition of partitions) {
+      const prepared = prepareWasmGpuBatch(
+        partition.plans,
+        partition.structures,
+      );
+      planInspectionMilliseconds += prepared.planInspectionMilliseconds;
+      columnConstructionMilliseconds += prepared.columnConstructionMilliseconds;
+      const uploadStart = performance.now();
+      const inputs = uploadWasmGpuResidentInputs(context.device, prepared);
+      allocationAndUploadMilliseconds += performance.now() - uploadStart;
+      physical.push({
+        job: discardWasmGpuHostInputColumns({
+          ...prepared,
+          planInspectionMilliseconds: 0,
+          columnConstructionMilliseconds: 0,
+        }),
+        inputs,
+        physicalPlan: {
+          firstPayloadIndex: partition.firstPayloadIndex,
+          payloadCount: partition.payloadCount,
+          resources: partition.resources,
+        },
+      });
+    }
+  } catch (error) {
+    for (const prepared of physical) {
+      prepared.inputs.leases.forEach((lease) => lease.release());
+    }
+    const reason = compilerGpuUnavailabilityReason(
+      "resident Wasm plan preparation",
+      error,
+    );
+    if (reason !== undefined) return { status: "unavailable", reason };
+    throw error;
+  }
+  const certificate: GpuResidentWasmPlanCertificate = {
+    payloadCount: plans.length,
+    atomCount: physical.reduce(
+      (sum, prepared) =>
+        safeResourceSum("resident atom count", sum, prepared.job.atomCount),
+      0,
+    ),
+    maximumOutputBytes: physical.reduce((sum, prepared) =>
+      safeResourceSum(
+        "resident maximum output bytes",
+        sum,
+        prepared.job.maximumEncodedByteLength,
+      ), 0),
+    lengthAtomCount: physical.reduce((sum, prepared) =>
+      safeResourceSum(
+        "resident length atom count",
+        sum,
+        prepared.job.lengthAtomCount,
+      ), 0),
+    lengthSizingDependencyAtomCount: physical.reduce(
+      (sum, prepared) =>
+        safeResourceSum(
+          "resident length dependency count",
+          sum,
+          prepared.job.lengthSizingDependencyAtomCount,
+        ),
+      0,
+    ),
+    physicalPlanCount: physical.length,
+    retainedInputBytes: physical.reduce(
+      (sum, prepared) =>
+        prepared.inputs.leases.reduce(
+          (physicalSum, lease) =>
+            safeResourceSum(
+              "resident retained input bytes",
+              physicalSum,
+              lease.byteLength,
+            ),
+          sum,
+        ),
+      0,
+    ),
+  };
+  const totalMilliseconds = performance.now() - totalStart;
+  const accountedMilliseconds = deviceRequestMilliseconds +
+    partitioningMilliseconds + planInspectionMilliseconds +
+    columnConstructionMilliseconds + allocationAndUploadMilliseconds;
+  const preparationTimings: GpuResidentWasmPlanPreparationTimings = {
+    totalMilliseconds,
+    deviceRequestMilliseconds,
+    partitioningMilliseconds,
+    planInspectionMilliseconds,
+    columnConstructionMilliseconds,
+    allocationAndUploadMilliseconds,
+    unaccountedMilliseconds: Math.max(
+      0,
+      totalMilliseconds - accountedMilliseconds,
+    ),
+  };
+  const state: ResidentWasmPlanState = {
+    physical,
+    released: false,
+    leasesReleased: false,
+    activeBorrows: 0,
+  };
+  const resident: GpuResidentWasmPlans = Object.freeze({
+    certificate,
+    physicalPlans: physical.map((prepared) => prepared.physicalPlan),
+    adapterLimits,
+    preparationTimings,
+    get released(): boolean {
+      return state.released;
+    },
+    release(): void {
+      if (state.released) {
+        throw new Error("resident GPU Wasm plans have already been released");
+      }
+      state.released = true;
+      if (state.activeBorrows === 0) releaseResidentWasmInputs(state);
+    },
+  });
+  residentWasmPlanStates.set(resident, state);
+  return { status: "completed", resident };
+}
+
+export async function emitResidentWasmPlansOnGpu(
+  resident: GpuResidentWasmPlans,
+  options: { readonly scheduling?: CompilerGpuSchedulingPolicy } = {},
+): Promise<GpuWasmBatchEmissionResult> {
+  const state = residentWasmPlanStates.get(resident);
+  if (state === undefined) {
+    throw new TypeError(
+      "resident GPU Wasm plan handle was not created by this compiler",
+    );
+  }
+  if (state.released) {
+    throw new Error("resident GPU Wasm plans cannot be emitted after release");
+  }
+  state.activeBorrows += 1;
+  const totalStart = performance.now();
+  try {
+    const gpuEmissionStart = performance.now();
+    const emissions = await Promise.all(state.physical.map(async (prepared) => {
+      const emission = await emitPreparedWasmJobWithGpu(
+        prepared.job,
+        options.scheduling ?? "throughput",
+        prepared.inputs,
+      );
+      if (emission.status === "unavailable") return emission;
+      return {
+        ...emission,
+        payloadBatchSize: prepared.physicalPlan.payloadCount,
+        timings: { ...emission.timings, scope: "batch" as const },
+      };
+    }));
+    const gpuEmissionWallMilliseconds = performance.now() - gpuEmissionStart;
+    const unavailable = emissions.find((emission) =>
+      emission.status === "unavailable"
+    );
+    if (unavailable?.status === "unavailable") return unavailable;
+    const physicalEmissions = emissions as Extract<
+      GpuWasmEmissionResult,
+      { readonly status: "completed" }
+    >[];
+    const artifactIsolationStart = performance.now();
+    const bytes = physicalEmissions.flatMap((emission, physicalIndex) => {
+      const physicalPlan = resident.physicalPlans[physicalIndex]!;
+      if (physicalPlan.payloadCount === 1) return [emission.bytes];
+      return emission.payloadByteOffsets.slice(1).map((end, index) =>
+        emission.bytes.slice(emission.payloadByteOffsets[index], end)
+      );
+    });
+    const artifactIsolationMilliseconds = performance.now() -
+      artifactIsolationStart;
+    if (bytes.length !== resident.certificate.payloadCount) {
+      throw new Error(
+        `resident GPU Wasm batch emitted ${bytes.length} artifacts for ${resident.certificate.payloadCount} plans`,
+      );
+    }
+    const totalMilliseconds = performance.now() - totalStart;
+    const accountedMilliseconds = gpuEmissionWallMilliseconds +
+      artifactIsolationMilliseconds;
+    return {
+      status: "completed",
+      bytes,
+      physicalEmissions,
+      physicalPlans: resident.physicalPlans,
+      adapterLimits: resident.adapterLimits,
+      timings: {
+        totalMilliseconds,
+        deviceRequestMilliseconds: 0,
+        partitioningMilliseconds: 0,
+        gpuEmissionWallMilliseconds,
+        artifactIsolationMilliseconds,
+        unaccountedMilliseconds: Math.max(
+          0,
+          totalMilliseconds - accountedMilliseconds,
+        ),
+      },
+    };
+  } finally {
+    state.activeBorrows -= 1;
+    if (state.released && state.activeBorrows === 0) {
+      releaseResidentWasmInputs(state);
+    }
+  }
+}
+
 function compilerGpuLimits(limits: GPUSupportedLimits): CompilerGpuLimits {
   return {
     maxBufferSize: limits.maxBufferSize,
@@ -855,6 +1175,20 @@ export async function emitWasmPlanOnGpu(
 
 type PreparedWasmGpuJob = {
   readonly columns: ReturnType<typeof atomColumns>;
+  readonly inputByteLengths: {
+    readonly kinds: number;
+    readonly primaryLowWords: number;
+    readonly nonByteLowWords: number;
+    readonly byteRanks: number;
+    readonly highWords: number;
+    readonly lengthAtomIndices: number;
+    readonly lengthPayloadIndices: number;
+    readonly lengthRangeStarts: number;
+    readonly lengthRangeCounts: number;
+    readonly payloadAtomBases: number;
+  };
+  readonly atomCount: number;
+  readonly payloadEndAtomIndices: readonly number[];
   readonly workgroupCount: number;
   readonly lengthAtomCount: number;
   readonly lengthSizingDependencyAtomCount: number;
@@ -863,17 +1197,64 @@ type PreparedWasmGpuJob = {
     readonly lengthCount: number;
   }[];
   readonly lengthAtomIndices: Uint32Array;
+  readonly lengthPayloadIndices: Uint32Array;
   readonly lengthRangeStarts: Uint32Array;
   readonly lengthRangeCounts: Uint32Array;
+  readonly payloadAtomBases: Uint32Array;
   readonly planInspectionMilliseconds: number;
   readonly columnConstructionMilliseconds: number;
   readonly maximumEncodedByteLength: number;
 };
 
+type WasmGpuResidentInputs = {
+  readonly device: GPUDevice;
+  readonly leases: readonly CompilerGpuBufferLease[];
+  readonly kindBuffer: GPUBuffer;
+  readonly lowWordBuffer: GPUBuffer;
+  readonly nonByteLowWordBuffer: GPUBuffer;
+  readonly byteRankBuffer: GPUBuffer;
+  readonly highWordBuffer: GPUBuffer;
+  readonly lengthAtomIndexBuffer: GPUBuffer;
+  readonly lengthPayloadIndexBuffer: GPUBuffer;
+  readonly lengthRangeStartBuffer: GPUBuffer;
+  readonly lengthRangeCountBuffer: GPUBuffer;
+  readonly payloadAtomBaseBuffer: GPUBuffer;
+  readonly countParameterBuffer: GPUBuffer;
+  readonly lengthParameterBuffers: readonly GPUBuffer[];
+};
+
+type ResidentWasmPhysicalPlan = {
+  readonly job: PreparedWasmGpuJob;
+  readonly inputs: WasmGpuResidentInputs;
+  readonly physicalPlan: GpuWasmPhysicalPlan;
+};
+
+type ResidentWasmPlanState = {
+  readonly physical: readonly ResidentWasmPhysicalPlan[];
+  released: boolean;
+  leasesReleased: boolean;
+  activeBorrows: number;
+};
+
+const residentWasmPlanStates = new WeakMap<
+  GpuResidentWasmPlans,
+  ResidentWasmPlanState
+>();
+
+function releaseResidentWasmInputs(state: ResidentWasmPlanState): void {
+  if (state.leasesReleased) return;
+  state.leasesReleased = true;
+  for (const physical of state.physical) {
+    physical.inputs.leases.forEach((lease) => lease.release());
+  }
+}
+
 function prepareWasmGpuJob(
   plan: WasmBinaryPlan,
   lowWordLayout: GpuWasmLowWordLayout,
+  payloadEndAtomIndices: readonly number[] = [plan.atoms.length],
 ): PreparedWasmGpuJob {
+  requirePayloadAtomBoundaries(payloadEndAtomIndices, plan.atoms.length);
   const inspectionStart = performance.now();
   const analysis = inspectWasmBinaryPlanStructure(plan);
   const planInspectionMilliseconds = performance.now() - inspectionStart;
@@ -886,8 +1267,29 @@ function prepareWasmGpuJob(
     lowWordLayout,
   );
   const columnConstructionMilliseconds = performance.now() - columnStart;
+  const lengthAtomIndices = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.atomIndex),
+  );
+  const lengthPayloadIndices = new Uint32Array(lengthAtoms.length);
+  const lengthRangeStarts = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.rangeStart),
+  );
+  const lengthRangeCounts = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.rangeCount),
+  );
+  const payloadAtomBases = new Uint32Array([0]);
   return {
     columns,
+    inputByteLengths: wasmGpuInputByteLengths(
+      columns,
+      lengthAtomIndices,
+      lengthPayloadIndices,
+      lengthRangeStarts,
+      lengthRangeCounts,
+      payloadAtomBases,
+    ),
+    atomCount: plan.atoms.length,
+    payloadEndAtomIndices,
     workgroupCount: Math.ceil(plan.atoms.length / wasmWorkgroupSize),
     lengthAtomCount: analysis.lengthLevels.reduce(
       (count, level) => count + level.atoms.length,
@@ -902,19 +1304,377 @@ function prepareWasmGpuJob(
       firstLengthRank += level.atoms.length;
       return region;
     }),
-    lengthAtomIndices: Uint32Array.from(
-      lengthAtoms.map((atom) => atom.atomIndex),
-    ),
-    lengthRangeStarts: Uint32Array.from(
-      lengthAtoms.map((atom) => atom.rangeStart),
-    ),
-    lengthRangeCounts: Uint32Array.from(
-      lengthAtoms.map((atom) => atom.rangeCount),
-    ),
+    lengthAtomIndices,
+    lengthPayloadIndices,
+    lengthRangeStarts,
+    lengthRangeCounts,
+    payloadAtomBases,
     planInspectionMilliseconds,
     columnConstructionMilliseconds,
     maximumEncodedByteLength: analysis.maximumEncodedByteLength,
   };
+}
+
+function prepareWasmGpuBatch(
+  plans: readonly WasmBinaryPlan[],
+  validatedStructures?: readonly WasmBinaryPlanStructure[],
+): PreparedWasmGpuJob {
+  if (plans.length === 0) {
+    throw new TypeError("resident Wasm preparation requires at least one plan");
+  }
+  const inspectionStart = performance.now();
+  const structures = validatedStructures ??
+    plans.map(inspectWasmBinaryPlanStructure);
+  const planInspectionMilliseconds = validatedStructures === undefined
+    ? performance.now() - inspectionStart
+    : 0;
+  if (structures.length !== plans.length) {
+    throw new RangeError(
+      `Wasm batch has ${plans.length} plans but ${structures.length} structure witnesses`,
+    );
+  }
+  const columnStart = performance.now();
+  const payloadAtomBases = new Uint32Array(plans.length);
+  const payloadEndAtomIndices: number[] = [];
+  let atomCount = 0;
+  let maximumEncodedByteLength = 0;
+  let lengthSizingDependencyAtomCount = 0;
+  for (const [payload, plan] of plans.entries()) {
+    payloadAtomBases[payload] = atomCount;
+    atomCount = safeResourceSum("atom count", atomCount, plan.atoms.length);
+    payloadEndAtomIndices.push(atomCount);
+    maximumEncodedByteLength = safeResourceSum(
+      "maximum output bytes",
+      maximumEncodedByteLength,
+      structures[payload]!.maximumEncodedByteLength,
+    );
+    lengthSizingDependencyAtomCount = safeResourceSum(
+      "length dependency count",
+      lengthSizingDependencyAtomCount,
+      structures[payload]!.dependencyAtomCount,
+    );
+  }
+  const columns = denseAtomColumns(plans, structures, atomCount);
+  const levels = new Map<
+    number,
+    {
+      readonly payload: number;
+      readonly atomIndex: number;
+      readonly rangeStart: number;
+      readonly rangeCount: number;
+    }[]
+  >();
+  for (const [payload, structure] of structures.entries()) {
+    for (const level of structure.lengthLevels) {
+      const retained = levels.get(level.dependencyLevel) ?? [];
+      retained.push(...level.atoms.map((atom) => ({
+        payload,
+        atomIndex: atom.atomIndex,
+        rangeStart: atom.rangeStart,
+        rangeCount: atom.rangeCount,
+      })));
+      levels.set(level.dependencyLevel, retained);
+    }
+  }
+  const orderedLevels = [...levels.entries()].sort(([left], [right]) =>
+    left - right
+  );
+  const lengthAtoms = orderedLevels.flatMap(([, atoms]) => atoms);
+  let firstLengthRank = 0;
+  const lengthLevelRegions = orderedLevels.map(([, atoms]) => {
+    const region = { firstLengthRank, lengthCount: atoms.length };
+    firstLengthRank += atoms.length;
+    return region;
+  });
+  const columnConstructionMilliseconds = performance.now() - columnStart;
+  const lengthAtomIndices = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.atomIndex),
+  );
+  const lengthPayloadIndices = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.payload),
+  );
+  const lengthRangeStarts = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.rangeStart),
+  );
+  const lengthRangeCounts = Uint32Array.from(
+    lengthAtoms.map((atom) => atom.rangeCount),
+  );
+  return {
+    columns,
+    inputByteLengths: wasmGpuInputByteLengths(
+      columns,
+      lengthAtomIndices,
+      lengthPayloadIndices,
+      lengthRangeStarts,
+      lengthRangeCounts,
+      payloadAtomBases,
+    ),
+    atomCount,
+    payloadEndAtomIndices,
+    workgroupCount: Math.ceil(atomCount / wasmWorkgroupSize),
+    lengthAtomCount: lengthAtoms.length,
+    lengthSizingDependencyAtomCount,
+    lengthLevelRegions,
+    lengthAtomIndices,
+    lengthPayloadIndices,
+    lengthRangeStarts,
+    lengthRangeCounts,
+    payloadAtomBases,
+    planInspectionMilliseconds,
+    columnConstructionMilliseconds,
+    maximumEncodedByteLength,
+  };
+}
+
+function wasmGpuInputByteLengths(
+  columns: ReturnType<typeof atomColumns>,
+  lengthAtomIndices: Uint32Array,
+  lengthPayloadIndices: Uint32Array,
+  lengthRangeStarts: Uint32Array,
+  lengthRangeCounts: Uint32Array,
+  payloadAtomBases: Uint32Array,
+): PreparedWasmGpuJob["inputByteLengths"] {
+  return {
+    kinds: columns.kinds.byteLength,
+    primaryLowWords: columns.primaryLowWords.byteLength,
+    nonByteLowWords: columns.nonByteLowWords.byteLength,
+    byteRanks: columns.byteRanks.byteLength,
+    highWords: columns.highWords.byteLength,
+    lengthAtomIndices: lengthAtomIndices.byteLength,
+    lengthPayloadIndices: lengthPayloadIndices.byteLength,
+    lengthRangeStarts: lengthRangeStarts.byteLength,
+    lengthRangeCounts: lengthRangeCounts.byteLength,
+    payloadAtomBases: payloadAtomBases.byteLength,
+  };
+}
+
+function discardWasmGpuHostInputColumns(
+  job: PreparedWasmGpuJob,
+): PreparedWasmGpuJob {
+  return {
+    ...job,
+    columns: {
+      ...job.columns,
+      kinds: new Uint32Array(),
+      primaryLowWords: new Uint32Array(),
+      nonByteLowWords: new Uint32Array(),
+      byteRanks: new Uint32Array(),
+      highWords: new Uint32Array(),
+    },
+    lengthAtomIndices: new Uint32Array(),
+    lengthPayloadIndices: new Uint32Array(),
+    lengthRangeStarts: new Uint32Array(),
+    lengthRangeCounts: new Uint32Array(),
+    payloadAtomBases: new Uint32Array(),
+  };
+}
+
+function denseAtomColumns(
+  plans: readonly WasmBinaryPlan[],
+  structures: readonly WasmBinaryPlanStructure[],
+  atomCount: number,
+): ReturnType<typeof atomColumns> {
+  const kinds = new Uint32Array(atomCount);
+  const primaryLowWords = new Uint32Array(atomCount);
+  const highWords = new Uint32Array(atomCount);
+  let atomBase = 0;
+  for (const plan of plans) {
+    for (const [localIndex, atom] of plan.atoms.entries()) {
+      const index = atomBase + localIndex;
+      if (atom.kind === "byte") {
+        kinds[index] = atomByte;
+        primaryLowWords[index] = atom.value;
+      } else if (atom.kind === "unsigned") {
+        kinds[index] = atomUnsigned;
+        primaryLowWords[index] = atom.value;
+      } else if (atom.kind === "signed32") {
+        kinds[index] = atomSigned32;
+        primaryLowWords[index] = atom.value >>> 0;
+      } else if (atom.kind === "signed64") {
+        kinds[index] = atomSigned64;
+        primaryLowWords[index] = Number(BigInt.asUintN(32, atom.value));
+        highWords[index] = Number(BigInt.asUintN(32, atom.value >> 32n));
+      } else {
+        kinds[index] = atomLength;
+      }
+    }
+    atomBase += plan.atoms.length;
+  }
+  return {
+    kinds,
+    primaryLowWords,
+    nonByteLowWords: new Uint32Array(),
+    byteRanks: new Uint32Array(),
+    lowWordLayout: "dense",
+    byteAtomCount: structures.reduce(
+      (sum, structure) => sum + structure.byteAtomCount,
+      0,
+    ),
+    byteRankBitWidth: 0,
+    maximumByteRank: 0,
+    highWords,
+    signed64AtomCount: structures.reduce(
+      (sum, structure) => sum + structure.signed64AtomCount,
+      0,
+    ),
+    sparseSigned64HighWords: false,
+    denseKinds: true,
+  };
+}
+
+function uploadWasmGpuResidentInputs(
+  device: GPUDevice,
+  job: PreparedWasmGpuJob,
+): WasmGpuResidentInputs {
+  const retainedLeases: CompilerGpuBufferLease[] = [];
+  const retain = (lease: CompilerGpuBufferLease): CompilerGpuBufferLease => {
+    retainedLeases.push(lease);
+    return lease;
+  };
+  try {
+    const kindLease = acquireUploadedBuffer(
+      device,
+      "Wasm atom kinds",
+      job.columns.kinds,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(kindLease);
+    const lowWordLease = acquireUploadedBuffer(
+      device,
+      "Wasm atom primary low words",
+      job.columns.primaryLowWords,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(lowWordLease);
+    const nonByteLowWordLease = acquireUploadedBuffer(
+      device,
+      "Wasm atom non-byte low words",
+      job.columns.nonByteLowWords,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(nonByteLowWordLease);
+    const byteRankLease = acquireUploadedBuffer(
+      device,
+      "Wasm atom byte ranks",
+      job.columns.byteRanks,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(byteRankLease);
+    const highWordLease = acquireUploadedBuffer(
+      device,
+      "Wasm atom high words",
+      job.columns.highWords,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(highWordLease);
+    const lengthAtomIndexLease = acquireUploadedBuffer(
+      device,
+      "Wasm length atom indices",
+      job.lengthAtomIndices,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(lengthAtomIndexLease);
+    const lengthPayloadIndexLease = acquireUploadedBuffer(
+      device,
+      "Wasm length payload indices",
+      job.lengthPayloadIndices,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(lengthPayloadIndexLease);
+    const lengthRangeStartLease = acquireUploadedBuffer(
+      device,
+      "Wasm length range starts",
+      job.lengthRangeStarts,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(lengthRangeStartLease);
+    const lengthRangeCountLease = acquireUploadedBuffer(
+      device,
+      "Wasm length range counts",
+      job.lengthRangeCounts,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(lengthRangeCountLease);
+    const payloadAtomBaseLease = acquireUploadedBuffer(
+      device,
+      "Wasm payload atom bases",
+      job.payloadAtomBases,
+      GPUBufferUsage.STORAGE,
+    );
+    retain(payloadAtomBaseLease);
+    const countParameterLease = acquireUploadedBuffer(
+      device,
+      "Wasm count parameters",
+      new Uint32Array([
+        job.atomCount,
+        job.columns.signed64AtomCount,
+        representationFlags(job),
+        0,
+      ]),
+      GPUBufferUsage.UNIFORM,
+    );
+    retain(countParameterLease);
+    const lengthParameterLeases = job.lengthLevelRegions.map((region, index) =>
+      retain(acquireUploadedBuffer(
+        device,
+        `Wasm length level ${index} parameters`,
+        new Uint32Array([
+          region.firstLengthRank,
+          region.lengthCount,
+          0,
+          0,
+        ]),
+        GPUBufferUsage.UNIFORM,
+      ))
+    );
+    return {
+      device,
+      leases: retainedLeases,
+      kindBuffer: kindLease.buffer,
+      lowWordBuffer: lowWordLease.buffer,
+      nonByteLowWordBuffer: nonByteLowWordLease.buffer,
+      byteRankBuffer: byteRankLease.buffer,
+      highWordBuffer: highWordLease.buffer,
+      lengthAtomIndexBuffer: lengthAtomIndexLease.buffer,
+      lengthPayloadIndexBuffer: lengthPayloadIndexLease.buffer,
+      lengthRangeStartBuffer: lengthRangeStartLease.buffer,
+      lengthRangeCountBuffer: lengthRangeCountLease.buffer,
+      payloadAtomBaseBuffer: payloadAtomBaseLease.buffer,
+      countParameterBuffer: countParameterLease.buffer,
+      lengthParameterBuffers: lengthParameterLeases.map((lease) =>
+        lease.buffer
+      ),
+    };
+  } catch (error) {
+    retainedLeases.forEach((lease) => lease.release());
+    throw error;
+  }
+}
+
+function requirePayloadAtomBoundaries(
+  payloadEndAtomIndices: readonly number[],
+  atomCount: number,
+): void {
+  if (payloadEndAtomIndices.length === 0) {
+    throw new TypeError("Wasm emission requires one terminal atom boundary");
+  }
+  let precedingAtomIndex = 0;
+  for (const [index, atomIndex] of payloadEndAtomIndices.entries()) {
+    if (
+      !Number.isSafeInteger(atomIndex) || atomIndex <= precedingAtomIndex ||
+      atomIndex > atomCount
+    ) {
+      throw new RangeError(
+        `Wasm payload boundary ${index} uses atom ${atomIndex} after ${precedingAtomIndex}; plan has ${atomCount} atoms`,
+      );
+    }
+    precedingAtomIndex = atomIndex;
+  }
+  if (precedingAtomIndex !== atomCount) {
+    throw new RangeError(
+      `Wasm final payload boundary ${precedingAtomIndex} does not cover ${atomCount} atoms`,
+    );
+  }
 }
 
 async function emitWasmPlanWithGpu(
@@ -923,42 +1683,33 @@ async function emitWasmPlanWithGpu(
   lowWordLayout: GpuWasmLowWordLayout,
   payloadEndAtomIndices: readonly number[] = [plan.atoms.length],
 ): Promise<GpuWasmEmissionResult> {
+  const job = prepareWasmGpuJob(
+    plan,
+    lowWordLayout,
+    payloadEndAtomIndices,
+  );
+  return await emitPreparedWasmJobWithGpu(job, scheduling);
+}
+
+async function emitPreparedWasmJobWithGpu(
+  job: PreparedWasmGpuJob,
+  scheduling: CompilerGpuSchedulingPolicy,
+  residentInputs?: WasmGpuResidentInputs,
+): Promise<GpuWasmEmissionResult> {
   const totalStart = performance.now();
-  if (payloadEndAtomIndices.length === 0) {
-    throw new TypeError("Wasm emission requires one terminal atom boundary");
-  }
-  let precedingAtomIndex = 0;
-  for (const [index, atomIndex] of payloadEndAtomIndices.entries()) {
-    if (
-      !Number.isSafeInteger(atomIndex) || atomIndex <= precedingAtomIndex ||
-      atomIndex > plan.atoms.length
-    ) {
-      throw new RangeError(
-        `Wasm payload boundary ${index} uses atom ${atomIndex} after ${precedingAtomIndex}; plan has ${plan.atoms.length} atoms`,
-      );
-    }
-    precedingAtomIndex = atomIndex;
-  }
-  if (precedingAtomIndex !== plan.atoms.length) {
-    throw new RangeError(
-      `Wasm final payload boundary ${precedingAtomIndex} does not cover ${plan.atoms.length} atoms`,
-    );
-  }
-  const planAnalysisStart = performance.now();
-  const job = prepareWasmGpuJob(plan, lowWordLayout);
-  const planAnalysisAndColumnMilliseconds = performance.now() -
-    planAnalysisStart;
+  const planAnalysisAndColumnMilliseconds = job.planInspectionMilliseconds +
+    job.columnConstructionMilliseconds;
   const planInspectionMilliseconds = job.planInspectionMilliseconds;
   const columnConstructionMilliseconds = job.columnConstructionMilliseconds;
   const {
     columns,
     lengthAtomCount,
-    lengthAtomIndices,
     lengthLevelRegions,
-    lengthRangeCounts,
-    lengthRangeStarts,
     lengthSizingDependencyAtomCount,
     maximumEncodedByteLength,
+    atomCount,
+    inputByteLengths,
+    payloadEndAtomIndices,
     workgroupCount,
   } = job;
   const contextStart = performance.now();
@@ -973,19 +1724,19 @@ async function emitWasmPlanWithGpu(
     lengthSizingPipeline,
     scanPipelines,
   } = context;
-  const kindBytes = Math.max(4, columns.kinds.byteLength);
+  const kindBytes = Math.max(4, inputByteLengths.kinds);
   const primaryLowWordBytes = Math.max(
     4,
-    columns.primaryLowWords.byteLength,
+    inputByteLengths.primaryLowWords,
   );
   const nonByteLowWordBytes = Math.max(
     4,
-    columns.nonByteLowWords.byteLength,
+    inputByteLengths.nonByteLowWords,
   );
-  const byteRankBytes = Math.max(4, columns.byteRanks.byteLength);
-  const signed64HighWordBytes = Math.max(4, columns.highWords.byteLength);
-  const atomSizeBytes = plan.atoms.length * Uint32Array.BYTES_PER_ELEMENT;
-  const resolvedOffsetBytes = (plan.atoms.length + 1) *
+  const byteRankBytes = Math.max(4, inputByteLengths.byteRanks);
+  const signed64HighWordBytes = Math.max(4, inputByteLengths.highWords);
+  const atomSizeBytes = atomCount * Uint32Array.BYTES_PER_ELEMENT;
+  const resolvedOffsetBytes = (atomCount + 1) *
     Uint32Array.BYTES_PER_ELEMENT;
   const outputWordCount = Math.ceil(
     maximumEncodedByteLength / Uint32Array.BYTES_PER_ELEMENT,
@@ -1005,17 +1756,27 @@ async function emitWasmPlanWithGpu(
     ["length values", atomSizeBytes, "storage"],
     [
       "length atom indices",
-      Math.max(4, lengthAtomIndices.byteLength),
+      Math.max(4, inputByteLengths.lengthAtomIndices),
       "storage",
     ],
     [
       "length range starts",
-      Math.max(4, lengthRangeStarts.byteLength),
+      Math.max(4, inputByteLengths.lengthRangeStarts),
+      "storage",
+    ],
+    [
+      "length payload indices",
+      Math.max(4, inputByteLengths.lengthPayloadIndices),
       "storage",
     ],
     [
       "length range counts",
-      Math.max(4, lengthRangeCounts.byteLength),
+      Math.max(4, inputByteLengths.lengthRangeCounts),
+      "storage",
+    ],
+    [
+      "payload atom bases",
+      Math.max(4, inputByteLengths.payloadAtomBases),
       "storage",
     ],
     ["packed output", outputBytes, "storage"],
@@ -1039,42 +1800,28 @@ async function emitWasmPlanWithGpu(
   if (dispatchReason !== undefined) {
     return { status: "unavailable", reason: dispatchReason };
   }
-
-  const kindLease = acquireUploadedBuffer(
-    device,
-    "Wasm atom kinds",
-    columns.kinds,
-    GPUBufferUsage.STORAGE,
-  );
-  const kindBuffer = kindLease.buffer;
-  const lowWordLease = acquireUploadedBuffer(
-    device,
-    "Wasm atom primary low words",
-    columns.primaryLowWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const lowWordBuffer = lowWordLease.buffer;
-  const nonByteLowWordLease = acquireUploadedBuffer(
-    device,
-    "Wasm atom non-byte low words",
-    columns.nonByteLowWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const nonByteLowWordBuffer = nonByteLowWordLease.buffer;
-  const byteRankLease = acquireUploadedBuffer(
-    device,
-    "Wasm atom byte ranks",
-    columns.byteRanks,
-    GPUBufferUsage.STORAGE,
-  );
-  const byteRankBuffer = byteRankLease.buffer;
-  const highWordLease = acquireUploadedBuffer(
-    device,
-    "Wasm atom high words",
-    columns.highWords,
-    GPUBufferUsage.STORAGE,
-  );
-  const highWordBuffer = highWordLease.buffer;
+  if (residentInputs !== undefined && residentInputs.device !== device) {
+    return {
+      status: "unavailable",
+      reason:
+        "resident Wasm plan belongs to a GPU device that is no longer active",
+    };
+  }
+  const inputs = residentInputs ?? uploadWasmGpuResidentInputs(device, job);
+  const {
+    kindBuffer,
+    lowWordBuffer,
+    nonByteLowWordBuffer,
+    byteRankBuffer,
+    highWordBuffer,
+    lengthAtomIndexBuffer,
+    lengthPayloadIndexBuffer,
+    lengthRangeStartBuffer,
+    lengthRangeCountBuffer,
+    payloadAtomBaseBuffer,
+    countParameterBuffer,
+    lengthParameterBuffers,
+  } = inputs;
   const atomSizeLease = acquireCompilerGpuBuffer(
     device,
     "Wasm atom sizes",
@@ -1089,27 +1836,6 @@ async function emitWasmPlanWithGpu(
     "storage",
   );
   const lengthValueBuffer = lengthValueLease.buffer;
-  const lengthAtomIndexLease = acquireUploadedBuffer(
-    device,
-    "Wasm length atom indices",
-    lengthAtomIndices,
-    GPUBufferUsage.STORAGE,
-  );
-  const lengthAtomIndexBuffer = lengthAtomIndexLease.buffer;
-  const lengthRangeStartLease = acquireUploadedBuffer(
-    device,
-    "Wasm length range starts",
-    lengthRangeStarts,
-    GPUBufferUsage.STORAGE,
-  );
-  const lengthRangeStartBuffer = lengthRangeStartLease.buffer;
-  const lengthRangeCountLease = acquireUploadedBuffer(
-    device,
-    "Wasm length range counts",
-    lengthRangeCounts,
-    GPUBufferUsage.STORAGE,
-  );
-  const lengthRangeCountBuffer = lengthRangeCountLease.buffer;
   const outputLease = acquireCompilerGpuBuffer(
     device,
     "Wasm packed output",
@@ -1121,18 +1847,6 @@ async function emitWasmPlanWithGpu(
     "storage",
   );
   const outputBuffer = outputLease.buffer;
-  const countParameterLease = acquireUploadedBuffer(
-    device,
-    "Wasm count parameters",
-    new Uint32Array([
-      plan.atoms.length,
-      columns.signed64AtomCount,
-      representationFlags(job),
-      0,
-    ]),
-    GPUBufferUsage.UNIFORM,
-  );
-  const countParameterBuffer = countParameterLease.buffer;
   const readbackLease = acquireCompilerGpuBuffer(
     device,
     "Wasm readback",
@@ -1143,37 +1857,11 @@ async function emitWasmPlanWithGpu(
     "copy",
   );
   const readback = readbackLease.buffer;
-  const lengthParameterLeases = lengthLevelRegions.map((region, index) =>
-    acquireUploadedBuffer(
-      device,
-      `Wasm length level ${index} parameters`,
-      new Uint32Array([
-        region.firstLengthRank,
-        region.lengthCount,
-        0,
-        0,
-      ]),
-      GPUBufferUsage.UNIFORM,
-    )
-  );
-  const lengthParameterBuffers = lengthParameterLeases.map((lease) =>
-    lease.buffer
-  );
-  const leases = [
-    kindLease,
-    lowWordLease,
-    nonByteLowWordLease,
-    byteRankLease,
-    highWordLease,
+  const scratchLeases = [
     atomSizeLease,
     lengthValueLease,
-    lengthAtomIndexLease,
-    lengthRangeStartLease,
-    lengthRangeCountLease,
     outputLease,
-    countParameterLease,
     readbackLease,
-    ...lengthParameterLeases,
   ];
   const allocationAndUploadMilliseconds = performance.now() -
     allocationAndUploadStart;
@@ -1220,12 +1908,14 @@ async function emitWasmPlanWithGpu(
           layout: lengthSizingPipeline.getBindGroupLayout(1),
           entries: [
             { binding: 0, resource: { buffer: lengthAtomIndexBuffer } },
-            { binding: 1, resource: { buffer: lengthRangeStartBuffer } },
-            { binding: 2, resource: { buffer: lengthRangeCountBuffer } },
-            { binding: 3, resource: { buffer: atomSizeBuffer } },
-            { binding: 4, resource: { buffer: lengthValueBuffer } },
+            { binding: 1, resource: { buffer: lengthPayloadIndexBuffer } },
+            { binding: 2, resource: { buffer: lengthRangeStartBuffer } },
+            { binding: 3, resource: { buffer: lengthRangeCountBuffer } },
+            { binding: 4, resource: { buffer: payloadAtomBaseBuffer } },
+            { binding: 5, resource: { buffer: atomSizeBuffer } },
+            { binding: 6, resource: { buffer: lengthValueBuffer } },
             {
-              binding: 5,
+              binding: 7,
               resource: { buffer: lengthParameterBuffers[levelIndex]! },
             },
           ],
@@ -1244,7 +1934,7 @@ async function emitWasmPlanWithGpu(
       encoder,
       scanPipelines,
       atomSizeBuffer,
-      plan.atoms.length,
+      atomCount,
     );
     const emissionBindGroup = device.createBindGroup({
       layout: emissionPipeline.getBindGroupLayout(0),
@@ -1334,34 +2024,37 @@ async function emitWasmPlanWithGpu(
     return {
       status: "completed",
       bytes,
-      atomCount: plan.atoms.length,
+      atomCount,
       byteCount,
       outputBufferBytes: outputBytes,
+      readbackMode: "capacity-single-map",
+      physicalReadbackBytes: readbackBytes,
+      logicalReadbackBytes: byteCount + boundaryBytes,
+      readbackPaddingBytes: outputBytes - byteCount,
       lengthAtomCount,
       sparseLengthSizing: false,
       lengthSizingDependencyAtomCount,
       lengthSizingWorkEstimate: lengthSizingDependencyAtomCount,
       resolvedOffsetBytes,
       resolvedOffsetBitWidth: 32,
-      atomInputBytes: columns.kinds.byteLength +
-        columns.primaryLowWords.byteLength +
-        columns.nonByteLowWords.byteLength +
-        columns.byteRanks.byteLength +
-        columns.highWords.byteLength +
-        lengthAtomIndices.byteLength +
-        lengthRangeStarts.byteLength +
-        lengthRangeCounts.byteLength,
+      atomInputBytes: inputByteLengths.kinds +
+        inputByteLengths.primaryLowWords +
+        inputByteLengths.nonByteLowWords + inputByteLengths.byteRanks +
+        inputByteLengths.highWords + inputByteLengths.lengthAtomIndices +
+        inputByteLengths.lengthPayloadIndices +
+        inputByteLengths.lengthRangeStarts +
+        inputByteLengths.lengthRangeCounts +
+        inputByteLengths.payloadAtomBases,
       lowWordLayout: columns.lowWordLayout,
-      lowWordBytes: columns.primaryLowWords.byteLength +
-        columns.nonByteLowWords.byteLength +
-        columns.byteRanks.byteLength,
+      lowWordBytes: inputByteLengths.primaryLowWords +
+        inputByteLengths.nonByteLowWords + inputByteLengths.byteRanks,
       byteAtomCount: columns.byteAtomCount,
       byteRankBitWidth: columns.byteRankBitWidth,
-      byteRankBytes: columns.byteRanks.byteLength,
+      byteRankBytes: inputByteLengths.byteRanks,
       maximumByteRank: columns.maximumByteRank,
       signed64AtomCount: columns.signed64AtomCount,
-      signed64HighWordBytes: columns.highWords.byteLength,
-      leasedBufferBytes: leases.reduce(
+      signed64HighWordBytes: inputByteLengths.highWords,
+      leasedBufferBytes: [...inputs.leases, ...scratchLeases].reduce(
         (sum, lease) => sum + lease.byteLength,
         0,
       ) + resolvedOffsets.ownedBuffers.reduce(
@@ -1369,7 +2062,7 @@ async function emitWasmPlanWithGpu(
         0,
       ),
       resources: gpuWasmPlanResources({
-        atomCount: plan.atoms.length,
+        atomCount,
         maximumOutputBytes: maximumEncodedByteLength,
         lengthAtomCount,
         lengthSizingDependencyAtomCount,
@@ -1410,7 +2103,10 @@ async function emitWasmPlanWithGpu(
   } finally {
     if (readbackMapped) readback.unmap();
     resolvedOffsets?.ownedBuffers.forEach((buffer) => buffer.destroy());
-    leases.forEach((lease) => lease.release());
+    scratchLeases.forEach((lease) => lease.release());
+    if (residentInputs === undefined) {
+      inputs.leases.forEach((lease) => lease.release());
+    }
   }
 }
 
@@ -1430,6 +2126,7 @@ function atomColumns(
   readonly highWords: Uint32Array;
   readonly signed64AtomCount: number;
   readonly sparseSigned64HighWords: boolean;
+  readonly denseKinds: boolean;
 } {
   const { byteAtomCount, maximumByteRank, signed64AtomCount } = analysis;
   const byteRankBitWidth = maximumByteRank <= 0xffff ? 16 : 32;
@@ -1533,13 +2230,15 @@ function atomColumns(
     highWords,
     signed64AtomCount,
     sparseSigned64HighWords,
+    denseKinds: false,
   };
 }
 
 function representationFlags(job: PreparedWasmGpuJob): number {
   return (job.columns.sparseSigned64HighWords ? 1 : 0) |
     (job.columns.lowWordLayout === "ranked" ? 4 : 0) |
-    (job.columns.byteRankBitWidth === 16 ? 8 : 0);
+    (job.columns.byteRankBitWidth === 16 ? 8 : 0) |
+    (job.columns.denseKinds ? denseKindRepresentationFlag : 0);
 }
 
 function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
@@ -1558,7 +2257,7 @@ function requestGpuWasmContext(): Promise<GpuWasmContextRequest> {
       requireCompilerGpuCapacity(device, {
         kind: "pipelineBindings",
         label: "Wasm sizing",
-        storageBufferCount: 6,
+        storageBufferCount: 7,
         uniformBufferCount: 1,
       });
       const emissionModule = device.createShaderModule({

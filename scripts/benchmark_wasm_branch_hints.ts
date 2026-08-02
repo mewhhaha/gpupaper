@@ -1,10 +1,32 @@
 import { wasmInstruction, WasmModuleBuilder, wasmType } from "../src/wasm.ts";
+import {
+  inspectBenchmarkEnvironment,
+  repositoryIdentity,
+  runtimeIdentity,
+  sha256,
+} from "./benchmark_environment.ts";
+import {
+  summarizePairedSamples,
+  summarizeSamples,
+} from "./benchmark_statistics.ts";
 
-const moduleSampleCount = 101;
-const runtimeSampleCount = 31;
+const moduleSampleCount = 100;
+const runtimeSampleCount = 32;
 const runtimeIterations = 1_000_000;
 const hintedBytes = buildBranchModule({ likelihood: "likely" });
 const unhintedBytes = buildBranchModule({});
+const allowContended = Deno.args.includes("--allow-contended");
+const environmentAtStart = await inspectBenchmarkEnvironment({
+  gpuWork: "ignore",
+});
+if (environmentAtStart.status !== "clear" && !allowContended) {
+  console.log(JSON.stringify({
+    status: "refused",
+    reason: "competing compiler work is active or inspection failed",
+    environment: environmentAtStart,
+  }));
+  Deno.exit(2);
+}
 
 const hintedModuleSamples: number[] = [];
 const unhintedModuleSamples: number[] = [];
@@ -61,11 +83,32 @@ for (const [condition, value] of probeInputs) {
   }
 }
 
+const environmentAtEnd = await inspectBenchmarkEnvironment({
+  gpuWork: "ignore",
+});
+const environmentClear = environmentAtStart.status === "clear" &&
+  environmentAtEnd.status === "clear";
 console.log(JSON.stringify(
   {
-    deno: Deno.version.deno,
-    v8: Deno.version.v8,
-    platform: `${Deno.build.os}-${Deno.build.arch}`,
+    status: environmentClear || allowContended ? "completed" : "refused",
+    validity: environmentClear ? { status: "admissible" } : allowContended
+      ? {
+        status: "diagnostic",
+        reason: "competing compiler work was present during measurement",
+      }
+      : {
+        status: "refused",
+        reason: "competing compiler work appeared during measurement",
+      },
+    schemaVersion: 1,
+    runtime: runtimeIdentity(),
+    repositories: {
+      gpupaper: await repositoryIdentity(
+        new URL("../", import.meta.url).pathname,
+      ),
+    },
+    environmentAtStart,
+    environmentAtEnd,
     trueConditionFrequency: 0.999,
     moduleSampleCount,
     runtimeSampleCount,
@@ -73,18 +116,35 @@ console.log(JSON.stringify(
     hintedBytes: hintedBytes.length,
     unhintedBytes: unhintedBytes.length,
     metadataBytes: hintedBytes.length - unhintedBytes.length,
+    outputs: {
+      hintedSha256: await sha256(hintedBytes),
+      unhintedSha256: await sha256(unhintedBytes),
+    },
     moduleConstructionMilliseconds: {
-      hintedMedian: median(hintedModuleSamples),
-      unhintedMedian: median(unhintedModuleSamples),
+      hinted: summarizeSamples(hintedModuleSamples),
+      unhinted: summarizeSamples(unhintedModuleSamples),
+      pair: summarizePairedSamples(
+        hintedModuleSamples,
+        unhintedModuleSamples,
+      ),
+      hintedRaw: hintedModuleSamples,
+      unhintedRaw: unhintedModuleSamples,
     },
     runtimeNanosecondsPerCall: {
-      hintedMedian: median(hintedRuntimeSamples),
-      unhintedMedian: median(unhintedRuntimeSamples),
+      hinted: summarizeSamples(hintedRuntimeSamples),
+      unhinted: summarizeSamples(unhintedRuntimeSamples),
+      pair: summarizePairedSamples(
+        hintedRuntimeSamples,
+        unhintedRuntimeSamples,
+      ),
+      hintedRaw: hintedRuntimeSamples,
+      unhintedRaw: unhintedRuntimeSamples,
     },
   },
   null,
   2,
 ));
+if (!environmentClear && !allowContended) Deno.exit(2);
 
 function buildBranchModule(
   options: { readonly likelihood?: "likely" },
@@ -138,12 +198,4 @@ function measureRuntime(
     throw new Error(`branch-hint benchmark produced checksum ${checksum}`);
   }
   return elapsed * 1_000_000 / runtimeIterations;
-}
-
-function median(values: readonly number[]): number {
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[middle];
 }

@@ -10,11 +10,13 @@ These measurements were recorded on 2026-07-30 and 2026-07-31 with:
   `8031077802b03700258d527d9a9d20addffe786b90111b5694cc5ff3a16a70d4`;
 - gpupaper working tree through the Core identity audit at `ebc641a`.
 
-Timings are advisory. The 2026-07-30 baseline reports p50 and p95 values from 15
-samples in one process; the 2026-07-31 optimization audit reports warm medians
-from five samples per target and mode. Exact work counts and emitted bytes are
-deterministic contracts. GPU mode is authoritative for Core rewriting and Wasm
-emission; CPU mode does not initialize WebGPU.
+Timings are advisory. The 2026-07-30 baseline's labels are historical: its
+15-observation “p95” is not admitted as a p95 by the current minimum of 20, and
+the 2026-07-31 optimization audit used five warm samples per target and mode.
+Exact work counts and emitted bytes remain deterministic contracts. Production
+GPU mode uses construction-certified Core identity and authoritative Wasm
+emission; CPU mode does not initialize WebGPU. New empirical claims must point
+to a machine-readable record under `measurements/`.
 
 ## Measurement model
 
@@ -45,20 +47,22 @@ per-field medians; the selected stages, accounted time, and remainder therefore
 belong to one real compilation and retain their accounting identity. Parser
 sub-stage attribution uses the same observed-run rule. The break-even benchmark
 alternates CPU-first and GPU-first pairs within every batch size and policy,
-requires an even sample count, and uses the midpoint of the two central
-observations as the even-sample median. This counterbalances first-order
-run-order drift but does not remove autocorrelation or turn six or sixteen
-samples into a population-level performance claim. The frontend comparison uses
-six warm observations as three complete CPU-first/GPU-first order pairs. It
-retains every warm total and reports the paired differences
-`d_i = GPU_i - CPU_i`, their median, and their median absolute deviation
-`median(|d_i - median(d)|)`. The paired statistic removes additive noise shared
-by adjacent CPU/GPU observations; the raw samples expose stalls that a marginal
-median would hide. It does not estimate confidence or remove backend-specific
-noise. The break-even report retains the same raw and paired evidence for every
-batch size. A crossover is observed only when the paired median is non-positive.
-Failure to observe one reports the maximum measured size, not a lower bound on
-an unknown crossover: no monotonicity property has been proved.
+alternates forward/reverse traversal of the complete policy/size matrix,
+requires an even sample count, hashes inputs and outputs, and uses the midpoint
+of the two central observations as the even-sample median. This counterbalances
+first-order run-order drift but does not remove autocorrelation or turn six or
+sixteen samples into a population-level performance claim. The frontend
+comparison uses six warm observations as three complete CPU-first/GPU-first
+order pairs. It retains every warm total and reports the paired differences
+`d_i = GPU_i - CPU_i`, their median, paired log-ratios, and their median
+absolute deviation `median(|d_i - median(d)|)`. The paired statistic removes
+additive noise shared by adjacent CPU/GPU observations; the raw samples expose
+stalls that a marginal median would hide. It does not estimate confidence or
+remove backend-specific noise. The break-even report retains the same raw and
+paired evidence for every batch size. A crossover is observed only when the
+paired median is non-positive. Failure to observe one reports the maximum
+measured size, not a lower bound on an unknown crossover: no monotonicity
+property has been proved.
 
 ```sh
 deno task benchmark:frontend
@@ -67,17 +71,141 @@ deno task benchmark:break-even
 deno task benchmark:wasm
 deno task benchmark:branch-hints
 deno task benchmark:peers
+deno task benchmark:blot-targets
+deno task benchmark:blot-batch
+deno task benchmark:blot-crossover
+```
+
+Every GPU benchmark refuses detected competing compiler or driver compute work
+unless `--allow-contended` is supplied; that override produces diagnostic, not
+admissible, evidence. To retain process hierarchy and raw observations, run for
+example:
+
+```sh
+deno task benchmark:record \
+  --task=benchmark:branch-hints \
+  --processes=6 \
+  --output=measurements/branch-hints-YYYY-MM-DD.json
 ```
 
 `benchmark:rebuild` distinguishes a cold compilation, an identical-source
 rebuild, trailing and internal comment edits, a one-function edit, and a
 dependency edit. It checks that semantic no-ops emit byte-identical Wasm.
 `benchmark:wasm` constructs each frozen target's final plan once, performs one
-unrecorded warm emission per low-word layout, and measures 21 dense/ranked pairs
+unrecorded warm emission per low-word layout, and measures 20 dense/ranked pairs
 while alternating both layout order and forward/reverse target order. Its
 boundary starts before host plan analysis and ends after mapped GPU readback and
 the final byte copy. Every observation must equal the independently emitted CPU
 artifact.
+
+`benchmark:blot-crossover` varies arithmetic-chain length and independent module
+count under a bounded total-operation matrix. It counterbalances CPU/GPU order,
+requires exact byte equality, reports physical GPU stage timings, and keeps
+plan-to-byte emission separate from validated Runtime HIR through validated
+Wasm. This is the matched benchmark for claims that more code or more modules
+can repay the GPU boundary.
+
+## 2026-08-02 protocol-audit diagnostics
+
+The current harnesses were exercised after the protocol repair. These records
+are diagnostic because unrelated native compiler work and GPU contexts were
+active; their small sample counts also intentionally report no p95. They verify
+the measurement machinery and locate work but do not replace an admissible
+baseline.
+
+The six-target frontend record
+[`frontend-diagnostic-2026-08-02.json`](measurements/frontend-diagnostic-2026-08-02.json)
+reported:
+
+| Target    | CPU median ms | GPU median ms | paired GPU−CPU median ms | paired GPU/CPU |
+| --------- | ------------: | ------------: | -----------------------: | -------------: |
+| Editor    |        84.603 |        92.504 |                    6.934 |          1.078 |
+| Codex     |       439.184 |       477.440 |                   41.138 |          1.095 |
+| grep      |        13.845 |        26.224 |                   14.121 |          1.858 |
+| tar       |        54.135 |        89.500 |                   35.452 |          1.668 |
+| wav       |         5.580 |        21.086 |                   14.936 |          3.664 |
+| raytracer |         9.792 |        24.006 |                   13.903 |          2.471 |
+
+All paired GPU premiums are positive. Canonical Core performed no GPU rewrite
+work; these premiums measure GPU Wasm overhead on top of the CPU semantic
+pipeline. The three-observation isolated Wasm record
+[`wasm-diagnostic-2026-08-02.json`](measurements/wasm-diagnostic-2026-08-02.json)
+measured 12.14–14.52 ms for the four smaller dense layouts and 27.25 ms for
+Codex, while CPU byte emission was 0.044–3.624 ms. Codex plan construction was
+93.420 ms before emission, making its stackification/layout work a larger target
+than changing dense versus ranked low words; the two layouts differed by only
+0.212 ms in this run.
+
+The two-observation Blot records are
+[`blot-targets-diagnostic-2026-08-02.json`](measurements/blot-targets-diagnostic-2026-08-02.json)
+and
+[`blot-batch-diagnostic-2026-08-02.json`](measurements/blot-batch-diagnostic-2026-08-02.json).
+For `minimal.blot`, gpupaper measured 17.596 ms and gpufuck 1.636 ms, with a
+paired gpupaper/gpufuck ratio of 12.174; their ABI-equivalent artifacts were 956
+and 2,390 bytes. The 54-module packed path measured 150.646 ms versus 779.400 ms
+for singleton submissions, a paired packed/singleton ratio of 0.193. In the
+capacity profile, median HIR preparation was 95.798 ms (63.2% of the 151.680 ms
+total), Wasm planning 24.723 ms (16.3%), and GPU emission 27.910 ms (18.4%). The
+next justified performance target is therefore Blot HIR preparation, followed by
+Wasm planning; increasing physical batch capacity cannot remove the dominant
+host work.
+
+Revision-keyed immutable HIR memoization implements that first target. The
+six-observation follow-up
+[`blot-batch-hir-cache-diagnostic-2026-08-02.json`](measurements/blot-batch-hir-cache-diagnostic-2026-08-02.json)
+measured the capacity profile as:
+
+| Stage                      | Previous median ms | Cached median ms |
+| -------------------------- | -----------------: | ---------------: |
+| loaded-graph refresh       |      not separated |            0.741 |
+| Runtime-HIR preparation    |             95.798 |            0.132 |
+| Runtime-HIR validation     |              0.721 |            0.660 |
+| Wasm planning              |             24.723 |           20.041 |
+| GPU emission               |             27.910 |           29.901 |
+| complete profiled boundary |            151.680 |           53.554 |
+
+The current packed API median is 51.858 ms for 54 modules, versus 727.621 ms
+when the same process invokes the one-module API 54 times. The cache retains
+5,246 reachable HIR objects with 295,194 bytes of logical JSON payload; actual
+V8 heap residency is larger and unmeasured. Both runs were contended, the old
+record has two observations, and their input hashes differ, so the ratios are
+not an admissible before/after speedup claim. The current record does establish
+that warm HIR lookup is no longer the dominant stage: GPU emission is 55.8% and
+host Wasm planning is 37.4% of the new capacity-profile median.
+
+Final-artifact reuse now separates unchanged rebuilds from actual compiler
+throughput. The follow-up record
+[`blot-batch-artifact-cache-diagnostic-2026-08-02.json`](measurements/blot-batch-artifact-cache-diagnostic-2026-08-02.json)
+asserted cache provenance on every public-API sample and bypassed the artifact
+cache in every direct compiler profile. Concurrent Blot work changed the live
+worktree to 56 candidates of which 18 reached the target; all 38 rejections and
+their causes were retained during the first observation. Concurrent edits
+continued before the final record: it admits 19 modules, retains 37 rejection
+causes, and emits 53,366 Wasm bytes. The hashes in the record, rather than the
+mutable sibling path, define that measured workload.
+
+| Boundary or retained state                    | Diagnostic observation |
+| --------------------------------------------- | ---------------------: |
+| packed unchanged rebuild, 19 modules          |               0.795 ms |
+| 19 separate unchanged rebuild calls           |              12.794 ms |
+| cache-bypassing compiler throughput           |              28.304 ms |
+| planning inside compiler throughput           |               6.986 ms |
+| GPU emission inside compiler throughput       |              19.523 ms |
+| retained Wasm + manifest + capability payload |           94,848 bytes |
+
+These six-observation results were recorded under contention and are not
+comparable to the earlier 54-module rows: the source set and input hash changed.
+They establish the implemented boundaries and show that graph refresh dominates
+is the next unchanged-build target, while GPU emission remains dominant when
+compilation is deliberately forced. Refresh and public rebuild are separately
+sampled intervals, so their medians are not an additive stage decomposition.
+
+The two-observation break-even diagnostic found no crossover through 64 grep
+compilations. At throughput batch 64, GPU minus CPU was 193.546 ms and the
+paired ratio 1.259 with a maximum observed Wasm payload batch of 16. This is not
+a monotonic lower bound or a clean performance claim; it is evidence that merely
+offering more identical work did not amortize the current boundary under the
+observed scheduler.
 
 ## Wasm branch-hint boundary
 
@@ -87,6 +215,18 @@ condition is true for 999 of every 1,000 calls. Each fresh Deno process takes
 101 alternating module-construction samples and 31 alternating runtime samples
 of one million calls after 100,000 warmups. It verifies hinted and unhinted
 results before reporting.
+
+Those rows preserve the historical 101/31 protocol. The current harness uses 100
+module-construction and 32 runtime observations so hinted-first and
+unhinted-first orders have equal weight.
+
+The corrected six-process diagnostic is retained in
+[`branch-hints-diagnostic-2026-08-02.json`](measurements/branch-hints-diagnostic-2026-08-02.json).
+Five process medians favored hints and one regressed by 0.005 ns/call. Paired
+median differences ranged from -0.146 to +0.005 ns/call; module construction was
+slower with hints in every process by 0.00010–0.00013 ms. Foreign Deno/GPU work
+made the record diagnostic, so it corroborates the direction and reversal of the
+historical result without replacing it.
 
 Six fresh Deno 2.9.4 / V8 15.0.245.2 processes on Linux x86-64 produced:
 
@@ -1591,6 +1731,67 @@ is not a counterbalanced causal estimate. Every benchmark observation was
 byte-identical to the direct CPU oracle. The 504-test required-GPU gate passed
 and compiled every frozen target twice.
 
+### Rust/WebAssembly CPU emission
+
+The third emitter implements the complete `WasmBinaryPlan` atom and nested
+length semantics in dependency-free Rust/WebAssembly. Cold calls serialize and
+validate a host plan. Resident calls retain its unique encoded result in
+WebAssembly linear memory and copy that exact result into an owned JavaScript
+array. The first record below predates memoization and SIMD.
+
+The one-process
+[diagnostic record](measurements/wasm-rust-diagnostic-2026-08-02.json) contains
+101 rotated TypeScript, cold Rust/Wasm, and resident Rust/Wasm observations per
+frozen target, plus two GPU layout observations. Compiler and GPU contention
+make it diagnostic rather than admissible speedup evidence:
+
+| Target    | TypeScript | Rust/Wasm cold | Rust/Wasm resident | Dense GPU |
+| :-------- | ---------: | -------------: | -----------------: | --------: |
+| Editor    |   0.649 ms |       1.235 ms |           0.217 ms | 14.421 ms |
+| Codex     |   6.812 ms |      10.763 ms |           1.748 ms | 34.909 ms |
+| grep      |   0.116 ms |       0.211 ms |           0.037 ms | 13.099 ms |
+| tar       |   0.572 ms |       1.142 ms |           0.194 ms | 15.674 ms |
+| wav       |   0.068 ms |       0.129 ms |           0.024 ms | 12.487 ms |
+| raytracer |   0.103 ms |       0.197 ms |           0.035 ms | 12.901 ms |
+
+Cold Rust/Wasm loses because its 16-byte-per-atom serialization and independent
+Rust validation cross the JS/Wasm boundary on every call. Resident Rust/Wasm is
+0.257--0.353 times the TypeScript median on all six targets. Codex resident work
+separates into 1.722 ms Rust execution and 0.021 ms owned copying; its cold path
+adds 5.220 ms serialization and 3.532 ms copy plus validation. The measured
+one-time resident costs imply a descriptive 2--10-emission amortization range,
+two for Codex, but those single preparation observations are not a stable
+selection rule.
+
+The practical conclusion is now different: final byte emission is primarily a
+CPU-residency decision. TypeScript remains the current cold default, retained
+Rust/Wasm is the measured steady-state candidate, and GPU emission needs a
+GPU-resident upstream plan or a much larger parallel batch to justify its fixed
+submission and mapping latency.
+
+The current 46,554-byte artifact uses a four-column ABI, constant-work LEB size
+formulas, four-lane SIMD fixed-field validation, and 16-byte SIMD length-range
+sums. The post-change
+[diagnostic record](measurements/wasm-rust-simd-diagnostic-2026-08-02.json)
+again observed contention and contains 101 CPU observations and two GPU
+observations per target:
+
+| Target    | TypeScript | Rust/Wasm cold | Rust/Wasm resident | Dense GPU |
+| :-------- | ---------: | -------------: | -----------------: | --------: |
+| Editor    |   0.456 ms |       0.957 ms |           0.005 ms | 14.832 ms |
+| Codex     |   4.711 ms |       7.638 ms |           0.025 ms | 31.058 ms |
+| grep      |   0.075 ms |       0.147 ms |           0.003 ms | 12.507 ms |
+| tar       |   0.392 ms |       0.849 ms |           0.005 ms | 14.726 ms |
+| wav       |   0.071 ms |       0.112 ms |           0.002 ms | 12.463 ms |
+| raytracer |   0.069 ms |       0.146 ms |           0.002 ms | 12.563 ms |
+
+Cold Rust/Wasm remains 1.58--2.16 times TypeScript. Memoized resident emission
+is 29.0--188.3 times faster than TypeScript at this narrow boundary, with a
+descriptive two-to-three-emission preparation break-even. Codex resident work is
+0.00039 ms handle selection and 0.02402 ms owned copying; the previous 1.722 ms
+re-encoding term no longer exists. These ratios are diagnostic, not admissible
+speedup claims.
+
 The first packer still read/modified/wrote each physical u16 word once per
 logical value. Building each disjoint low/high pair locally reduces derived host
 stores without changing capacity:
@@ -2277,6 +2478,50 @@ separate padded classification, scan, and name resolution.
 The post-audit gate formatted 143 files, linted 125 files, type-checked every
 entry point, and passed 543 tests. `benchmark:syntax 1` selected llvmpipe and
 refused to emit performance JSON, so this audit adds no RTX timing row.
+
+## Blot CPU/GPU crossover diagnostic
+
+The two-sample
+[crossover record](measurements/blot-crossover-diagnostic-2026-08-02.json) is
+diagnostic because competing compiler and GPU work was present. It nevertheless
+checks every GPU artifact against CPU bytes and observes no crossover through
+2.69 million plan atoms or 256 independent modules. Representative emission
+medians were 0.030 versus 15.398 ms for one 16-add module, 4.813 versus 30.587
+ms for 256 such modules, and 38.994 versus 163.827 ms for 64 modules of 4,096
+adds. The corresponding complete-target medians were 0.293 versus 14.939, 49.286
+versus 75.431, and 646.352 versus 802.716 ms.
+
+The last cell localized 57.135–57.515 ms in partitioning and packing and
+56.741–75.999 ms in repeated packed-plan inspection plus column construction.
+Mapped device completion was 29.771–33.469 ms. Thus the current loss is not
+explained by final readback: redundant host-resident plan transformations exceed
+the complete CPU emitter before the device result is available. PAPER.md derives
+the GPU-resident plan boundary required to remove those passes. The same work
+also removed two quadratic value-type lookups from Blot lowering and canonical
+Core validation; all performance numbers above were recorded after both repairs.
+
+The follow-up
+[resident diagnostic](measurements/blot-crossover-resident-diagnostic-2026-08-02.json)
+retains dense validated input columns across emissions and discards their host
+mirrors. It adds a distinct resident boundary to the paired benchmark rather
+than subtracting preparation time after measurement. Under recorded contention,
+64 modules of 4,096 adds emitted in 72.121 ms on the CPU, 173.388 ms through
+cold GPU conversion, and 71.654 ms through resident columns; compatibility
+preparation cost 83.086 ms outside that resident interval. The nominal 0.467 ms
+resident win is not admissible because the CPU was also contended. Eight
+32,768-add modules with a similar 2.63-million-atom total measured 69.149 versus
+83.732 ms and showed severe device-completion variation, so module shape and GPU
+contention remain required predictors.
+
+Resident output uses one mapping synchronization. The 64-by-4,096 cell returned
+3,202,176 logical Wasm bytes from 7,970,368 bytes of output capacity. The
+emitter physically copies that conservative capacity plus terminal boundaries,
+then copies only the exact prefix into owned host arrays. Its result now reports
+physical, logical, and padding readback bytes. A two-map exact physical copy is
+not selected because the observed owned prefix copy was only 0.439--1.429 ms,
+well below another submission/mapping latency. `PAPER.md` states the adapter
+break-even inequality and the still-missing direct GPU stackifier/certificate
+boundary.
 
 ## Peer boundaries
 

@@ -35,6 +35,7 @@ import {
   type GpuWasmEmissionResult,
   type GpuWasmPhysicalPlan,
 } from "./gpu_wasm.ts";
+import { emitWasmPlanOnRustWasm } from "./rust_wasm_emitter.ts";
 import {
   type BlotRuntimeFunction,
   type BlotRuntimeModule,
@@ -59,6 +60,14 @@ export type GpuBlotRuntimeTargetArtifact = BlotRuntimeTargetArtifact & {
 
 export type GpuBlotRuntimeBatchArtifact = BlotRuntimeTargetArtifact & {
   readonly wasm: Uint8Array;
+};
+
+export type RustWasmBlotRuntimeBatchArtifact = BlotRuntimeTargetArtifact & {
+  readonly wasm: Uint8Array;
+};
+
+export type RustWasmBlotRuntimeBatch = {
+  readonly artifacts: readonly RustWasmBlotRuntimeBatchArtifact[];
 };
 
 export type GpuBlotRuntimeBatch = {
@@ -155,6 +164,28 @@ export function compileBlotRuntimeModule(
   return { ...lowered, core, manifest, manifestBytes };
 }
 
+export async function compileBlotRuntimeModulesOnRustWasm(
+  modules: readonly ValidatedBlotRuntimeModule[],
+  options: {
+    readonly target?: DucklangWasmTarget;
+  } = {},
+): Promise<RustWasmBlotRuntimeBatch> {
+  const planned = modules.map((module) =>
+    compileBlotRuntimeModule(module, {
+      emission: "planOnly",
+      target: options.target,
+    })
+  );
+  const artifacts: RustWasmBlotRuntimeBatchArtifact[] = [];
+  for (const [index, artifact] of planned.entries()) {
+    const module = modules[index]!;
+    const wasm = (await emitWasmPlanOnRustWasm(artifact.wasmPlan)).bytes;
+    requireBlotWasm(module, wasm, artifact.manifestBytes, "Rust/WebAssembly");
+    artifacts.push({ ...artifact, wasm });
+  }
+  return { artifacts };
+}
+
 export async function compileBlotRuntimeModuleOnGpu(
   module: ValidatedBlotRuntimeModule,
   options: {
@@ -247,7 +278,7 @@ export async function compileBlotRuntimeModulesOnGpu(
       );
     }
     moduleValidationTimings.push(
-      requireGpuBlotWasm(modules[index]!, wasm, artifact.manifestBytes),
+      requireBlotWasm(modules[index]!, wasm, artifact.manifestBytes, "GPU"),
     );
     return { ...artifact, wasm };
   });
@@ -292,17 +323,20 @@ export async function compileBlotRuntimeModulesOnGpu(
   };
 }
 
-function requireGpuBlotWasm(
+function requireBlotWasm(
   module: ValidatedBlotRuntimeModule,
   wasm: Uint8Array,
   manifestBytes: Uint8Array,
+  emitterName: "GPU" | "Rust/WebAssembly",
 ): {
   readonly wasmValidationMilliseconds: number;
   readonly manifestValidationMilliseconds: number;
 } {
   const wasmValidationStart = performance.now();
   if (!WebAssembly.validate(Uint8Array.from(wasm))) {
-    throw new Error(`${module.source}: GPU emitted invalid WebAssembly`);
+    throw new Error(
+      `${module.source}: ${emitterName} emitted invalid WebAssembly`,
+    );
   }
   const wasmValidationMilliseconds = performance.now() -
     wasmValidationStart;
@@ -316,7 +350,7 @@ function requireGpuBlotWasm(
     !byteArraysEqual(new Uint8Array(embeddedManifest[0]!), manifestBytes)
   ) {
     throw new Error(
-      `${module.source}: GPU emitted a blot:abi custom section that differs from its manifest bytes`,
+      `${module.source}: ${emitterName} emitted a blot:abi custom section that differs from its manifest bytes`,
     );
   }
   return {
@@ -372,58 +406,66 @@ export function lowerBlotRuntimeModuleToCore(
   }
   const functions: DucklangCoreFunction[] = module.functions.map((
     function_,
-  ) => ({
-    id: function_.id as CoreFunctionId,
-    name: function_.name,
-    sourceSymbolId: undefined,
-    signature: function_.signature as CoreSignatureId,
-    entryBlock: function_.entryBlock as CoreBlockId,
-    blocks: function_.blocks.map((block) => ({
-      id: block.id as CoreBlockId,
-      parameters: block.parameters.map((parameter) => ({
-        value: parameter.value as CoreValueId,
-        type: parameter.type as CoreTypeId,
-        span: parameter.span,
+  ) => {
+    const valueTypes = runtimeValueTypes(function_);
+    return {
+      id: function_.id as CoreFunctionId,
+      name: function_.name,
+      sourceSymbolId: undefined,
+      signature: function_.signature as CoreSignatureId,
+      entryBlock: function_.entryBlock as CoreBlockId,
+      blocks: function_.blocks.map((block) => ({
+        id: block.id as CoreBlockId,
+        parameters: block.parameters.map((parameter) => ({
+          value: parameter.value as CoreValueId,
+          type: parameter.type as CoreTypeId,
+          span: parameter.span,
+        })),
+        operations: block.operations.map((operation) =>
+          lowerOperation(
+            module,
+            operation,
+            valueTypes,
+            checkedIntegerHelpers,
+          )
+        ),
+        terminator: block.terminator.kind === "branch"
+          ? {
+            kind: "branch" as const,
+            target: block.terminator.target as CoreBlockId,
+            arguments: block.terminator.arguments.map((value) =>
+              value as CoreValueId
+            ),
+            span: block.terminator.span,
+          }
+          : block.terminator.kind === "conditional"
+          ? {
+            kind: "conditional_branch" as const,
+            condition: block.terminator.condition as CoreValueId,
+            trueTarget: block.terminator.consequent as CoreBlockId,
+            trueArguments: block.terminator.consequentArguments.map((value) =>
+              value as CoreValueId
+            ),
+            falseTarget: block.terminator.alternate as CoreBlockId,
+            falseArguments: block.terminator.alternateArguments.map((value) =>
+              value as CoreValueId
+            ),
+            span: block.terminator.span,
+          }
+          : block.terminator.kind === "return"
+          ? {
+            kind: "return" as const,
+            values: [block.terminator.value as CoreValueId],
+            span: block.terminator.span,
+          }
+          : {
+            kind: "trap" as const,
+            span: block.terminator.span,
+          },
       })),
-      operations: block.operations.map((operation) =>
-        lowerOperation(module, function_, operation, checkedIntegerHelpers)
-      ),
-      terminator: block.terminator.kind === "branch"
-        ? {
-          kind: "branch" as const,
-          target: block.terminator.target as CoreBlockId,
-          arguments: block.terminator.arguments.map((value) =>
-            value as CoreValueId
-          ),
-          span: block.terminator.span,
-        }
-        : block.terminator.kind === "conditional"
-        ? {
-          kind: "conditional_branch" as const,
-          condition: block.terminator.condition as CoreValueId,
-          trueTarget: block.terminator.consequent as CoreBlockId,
-          trueArguments: block.terminator.consequentArguments.map((value) =>
-            value as CoreValueId
-          ),
-          falseTarget: block.terminator.alternate as CoreBlockId,
-          falseArguments: block.terminator.alternateArguments.map((value) =>
-            value as CoreValueId
-          ),
-          span: block.terminator.span,
-        }
-        : block.terminator.kind === "return"
-        ? {
-          kind: "return" as const,
-          values: [block.terminator.value as CoreValueId],
-          span: block.terminator.span,
-        }
-        : {
-          kind: "trap" as const,
-          span: block.terminator.span,
-        },
-    })),
-    span: function_.span,
-  }));
+      span: function_.span,
+    };
+  });
   if (checkedIntegerSignature !== undefined) {
     const signedIntegerType = requiredRuntimeType(
       module,
@@ -518,8 +560,8 @@ function lowerTypes(module: BlotRuntimeModule): readonly DucklangCoreType[] {
 
 function lowerOperation(
   module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
   operation: BlotRuntimeOperation,
+  valueTypes: ReadonlyMap<number, number>,
   checkedIntegerHelpers: ReadonlyMap<
     "add" | "subtract" | "multiply",
     CoreFunctionId
@@ -541,8 +583,8 @@ function lowerOperation(
   if (operation.kind === "scalar") {
     const checkedHelper = checkedIntegerHelperForOperation(
       module,
-      function_,
       operation,
+      valueTypes,
       checkedIntegerHelpers,
     );
     if (checkedHelper !== undefined) {
@@ -662,14 +704,14 @@ function lowerOperation(
 
 function checkedIntegerHelperForOperation(
   module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
   operation: Extract<BlotRuntimeOperation, { readonly kind: "scalar" }>,
+  valueTypes: ReadonlyMap<number, number>,
   helpers: ReadonlyMap<
     "add" | "subtract" | "multiply",
     CoreFunctionId
   >,
 ): CoreFunctionId | undefined {
-  const operandType = runtimeValueTypes(function_).get(operation.operands[0]);
+  const operandType = valueTypes.get(operation.operands[0]);
   if (module.types[operandType ?? -1]?.kind !== "signed-integer-64") {
     return undefined;
   }

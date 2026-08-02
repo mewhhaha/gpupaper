@@ -6,6 +6,7 @@ import {
 import {
   compileBlotRuntimeModule as compileValidatedBlotRuntimeModule,
   compileBlotRuntimeModulesOnGpu,
+  compileBlotRuntimeModulesOnRustWasm,
 } from "../src/blot_runtime_target.ts";
 import {
   buildBlotAbiManifest,
@@ -75,6 +76,32 @@ Deno.test("Blot Runtime target emits an ordinal-preserving packed GPU batch", as
   assertEquals(empty.gpuEmissions.length, 0);
   assertEquals(empty.gpuBatch, undefined);
   assertEquals(empty.timings.totalMilliseconds, 0);
+});
+
+Deno.test("Blot Runtime target emits an ordinal-preserving Rust/WebAssembly batch", async () => {
+  const modules = [42n, 7n, -3n].map((value, ordinal) =>
+    validateBlotRuntimeModule(runtimeModule(
+      [constantFunction(0, `answer_${ordinal}`, value)],
+      [runtimeExport("default", "blot:default", 0)],
+    ))
+  );
+  const expected = modules.map((module) => compileBlotRuntimeModule(module));
+  const batch = await compileBlotRuntimeModulesOnRustWasm(modules);
+
+  assertEquals(batch.artifacts.length, 3);
+  for (const [ordinal, artifact] of batch.artifacts.entries()) {
+    assertBytesEqual(artifact.wasm, expected[ordinal].wasm!);
+    const instance = await instantiate(artifact.wasm, artifact.textLiterals);
+    assertEquals(call(instance, "blot:default"), [42n, 7n, -3n][ordinal]);
+  }
+  assertEquals(
+    batch.artifacts[0].wasm.buffer === batch.artifacts[1].wasm.buffer,
+    false,
+  );
+  assertEquals(
+    (await compileBlotRuntimeModulesOnRustWasm([])).artifacts.length,
+    0,
+  );
 });
 
 Deno.test("Blot Runtime target preserves dynamic scalar export parameters", async () => {

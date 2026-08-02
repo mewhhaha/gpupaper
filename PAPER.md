@@ -1089,9 +1089,31 @@ or thermal drift. A reported stage breakdown is one observed profile nearest the
 scalar median total, not a vector of independently selected component medians.
 Thus `accounted + unattributed = total` and all stage percentages refer to a
 possible execution. Parser sub-stage reports select an observed parse by the
-same rule. Medians and nearest-rank p95 values remain descriptive statistics;
-without independent repetitions and uncertainty intervals they do not establish
-a general speedup.
+same rule. A p95 is reported only for at least 20 retained observations; below
+that threshold the record exposes the maximum and an `insufficient` tail status.
+Twenty is an instrument policy, not a proof of estimator precision. Medians,
+MADs, and p95 values remain descriptive statistics; without independent process
+repetitions and uncertainty intervals they do not establish a general speedup.
+
+For positive adjacent times (L_i,R_i), comparison records both
+
+\[ \Delta_i=L_i-R_i \quad\text{and}\quad \rho_i=\log(L_i/R_i). \]
+
+The difference estimates additive latency cost. The log ratio is symmetric under
+exchanging alternatives, composes additively, and its reported scale factor is
+\(\exp(\operatorname{median}\rho_i)\). A ratio of independently selected
+marginal medians is retained only when labeled descriptive; it is not the paired
+estimator. Each stage vector used for explanation is selected from one observed
+execution nearest the median total. Consequently the measurement algebra cannot
+construct an impossible execution by independently selecting component medians.
+
+Iterations are nested inside fresh runtime processes. The executable recorder
+runs processes sequentially so their device work does not overlap and retains
+every process result. Process results are not flattened into one artificial
+sample: within-process pairs estimate short-timescale effects, while variation
+between fresh processes exposes initialization, JIT, allocator, and thermal
+state. The current records are descriptive at both levels; a confidence
+procedure remains unimplemented.
 
 For a batch size \(N\), observed latency break-even is the predicate
 \(\operatorname{median}_i(G_{N,i}-C_{N,i})\leq 0\). The difference of the two
@@ -1102,9 +1124,10 @@ particular, \(\max S\) is not a lower bound on a future crossover.
 
 Executable evidence consists of capacity-boundary tests, device-loss recovery,
 physical-batch isolation tests, generated CPU/GPU differentials for type
-closure, Core rewrites and Wasm plans, and the six-target required-GPU release
-gate. These establish implementation behavior for tested inputs; they do not
-prove arbitrary kernels correct.
+closure, deliberately noncanonical Core packages and Wasm plans, and the
+six-target release gate requiring construction-certified Core identity plus GPU
+Wasm emission. These establish implementation behavior for tested inputs; they
+do not prove arbitrary kernels correct.
 
 ### 7.2 Flat Core representation
 
@@ -1764,13 +1787,15 @@ logical device bytes:
 
 ```text
 4A                  atom-size column
-+ 12K               length frontier
++ 16K + 4n          payload-relative length frontier and module bases
 + 8(H + 2)          alternating hierarchy sums and prefixes
 + 16(|J| + 2h - 1)  per-pass uniforms
 ```
 
 The old inclusive-prefix readback word exactly offsets the new vector's one
-extra boundary word, so neither appears in the difference. Packed batches add
+extra boundary word, so neither appears in the difference. The additional
+payload word per length and base word per module are the price of virtual packed
+relocation: they remove an \(O(A)\) rebasing copy. Packed batches add
 device-required alignment between logical jobs; it does not change this per-job
 model. Host analysis work is \(O(A+D+\min(D,A+K\log K))\): validation retains
 \(D\), while length sizing chooses the smaller modeled representation.
@@ -2481,12 +2506,16 @@ validation, and the following timings are empirical measurements. None is
 silently promoted into a proof.
 
 The frozen SIMD microbenchmark ran on 2026-08-01 with Deno 2.9.4, V8 15.0.245.2,
-and an AMD Ryzen 7 7800X3D. Compiler samples are medians of 15 runs after three
-warmups and alternate scalar and SIMD targets. Runtime samples use one
-instantiated module per target, 100,000 calls per sample, 31 alternating
-samples, a consumed checksum, and distinct per-chain constants to prevent
-cross-chain common-subexpression collapse. The RTX 4080 SUPER does not execute
-these payload operations; it is irrelevant to this table.
+and an AMD Ryzen 7 7800X3D. The later protocol audit found that its compiler
+harness warmed only SIMD and always measured scalar before SIMD, contrary to the
+claimed alternating protocol. The timing columns below are therefore historical
+diagnostics, not admissible comparative evidence. Deterministic work counts and
+artifact sizes remain valid. The corrected harness warms both targets and uses
+16 balanced scalar-first/SIMD-first compiler pairs. Runtime samples use one
+instantiated module per target, 100,000 calls per sample, 32 balanced samples, a
+consumed checksum, and distinct per-chain constants to prevent cross-chain
+common-subexpression collapse. The RTX 4080 SUPER does not execute these payload
+operations; it is irrelevant to this table.
 
 | independent six-operation chains | source bytes | scalar/SIMD compile ms | SIMD stage ms | scalar/SIMD ns per call | scalar/SIMD Wasm bytes | modeled scalar/vector cost |
 | -------------------------------: | -----------: | ---------------------: | ------------: | ----------------------: | ---------------------: | -------------------------: |
@@ -2504,18 +2533,20 @@ their 11.697 ms sum lies below the 11.830 ms enclosing interval. The remaining
 0.133 ms is instrumentation and call-boundary remainder, so the profile
 containment invariant holds.
 
-Observed execution is not monotone at the smallest sizes: two chains are 1.4%
-slower despite positive recipe profit, while four, eight, and 32 chains are
-12.6%, 24.2%, and 28.5% faster. This is a counterexample to treating the current
-recipe units as calibrated cycles. Using independent median differences in the
-end-to-end equation gives approximate amortization counts of 676 thousand, 96
-thousand, and 360 thousand calls for four, eight, and 32 chains; the two-chain
-case has no break-even in this sample. The one-chain difference is only 0.499 ns
-and is too small to use as a threshold. These estimates are empirical hypotheses
-for this V8 and CPU, not portable planner constants.
+In that diagnostic run, observed execution was not monotone at the smallest
+sizes: two chains were 1.4% slower despite positive recipe profit, while four,
+eight, and 32 chains are 12.6%, 24.2%, and 28.5% faster. This is a
+counterexample to treating the current recipe units as calibrated cycles. Using
+independent median differences in the end-to-end equation gives approximate
+amortization counts of 676 thousand, 96 thousand, and 360 thousand calls for
+four, eight, and 32 chains; the two-chain case has no break-even in this sample.
+The one-chain difference is only 0.499 ns and is too small to use as a
+threshold. These estimates are empirical hypotheses for this V8 and CPU, not
+portable planner constants.
 
-`deno task benchmark:simd` reproduces the measurement and rejects a scalar/SIMD
-result mismatch or an unexpected accepted-plan count before reporting timings.
+`deno task benchmark:simd` runs the corrected protocol, retains raw paired
+differences and log ratios, and rejects a scalar/SIMD result mismatch or an
+unexpected accepted-plan count before reporting timings.
 
 ### 7.9 Advisory branch likelihood and resolved computations
 
@@ -2788,8 +2819,9 @@ empirical evidence that the supported V8 consumes useful metadata for this
 branch shape, plus a counterexample to deterministic improvement. It is not a
 performance proof for every aggregate selection or another engine.
 
-`deno task benchmark:branch-hints` reproduces one process-level measurement and
-rejects semantic disagreement before reporting.
+`deno task benchmark:branch-hints` now uses 100 module-construction and 32
+runtime samples, giving each order equal weight, and rejects semantic
+disagreement before reporting one process-level measurement.
 
 Among the six frozen applications, only Codex contains the residual aggregate
 selection shape admitted by the initial policy. Its deterministic module grows
@@ -2818,14 +2850,17 @@ work and critical-path depth separately [17, 36].
 
 For stage (i), record
 
-\[ C_i=(W_i,S_i,H_i,D_i,A_i,K_i,R_i), \]
+\[ C_i=(W_i,S_i,H_i,D_i,U_i,A_i,K_i,R_i), \]
 
 where (W_i) is primitive work, (S_i) dependency span, (H_i) host bytes read or
-written, (D_i) device bytes read or written, (A_i) allocated bytes, (K_i) queue
-submissions or host synchronizations, and (R_i) mapped readback bytes. For
-effective parallelism (P_i), host/device bandwidths (B_h,B_d), transfer
-bandwidth (B_t), allocation cost (c_a), submission latency (L), and mapping
-latency (M), the first calibration model is
+written, (D_i) device bytes read or written, (U_i) host-to-device upload bytes,
+(A_i) allocated bytes, (K_i) queue submissions or host synchronizations, and
+(R_i) mapped readback bytes. Host bytes count CPU memory traffic, whereas upload
+bytes count traffic across the host/device boundary; a byte may contribute to
+both terms when it is first read by the host and then uploaded. For effective
+parallelism (P_i), host/device bandwidths (B_h,B_d), transfer bandwidth (B_t),
+allocation cost (c_a), submission latency (L), and mapping latency (M), the
+first calibration model is
 
 \[ \widehat T_i = \max(W_i/P_i,S_i)c_i + H_i/B_h + D_i/B_d + (U_i+R_i)/B_t + A_i
 c_a + K_iL + [R_i>0]M. \]
@@ -2862,13 +2897,16 @@ current peer harness violates equal-boundary comparison: gpupaper measures
 Ducklang source to Wasm while gpufuck receives a prepared Surface module. It is
 useful as two named workload observations but not as a speedup denominator.
 
-The frontend benchmark now selects `gpuWasmVerification: "none"` and retains
-every warm profile rather than only the median representative. It still lacks
-the peer harness's process/GPU load inspection and consequently labels its
-output `diagnostic`; its stage distributions identify work but are not
-admissible performance claims. Differential mode intentionally constructs CPU
-bytes as an oracle and remains conformance evidence, never production GPU
-latency.
+The frontend benchmark now selects `gpuWasmVerification: "none"`, retains every
+warm profile, records repository/runtime/adapter/input identity, and applies the
+same process/GPU load inspection before and after measurement as the peer, Wasm,
+rebuild, break-even, and Blot harnesses. GPU process inspection treats every
+foreign compute process reported by the driver as contention; executable names
+are not an allowlist. CPU-only SIMD and branch harnesses ignore unrelated GPU
+work but still reject foreign compiler and Deno/Node runtime work.
+`--allow-contended` produces an explicitly diagnostic record rather than
+weakening admission. Differential mode intentionally constructs CPU bytes as an
+oracle and remains conformance evidence, never production GPU latency.
 
 #### Resident ownership state
 
@@ -3891,10 +3929,735 @@ For source-evaluation work `S` and `E` runtime exports, this changes
 compile-time work from `O(E S)` to `O(S+E)` without memoizing or discarding
 runtime effects.
 
+#### Revision-keyed Runtime-HIR memoization
+
+Warm batch measurements expose a second duplication boundary. `prepare()` is
+already memoized by Blot's `Loaded` object identity, but `prepareGpupaperHir()`
+repeats symbolic residualization and Runtime-HIR export on every call. The
+loader supplies a semantic revision token: an unchanged source/dependency
+closure returns the same `Loaded` object, while `refreshLoadedModules()` removes
+every changed module and transitive importer so the next load receives a fresh
+identity. A path alone is not such a token.
+
+Let \(l\) be a loaded revision, \(P(l)\) its checked/staged prepared module, and
+\(R(P(l))\) deterministic residualization plus HIR export. This is selective
+memoization with the loader identity as the explicit dependence key [12]. The
+cache is
+
+\[ K[l] = \operatorname{freeze}(R(P(l))). \]
+
+The lookup law is \(K[l]=R(P(l))\), not observational approximation. The batch
+entry point must refresh the loaded graph once before any lookup. A hit may
+return the same object only because the complete HIR object graph is frozen;
+otherwise a JavaScript consumer could mutate one result and corrupt later
+compilations. Failures are not cached. Weak identity keys allow obsolete
+revisions to die after the loader and bounded incremental tables release them.
+
+The invariants are:
+
+1. same loaded identity implies the exact same frozen HIR identity and bytes;
+2. a source or transitive dependency edit produces a fresh loaded identity and
+   cannot hit the old HIR;
+3. batch refresh occurs once before preparation, never once per module;
+4. validation and Wasm artifacts from cached and freshly derived HIR are
+   byte-identical; and
+5. no compiler-visible mutation is possible through a returned HIR reference.
+
+For module \(i\), let residualization/export cost be \(r_i\), HIR size \(h_i\),
+lookup cost \(q\), one-time freeze cost \(f_i=O(h_i)\), and let the same
+revision be prepared \(k_i\) times. The uncached work is \(\sum_i k_i r_i\);
+memoized work is \(\sum_i(r_i+f_i+(k_i-1)q)\), retaining \(\sum_i h_i\) bytes
+while revisions are live. A module benefits exactly when \((k_i-1)(r_i-q)>f_i\).
+Cold one-shot compilation may regress by \(f_i\); the resident and
+repeated-batch boundary is the intended case. Source refresh adds one
+file-content comparison per known loaded revision and must remain a separately
+measured stage rather than being hidden inside a cache-hit claim.
+
+Blot now implements this cache as a weak map from `Loaded` to deeply frozen
+Runtime HIR, and `buildGpupaperBatch` refreshes the loaded graph once before
+preparing any member. A hit therefore avoids residualization and export rather
+than merely avoiding parsing and checking. The executable evidence establishes
+same-revision reference identity, rejects mutation, and gives both a root edit
+and a transitive dependency edit fresh HIR with the changed value. The complete
+Blot suite passes 741 tests. Gpupaper admits all 54 top-level examples with all
+315 oracle observations and compiles all 54 to valid Wasm.
+
+The diagnostic record
+`measurements/blot-batch-hir-cache-diagnostic-2026-08-02.json` measures six warm
+capacity profiles. Refresh costs 0.741 ms median for the resident graph and 54
+cache lookups cost 0.132 ms median, or 2.44 microseconds per requested module.
+The frozen cache reaches 5,246 JavaScript objects whose JSON logical payload is
+295,194 bytes, 5,467 bytes per module and 1.69 times the 175,004 emitted Wasm
+bytes. JSON payload is a deterministic lower bound, not a measurement of V8 heap
+residency: object headers, hash-table capacity, strings, and weak-map storage
+remain unmeasured.
+
+The earlier diagnostic attributed 95.798 ms to repeated HIR preparation. Its
+input hash differs from the new record, both records observed contention, and
+the earlier record has only two samples, so their 726-fold raw preparation ratio
+and 2.83-fold total ratio are localization evidence rather than an admissible
+speedup estimate. The new record independently establishes the implemented
+warm-cache cost. It does not isolate the one-time freeze cost \(f_i\), so the
+cold break-even inequality above remains a model rather than a measured
+threshold.
+
+#### Revision-keyed final-artifact reuse
+
+HIR reuse removes repeated source semantics but still validates, plans, submits,
+reads back, and validates the same deterministic module. Let \(H\) be a frozen
+Runtime HIR revision that is validated before its first cache installation, let
+\(\gamma\) be the complete target configuration, and define
+
+\[ A_\gamma(H)=(W,M,C), \]
+
+where \(W\) is the validated Wasm byte string, \(M\) is the exact embedded and
+sidecar manifest byte string, and \(C\) is the sorted capability-name sequence.
+The current Blot gpupaper entry point has one fixed \(\gamma\), so frozen HIR
+object identity is a sufficient cache key within one loaded compiler process. A
+future target option must extend the key; silently sharing artifacts across
+different configurations would violate the function above.
+
+The selected incremental rule is
+
+\[ K_A[H]=\operatorname{copy}(A_\gamma(H)) \quad\text{only after successful
+target validation}. \]
+
+JavaScript typed arrays remain caller-mutable even when their containing record
+is frozen. The cache therefore owns byte arrays that are never returned and a
+hit publishes defensive copies. This costs work linear in artifact bytes but
+prevents a caller from changing a later build. Failed source preparation,
+validation, backend emission, or artifact validation installs no entry.
+
+For an ordered request \([H_0,\ldots,H_{n-1}]\), the batch algorithm classifies
+each ordinal as a hit, local failure, or miss; compiles the stable miss
+subsequence in one target batch; installs successful misses; and scatters copied
+artifacts back to source ordinals. Hits never enter the target batch. A miss
+batch failure changes only miss ordinals; prior hits remain successful. This is
+stable filtering followed by stable scatter, not completion-order scheduling.
+
+The invariants are:
+
+1. a cache hit returns byte-identical Wasm, manifest bytes, and capabilities;
+2. no returned typed array aliases cache-owned storage or another outcome;
+3. direct and transitive source changes produce a fresh HIR identity and miss;
+4. mixed hit/miss requests submit only misses and preserve every input ordinal;
+5. failures are absent from the cache and may succeed after a source repair;
+6. only fully validated successful artifacts are installed; and
+7. compiler-throughput measurements bypass this cache, while incremental-build
+   measurements exercise it.
+
+For module \(i\), let validation, planning, GPU execution/readback, and final
+validation costs be \(v_i,p_i,g_i,a_i\). Let \(b_i=|W_i|+|M_i|\), memory-copy
+bandwidth be \(B_h\), lookup cost be \(q\), and let one revision be requested
+\(k_i\) times. Uncached work is \(k_i(v_i+p_i+g_i+a_i)\). Cached work is one
+full compilation plus retained storage \(b_i\) and \((k_i-1)(q+b_i/B_h)\)
+publication work. A hit benefits exactly when
+
+\[ q+b_i/B_h < v_i+p_i+g_i+a_i. \]
+
+This cache does not make changed-module compilation faster. It discards
+unchanged work before scheduling; the existing direct Runtime-HIR target remains
+the cache-bypassing boundary for measuring and optimizing real compiler
+throughput.
+
+Blot now implements \(K_A\) as a weak map from frozen HIR identity to
+cache-owned Wasm, manifest bytes, and a frozen capability sequence. The public
+outcome reports whether an artifact was `compiled` or came from the
+`revision-cache`. Batch construction converts and checks the complete returned
+miss batch before installing any member, then returns fresh byte arrays and a
+fresh capability array for both hits and misses. Six GPU integration tests cover
+local failure isolation, mutation of both byte arrays and capabilities, direct
+and transitive edits, reverse-ordered mixed hit/miss scatter, and
+failed-then-repaired source. The existing HIR tests separately establish the
+revision identity and dependency invalidation premises.
+
+`benchmark:blot-batch` now exposes two named boundaries in one fresh-process
+record. `incrementalRebuild` invokes the public API and asserts that every warm
+success is a revision-cache hit. `compilerThroughput` starts from frozen HIR,
+calls validation and the Runtime-HIR GPU target directly, and therefore cannot
+hit the artifact cache. Candidate source failures are retained with their exact
+causes; the benchmark neither times them as target work nor silently claims the
+entire live corpus was admitted.
+
+The diagnostic record
+`measurements/blot-batch-artifact-cache-diagnostic-2026-08-02.json` observed a
+concurrently changing Blot worktree with 56 top-level candidates, 18 admitted
+target modules, 101 oracle observations, and 38 explicit rejections. A later
+recording after another concurrent edit admitted 19 modules and retained 37
+rejections; that final machine-readable record is authoritative. For those 19
+revisions, packed unchanged rebuilds cost 0.795 ms median and 19 separate public
+calls cost 12.794 ms median. The cache retains 53,366 Wasm bytes, 41,400
+manifest bytes, and 82 logical capability-name bytes, or 94,848 logical bytes
+before typed-array and object headers. The cache-bypassing capacity profile cost
+28.304 ms median: 6.986 ms planning and 19.523 ms GPU emission dominated it. The
+record observed competing work and has six samples, so these are diagnostic
+boundary measurements, not an admissible speedup estimate. Its complete-corpus,
+admitted-subset, and output hashes are respectively
+`28b865e8ff72ed62cda138778f0df1ecf85042b6be968b38dee8be031d0eb01d`,
+`a8b9fec1cab989d49c6c1c238713e59eacc8c78d99160c1e663bb5ca5312aea4`, and
+`7b023f7b8f60052da7a6fe4ed871852526fa0fdab18f059d6c72a7fd64c96c80`. Gpupaper's
+complete suite passes 609 tests, including all six new GPU cache tests. Blot
+type-checks, but its concurrently edited worktree currently passes 526 tests and
+fails 224 across inference, lowering, and unrelated source semantics. That dirty
+sibling state prevents a clean whole-Blot-suite claim; the target admission and
+rejection vectors above are retained instead of concealing the boundary.
+
+#### CPU/GPU crossover is two-dimensional
+
+“More code” is not one workload variable. Let \(n\) be the number of mutually
+independent Runtime-HIR modules in one request, let \(a_i\) be the final Wasm
+plan atoms for module \(i\), and let \(A=\sum_i a_i\). Increasing one \(a_i\)
+exposes instruction-level work inside one dependency graph. Increasing \(n\)
+also exposes independent payloads and amortizes submission, allocation, mapping,
+and readback boundaries. These transformations have different depth and fixed
+costs and must not be conflated.
+
+For the present target, both backends first perform the same deterministic
+Runtime-HIR validation, Core lowering, stackification, and Wasm planning. Write
+that common host cost as \(P(n,A)\). A descriptive first-order model is
+
+\[ T_C=P(n,A)+c_0+c_n n+c_a A, \qquad T_G=P(n,A)+g_0+g_n n+g_a A. \]
+
+The constants are adapter-, runtime-, layout-, and workload-specific empirical
+coefficients, not semantic constants. The GPU can beat the CPU only where
+
+\[ \Delta(n,A)=T_G-T_C= (g_0-c_0)+(g_n-c_n)n+(g_a-c_a)A<0. \]
+
+For \(n=1\), making one module larger has a finite crossover only if
+\(g_a<c_a\), in which case the fitted threshold is
+\(A^\star=-((g_0-c_0)+(g_n-c_n))/(g_a-c_a)\). If \(g_a\ge c_a\), no amount of
+code within the validity range of this affine model repays the GPU boundary. For
+a fixed module shape with \(a\) atoms, batching has a finite crossover only if
+\((g_n-c_n)+(g_a-c_a)a<0\), with \(n^\star=-(g_0-c_0)/((g_n-c_n)+(g_a-c_a)a)\).
+These are conditional algebraic consequences of a fitted model, not proofs that
+its slopes remain linear outside the measured range.
+
+The physical lower bound is stricter. A discrete GPU request has nonzero command
+encoding, queue, synchronization, and mapped-readback latency \(L_G>0\).
+Compilation also has to read \(\Omega(A)\) plan words and produce \(\Omega(Y)\)
+output bytes. Thus
+
+\[ T_G \ge L_G+\max(Aw/B_G,\;W_G/P_G)+Y/B_R, \]
+
+where \(w\) is input bytes per atom, \(B_G\) and \(B_R\) are effective device
+and readback bandwidths, \(W_G\) is shader work, and \(P_G\) is effective
+parallel throughput. This bound makes zero-latency singleton GPU compilation
+physically impossible under the current host-visible API. It does not preclude a
+crossover: sufficiently many independent atoms can amortize \(L_G\) if their
+marginal GPU cost is lower. Conversely, occupancy alone cannot establish a
+speedup when the CPU has the lower marginal cost.
+
+The frozen Wasm-plan diagnostics are counterexamples to an unconditional
+single-module crossover claim. At 204,168 Codex atoms, direct CPU byte emission
+was 3.624 ms median and GPU emission was 27.043 ms; the five smaller targets
+also favored the CPU. The packed editor-shaped series gives a different but
+still unresolved case: 64 CPU emissions extrapolate to about 25.46 ms from the
+0.398 ms singleton median, while packed GPU emission measured 28.581 ms. That
+near boundary is not a matched paired observation and cannot establish a
+crossover.
+
+`benchmark:blot-crossover` therefore constructs validated synthetic Runtime HIR
+without involving Blot's moving source corpus. It varies chain length and
+logical module count independently, prepares one exact Wasm plan per shape, and
+measures two boundaries: plan-to-bytes emission and validated Runtime-HIR to
+validated Wasm. CPU and GPU order is counterbalanced inside every cell. Every
+GPU artifact must be byte-identical to the independent CPU artifact before a
+timing is retained. The report retains atoms, output bytes, physical payload
+partitions, raw paired samples, observed cells, and a descriptive affine fit.
+The fit is an unverified interpolation until an admissible run supplies stable
+residuals; an observed byte mismatch is a correctness failure rather than a
+performance sample.
+
+The first attempted 262,144-operation run falsified the assumption that the
+common host term was linear. Checked-integer lowering reconstructed the complete
+function value-type map inside every operation lookup. For \(V_f\) values and
+\(O_f\) operations in function \(f\), the implementation performed
+
+\[ \Theta\!\left(\sum_f O_fV_f\right), \]
+
+which is quadratic for a single arithmetic chain. This was an implementation
+counterexample, not a physical GPU limit. The typing judgement already assigns
+one immutable environment \(\Gamma_f :
+\text{ValueId}\rightharpoonup\text{TypeId}\) to each validated function.
+Lowering now materializes \(\Gamma_f\) once and passes it to every operation
+rule. Construction takes \(\Theta(V_f)\) work and space; all operation queries
+take expected \(O(1)\), so the boundary becomes expected \(O(\sum_f(V_f+O_f))\).
+The existing Runtime-HIR validator proves that every operand has a dominating
+definition before this lookup. Rebuilding the same map cannot add semantic
+evidence and is forbidden by this representation rule.
+
+The next run exposed the same anti-pattern at the following trust boundary.
+Canonical Core validation built a definition map, but operand type checks then
+searched every block parameter and operation linearly. A one-block chain again
+required \(\Theta(O_fV_f)\) work. The definition judgement is more precisely
+
+\[ \Delta_f(x)=(b,k,\tau), \]
+
+where value \(x\) is defined in block \(b\) at operation ordinal \(k\) with type
+\(\tau\). Core validation now constructs the definition-position and type
+projections together during its first pass. Dominance uses the former and all
+typing rules use the latter in expected constant time. This preserves the same
+undefined-value and duplicate-definition failures while reducing type-checking
+work to expected \(O(V_f+O_f+E_f)\), excluding the separately stated dominator
+algorithm. A failed 32,768-add diagnostic measured 1,990.653 ms for complete CPU
+target compilation while its already prepared plan emitted in 5.533 ms; that
+observation localizes the invalid model but is not retained as a post-repair
+performance claim.
+
+The post-repair diagnostic record
+[blot-crossover-diagnostic-2026-08-02.json](measurements/blot-crossover-diagnostic-2026-08-02.json)
+contains two paired observations per cell under recorded compiler and GPU
+contention. It is correctness and localization evidence, not an admissible
+speedup result. Every GPU artifact equals the independent CPU byte string. No
+CPU/GPU crossover was observed at either boundary:
+
+| chain adds | modules | total atoms | CPU emit ms | GPU emit ms | CPU full ms | GPU full ms |
+| ---------: | ------: | ----------: | ----------: | ----------: | ----------: | ----------: |
+|         16 |       1 |       1,285 |       0.030 |      15.398 |       0.293 |      14.939 |
+|         16 |     256 |     328,960 |       4.813 |      30.587 |      49.286 |      75.431 |
+|      4,096 |      64 |   2,693,568 |      38.994 |     163.827 |     646.352 |     802.716 |
+|     32,768 |       1 |     328,808 |       4.753 |      98.421 |     104.130 |     210.601 |
+|     32,768 |       8 |   2,630,464 |      38.304 |     195.013 |     894.601 |   1,147.294 |
+
+Module count and atom count are independently relevant. The two roughly
+2.6-million-atom cells have similar CPU emission but differ by 31.186 ms on the
+GPU despite similar output size. A scalar “bytes of source” threshold therefore
+cannot select this backend; plan shape, dependency ranges, and physical
+partition work are required predictors.
+
+The descriptive emission fit estimates
+\(\Delta=27.727-0.0872n+4.529\times10^{-5}A\) milliseconds, with 17.963 ms
+root-mean-square residual. The positive atom coefficient predicts no
+single-module crossover inside the model. Its extrapolated 16-add crossover is
+956 modules, far outside the largest measured 256-module cell, which still had a
+positive 25.775 ms GPU premium. The complete-target fit likewise has a positive
+atom coefficient and 25.348 ms residual. These residuals and counterexamples
+make both fits hypotheses; the observed no-crossover cells are the evidence.
+
+The 64-by-4,096 cell explains why merely adding host-produced code cannot close
+the gap. The two GPU samples spent 57.135–57.515 ms partitioning and packing
+before physical emission. Physical emission then spent 56.741–75.999 ms
+inspecting the packed plan and constructing columns. Those host passes alone
+exceed the complete 38.994 ms CPU emitter. Mapped device completion was only
+29.771–33.469 ms, and final readback copying was 0.227–0.566 ms. Therefore the
+gap is not a physical output-transfer lower bound. It is principally an
+algorithmic boundary mismatch: a host object plan is inspected, copied into a
+packed object plan, inspected again, converted to structure-of-arrays columns,
+and only then submitted.
+
+This yields a conditional feasibility result. If the plan remains a host object,
+the GPU path has at least two additional \(\Omega(A)\) host passes before doing
+the same necessary output work, so larger plans do not asymptotically erase the
+measured disadvantage while those passes have higher combined marginal cost than
+direct CPU emission. If the preceding lowering produces validated GPU-resident
+columns and a capacity witness directly, partitioning becomes \(O(n)\) scalar
+metadata work, atom packing becomes virtual prefix rebasing, column construction
+disappears, and only terminal bytes cross to the host. The 29.771–33.469 ms
+mapped completion interval versus 38.994 ms CPU emission shows that such a
+boundary is physically capable of being competitive for this large independent
+batch. It does not prove a speedup under a clear environment.
+
+Amdahl's law sets the more important complete-compiler restriction. In the
+64-by-4,096 cell, replacing the 38.994 ms CPU emitter with a zero-time emitter
+could improve 646.352 ms by at most \(646.352/(646.352-38.994)=1.064\), or 6.4%.
+In the eight-by-32,768 cell the corresponding limit is
+\(894.601/(894.601-38.304)=1.045\), or 4.5%. More code makes this project useful
+only if Core construction, stackification, layout, and validation also move to
+the GPU or are discarded by revision caching. Accelerating only final Wasm bytes
+is not a route to a large end-to-end gain.
+
+The next representation boundary is therefore derived, not optional:
+
+1. the producer emits immutable GPU-resident Wasm-plan columns plus a checked
+   structure/capacity witness;
+2. a stable exclusive scan assigns logical module atom bases without copying
+   host atom objects;
+3. length ranges are stored relative to a module base and interpreted with that
+   base, so packing requires no atom rewrite;
+4. GPU validation differentially checks the witness and byte output against the
+   current CPU oracle; and
+5. only final artifact boundaries and bytes are mapped to the host.
+
+Until those invariants are implemented, the CPU emitter is the performance
+oracle for host-resident plans, packed GPU emission is justified only relative
+to separate GPU submissions or by a GPU-residency requirement, and unchanged
+revisions should use the artifact cache rather than either emitter.
+
+#### Resident Wasm-plan calculus
+
+The migration target is an affine device resource, not another host snapshot.
+For device identity \(d\), define
+
+\[ R_d=(K,L,H,Q,I,P,\Lambda,C), \]
+
+where \(K,L,H\) are dense per-atom kind, low-word, and high-word device columns;
+\(Q,I\) are local length-range and local length-atom columns; \(P\) is the
+stable payload atom-base column; \(\Lambda\) partitions length ranks by
+dependency level; and \(C\) is the validated capacity certificate. Dense
+per-atom columns deliberately replace the compact host-transfer representation:
+they permit a preceding GPU pass to write atom \(j\) independently and permit
+payload segments to be copied device-to-device without cross-payload bit-word
+repair. Compact nibbles and ranked bytes are profitable only at a host upload
+boundary, which residency removes.
+
+Every length record stores
+
+\[
+(\text{payload},\text{localAtom},\text{localStart},\text{count},\text{level}).
+\]
+
+The sizing kernel resolves global positions as
+\(P[\text{payload}]+\text{localAtom}\) and
+\(P[\text{payload}]+\text{localStart}\). Therefore stable batching concatenates
+payload address intervals and scans their sizes, but rewrites no atom or length
+record. This is segmented relocation by a base environment, the same algebra as
+link-time section-relative relocation. It replaces \(\Theta(A)\) host atom
+rebasing with \(O(n)\) base metadata and any device-to-device segment copies
+already required by ownership.
+
+The certificate is
+
+\[ C=(d,n,A,Y,\ell,D,\Lambda,\rho), \]
+
+with payload count \(n\), atom count \(A\), maximum output capacity \(Y\),
+length count \(\ell\), dependency work \(D\), level regions \(\Lambda\), and the
+exact storage/dispatch resource witness \(\rho\). Construction accepts a
+resident plan only after checking:
+
+1. payload bases start at zero, strictly increase, and end at \(A\);
+2. every local atom and range is confined to its payload interval;
+3. length levels are topologically ordered and agree with \(\Lambda\);
+4. all device buffers belong to \(d\) and meet the sizes certified by \(\rho\);
+5. \(Y\), all prefix sums, and all copy ranges are safe integers and fit the
+   adapter; and
+6. ownership is affine: one resident handle releases every retained lease
+   exactly once, emission only borrows it, and use after release fails before
+   command encoding.
+
+For a host-created compatibility plan, conversion still costs \(\Theta(A+\ell)\)
+host work and \(\Theta(A+\ell)\) upload. It can amortize that cost across
+repeated emissions but cannot support a cold speedup claim. The important
+producer contract accepts already-resident dense columns and a certificate from
+the preceding GPU lowering. Under that contract, preparation cost is
+\(O(n+|\Lambda|)\) host metadata, no atom column crosses PCIe, and emission
+borrows the producer's buffers. A differential oracle must construct the old
+host plan outside the measured resident boundary until generated tests cover
+every atom form, dependency level, payload partition, and capacity edge.
+
+WebGPU creates one unavoidable terminal-layout choice. Copy command sizes are
+encoded by the host; a shader cannot make a buffer-copy command consume the
+final scan offset indirectly. A one-submission emitter can copy conservative
+capacity \(Y\), map it once, and publish only the exact prefix \(y\le Y\). An
+exact physical transfer must instead map the terminal offset, then issue and map
+a second copy of exactly \(y\) bytes. If mapping/submission latency is \(L_m\)
+and the avoided padding is \(Y-y\), exact transfer is profitable only if
+
+\[ (Y-y)/B_R > L_m. \]
+
+The one-submission mode is selected unless this inequality is supported by an
+adapter measurement. Both modes return only owned exact artifact bytes; they
+differ in physical transfer volume and synchronization depth, which benchmarks
+must report separately.
+
+The compatibility implementation now realizes the affine consumer half of this
+calculus. `createGpuResidentWasmPlans` validates ordinary host plans, constructs
+dense columns directly without first constructing a rebased packed atom graph,
+uploads each capacity-safe physical partition once, and then drops every host
+typed-array mirror. The retained host state is only payload boundaries, level
+regions, scalar layout metadata, and the certificate. An emission borrows the
+input leases and allocates fresh size, offset, output, and readback scratch.
+Capacity partitioning passes its validated structure witness into column
+construction, so compatibility creation performs one structural inspection
+rather than two independent \(\Theta(A+D)\) inspections. Calling `release`
+during a borrow marks the handle dead and defers lease return until the last
+borrower finishes; double release and use after release fail. Thus repeated
+emission implements items 2 and 3 of the derived boundary and the consumer side
+of item 4. It does not yet implement item 1's important case: no current GPU
+stackifier produces (R_d), so compatibility creation still pays one
+(Theta(A+\ell)) host construction and upload. Calling that path direct GPU
+production would erase the exact boundary the model is intended to expose.
+
+The retained dense input size before allocator rounding is
+
+\[ M_R=12A+16\ell+4n+16(1+|\Lambda|)\ \text{bytes}, \]
+
+because kind, low, and high words are dense, each length has atom, payload,
+range-start, and range-count words, each payload has one base, and every level
+plus the scalar pass has a four-word uniform. This deliberately spends more
+device memory than ranked host-transfer columns to make independent GPU writes
+and zero-rewrite concatenation possible. The certificate reports actual leased
+bytes after minimum-buffer and pool rounding. A `u32` atom or output domain and
+all adapter buffer/dispatch limits are checked before a resident handle is
+published.
+
+The two-sample
+[resident crossover diagnostic](measurements/blot-crossover-resident-diagnostic-2026-08-02.json)
+ran on the RTX 4080 SUPER while another Deno GPU process was resident, so it is
+correctness and localization evidence, not an admissible speedup claim. Every
+resident output was byte-identical to independent CPU emission. Representative
+medians are:
+
+| chain adds | modules | total atoms | CPU emit ms | cold GPU ms | resident GPU ms | resident preparation ms |
+| ---------: | ------: | ----------: | ----------: | ----------: | --------------: | ----------------------: |
+|         16 |     256 |     328,960 |       7.802 |      30.977 |          17.692 |                  19.865 |
+|        256 |     256 |     943,616 |      30.255 |      54.856 |          19.682 |                  42.200 |
+|      4,096 |      64 |   2,693,568 |      72.121 |     173.388 |          71.654 |                  83.086 |
+|     32,768 |       8 |   2,630,464 |      69.149 |     149.643 |          83.732 |                  99.207 |
+
+The 64-by-4,096 cell removes 101.734 ms from the repeated boundary and is
+nominally 0.467 ms below the paired CPU median, which confirms that host plan
+conversion was the dominant removable term there. This is not an admissible
+crossover: CPU contention inflated the CPU median relative to the prior
+diagnostic, the two device-completion observations were 56.223 and 65.726 ms,
+and the similar-atom eight-by-32,768 cell had a 44.065 versus 111.578 ms
+completion spread. Module shape and external scheduling remain material hidden
+variables. The measured actual/capacity output for the 64-by-4,096 cell was
+3,202,176/7,970,368 bytes. Even though the single-map mode physically copied
+4,768,192 padding bytes, owned host prefix copying took only 0.439--1.429 ms;
+adding another submission and mapping synchronization is therefore not justified
+by this diagnostic. The result reports `physicalReadbackBytes`,
+`logicalReadbackBytes`, and `readbackPaddingBytes` so a different adapter can
+test the inequality rather than inherit this choice.
+
+Executable validation currently consists of CPU structural validation before
+compatibility upload plus CPU/GPU byte differential tests covering nested
+lengths, multiple physical partitions, repeated borrow, ordinal isolation, and
+release races. A future direct GPU producer needs a producer-issued certificate
+and a GPU validation pass before it can bypass the host structural oracle. That
+missing proof boundary, not buffer adoption syntax, is the remaining part of
+items 1 and 4.
+
+#### Three-backend Wasm-emission equivalence
+
+The CPU comparison must not depend on JavaScript object traversal alone. Define
+the emission semantics as the partial function
+
+\[ E:P\rightharpoonup B, \]
+
+from a structurally valid `WasmBinaryPlan` to its unique byte string. The
+TypeScript/V8, Rust/WebAssembly, and WGSL implementations are conforming
+backends exactly when they accept the same supported plan domain and, for every
+accepted plan $P$, return the same $E(P)$. The WebAssembly integer encodings are
+fixed by the Core Specification [27]; backend agreement is executable evidence,
+while engine validation of $E(P)$ is a distinct module-validity check and not a
+proof that the three algorithms agree.
+
+The Rust/WebAssembly boundary uses version 2 of a four-column atom ABI. For atom
+index $i$ and atom count $A$, the contiguous input words are:
+
+```text
+kind[i]    : byte | unsigned | signed32 | signed64 | length
+first[i]   : scalar low word or length-local range start
+second[i]  : signed64 high word or length range count
+third[i]   : zero for scalars or length dependency level
+```
+
+This representation is injective over the current atom domain. Signed 32-bit
+values are recovered by two's-complement interpretation of `first[i]`, and
+signed 64-bit values by concatenating `second[i]` and `first[i]`. A length atom
+needs exactly the remaining three columns. Host ingestion rejects values that
+cannot be represented before coercion, and the Rust module independently checks
+kinds, scalar reserved words, ranges, strict dependency-level descent, and the
+declared maximum level. The memory32 boundary additionally requires
+$16A\le2^{32}-1$ before allocating the host column vector or calling the u32
+word-count export; larger inputs fail before JavaScript-to-WebAssembly coercion.
+The Rust implementation sorts length atom indices by `(level, atomIndex)` once;
+emission then evaluates each topological level and publishes no partial output
+on failure.
+
+A Rust instance owns a linear plan table. Preparation copies the `16A`-byte
+column vector into WebAssembly memory, validates it, computes the unique $E(P)$,
+and returns an affine handle retaining those encoded bytes. Because the plan is
+immutable and $E$ is a function, the memoization equation
+
+\[\operatorname{emit}(\operatorname{prepare}(P))=E(P)\]
+
+holds for every later live-handle emission without re-reading the atoms.
+JavaScript immediately copies the retained pointer/length into an owned
+`Uint8Array`; caller mutation therefore cannot alter the memoized witness.
+Releasing a handle removes its bytes and invalidates the published pointer;
+stale or double use fails. The module's shared input and current-output handle
+make calls sequential within one instance. Parallel CPU emission requires
+independent instances, which is an explicit scheduling choice rather than
+unsound shared mutation.
+
+The scalar sizing pass uses constant-work bit formulas rather than simulating an
+encoding loop. For an unsigned $N$-bit word $x$, let
+$b_u=N-\operatorname{clz}(x)$. Its canonical unsigned LEB size is
+
+\[s_u(x)=\max(1,\lceil b_u/7\rceil).\]
+
+For a signed two's-complement word, let $m=x\oplus(x\gg_{arith}(N-1))$: positive
+values remain unchanged and negative values become their bitwise complement.
+Then
+
+\[s_s(x)=\lceil(N-\operatorname{clz}(m)+1)/7\rceil.\]
+
+The extra bit is the required sign witness. The boundary cases $0,-1,63,-64,
+64,-65$ and both signed extrema show that this is the same stopping condition as
+canonical signed LEB emission. These formulas change sizing work from up to five
+scalar loop iterations for u32/i32 and ten for i64 to one bounded sequence;
+actual variable-length byte emission remains scalar.
+
+For atom count $A$, dependency work $D$, length count $K$, and output bytes $y$,
+TypeScript direct emission has work $O(A+D+y)$. Cold Rust/Wasm has the same
+algorithmic work plus `16A` host-to-linear-memory traffic and $y$ owned-output
+traffic. Preparation has temporary logical storage $16A+A+4K+y+O(1)$ bytes for
+columns, one-byte sizes, length payloads, and the encoded witness. After
+preparation it retains only $y+O(1)$ logical bytes per live plan. Resident
+emission pays $O(1)$ handle selection plus the unavoidable $\Omega(y)$
+owned-output copy, and no atom or dependency work. GPU resident emission has the
+same logical atom work, parallel scan span, one device submission/mapping
+latency, and conservative physical readback capacity $Y\ge y$. Therefore no
+scalar size threshold alone orders the three backends: cold/resident state, $D$,
+$A$, $y$, batch shape, and initialization state are required coordinates.
+
+The benchmark must report four non-overlapping intervals: WebAssembly module
+compile/instantiate, plan ingestion, emission, and owned-output copying. Cold
+Rust numbers include ingestion; resident numbers exclude it only by retaining a
+real affine handle before the timed interval. Module initialization is reported
+separately and may be amortized only by a long-lived process. Every measured
+output is compared byte-for-byte with the TypeScript oracle before any timing is
+admitted. Counterexamples include every scalar boundary, nested and sparse
+length levels, invalid same-level dependencies, release misuse, and repeated
+emission after the caller mutates an earlier returned byte array.
+
+SIMD is a preparation optimization, not part of resident emission after
+memoization. The implemented structure-of-arrays ABI has four contiguous u32
+columns `kind`, `first`, `second`, and `third`; it has `16A` bytes and four host
+stores per atom, and four adjacent atom fields can be loaded by one `v128.load`.
+For $A=4q+r$, $0\le r<4$, the SIMD validator applies the scalar validity
+predicate lane-wise to $q$ vectors and the unchanged scalar predicate to the
+$r$-atom tail. Reduction accepts a vector exactly when no lane reports an
+invalid kind, byte range, or reserved word, preserving the scalar domain.
+Range-dependency validation and variable-length byte placement remain scalar
+because fixed-width WebAssembly SIMD has no general gather/scatter and their
+work is irregular.
+
+Length payload sizing is regular: each dependency contributes one size byte. For
+a range of $c=16q+r$ entries, the implementation loads $q$ `v128` chunks, uses
+unsigned pairwise widening addition from 16 u8 lanes to four u32 lanes, reduces
+those exact partial sums into u64, and folds the $r<16$ tail scalarly. Each u32
+lane sums four values of at most ten and therefore cannot overflow; the u64
+accumulator preserves the existing explicit u32 payload-limit check. Ranges
+shorter than 16 execute only the scalar tail [27, 29, 31, 48].
+
+The implementation is a dependency-free Rust `cdylib` compiled for
+`wasm32-unknown-unknown` with fixed-width `simd128`. Its checked-in 46,554-byte
+artifact exports only linear memory and the versioned preparation, emission,
+release, output, and error functions. The TypeScript boundary writes native
+`Uint32Array` columns on a little-endian host and performs an explicit
+little-endian conversion otherwise; this preserves the ABI without imposing four
+`DataView` calls per atom on the measured platform. Released plans are removed
+from a `HashMap` keyed by a monotonically increasing handle, so retained plan
+memory is proportional to live handles rather than historical calls. Exhausting
+the non-error u32 handle domain fails instead of reusing a stale identity. The
+temporary input vector is freed after parsing. WebAssembly linear memory cannot
+shrink, so physical pages remain at the instance high-water mark and are
+allocator-reusable; resident memory claims therefore distinguish live logical
+allocations from physical linear-memory capacity.
+
+Backend selection is a total policy over a chosen CPU emitter
+$C\in\{E_{TS},E_{RW}\}$ and GPU mode. CPU-only compilation returns $C(P)$.
+Differential GPU compilation evaluates both $C(P)$ and $E_{GPU}(P)$ and returns
+the GPU bytes only after exact equality. Optional authoritative GPU compilation
+returns GPU bytes when available and otherwise evaluates $C(P)$; required
+authoritative mode never evaluates a CPU emitter. Thus choosing Rust/WebAssembly
+changes neither the accepted source semantics nor the fallback domain. It only
+substitutes an independently implemented realization of $E$ at a boundary where
+CPU bytes are required. The CLI exposes this choice as `--rust-wasm-emitter`,
+and `CompilationOptions.cpuWasmEmitter` exposes it as `"rust-wasm"`.
+
+A Ducklang compilation-session identity includes the CPU emitter choice. This is
+necessary even though byte equivalence predicts the same artifact: backend and
+timing evidence are observable fields of the returned compilation record, so
+reusing a TypeScript record for a Rust request would falsify its provenance.
+Executable integration tests compile both the Haskell-like and Ducklang
+frontends through both CPU emitters, compare exact bytes, validate and execute
+the Rust-produced modules, and exercise distinct session identities. The public
+option boundary rejects any third CPU-emitter name before lowering. The compiler
+deliberately uses the cold Rust path because each lowering produces a new plan;
+retaining a plan is an explicit low-level operation and cannot be inferred
+across compilations from equal source text.
+
+The two-sample GPU portion and 101-sample CPU portions in
+[wasm-rust-diagnostic-2026-08-02.json](measurements/wasm-rust-diagnostic-2026-08-02.json)
+ran before resident memoization with recorded compiler and GPU contention. The
+following historical medians are diagnostic rather than admissible speedup
+claims:
+
+| target    |   atoms | TypeScript ms | cold Rust/Wasm ms | resident Rust/Wasm ms | dense GPU ms |
+| :-------- | ------: | ------------: | ----------------: | --------------------: | -----------: |
+| editor    |  23,923 |         0.649 |             1.235 |                 0.217 |       14.421 |
+| codex     | 204,168 |         6.812 |            10.763 |                 1.748 |       34.909 |
+| grep      |   3,897 |         0.116 |             0.211 |                 0.037 |       13.099 |
+| tar       |  22,201 |         0.572 |             1.142 |                 0.194 |       15.674 |
+| wav       |   2,477 |         0.068 |             0.129 |                 0.024 |       12.487 |
+| raytracer |   3,851 |         0.103 |             0.197 |                 0.035 |       12.901 |
+
+Cold Rust/Wasm is 1.58--2.00 times the TypeScript median because atom
+serialization and Rust validation dominate. Resident Rust/Wasm is 0.257--0.353
+times the TypeScript median on all six targets. For Codex, its 1.722 ms Rust
+execution and 0.021 ms owned copy explain nearly all of the 1.748 ms boundary;
+cold serialization and copy/validation have 5.220 and 3.532 ms medians. The
+single initialization observation was 0.589 ms and is not a distribution. Using
+each one-time resident preparation observation, the descriptive session
+break-even is 2--10 emissions depending on target, or two for Codex. This is a
+hypothesis under contention, not a backend selection rule.
+
+The post-memoization and SIMD
+[diagnostic record](measurements/wasm-rust-simd-diagnostic-2026-08-02.json) uses
+the same 10 warmups and 101 rotated CPU observations per target, with two GPU
+observations, and again records foreign compiler/GPU work. It therefore supports
+only diagnostic comparisons:
+
+| target    | TypeScript ms | cold Rust/Wasm ms | resident Rust/Wasm ms | dense GPU ms |
+| :-------- | ------------: | ----------------: | --------------------: | -----------: |
+| editor    |         0.456 |             0.957 |                 0.005 |       14.832 |
+| codex     |         4.711 |             7.638 |                 0.025 |       31.058 |
+| grep      |         0.075 |             0.147 |                 0.003 |       12.507 |
+| tar       |         0.392 |             0.849 |                 0.005 |       14.726 |
+| wav       |         0.071 |             0.112 |                 0.002 |       12.463 |
+| raytracer |         0.069 |             0.146 |                 0.002 |       12.563 |
+
+Cold Rust/Wasm remains 1.58--2.16 times TypeScript because it must construct and
+copy `16A` bytes and independently validate and encode a new plan. Memoized
+resident Rust/Wasm is 0.0053--0.0345 times TypeScript, or 29.0--188.3 times
+faster on this boundary. Codex resident execution has a 0.00039 ms median and
+its mandatory 226,211-byte owned copy has a 0.02402 ms median; the previous
+1.722 ms re-encoding term is absent. The descriptive preparation break-even is
+two emissions for Codex, grep, and wav and three for Editor, tar, and raytracer.
+The single 46,554-byte module initialization observation is 0.429 ms and is not
+a distribution.
+
+The optimization sequence also supplied a counterexample to indiscriminate SIMD.
+Only 3.27--11.54% of four-atom groups in the frozen plans contain four bytes, so
+vector validation plus all-byte classification alone increased the measured Rust
+copy/validation/encoding component by 6.0--15.8% in an exploratory contended
+run. Adding 16-byte SIMD range summation, where the exact dependency work is
+4,609--403,129 size entries, reversed that result: the component fell by
+14.0--17.9% relative to the fixed-field-only SIMD variant and by 4.2--9.8%
+relative to the memoized scalar/AoS baseline on all six targets. Those
+intermediate runs are unretained exploratory evidence, not an admissible paired
+estimate; the final absolute observations and atom/work counts are retained in
+the machine-readable record. The accepted design therefore uses SIMD for every
+four-lane validity group and every 16-byte size-range chunk, retains a scalar
+diagnostic/tail path, and does not attempt variable-width SIMD emission.
+
+The decisive implementation result is independent of timing: every frozen and
+generated output is byte-identical across TypeScript and Rust/Wasm, every GPU
+comparison uses the same oracle, all five atom forms and sparse/nested levels
+are covered, every LEB transition and SIMD range boundary is covered, malformed
+vector lanes retain exact diagnostics, invalid dependency and numeric boundaries
+fail, and affine release and owned-output isolation are executable tests. The
+Rust backend is therefore feature-equivalent at the current Wasm-plan boundary.
+It is not yet a direct consumer of GPU-resident columns, and its single-instance
+calls are deliberately sequential.
+
 #### Stable packed module batches
 
-Blot exposes compilation parallelism only after checking and residualization.
-A logical target batch is the ordered sequence
+Blot exposes compilation parallelism only after checking and residualization. A
+logical target batch is the ordered sequence
 
 \[\mathcal B=[(o_0,M_0),\ldots,(o_{n-1},M_{n-1})],\]
 
@@ -3911,15 +4674,14 @@ ordered concatenation
 
 \[P_{\mathcal B}=P_0\mathbin{+}\cdots\mathbin{+}P_{n-1}.\]
 
-A non-length atom is copied unchanged. A length atom from `P_i` with local
-range `[s,s+c)` becomes `[b_i+s,b_i+s+c)` and retains its dependency level.
-Because every local length range lies inside its own plan, rebasing preserves
-the length dependency graph and creates no cross-module edge. Independent
-length atoms at the same level are therefore sized by the same GPU frontier.
-One exclusive scan over the packed atom sizes gives global byte offsets. The
-emitter copies offsets at `b_1,...,b_n` into the readback, yielding byte
-boundaries `q_0=0,q_1,...,q_n`; artifact `i` is the isolated copy
-`output[q_i:q_{i+1}]`.
+A non-length atom is copied unchanged. A length atom from `P_i` with local range
+`[s,s+c)` becomes `[b_i+s,b_i+s+c)` and retains its dependency level. Because
+every local length range lies inside its own plan, rebasing preserves the length
+dependency graph and creates no cross-module edge. Independent length atoms at
+the same level are therefore sized by the same GPU frontier. One exclusive scan
+over the packed atom sizes gives global byte offsets. The emitter copies offsets
+at `b_1,...,b_n` into the readback, yielding byte boundaries
+`q_0=0,q_1,...,q_n`; artifact `i` is the isolated copy `output[q_i:q_{i+1}]`.
 
 The required invariants are:
 
@@ -4329,10 +5091,65 @@ boundary-validation rule and are rejected alternatives.
 
 Blot exposes this target explicitly as `blot build --target=gpupaper`. That
 command checks and stages in the Blot checkout, validates Runtime HIR once, and
-uses gpupaper's GPU Wasm emitter. Gpupaper's former `.blot` parser, copied Baba
-grammar, payload lowering, fixtures, and syntax benchmark have been deleted;
-passing Blot source to gpupaper now reports the target-boundary command instead
-of reconstructing Blot semantics.
+uses gpupaper's Rust/WebAssembly Wasm emitter. Gpupaper's former `.blot` parser,
+copied Baba grammar, payload lowering, fixtures, and syntax benchmark have been
+deleted; passing Blot source to gpupaper now reports the target-boundary command
+instead of reconstructing Blot semantics.
+
+#### Rust/WebAssembly production selection for Blot
+
+Let the stable cache-miss subsequence after Blot preparation and Runtime-HIR
+validation be $[M_0,\ldots,M_{n-1}]$, let $P_i=L(M_i)$ be gpupaper's immutable
+binary plan, and let $E_{RW}$ be the Rust/WebAssembly realization of the
+emission function defined in the three-backend equivalence section. The
+production target now computes
+
+\[W_i=E_{RW}(P_i)\]
+
+in increasing miss ordinal. This changes compiler execution, not payload
+semantics: $L$, the Blot ABI manifest, and the required byte string $E(P_i)$ are
+unchanged. Exact TypeScript/Rust and GPU/Rust differentials are executable
+validation of that equality on the tested domain; they are not a universal proof
+of independent implementations.
+
+One Rust/WebAssembly instance has shared input storage and one published output
+handle, so production miss emission is sequential. Independent instances would
+permit CPU parallelism, but would add module instantiation and linear-memory
+high-water marks without evidence that current miss batches amortize them. A
+successful emission is immediately validated as WebAssembly, checked for the
+exact `blot:abi` section, copied into Blot's revision-keyed artifact cache, and
+released by the cold emitter call. Retaining the Rust plan after that point
+would duplicate the same $y_i$ encoded bytes already owned by the artifact
+cache; it cannot discard more work than the final-artifact lookup. Consequently
+module initialization is shared, while plan residence ends at successful cache
+installation.
+
+For miss $i$, with atom count $A_i$, dependency work $D_i$, and output length
+$y_i$, the target performs
+
+\[W_{RW}=\Theta\!\left(\sum_i(A_i+D_i+y_i)\right)\]
+
+work and crosses the JavaScript/WebAssembly boundary with $\sum_i(16A_i+y_i)$
+bytes, in addition to output and manifest validation. The GPU batch has the same
+logical work, parallel scan span, atom upload and readback traffic, plus
+submission and mapping latency. Existing diagnostics measure that fixed GPU
+boundary at 12.5--31.1 ms for the frozen plans, whereas cold Rust/WebAssembly
+emission measures 0.112--7.638 ms; these contended, different-workload
+observations motivate the current policy but do not prove a global ordering. A
+sufficiently large independent batch or a GPU-resident plan producer can reverse
+it. The packed GPU API therefore remains an experimental backend and benchmark
+subject rather than being deleted.
+
+The target preserves five invariants. Misses retain source order. Returned Wasm
+and manifest arrays are owned. A source failure remains local and never enters
+emission. If any admitted miss fails emission or artifact validation, the Blot
+batch wrapper publishes none of that miss subsequence, while already classified
+cache hits remain valid. No declared payload effect executes during compiler
+emission. Successful public outcomes report `wasmEmitter = "rust-wasm"`, making
+backend provenance observable rather than inferred from timing. Executable tests
+compare a multi-module Rust/WebAssembly batch byte-for-byte with the TypeScript
+emitter, execute each ordinal, cover the empty batch, and require the public
+Blot target to report Rust/WebAssembly provenance [27, 48].
 
 #### Executable and empirical evidence
 
@@ -4342,22 +5159,22 @@ and compares 313 runtime exports against the exact public ABI manifest, decoded
 result, ordered capability/operation/argument trace, and required post-return
 call from Blot's gpufuck CPU oracle with zero rejections. This is executable
 validation over the admitted corpus, not a proof for programs outside the
-binding-time rule. Twenty-six focused tests cover seven validator properties
-and nineteen target scenarios, including dynamic scalar parameters, canonical
-import identity, call-region pressure, repeated-call reclamation, Unicode scalar
+binding-time rule. Twenty-six focused tests cover seven validator properties and
+nineteen target scenarios, including dynamic scalar parameters, canonical import
+identity, call-region pressure, repeated-call reclamation, Unicode scalar
 ordering across UTF-8 length boundaries, and every malformed UTF-8 sequence
-family. Two source integration tests prove that an
-observed `Text` host result remains an SSA dependency through append and a later
-host call and that both residual terminal branches execute with their exact
-ordered trace. The complete gpupaper suite now passes 596 tests; the published
-Blot revision used for the target baseline passed 673 tests.
+family. Two source integration tests prove that an observed `Text` host result
+remains an SSA dependency through append and a later host call and that both
+residual terminal branches execute with their exact ordered trace. The complete
+gpupaper suite now passes 596 tests; the published Blot revision used for the
+target baseline passed 673 tests.
 
 A single warm-process corpus pass after the dynamic-Text implementation measured
 1,442.60 ms in Blot-to-HIR production, 4.95 ms in explicit HIR validation, and
 60.00 ms in target emission across all 53 files; medians were 23.997, 0.0435,
-and 0.734 ms respectively. The artifacts totalled 173,721 bytes. These stage sums
-share frontend caches and are workload evidence rather than independent cold
-samples.
+and 0.734 ms respectively. The artifacts totalled 173,721 bytes. These stage
+sums share frontend caches and are workload evidence rather than independent
+cold samples.
 
 The alternating equal-source benchmark on `minimal.blot` used one warmup and
 five samples on the RTX 4080 SUPER. Gpupaper measured 3.048 ms p50 (2.125 HIR
@@ -5329,7 +6146,9 @@ Across the frozen plans, length metadata changes from `8A + 4K` to `12K` bytes,
 a 99.11–99.86% reduction. Codex changes from 1,634,184 to 4,176 bytes. GPU work
 and emitted bytes are unchanged. Generated and frozen CPU-byte differentials,
 packed emission, engine validation, and the full required-GPU gate are the
-executable evidence.
+executable evidence. The later payload-relative resident representation extends
+this historical three-word frontier to `16K + 4n` bytes so a packed module can
+be relocated by its base rather than by rewriting every length record.
 
 ### 2026-07-31: Core rewrites gain an opcode frontier
 
@@ -8546,6 +9365,74 @@ this change. The first subsequent executable slice adds the validated
 job-analysis boundary described in Section 7.11, profiles its cost, and leaves
 the source-order Core constructor unchanged.
 
+### 2026-08-02: benchmark evidence becomes an executable contract
+
+A measurement audit found five protocol/model defects: the release gate still
+required a GPU Core rewrite after production had proved the canonical rewrite
+frontier empty; rebuild reports synthesized profiles from independent field
+medians; the SIMD implementation did not implement its stated ordering; a peer
+order label named a measurement that did not exist; and several four- or
+fifteen-observation reports called their maximum-like order statistic “p95.”
+These are failed evidence mechanisms, not compiler performance regressions.
+
+The release contract now requires `coreRewrite = identity`, zero Core
+candidate/dispatch/payload work, GPU Wasm emission, and differential GPU/CPU
+byte equality. The benchmark algebra in Section 7.10 is implemented by shared
+median, interpolation, observed-representative, tail-admission, and paired
+difference/log-ratio primitives. Regression tests reject synthetic profiles,
+reasonless diagnostic records, even-sample upper-median selection, and p95
+claims below 20 observations. Frontend, rebuild, break-even, Wasm, SIMD, branch,
+peer, and Blot harnesses record their raw observations and machine identities;
+the GPU harnesses inspect every foreign driver compute process. The break-even
+matrix balances both backend order and policy/batch traversal, hashes every
+input and output, and rejects CPU/GPU byte disagreement before estimating a
+crossover.
+
+The raw-evidence boundary is `measurements/*.json`. The process recorder invokes
+each supported task in sequential fresh Deno processes and stores the complete
+per-process result; checked-in summaries must be derived from those records.
+This supplies hierarchy and auditability, not statistical certainty. Remaining
+limits are explicit: OS process enumeration cannot detect undisclosed hardware
+work, NVIDIA inspection is currently the only implemented GPU load backend, 20
+samples is a reporting threshold rather than an accuracy theorem, and no
+bootstrap or random-effects confidence interval is implemented.
+
+The first post-repair executions are retained as diagnostic records because
+foreign compiler processes and GPU contexts were active. They are empirical
+instrument checks, not admissible speedup claims. Six-target paired
+GPU-minus-CPU medians were positive for every Duck target. The 54-module Blot
+capacity profile attributed median 95.798 ms of 151.680 ms (63.2%) to HIR
+preparation, 24.723 ms (16.3%) to Wasm planning, and 27.910 ms (18.4%) to GPU
+emission. Packed compilation measured 150.646 ms versus 779.400 ms for singleton
+submissions, while `minimal.blot` measured 17.596 ms through gpupaper versus
+1.636 ms through gpufuck. The latter is a paired equal-source/ABI comparison;
+the general peer record remains incomparable because it gives the three
+compilers different boundaries. These diagnostics prioritize Blot HIR
+preparation and Codex Wasm planning over a larger physical GPU batch. Exact
+records are named in `PERFORMANCE.md` and retained under `measurements/`.
+
+The next implementation keys deeply frozen Runtime HIR by Blot loaded-revision
+identity and refreshes the dependency graph once per public batch. All 741 Blot
+tests pass, including direct and transitive invalidation, and the 54-module
+oracle retains 315 observations. A six-observation diagnostic measures 0.741 ms
+for graph refresh and 0.132 ms for all 54 cache lookups; its 295,194-byte
+logical JSON footprint is a lower bound on retained heap. The prior and current
+records have different input hashes and both observed contention, so their
+timing delta is not promoted to an admissible speedup claim. The current profile
+moves the measured bottleneck to GPU emission and host Wasm planning.
+
+The corrected 100/32 branch-hint harness also ran in six fresh processes. Five
+paired runtime medians favored hints and one regressed by 0.005 ns/call;
+construction was slower with hints in all six. Foreign runtime work makes this
+record diagnostic, but its process-level reversal independently preserves the
+counterexample to a universal engine speedup.
+
+The cost-state tuple now includes the previously used but undefined upload term
+`U_i`. `H_i` counts host memory traffic and `U_i` counts host-to-device traffic,
+so an uploaded byte may contribute to both terms. This repairs the dimensional
+definition without claiming the additive calibration model fits the current
+adapter.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -8664,3 +9551,6 @@ the source-order Core constructor unchanged.
 47. Mads Tofte and Jean-Pierre Talpin. “Region-Based Memory Management.”
     Information and Computation 132(2), 1997.
     <https://doi.org/10.1006/inco.1996.2613>
+48. Rust Project. “`core::arch::wasm32` SIMD intrinsics” and “WebAssembly target
+    features.” 2026. <https://doc.rust-lang.org/core/arch/wasm32/index.html>
+    <https://doc.rust-lang.org/stable/rustc/platform-support/wasm32-unknown-unknown.html>

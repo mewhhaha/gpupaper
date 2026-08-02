@@ -2,7 +2,10 @@ import { compileModuleSource } from "../src/compiler.ts";
 import {
   inspectBenchmarkEnvironment,
   repositoryIdentity,
+  runtimeIdentity,
+  sha256,
 } from "./benchmark_environment.ts";
+import { summarizeSamples } from "./benchmark_statistics.ts";
 
 const sampleCount = requestedSampleCount(Deno.args);
 const allowContended = Deno.args.includes("--allow-contended");
@@ -81,15 +84,8 @@ console.log(JSON.stringify({
     "gpupaper-source",
     "blot-source",
     "gpufuck-surface",
-    "alternating-equal-blot-source-boundary",
   ],
-  runtime: {
-    deno: Deno.version.deno,
-    v8: Deno.version.v8,
-    typescript: Deno.version.typescript,
-    os: Deno.build.os,
-    architecture: Deno.build.arch,
-  },
+  runtime: runtimeIdentity(),
   repositories: {
     gpupaper: await repositoryIdentity(gpupaperDirectory),
     gpufuck: await repositoryIdentity(gpufuckDirectory),
@@ -141,8 +137,7 @@ if (validity.status === "refused") Deno.exit(2);
 async function measure(
   compile: () => Promise<Uint8Array>,
 ): Promise<{
-  readonly p50Milliseconds: number;
-  readonly p95Milliseconds: number;
+  readonly timing: ReturnType<typeof summarizeSamples>;
   readonly rawMilliseconds: readonly number[];
   readonly wasmBytes: number;
   readonly wasmSha256: string;
@@ -157,8 +152,7 @@ async function measure(
     lastWasm = wasm;
   }
   return {
-    p50Milliseconds: percentile(samples, 0.5),
-    p95Milliseconds: percentile(samples, 0.95),
+    timing: summarizeSamples(samples),
     rawMilliseconds: samples,
     wasmBytes: lastWasm.byteLength,
     wasmSha256: await sha256(lastWasm),
@@ -190,8 +184,7 @@ async function measureBlot(
   file: string,
   samples: number,
 ): Promise<{
-  readonly p50Milliseconds: number;
-  readonly p95Milliseconds: number;
+  readonly timing: ReturnType<typeof summarizeSamples>;
   readonly rawMilliseconds: readonly number[];
   readonly wasmBytes: number;
   readonly wasmSha256: string;
@@ -210,13 +203,7 @@ async function measureBlot(
       timings.push(performance.now() - start);
       lastWasm = built.wasm;
     }
-    const percentile = (quantile) => {
-      const ordered = [...timings].sort((left, right) => left - right);
-      return ordered[Math.ceil((ordered.length - 1) * quantile)];
-    };
     console.log(JSON.stringify({
-      p50Milliseconds: percentile(0.5),
-      p95Milliseconds: percentile(0.95),
       wasmBytes: lastWasm.byteLength,
       rawMilliseconds: timings,
       wasmSha256: Array.from(
@@ -243,14 +230,17 @@ async function measureBlot(
       }`,
     );
   }
-  return JSON.parse(new TextDecoder().decode(output.stdout));
+  const measured = JSON.parse(new TextDecoder().decode(output.stdout));
+  return {
+    ...measured,
+    timing: summarizeSamples(measured.rawMilliseconds),
+  };
 }
 
 async function measureGpufuck(
   samples: number,
 ): Promise<{
-  readonly p50Milliseconds: number;
-  readonly p95Milliseconds: number;
+  readonly timing: ReturnType<typeof summarizeSamples>;
   readonly rawMilliseconds: readonly number[];
   readonly wasmBytes: number;
   readonly wasmSha256: string;
@@ -308,13 +298,7 @@ async function measureGpufuck(
       lastWasm = wasm;
     }
     device.destroy();
-    const percentile = (quantile) => {
-      const ordered = [...timings].sort((left, right) => left - right);
-      return ordered[Math.ceil((ordered.length - 1) * quantile)];
-    };
     console.log(JSON.stringify({
-      p50Milliseconds: percentile(0.5),
-      p95Milliseconds: percentile(0.95),
       wasmBytes: lastWasm.byteLength,
       rawMilliseconds: timings,
       wasmSha256: Array.from(
@@ -337,12 +321,11 @@ async function measureGpufuck(
       }`,
     );
   }
-  return JSON.parse(new TextDecoder().decode(output.stdout));
-}
-
-function percentile(values: readonly number[], quantile: number): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil((ordered.length - 1) * quantile)]!;
+  const measured = JSON.parse(new TextDecoder().decode(output.stdout));
+  return {
+    ...measured,
+    timing: summarizeSamples(measured.rawMilliseconds),
+  };
 }
 
 function requestedSampleCount(arguments_: readonly string[]): number {
@@ -357,13 +340,4 @@ function requestedSampleCount(arguments_: readonly string[]): number {
     );
   }
   return count;
-}
-
-async function sha256(bytes: Uint8Array): Promise<string> {
-  return Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes)),
-    ),
-    (byte) => byte.toString(16).padStart(2, "0"),
-  ).join("");
 }

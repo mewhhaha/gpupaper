@@ -5,6 +5,17 @@ import {
   type DucklangCompilationSession,
 } from "../src/compiler.ts";
 import { clearDucklangParserCache } from "../src/ducklang_parser.ts";
+import {
+  representativeSample,
+  type SampleSummary,
+  summarizeSamples,
+} from "./benchmark_statistics.ts";
+import {
+  inspectBenchmarkEnvironment,
+  repositoryIdentity,
+  runtimeIdentity,
+  sha256,
+} from "./benchmark_environment.ts";
 
 const caseStudyDirectory = new URL(
   "../examples/binned/live/case-studies/",
@@ -16,6 +27,39 @@ const targets = [
   target("grep", "grep/host.duck"),
 ] as const;
 const sampleCount = requestedSampleCount(Deno.args);
+const allowContended = Deno.args.includes("--allow-contended");
+const environmentAtStart = await inspectBenchmarkEnvironment();
+if (environmentAtStart.status !== "clear" && !allowContended) {
+  console.log(JSON.stringify({
+    status: "refused",
+    reason: "competing compiler or GPU work is active or inspection failed",
+    environment: environmentAtStart,
+  }));
+  Deno.exit(2);
+}
+const adapter = await navigator.gpu.requestAdapter();
+if (adapter === null) {
+  throw new Error("rebuild benchmark has no WebGPU adapter");
+}
+console.log(JSON.stringify({
+  recordType: "benchmarkStart",
+  schemaVersion: 1,
+  benchmark: "ducklang-rebuild",
+  sampleCount,
+  runtime: runtimeIdentity(),
+  repositories: {
+    gpupaper: await repositoryIdentity(
+      new URL("../", import.meta.url).pathname,
+    ),
+  },
+  adapter: {
+    vendor: adapter.info.vendor,
+    architecture: adapter.info.architecture,
+    device: adapter.info.device,
+    description: adapter.info.description,
+  },
+  environmentAtStart,
+}));
 
 for (const target_ of targets) {
   const source = await Deno.readTextFile(target_.source);
@@ -49,6 +93,8 @@ for (const target_ of targets) {
       target: target_.name,
       backend,
       sampleCount,
+      inputSha256: await sha256(new TextEncoder().encode(source)),
+      outputSha256: await sha256(identical.wasm),
       cold: report(cold),
       identicalRebuild: report(identical),
       trailingCommentRebuild: report(commentOnly),
@@ -66,6 +112,24 @@ for (const target_ of targets) {
 await benchmarkSemanticEdit();
 await benchmarkDependencyEdit();
 await clearDucklangParserCache();
+const environmentAtEnd = await inspectBenchmarkEnvironment();
+const environmentClear = environmentAtStart.status === "clear" &&
+  environmentAtEnd.status === "clear";
+console.log(JSON.stringify({
+  recordType: "benchmarkEnd",
+  status: environmentClear || allowContended ? "completed" : "refused",
+  validity: environmentClear ? { status: "admissible" } : allowContended
+    ? {
+      status: "diagnostic",
+      reason: "competing compiler or GPU work was present during measurement",
+    }
+    : {
+      status: "refused",
+      reason: "competing compiler or GPU work appeared during measurement",
+    },
+  environmentAtEnd,
+}));
+if (!environmentClear && !allowContended) Deno.exit(2);
 
 function target(name: string, hostInterface: string) {
   return {
@@ -78,18 +142,21 @@ function target(name: string, hostInterface: string) {
 type Target = ReturnType<typeof target>;
 type Measurement = {
   readonly profile: DucklangCompilationProfile;
-  readonly totalP95Milliseconds: number;
+  readonly total: SampleSummary;
+  readonly rawProfiles: readonly DucklangCompilationProfile[];
   readonly wasm: Uint8Array;
 };
 
 function report(measurement: Measurement): {
   readonly profile: DucklangCompilationProfile;
-  readonly totalP95Milliseconds: number;
+  readonly total: SampleSummary;
+  readonly rawProfiles: readonly DucklangCompilationProfile[];
   readonly wasmBytes: number;
 } {
   return {
     profile: measurement.profile,
-    totalP95Milliseconds: measurement.totalP95Milliseconds,
+    total: measurement.total,
+    rawProfiles: measurement.rawProfiles,
     wasmBytes: measurement.wasm.byteLength,
   };
 }
@@ -121,11 +188,14 @@ async function compileSamples(
     );
   }
   return {
-    profile: medianProfile(profiles),
-    totalP95Milliseconds: percentile(
-      profiles.map((profile) => profile.totalMilliseconds),
-      0.95,
+    profile: representativeSample(
+      profiles,
+      (profile) => profile.totalMilliseconds,
     ),
+    total: summarizeSamples(
+      profiles.map((profile) => profile.totalMilliseconds),
+    ),
+    rawProfiles: profiles,
     wasm,
   };
 }
@@ -162,11 +232,14 @@ async function compileEditSamples(
     throw new Error(`${target_.name} ${backend} edited rebuild has no samples`);
   }
   return {
-    profile: medianProfile(profiles),
-    totalP95Milliseconds: percentile(
-      profiles.map((profile) => profile.totalMilliseconds),
-      0.95,
+    profile: representativeSample(
+      profiles,
+      (profile) => profile.totalMilliseconds,
     ),
+    total: summarizeSamples(
+      profiles.map((profile) => profile.totalMilliseconds),
+    ),
+    rawProfiles: profiles,
     wasm,
   };
 }
@@ -188,7 +261,8 @@ async function compile(
   }
   return {
     profile: artifact.profile,
-    totalP95Milliseconds: artifact.profile.totalMilliseconds,
+    total: summarizeSamples([artifact.profile.totalMilliseconds]),
+    rawProfiles: [artifact.profile],
     wasm: artifact.wasm,
   };
 }
@@ -268,7 +342,8 @@ async function compileWithoutHost(
   }
   return {
     profile: artifact.profile,
-    totalP95Milliseconds: artifact.profile.totalMilliseconds,
+    total: summarizeSamples([artifact.profile.totalMilliseconds]),
+    rawProfiles: [artifact.profile],
     wasm: artifact.wasm,
   };
 }
@@ -276,15 +351,19 @@ async function compileWithoutHost(
 function sampledProfileReport(
   profiles: readonly DucklangCompilationProfile[],
 ): {
-  readonly p50: DucklangCompilationProfile;
-  readonly totalP95Milliseconds: number;
+  readonly representative: DucklangCompilationProfile;
+  readonly total: SampleSummary;
+  readonly rawProfiles: readonly DucklangCompilationProfile[];
 } {
   return {
-    p50: medianProfile(profiles),
-    totalP95Milliseconds: percentile(
-      profiles.map((profile) => profile.totalMilliseconds),
-      0.95,
+    representative: representativeSample(
+      profiles,
+      (profile) => profile.totalMilliseconds,
     ),
+    total: summarizeSamples(
+      profiles.map((profile) => profile.totalMilliseconds),
+    ),
+    rawProfiles: profiles,
   };
 }
 
@@ -313,53 +392,6 @@ function largestStageDeltas(
       Math.abs(right.deltaMilliseconds) - Math.abs(left.deltaMilliseconds)
     )
     .slice(0, 8);
-}
-
-function medianProfile(
-  profiles: readonly DucklangCompilationProfile[],
-): DucklangCompilationProfile {
-  return {
-    totalMilliseconds: median(
-      profiles.map((profile) => profile.totalMilliseconds),
-    ),
-    accountedMilliseconds: median(
-      profiles.map((profile) => profile.accountedMilliseconds),
-    ),
-    unattributedMilliseconds: median(
-      profiles.map((profile) => profile.unattributedMilliseconds),
-    ),
-    stages: medianRecord(profiles.map((profile) => profile.stages)),
-    details: medianRecord(profiles.map((profile) => profile.details)),
-    work: medianRecord(profiles.map((profile) => profile.work)),
-  };
-}
-
-function medianRecord<Record_ extends Readonly<Record<string, number>>>(
-  records: readonly Record_[],
-): Record_ {
-  const keys = Object.keys(records[0]) as (keyof Record_)[];
-  return Object.fromEntries(
-    keys.map((key) => [
-      key,
-      median(records.map((record) => record[key] as number)),
-    ]),
-  ) as Record_;
-}
-
-function median(values: readonly number[]): number {
-  if (values.length === 0) {
-    throw new RangeError("cannot calculate the median of an empty sample");
-  }
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.floor(ordered.length / 2)]!;
-}
-
-function percentile(values: readonly number[], quantile: number): number {
-  if (values.length === 0) {
-    throw new RangeError("cannot calculate a percentile of an empty sample");
-  }
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil((ordered.length - 1) * quantile)]!;
 }
 
 function requestedSampleCount(arguments_: readonly string[]): number {

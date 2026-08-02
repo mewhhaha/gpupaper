@@ -59,17 +59,34 @@ for (const target_ of targets) {
         `${target_.name} emitted ${artifact.wasm.length} bytes; release contract is ${target_.wasmBytes}`,
       );
     }
+    if (artifact.language !== "ducklang") {
+      throw new Error(
+        `${target_.name} release target compiled as ${artifact.language}`,
+      );
+    }
     if (
       artifact.backends.typeCheck !== "cpu" ||
       artifact.backends.comptime !== "cpu" ||
-      artifact.backends.coreRewrite !==
-        (target_.name === "tar" ? "gpu" : "identity") ||
+      artifact.backends.coreRewrite !== "identity" ||
       artifact.backends.wasmEmission !== "gpu" ||
       artifact.backends.wasmVerification !== "cpuDifferential"
     ) {
       throw new Error(
-        `${target_.name} did not complete every required GPU boundary: ${
+        `${target_.name} violated the release backend contract: ${
           JSON.stringify(artifact.backends)
+        }`,
+      );
+    }
+    const work = artifact.profile.work;
+    if (
+      work.gpuRewriteCandidateCount !== 0 ||
+      work.gpuRewriteDispatchedInvocationCount !== 0 ||
+      work.gpuCoreSubmissionBatchSize !== 0 ||
+      work.gpuCorePayloadBatchSize !== 0
+    ) {
+      throw new Error(
+        `${target_.name} submitted redundant Core work: ${
+          JSON.stringify(work)
         }`,
       );
     }

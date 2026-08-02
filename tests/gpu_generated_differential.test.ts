@@ -16,6 +16,7 @@ import { inferDucklangModule } from "../src/ducklang_types.ts";
 import { unionPairsOnGpu } from "../src/gpu_solver.ts";
 import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
 import { parseModule } from "../src/parser.ts";
+import { createRustWasmEmitter } from "../src/rust_wasm_emitter.ts";
 import {
   emitWasmPlanOnCpu,
   wasmInstruction,
@@ -162,6 +163,7 @@ function numberWords(
 }
 
 Deno.test("generated Wasm plans emit valid byte-identical modules", async () => {
+  const { emitter: rustWasmEmitter } = await createRustWasmEmitter();
   for (const seed of generatedSeeds) {
     await withSeed(seed, async (random) => {
       const builder = new WasmModuleBuilder();
@@ -184,6 +186,7 @@ Deno.test("generated Wasm plans emit valid byte-identical modules", async () => 
 
       const gpu = await emitWasmPlanOnGpu(plan);
       if (gpu.status === "completed") assertEquals(gpu.bytes, expected);
+      assertEquals(rustWasmEmitter.emit(plan).bytes, expected);
     });
   }
 });

@@ -9,6 +9,8 @@ import {
   wasmType,
 } from "../src/wasm.ts";
 import {
+  createGpuResidentWasmPlans,
+  emitResidentWasmPlansOnGpu,
   emitWasmPlanOnGpu,
   emitWasmPlansOnGpu,
   packWasmBinaryPlans,
@@ -212,6 +214,85 @@ Deno.test("packed GPU Wasm emission crosses the command batching cap when capaci
       Array.from(emitWasmPlanOnCpu(plans[index])),
     );
   }
+});
+
+Deno.test("resident GPU Wasm plans preserve nested lengths across repeated emissions", async () => {
+  const plans = [1, 3, 130].map((count) => buildModule(count).finishPlan());
+  const creation = await createGpuResidentWasmPlans(plans, {
+    maximumPhysicalPayloadCount: 2,
+  });
+  if (creation.status === "unavailable") return;
+  const { resident } = creation;
+  try {
+    assertEquals(resident.certificate.payloadCount, 3);
+    assertEquals(resident.certificate.physicalPlanCount, 2);
+    assertEquals(
+      resident.certificate.atomCount,
+      plans.reduce(
+        (count, plan) => count + plan.atoms.length,
+        0,
+      ),
+    );
+    assertEquals(resident.certificate.retainedInputBytes > 0, true);
+    const first = await emitResidentWasmPlansOnGpu(resident, {
+      scheduling: "latency",
+    });
+    const second = await emitResidentWasmPlansOnGpu(resident, {
+      scheduling: "latency",
+    });
+    if (first.status === "unavailable") return;
+    if (second.status === "unavailable") return;
+
+    for (
+      const emission of [
+        ...first.physicalEmissions,
+        ...second.physicalEmissions,
+      ]
+    ) {
+      assertEquals(emission.timings.planInspectionMilliseconds, 0);
+      assertEquals(emission.timings.columnConstructionMilliseconds, 0);
+      assertEquals(emission.readbackMode, "capacity-single-map");
+      assertEquals(
+        emission.physicalReadbackBytes - emission.logicalReadbackBytes,
+        emission.readbackPaddingBytes,
+      );
+    }
+    for (const output of [first.bytes, second.bytes]) {
+      for (const [index, bytes] of output.entries()) {
+        assertEquals(
+          Array.from(bytes),
+          Array.from(emitWasmPlanOnCpu(plans[index]!)),
+        );
+      }
+      assertEquals(output[0]!.buffer === output[1]!.buffer, false);
+    }
+  } finally {
+    if (!resident.released) resident.release();
+  }
+});
+
+Deno.test("resident GPU Wasm release waits for an active borrow and rejects later use", async () => {
+  const creation = await createGpuResidentWasmPlans([
+    buildModule(20).finishPlan(),
+  ]);
+  if (creation.status === "unavailable") return;
+  const { resident } = creation;
+  const pendingEmission = emitResidentWasmPlansOnGpu(resident, {
+    scheduling: "latency",
+  });
+  resident.release();
+  assertEquals(resident.released, true);
+  const emitted = await pendingEmission;
+  if (emitted.status === "unavailable") return;
+  assertEquals(
+    WebAssembly.validate(emitted.bytes[0]!.slice().buffer as ArrayBuffer),
+    true,
+  );
+  await assertRejects(
+    () => emitResidentWasmPlansOnGpu(resident),
+    /cannot be emitted after release/,
+  );
+  assertThrows(() => resident.release(), /already been released/);
 });
 
 Deno.test("Ducklang Wasm modules with resolved lengths validate", () => {
@@ -471,6 +552,19 @@ function assertThrows(action: () => unknown, expected: RegExp): void {
     throw error;
   }
   throw new Error(`expected action to throw ${expected}`);
+}
+
+async function assertRejects(
+  action: () => Promise<unknown>,
+  expected: RegExp,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error && expected.test(error.message)) return;
+    throw error;
+  }
+  throw new Error(`expected action to reject ${expected}`);
 }
 
 function gpuLimits(): CompilerGpuLimits {

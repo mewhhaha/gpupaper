@@ -1,0 +1,783 @@
+{
+  "schemaVersion": 1,
+  "task": "benchmark:blot-batch",
+  "processCount": 1,
+  "maximumAttempts": 3,
+  "processOrder": "sequentialFreshDenoProcesses",
+  "benchmarkArguments": [
+    "--samples=2",
+    "--allow-contended"
+  ],
+  "processes": [
+    {
+      "process": 0,
+      "refusedAttempts": [],
+      "result": {
+        "status": "completed",
+        "validity": {
+          "status": "diagnostic",
+          "reason": "competing compiler or GPU work was present during measurement"
+        },
+        "schemaVersion": 5,
+        "workload": "../blot/examples/*.blot",
+        "files": 54,
+        "samples": 2,
+        "warmups": 1,
+        "inputSha256": "726af221023112e32a87c18ed537920b3297550a4b810a2efc83ff2f6e15aeed",
+        "outputSha256": "97f69759bc03fc6073c8ead07cce4e48f753e9cfee669fd62f2d34487070a884",
+        "boundary": "warm process and Blot preparation cache, all top-level examples to byte-identical Wasm",
+        "runOrder": [
+          "packed",
+          "singleton",
+          "singleton",
+          "packed"
+        ],
+        "repositories": {
+          "gpupaper": {
+            "revision": "ef8872dabf446660b75bce84882dd042c176a905",
+            "status": [
+              "M PAPER.md",
+              " M PERFORMANCE.md",
+              " M README.md",
+              " M deno.json",
+              " M scripts/benchmark_blot_batch.ts",
+              " M scripts/benchmark_blot_targets.ts",
+              " M scripts/benchmark_ducklang_frontend.ts",
+              " M scripts/benchmark_ducklang_rebuild.ts",
+              " M scripts/benchmark_ducklang_simd.ts",
+              " M scripts/benchmark_environment.ts",
+              " M scripts/benchmark_gpu_break_even.ts",
+              " M scripts/benchmark_peer_compilers.ts",
+              " M scripts/benchmark_wasm_branch_hints.ts",
+              " M scripts/benchmark_wasm_emission.ts",
+              " M scripts/release_gpu.ts",
+              "?? measurements/",
+              "?? scripts/benchmark_schema.ts",
+              "?? scripts/benchmark_statistics.ts",
+              "?? scripts/record_benchmark_processes.ts",
+              "?? tests/benchmark_environment.test.ts",
+              "?? tests/benchmark_schema.test.ts",
+              "?? tests/benchmark_statistics.test.ts"
+            ],
+            "trackedDiffSha256": "a5086f7cd619509e5d19220f9994f43c1a8692bfd839f26d9393e8a07c1d81e2",
+            "untrackedFiles": [
+              {
+                "path": "measurements/README.md",
+                "sha256": "909c044a59ab13db9b689a3bbd564bb6f13e920fa358c6ef03b5520fbb6f4a09"
+              },
+              {
+                "path": "measurements/blot-targets-diagnostic-2026-08-02.json",
+                "sha256": "2f5238da5a9793bf63c7ee091d514eab691d63b2bc592019ae31428d2ab1ee9a"
+              },
+              {
+                "path": "scripts/benchmark_schema.ts",
+                "sha256": "99fd5cc971b54cb47350c6fb4741a1a371def6acefeab6da0e67a35fdb3e53e8"
+              },
+              {
+                "path": "scripts/benchmark_statistics.ts",
+                "sha256": "e7186566ef22aa0168fc4dc9526a8dbee29e6aa898302e87081ceefb2b2a2208"
+              },
+              {
+                "path": "scripts/record_benchmark_processes.ts",
+                "sha256": "cb6bcf06d821838bc10b1de7ba34bb85ec5ae30d2ef6c6d37557c7d28bb196e3"
+              },
+              {
+                "path": "tests/benchmark_environment.test.ts",
+                "sha256": "bf18c190285677c69498d4a6dc8f6b98c1a2e072b4ee4134ffcd7f39afc7ef0b"
+              },
+              {
+                "path": "tests/benchmark_schema.test.ts",
+                "sha256": "74b6fa6c3f84924a57222e424081f9700acf83a3a50bdf901a05e27adeaa3f0f"
+              },
+              {
+                "path": "tests/benchmark_statistics.test.ts",
+                "sha256": "567a71672878e58431eb0ad43959c9e491b4847ad9f48e9f5de649474f2fe998"
+              }
+            ]
+          },
+          "blot": {
+            "revision": "a939bb6d939fe1e276ca04e91eed929063c77723",
+            "status": [],
+            "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "untrackedFiles": []
+          }
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3",
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "adapter": {
+          "vendor": "4318",
+          "architecture": "",
+          "device": "9986",
+          "description": "NVIDIA GeForce RTX 4080 SUPER"
+        },
+        "environmentAtStart": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 497264,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval './scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -40; echo BUILD_DONE; for f in l1 l2 l3; do echo \"=== $f ===\"; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/$f.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'; done' < /dev/null && pwd -P >| /tmp/claude-324f-cwd"
+            },
+            {
+              "pid": 497266,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo build --release -p porffor-cli"
+            },
+            {
+              "pid": 497267,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval './scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -40; echo BUILD_DONE; for f in l1 l2 l3; do echo \"=== $f ===\"; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/$f.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'; done' < /dev/null && pwd -P >| /tmp/claude-324f-cwd"
+            },
+            {
+              "pid": 497342,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name porffor_aot_wasm --edition=2021 crates/porffor-aot-wasm/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C debuginfo=line-tables-only --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=4aca8a24f4dc3097 -C extra-filename=-b14b2767448ed00a --out-dir /home/mewhhaha/src/porffor/target/release/deps -L dependency=/home/mewhhaha/src/porffor/target/release/deps --extern icu_normalizer=/home/mewhhaha/src/porffor/target/release/deps/libicu_normalizer-afd32636a0f5c352.rmeta --extern icu_properties=/home/mewhhaha/src/porffor/target/release/deps/libicu_properties-b3bb6068a1848f32.rmeta --extern num_bigint=/home/mewhhaha/src/porffor/target/release/deps/libnum_bigint-8f9ea69574727cdd.rmeta --extern porffor_ir=/home/mewhhaha/src/porffor/target/release/deps/libporffor_ir-8b09c5b053a9ef0c.rmeta --extern wasm_encoder=/home/mewhhaha/src/porffor/target/release/deps/libwasm_encoder-2caa4ff6d3a748e3.rmeta -C link-arg=-fuse-ld=lld"
+            }
+          ],
+          "gpuProcesses": [
+            {
+              "pid": 1481,
+              "command": "anyrun",
+              "memoryMiB": 8
+            },
+            {
+              "pid": 1490,
+              "command": "/opt/zen-browser-bin/zen-bin",
+              "memoryMiB": 368
+            },
+            {
+              "pid": 491785,
+              "command": "deno",
+              "memoryMiB": 406
+            },
+            {
+              "pid": 494434,
+              "command": "deno",
+              "memoryMiB": 205
+            }
+          ],
+          "nvidiaDevices": [
+            {
+              "name": "NVIDIA GeForce RTX 4080 SUPER",
+              "driverVersion": "610.43.03",
+              "pciDeviceId": "0x270210DE"
+            }
+          ],
+          "inspectionErrors": []
+        },
+        "environmentAtEnd": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 497264,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval './scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -40; echo BUILD_DONE; for f in l1 l2 l3; do echo \"=== $f ===\"; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/$f.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'; done' < /dev/null && pwd -P >| /tmp/claude-324f-cwd"
+            },
+            {
+              "pid": 497266,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo build --release -p porffor-cli"
+            },
+            {
+              "pid": 497267,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval './scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -40; echo BUILD_DONE; for f in l1 l2 l3; do echo \"=== $f ===\"; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/$f.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'; done' < /dev/null && pwd -P >| /tmp/claude-324f-cwd"
+            },
+            {
+              "pid": 497342,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name porffor_aot_wasm --edition=2021 crates/porffor-aot-wasm/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C debuginfo=line-tables-only --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=4aca8a24f4dc3097 -C extra-filename=-b14b2767448ed00a --out-dir /home/mewhhaha/src/porffor/target/release/deps -L dependency=/home/mewhhaha/src/porffor/target/release/deps --extern icu_normalizer=/home/mewhhaha/src/porffor/target/release/deps/libicu_normalizer-afd32636a0f5c352.rmeta --extern icu_properties=/home/mewhhaha/src/porffor/target/release/deps/libicu_properties-b3bb6068a1848f32.rmeta --extern num_bigint=/home/mewhhaha/src/porffor/target/release/deps/libnum_bigint-8f9ea69574727cdd.rmeta --extern porffor_ir=/home/mewhhaha/src/porffor/target/release/deps/libporffor_ir-8b09c5b053a9ef0c.rmeta --extern wasm_encoder=/home/mewhhaha/src/porffor/target/release/deps/libwasm_encoder-2caa4ff6d3a748e3.rmeta -C link-arg=-fuse-ld=lld"
+            }
+          ],
+          "gpuProcesses": [
+            {
+              "pid": 1481,
+              "command": "anyrun",
+              "memoryMiB": 8
+            },
+            {
+              "pid": 1490,
+              "command": "/opt/zen-browser-bin/zen-bin",
+              "memoryMiB": 368
+            },
+            {
+              "pid": 491785,
+              "command": "deno",
+              "memoryMiB": 406
+            },
+            {
+              "pid": 494434,
+              "command": "deno",
+              "memoryMiB": 205
+            }
+          ],
+          "nvidiaDevices": [
+            {
+              "name": "NVIDIA GeForce RTX 4080 SUPER",
+              "driverVersion": "610.43.03",
+              "pciDeviceId": "0x270210DE"
+            }
+          ],
+          "inspectionErrors": []
+        },
+        "packed": {
+          "timing": {
+            "count": 2,
+            "median": 150.64580350000006,
+            "minimum": 138.5529449999999,
+            "maximum": 162.7386620000002,
+            "medianAbsoluteDeviation": 12.092858500000148,
+            "p95": {
+              "status": "insufficient",
+              "minimumSampleCount": 20
+            }
+          },
+          "rawMilliseconds": [
+            162.7386620000002,
+            138.5529449999999
+          ],
+          "modulesPerSecond": 358.456715988109
+        },
+        "singleton": {
+          "timing": {
+            "count": 2,
+            "median": 779.4004340000001,
+            "minimum": 776.921276,
+            "maximum": 781.8795920000002,
+            "medianAbsoluteDeviation": 2.4791580000000977,
+            "p95": {
+              "status": "insufficient",
+              "minimumSampleCount": 20
+            }
+          },
+          "rawMilliseconds": [
+            776.921276,
+            781.8795920000002
+          ],
+          "modulesPerSecond": 69.28402608510736
+        },
+        "marginalMedianRatio": 5.173728148358277,
+        "pairedPackedToSingleton": {
+          "differences": [
+            -614.1826139999998,
+            -643.3266470000003
+          ],
+          "logRatios": [
+            -1.5631934138139418,
+            -1.7304482273180872
+          ],
+          "difference": {
+            "count": 2,
+            "median": -628.7546305000001,
+            "minimum": -643.3266470000003,
+            "maximum": -614.1826139999998,
+            "medianAbsoluteDeviation": 14.572016500000245,
+            "p95": {
+              "status": "insufficient",
+              "minimumSampleCount": 20
+            }
+          },
+          "logRatio": {
+            "count": 2,
+            "median": -1.6468208205660146,
+            "minimum": -1.7304482273180872,
+            "maximum": -1.5631934138139418,
+            "medianAbsoluteDeviation": 0.0836274067520727,
+            "p95": {
+              "status": "insufficient",
+              "minimumSampleCount": 20
+            }
+          },
+          "medianRatio": 0.19266144131154428
+        },
+        "wasmBytes": 175004,
+        "stageProfile": {
+          "samples": 2,
+          "fixedCount16": {
+            "stages": {
+              "prepareHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 82.49344599999972,
+                  "minimum": 82.21220000000221,
+                  "maximum": 82.77469199999723,
+                  "medianAbsoluteDeviation": 0.281245999997509,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  82.21220000000221,
+                  82.77469199999723
+                ]
+              },
+              "validateHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.6179669999983162,
+                  "minimum": 0.6043149999950401,
+                  "maximum": 0.6316190000015922,
+                  "medianAbsoluteDeviation": 0.013652000003276044,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.6316190000015922,
+                  0.6043149999950401
+                ]
+              },
+              "planWasm": {
+                "timing": {
+                  "count": 2,
+                  "median": 22.854067999998733,
+                  "minimum": 22.82672299999831,
+                  "maximum": 22.881412999999156,
+                  "medianAbsoluteDeviation": 0.02734500000042317,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  22.881412999999156,
+                  22.82672299999831
+                ]
+              },
+              "emitWasmOnGpu": {
+                "timing": {
+                  "count": 2,
+                  "median": 28.48202550000019,
+                  "minimum": 26.881524000000354,
+                  "maximum": 30.082527000000027,
+                  "medianAbsoluteDeviation": 1.6005014999998366,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  30.082527000000027,
+                  26.881524000000354
+                ]
+              },
+              "wasmValidation": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.9531235000010838,
+                  "minimum": 0.8166570000007596,
+                  "maximum": 1.089590000001408,
+                  "medianAbsoluteDeviation": 0.13646650000032423,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.8166570000007596,
+                  1.089590000001408
+                ]
+              },
+              "manifestValidation": {
+                "timing": {
+                  "count": 2,
+                  "median": 2.1840149999991354,
+                  "minimum": 1.8723489999997582,
+                  "maximum": 2.4956809999985126,
+                  "medianAbsoluteDeviation": 0.31166599999937716,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  1.8723489999997582,
+                  2.4956809999985126
+                ]
+              },
+              "targetUnaccounted": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.0839550000005147,
+                  "minimum": 0.07106000000112545,
+                  "maximum": 0.09684999999990396,
+                  "medianAbsoluteDeviation": 0.012894999999389256,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.09684999999990396,
+                  0.07106000000112545
+                ]
+              },
+              "total": {
+                "timing": {
+                  "count": 2,
+                  "median": 137.73179949999985,
+                  "minimum": 136.78873399999975,
+                  "maximum": 138.67486499999995,
+                  "medianAbsoluteDeviation": 0.9430655000001025,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  138.67486499999995,
+                  136.78873399999975
+                ]
+              }
+            },
+            "gpuBatch": {
+              "physicalPlans": [
+                {
+                  "firstPayloadIndex": 0,
+                  "payloadCount": 16,
+                  "resources": {
+                    "payloadCount": 16,
+                    "atomCount": 46031,
+                    "maximumOutputBytes": 60152,
+                    "lengthAtomCount": 251,
+                    "lengthSizingDependencyAtomCount": 51732,
+                    "maximumStorageBindingBytes": 184128,
+                    "readbackBytes": 60216,
+                    "workgroupCount": 720
+                  }
+                },
+                {
+                  "firstPayloadIndex": 16,
+                  "payloadCount": 16,
+                  "resources": {
+                    "payloadCount": 16,
+                    "atomCount": 37897,
+                    "maximumOutputBytes": 51268,
+                    "lengthAtomCount": 228,
+                    "lengthSizingDependencyAtomCount": 43563,
+                    "maximumStorageBindingBytes": 151592,
+                    "readbackBytes": 51332,
+                    "workgroupCount": 593
+                  }
+                },
+                {
+                  "firstPayloadIndex": 32,
+                  "payloadCount": 16,
+                  "resources": {
+                    "payloadCount": 16,
+                    "atomCount": 69303,
+                    "maximumOutputBytes": 91316,
+                    "lengthAtomCount": 307,
+                    "lengthSizingDependencyAtomCount": 78551,
+                    "maximumStorageBindingBytes": 277216,
+                    "readbackBytes": 91380,
+                    "workgroupCount": 1083
+                  }
+                },
+                {
+                  "firstPayloadIndex": 48,
+                  "payloadCount": 6,
+                  "resources": {
+                    "payloadCount": 6,
+                    "atomCount": 21099,
+                    "maximumOutputBytes": 25596,
+                    "lengthAtomCount": 97,
+                    "lengthSizingDependencyAtomCount": 22649,
+                    "maximumStorageBindingBytes": 84400,
+                    "readbackBytes": 25620,
+                    "workgroupCount": 330
+                  }
+                }
+              ],
+              "adapterLimits": {
+                "maxBufferSize": 268435456,
+                "maxStorageBufferBindingSize": 134217728,
+                "maxUniformBufferBindingSize": 65536,
+                "maxComputeWorkgroupsPerDimension": 65535,
+                "maxStorageBuffersPerShaderStage": 8,
+                "maxUniformBuffersPerShaderStage": 12
+              },
+              "timings": {
+                "totalMilliseconds": 26.869434000000183,
+                "deviceRequestMilliseconds": 0.00454000000081578,
+                "partitioningMilliseconds": 4.530206999999791,
+                "gpuEmissionWallMilliseconds": 22.259906999999657,
+                "artifactIsolationMilliseconds": 0.06517000000076223,
+                "unaccountedMilliseconds": 0.009609999999156571
+              }
+            }
+          },
+          "capacity": {
+            "stages": {
+              "prepareHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 95.79798350000146,
+                  "minimum": 84.77655700000196,
+                  "maximum": 106.81941000000097,
+                  "medianAbsoluteDeviation": 11.021426499999507,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  106.81941000000097,
+                  84.77655700000196
+                ]
+              },
+              "validateHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.7208604999996169,
+                  "minimum": 0.6584980000016003,
+                  "maximum": 0.7832229999976335,
+                  "medianAbsoluteDeviation": 0.062362499998016574,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.7832229999976335,
+                  0.6584980000016003
+                ]
+              },
+              "planWasm": {
+                "timing": {
+                  "count": 2,
+                  "median": 24.7234540000004,
+                  "minimum": 21.387681000001066,
+                  "maximum": 28.059226999999737,
+                  "medianAbsoluteDeviation": 3.3357729999993353,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  28.059226999999737,
+                  21.387681000001066
+                ]
+              },
+              "emitWasmOnGpu": {
+                "timing": {
+                  "count": 2,
+                  "median": 27.909958000000188,
+                  "minimum": 25.762439000000086,
+                  "maximum": 30.05747700000029,
+                  "medianAbsoluteDeviation": 2.147519000000102,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  30.05747700000029,
+                  25.762439000000086
+                ]
+              },
+              "wasmValidation": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.710396999998693,
+                  "minimum": 0.6301189999985581,
+                  "maximum": 0.7906749999988278,
+                  "medianAbsoluteDeviation": 0.08027800000013485,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.7906749999988278,
+                  0.6301189999985581
+                ]
+              },
+              "manifestValidation": {
+                "timing": {
+                  "count": 2,
+                  "median": 1.6884054999986802,
+                  "minimum": 1.6075120000023162,
+                  "maximum": 1.7692989999950441,
+                  "medianAbsoluteDeviation": 0.08089349999636397,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  1.6075120000023162,
+                  1.7692989999950441
+                ]
+              },
+              "targetUnaccounted": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.0743145000021741,
+                  "minimum": 0.0714599999987513,
+                  "maximum": 0.0771690000055969,
+                  "medianAbsoluteDeviation": 0.0028545000034227996,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  0.0714599999987513,
+                  0.0771690000055969
+                ]
+              },
+              "total": {
+                "timing": {
+                  "count": 2,
+                  "median": 151.68040800000017,
+                  "minimum": 135.1071920000004,
+                  "maximum": 168.25362399999995,
+                  "medianAbsoluteDeviation": 16.573215999999775,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  168.25362399999995,
+                  135.1071920000004
+                ]
+              }
+            },
+            "gpuBatch": {
+              "physicalPlans": [
+                {
+                  "firstPayloadIndex": 0,
+                  "payloadCount": 54,
+                  "resources": {
+                    "payloadCount": 54,
+                    "atomCount": 174330,
+                    "maximumOutputBytes": 228332,
+                    "lengthAtomCount": 883,
+                    "lengthSizingDependencyAtomCount": 196495,
+                    "maximumStorageBindingBytes": 697324,
+                    "readbackBytes": 228548,
+                    "workgroupCount": 2724
+                  }
+                }
+              ],
+              "adapterLimits": {
+                "maxBufferSize": 268435456,
+                "maxStorageBufferBindingSize": 134217728,
+                "maxUniformBufferBindingSize": 65536,
+                "maxComputeWorkgroupsPerDimension": 65535,
+                "maxStorageBuffersPerShaderStage": 8,
+                "maxUniformBuffersPerShaderStage": 12
+              },
+              "timings": {
+                "totalMilliseconds": 25.74804899999981,
+                "deviceRequestMilliseconds": 0.0063500000005660695,
+                "partitioningMilliseconds": 4.424586999999519,
+                "gpuEmissionWallMilliseconds": 21.23322199999984,
+                "artifactIsolationMilliseconds": 0.07236999999986438,
+                "unaccountedMilliseconds": 0.011520000000018626
+              }
+            }
+          },
+          "pipelinedDepth2": {
+            "stages": {
+              "prepareHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 97.77650649999987,
+                  "minimum": 95.03267600000254,
+                  "maximum": 100.5203369999972,
+                  "medianAbsoluteDeviation": 2.7438304999973298,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  100.5203369999972,
+                  95.03267600000254
+                ]
+              },
+              "validateHir": {
+                "timing": {
+                  "count": 2,
+                  "median": 0.9601215000016055,
+                  "minimum": 0.7475070000018604,
+                  "maximum": 1.1727360000013505,
+                  "medianAbsoluteDeviation": 0.21261449999974502,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  1.1727360000013505,
+                  0.7475070000018604
+                ]
+              },
+              "planWasmWork": {
+                "timing": {
+                  "count": 2,
+                  "median": 23.106742499998745,
+                  "minimum": 21.755648999997902,
+                  "maximum": 24.45783599999959,
+                  "medianAbsoluteDeviation": 1.351093500000843,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  24.45783599999959,
+                  21.755648999997902
+                ]
+              },
+              "summedGpuBatchSpan": {
+                "timing": {
+                  "count": 2,
+                  "median": 99.720147,
+                  "minimum": 98.79466699999921,
+                  "maximum": 100.64562700000079,
+                  "medianAbsoluteDeviation": 0.925480000000789,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  100.64562700000079,
+                  98.79466699999921
+                ]
+              },
+              "total": {
+                "timing": {
+                  "count": 2,
+                  "median": 143.44679499999984,
+                  "minimum": 138.95518300000003,
+                  "maximum": 147.93840699999964,
+                  "medianAbsoluteDeviation": 4.4916119999998045,
+                  "p95": {
+                    "status": "insufficient",
+                    "minimumSampleCount": 20
+                  }
+                },
+                "rawMilliseconds": [
+                  147.93840699999964,
+                  138.95518300000003
+                ]
+              }
+            },
+            "physicalBatchCounts": [
+              2,
+              2
+            ],
+            "maximumInFlightLeasedBufferBytes": 3934184
+          },
+          "fixedToCapacityP50Ratio": 0.9080394845720595,
+          "capacityToPipelineP50Ratio": 1.0573983754743377
+        }
+      }
+    }
+  ]
+}

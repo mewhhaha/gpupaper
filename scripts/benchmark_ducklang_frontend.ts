@@ -8,6 +8,18 @@ import {
   DucklangSyntaxError,
   parseDucklangModuleWithTimings,
 } from "../src/ducklang_parser.ts";
+import {
+  inspectBenchmarkEnvironment,
+  repositoryIdentity,
+  runtimeIdentity,
+  sha256,
+} from "./benchmark_environment.ts";
+import {
+  median,
+  representativeSample,
+  summarizePairedSamples,
+  summarizeSamples,
+} from "./benchmark_statistics.ts";
 
 const defaultTargets = [
   {
@@ -67,9 +79,25 @@ const defaultTargets = [
 ] as const;
 const warmIterationCount = 6;
 
-const targets = Deno.args.length === 0
+const requestedTargets = Deno.args.filter((argument) =>
+  !argument.startsWith("--")
+);
+const targets = requestedTargets.length === 0
   ? defaultTargets
-  : Deno.args.map((source) => ({ source, hostInterface: undefined }));
+  : requestedTargets.map((source) => ({ source, hostInterface: undefined }));
+const allowContended = Deno.args.includes("--allow-contended");
+const environmentAtStart = await inspectBenchmarkEnvironment();
+if (environmentAtStart.status !== "clear" && !allowContended) {
+  console.log(JSON.stringify({
+    status: "refused",
+    reason: "competing compiler or GPU work is active or inspection failed",
+    environment: environmentAtStart,
+  }));
+  Deno.exit(2);
+}
+const adapter = await navigator.gpu.requestAdapter();
+if (adapter === null) throw new Error("frontend benchmark has no GPU adapter");
+const results = [];
 
 try {
   for (const target of targets) {
@@ -105,14 +133,10 @@ try {
       hostInterface,
     );
 
-    console.log(JSON.stringify({
+    results.push({
       file,
-      validity: {
-        status: "diagnostic",
-        reason:
-          "frontend benchmark does not inspect competing process or GPU load",
-      },
       sourceBytes: new TextEncoder().encode(source).length,
+      sourceSha256: await sha256(new TextEncoder().encode(source)),
       parser: {
         coldStatus: cold.status,
         ...(cold.status === "error" ? { coldError: cold.error } : {}),
@@ -134,22 +158,43 @@ try {
         cpu: compilations.cpu,
         gpu: compilations.gpu,
       },
-    }));
+    });
   }
 } finally {
   await clearDucklangParserCache();
 }
-
-function median(values: readonly number[]): number {
-  if (values.length === 0) {
-    throw new RangeError("cannot calculate the median of an empty sample");
-  }
-  const ordered = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(ordered.length / 2);
-  return ordered.length % 2 === 0
-    ? (ordered[middle - 1] + ordered[middle]) / 2
-    : ordered[middle];
-}
+const environmentAtEnd = await inspectBenchmarkEnvironment();
+const environmentClear = environmentAtStart.status === "clear" &&
+  environmentAtEnd.status === "clear";
+console.log(JSON.stringify({
+  status: environmentClear || allowContended ? "completed" : "refused",
+  validity: environmentClear ? { status: "admissible" } : allowContended
+    ? {
+      status: "diagnostic",
+      reason: "competing compiler or GPU work was present during measurement",
+    }
+    : {
+      status: "refused",
+      reason: "competing compiler or GPU work appeared during measurement",
+    },
+  schemaVersion: 2,
+  runtime: runtimeIdentity(),
+  repositories: {
+    gpupaper: await repositoryIdentity(
+      new URL("../", import.meta.url).pathname,
+    ),
+  },
+  adapter: {
+    vendor: adapter.info.vendor,
+    architecture: adapter.info.architecture,
+    device: adapter.info.device,
+    description: adapter.info.description,
+  },
+  environmentAtStart,
+  environmentAtEnd,
+  results,
+}));
+if (!environmentClear && !allowContended) Deno.exit(2);
 
 type ParserMeasurement = {
   readonly status: "completed" | "error";
@@ -162,6 +207,7 @@ type CompletedCompilationMeasurement = {
   readonly status: "completed";
   readonly totalMilliseconds: number;
   readonly profile: DucklangCompilationProfile;
+  readonly wasmSha256: string;
 };
 
 type CompilationMeasurement =
@@ -215,6 +261,7 @@ async function measureCompilation(
       status: "completed",
       totalMilliseconds: performance.now() - start,
       profile: artifact.profile,
+      wasmSha256: await sha256(artifact.wasm),
     };
   } catch (error) {
     return {
@@ -230,6 +277,7 @@ type CompilationModeReport = {
   readonly warmIterationCount: number;
   readonly warmTotalMilliseconds: readonly number[];
   readonly warmMedianTotalMilliseconds: number;
+  readonly warmTiming: ReturnType<typeof summarizeSamples>;
   readonly warmProfiles?: readonly DucklangCompilationProfile[];
   readonly warmRepresentativeProfile?: DucklangCompilationProfile;
   readonly warmHotStages?: readonly {
@@ -248,9 +296,11 @@ async function measureCompilationModes(
   readonly cpu: CompilationModeReport;
   readonly gpu: CompilationModeReport;
   readonly pairedGpuMinusCpu?: {
-    readonly milliseconds: readonly number[];
-    readonly medianMilliseconds: number;
-    readonly medianAbsoluteDeviationMilliseconds: number;
+    readonly differences: readonly number[];
+    readonly logRatios: readonly number[];
+    readonly difference: ReturnType<typeof summarizeSamples>;
+    readonly logRatio: ReturnType<typeof summarizeSamples>;
+    readonly medianRatio: number;
   };
 }> {
   await clearDucklangParserCache();
@@ -281,29 +331,26 @@ async function measureCompilationModes(
       );
     }
   }
-  const completedPairs = cpuWarm.flatMap((cpu, index) => {
+  const completedCpu: number[] = [];
+  const completedGpu: number[] = [];
+  cpuWarm.forEach((cpu, index) => {
     const gpu = gpuWarm[index];
-    return cpu.status === "completed" && gpu?.status === "completed"
-      ? [gpu.totalMilliseconds - cpu.totalMilliseconds]
-      : [];
+    if (cpu.status !== "completed" || gpu?.status !== "completed") return;
+    if (cpu.wasmSha256 !== gpu.wasmSha256) {
+      throw new Error(
+        `${file} CPU/GPU pair ${index} emitted ${cpu.wasmSha256} and ${gpu.wasmSha256}`,
+      );
+    }
+    completedCpu.push(cpu.totalMilliseconds);
+    completedGpu.push(gpu.totalMilliseconds);
   });
-  const pairedMedian = completedPairs.length === warmIterationCount
-    ? median(completedPairs)
+  const paired = completedCpu.length === warmIterationCount
+    ? summarizePairedSamples(completedGpu, completedCpu)
     : undefined;
   return {
     cpu: summarizeCompilationMode(cpuFirst, cpuWarm),
     gpu: summarizeCompilationMode(gpuFirst, gpuWarm),
-    ...(pairedMedian === undefined ? {} : {
-      pairedGpuMinusCpu: {
-        milliseconds: completedPairs,
-        medianMilliseconds: pairedMedian,
-        medianAbsoluteDeviationMilliseconds: median(
-          completedPairs.map((difference) =>
-            Math.abs(difference - pairedMedian)
-          ),
-        ),
-      },
-    }),
+    ...(paired === undefined ? {} : { pairedGpuMinusCpu: paired }),
   };
 }
 
@@ -324,6 +371,9 @@ function summarizeCompilationMode(
       measurement.totalMilliseconds
     ),
     warmMedianTotalMilliseconds: median(
+      warm.map((measurement) => measurement.totalMilliseconds),
+    ),
+    warmTiming: summarizeSamples(
       warm.map((measurement) => measurement.totalMilliseconds),
     ),
     ...(completed.length === warm.length
@@ -347,13 +397,7 @@ function summarizeCompilationMode(
 function representativeCompilationProfile(
   samples: readonly DucklangCompilationProfile[],
 ): DucklangCompilationProfile {
-  const medianTotal = median(samples.map((sample) => sample.totalMilliseconds));
-  return [...samples].sort((left, right) => {
-    const leftDistance = Math.abs(left.totalMilliseconds - medianTotal);
-    const rightDistance = Math.abs(right.totalMilliseconds - medianTotal);
-    return leftDistance - rightDistance ||
-      left.totalMilliseconds - right.totalMilliseconds;
-  })[0];
+  return representativeSample(samples, (sample) => sample.totalMilliseconds);
 }
 
 function hotStages(

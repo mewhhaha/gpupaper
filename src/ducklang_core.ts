@@ -1853,6 +1853,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
       CoreValueId,
       { readonly block: CoreBlockId; readonly operation: number }
     >();
+    const valueTypes = new Map<CoreValueId, CoreTypeId>();
     for (const [blockIndex, block] of function_.blocks.entries()) {
       if (block.id !== blockIndex) {
         throw new TypeError(
@@ -1866,6 +1867,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
           "block parameter type",
         );
         defineCoreValue(definitions, parameter.value, block.id, -1, function_);
+        valueTypes.set(parameter.value, parameter.type);
       }
       for (const [operationIndex, operation] of block.operations.entries()) {
         requireIndex(operation.type, module.types.length, "operation type");
@@ -1876,6 +1878,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
           operationIndex,
           function_,
         );
+        valueTypes.set(operation.result, operation.type);
         if (
           operation.kind === "call.direct" ||
           operation.kind === "closure.make"
@@ -1899,7 +1902,13 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
     }
     const predecessors = function_.blocks.map(() => new Set<CoreBlockId>());
     for (const block of function_.blocks) {
-      validateTerminatorEdges(function_, block, definitions, predecessors);
+      validateTerminatorEdges(
+        function_,
+        block,
+        definitions,
+        valueTypes,
+        predecessors,
+      );
     }
     const dominators = calculateDominators(function_, predecessors);
     for (const block of function_.blocks) {
@@ -1914,7 +1923,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
             operationIndex,
           );
         }
-        validateCoreCallOperation(module, function_, operation);
+        validateCoreCallOperation(module, function_, operation, valueTypes);
       }
       for (const operand of terminatorValues(block.terminator)) {
         requireDominatingValue(
@@ -1926,7 +1935,7 @@ export function validateDucklangCore(module: DucklangCoreModule): void {
           block.operations.length,
         );
       }
-      validateCoreTerminator(module, function_, block);
+      validateCoreTerminator(module, function_, block, valueTypes);
     }
   }
 }
@@ -1935,13 +1944,14 @@ function validateCoreCallOperation(
   module: DucklangCoreModule,
   function_: DucklangCoreFunction,
   operation: DucklangCoreOperation,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): void {
   if (
     operation.kind === "store.empty" || operation.kind === "store.new" ||
     operation.kind === "store.length" || operation.kind === "store.read" ||
     operation.kind === "store.write" || operation.kind === "store.grow"
   ) {
-    validateCoreStoreOperation(module, function_, operation);
+    validateCoreStoreOperation(module, function_, operation, valueTypes);
     return;
   }
   if (operation.kind === "vector.shuffle") {
@@ -1953,7 +1963,10 @@ function validateCoreCallOperation(
       );
     }
     for (const operand of operation.operands) {
-      if (coreValueType(function_, operand) !== operation.type) {
+      if (
+        requiredCoreValueType(valueTypes, function_, operand) !==
+          operation.type
+      ) {
         throw new TypeError(
           `Core vector.shuffle ${function_.name}:${operation.result} changes operand type`,
         );
@@ -1980,11 +1993,16 @@ function validateCoreCallOperation(
       module,
       function_,
       operation,
+      valueTypes,
     )
   ) return;
   if (operation.kind === "seal.wrap" || operation.kind === "seal.unwrap") {
     requireCoreOperationOperands(function_, operation, 1);
-    const operandType = coreValueType(function_, operation.operands[0]);
+    const operandType = requiredCoreValueType(
+      valueTypes,
+      function_,
+      operation.operands[0],
+    );
     if (!sameCoreRuntimeRepresentation(module, operandType, operation.type)) {
       throw new TypeError(
         `Core ${operation.kind} ${function_.name}:${operation.result} changes representation from type ${operandType} to ${operation.type}`,
@@ -1998,7 +2016,11 @@ function validateCoreCallOperation(
     operation.kind === "resource.freeze"
   ) {
     requireCoreOperationOperands(function_, operation, 1);
-    const operandType = coreValueType(function_, operation.operands[0]);
+    const operandType = requiredCoreValueType(
+      valueTypes,
+      function_,
+      operation.operands[0],
+    );
     if (operandType !== operation.type) {
       throw new TypeError(
         `Core ${operation.kind} ${function_.name}:${operation.result} changes type ${operandType} to ${operation.type}`,
@@ -2014,7 +2036,7 @@ function validateCoreCallOperation(
     requireCoreUnitType(module, operation.type, operation.kind);
     requireCoreUnitType(
       module,
-      coreValueType(function_, operation.operands[0]),
+      requiredCoreValueType(valueTypes, function_, operation.operands[0]),
       `${operation.kind} operand`,
     );
     return;
@@ -2028,10 +2050,14 @@ function validateCoreCallOperation(
     requireCoreOperationOperands(function_, operation, 2);
     requireCoreUnitType(
       module,
-      coreValueType(function_, operation.operands[0]),
+      requiredCoreValueType(valueTypes, function_, operation.operands[0]),
       "region.allocate token",
     );
-    const allocatedType = coreValueType(function_, operation.operands[1]);
+    const allocatedType = requiredCoreValueType(
+      valueTypes,
+      function_,
+      operation.operands[1],
+    );
     if (allocatedType !== operation.type) {
       throw new TypeError(
         `Core region.allocate ${function_.name}:${operation.result} changes allocation type ${allocatedType} to ${operation.type}`,
@@ -2044,7 +2070,9 @@ function validateCoreCallOperation(
     const signature = module.signatures[callee.signature];
     requireCoreTypes(
       `direct call ${function_.name} -> ${callee.name}`,
-      operation.operands.map((operand) => coreValueType(function_, operand)),
+      operation.operands.map((operand) =>
+        requiredCoreValueType(valueTypes, function_, operand)
+      ),
       signature.parameters,
     );
     if (operation.type !== signature.result) {
@@ -2079,7 +2107,9 @@ function validateCoreCallOperation(
     );
     requireCoreTypes(
       `closure ${target.name} captures`,
-      operation.operands.map((operand) => coreValueType(function_, operand)),
+      operation.operands.map((operand) =>
+        requiredCoreValueType(valueTypes, function_, operand)
+      ),
       codeSignature.parameters.slice(closureSignature.parameters.length),
     );
     if (codeSignature.result !== closureSignature.result) {
@@ -2096,7 +2126,7 @@ function validateCoreCallOperation(
     );
   }
   const closureType = module.types[
-    coreValueType(function_, operation.operands[0])
+    requiredCoreValueType(valueTypes, function_, operation.operands[0])
   ];
   if (
     closureType.kind !== "function" ||
@@ -2110,7 +2140,7 @@ function validateCoreCallOperation(
   requireCoreTypes(
     `indirect call ${function_.name}:${operation.result}`,
     operation.operands.slice(1).map((operand) =>
-      coreValueType(function_, operand)
+      requiredCoreValueType(valueTypes, function_, operand)
     ),
     signature.parameters,
   );
@@ -2137,6 +2167,7 @@ function validateCoreStoreOperation(
     DucklangCoreOperation,
     { readonly kind: `store.${string}` }
   >,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): void {
   const resultType = module.types[operation.type];
   if (operation.kind === "store.empty" || operation.kind === "store.new") {
@@ -2150,10 +2181,14 @@ function validateCoreStoreOperation(
     if (operation.kind === "store.empty") return;
     requireCoreI64Type(
       module,
-      coreValueType(function_, operation.operands[0]),
+      requiredCoreValueType(valueTypes, function_, operation.operands[0]),
       `${operation.kind} length`,
     );
-    const initial = coreValueType(function_, operation.operands[1]);
+    const initial = requiredCoreValueType(
+      valueTypes,
+      function_,
+      operation.operands[1],
+    );
     if (initial !== resultType.element) {
       throw new TypeError(
         `Core ${operation.kind} ${function_.name}:${operation.result} initial type ${initial} differs from element ${resultType.element}`,
@@ -2170,7 +2205,11 @@ function validateCoreStoreOperation(
       ? 2
       : 3,
   );
-  const storeTypeId = coreValueType(function_, operation.operands[0]);
+  const storeTypeId = requiredCoreValueType(
+    valueTypes,
+    function_,
+    operation.operands[0],
+  );
   const storeType = module.types[storeTypeId];
   if (storeType.kind !== "store") {
     throw new TypeError(
@@ -2183,7 +2222,7 @@ function validateCoreStoreOperation(
   }
   requireCoreI64Type(
     module,
-    coreValueType(function_, operation.operands[1]),
+    requiredCoreValueType(valueTypes, function_, operation.operands[1]),
     `${operation.kind} index or length`,
   );
   if (operation.kind === "store.read") {
@@ -2199,7 +2238,11 @@ function validateCoreStoreOperation(
       `Core ${operation.kind} ${function_.name}:${operation.result} changes store type ${storeTypeId} to ${operation.type}`,
     );
   }
-  const valueType = coreValueType(function_, operation.operands[2]);
+  const valueType = requiredCoreValueType(
+    valueTypes,
+    function_,
+    operation.operands[2],
+  );
   if (valueType !== storeType.element) {
     throw new TypeError(
       `Core ${operation.kind} ${function_.name}:${operation.result} value type ${valueType} differs from element ${storeType.element}`,
@@ -2221,6 +2264,7 @@ function validateCoreSimdPrimitive(
   module: DucklangCoreModule,
   function_: DucklangCoreFunction,
   operation: Extract<DucklangCoreOperation, { readonly kind: "primitive" }>,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): boolean {
   const extractIds = [
     PrimitiveId.f32x4ExtractLane0,
@@ -2260,7 +2304,7 @@ function validateCoreSimdPrimitive(
   if (!simdIds.includes(operation.primitiveId)) return false;
 
   const operandTypes = operation.operands.map((operand) =>
-    module.types[coreValueType(function_, operand)]
+    module.types[requiredCoreValueType(valueTypes, function_, operand)]
   );
   const resultType = module.types[operation.type];
   const isF32 = (type: DucklangCoreType): boolean =>
@@ -2324,10 +2368,15 @@ function validateCoreTerminator(
   module: DucklangCoreModule,
   function_: DucklangCoreFunction,
   block: DucklangCoreBlock,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): void {
   if (block.terminator.kind === "conditional_branch") {
     const conditionType = module.types[
-      coreValueType(function_, block.terminator.condition)
+      requiredCoreValueType(
+        valueTypes,
+        function_,
+        block.terminator.condition,
+      )
     ];
     if (conditionType.kind !== "scalar" || conditionType.scalar !== "i32") {
       throw new TypeError(
@@ -2340,7 +2389,9 @@ function validateCoreTerminator(
   const signature = module.signatures[function_.signature];
   requireCoreTypes(
     `return ${function_.name}:${block.id}`,
-    block.terminator.values.map((value) => coreValueType(function_, value)),
+    block.terminator.values.map((value) =>
+      requiredCoreValueType(valueTypes, function_, value)
+    ),
     [signature.result],
   );
 }
@@ -2369,6 +2420,7 @@ function validateTerminatorEdges(
   function_: DucklangCoreFunction,
   block: DucklangCoreBlock,
   definitions: ReadonlyMap<CoreValueId, unknown>,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
   predecessors: Set<CoreBlockId>[],
 ): void {
   const edge = (
@@ -2391,7 +2443,11 @@ function validateTerminatorEdges(
           `Core edge ${function_.name}:${block.id} uses undefined value ${argument}`,
         );
       }
-      const argumentType = coreValueType(function_, argument);
+      const argumentType = requiredCoreValueType(
+        valueTypes,
+        function_,
+        argument,
+      );
       if (argumentType !== parameters[index].type) {
         throw new TypeError(
           `Core edge ${function_.name}:${block.id} argument ${index} has type ${argumentType}; target ${target} expects ${
@@ -2501,20 +2557,13 @@ function defineCoreValue(
   definitions.set(value, { block, operation });
 }
 
-function coreValueType(
+function requiredCoreValueType(
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
   function_: DucklangCoreFunction,
   value: CoreValueId,
 ): CoreTypeId {
-  for (const block of function_.blocks) {
-    const parameter = block.parameters.find((candidate) =>
-      candidate.value === value
-    );
-    if (parameter !== undefined) return parameter.type;
-    const operation = block.operations.find((candidate) =>
-      candidate.result === value
-    );
-    if (operation !== undefined) return operation.type;
-  }
+  const type = valueTypes.get(value);
+  if (type !== undefined) return type;
   throw new TypeError(
     `Core function ${function_.name} has no type for value ${value}`,
   );

@@ -53,13 +53,23 @@ Deno.test("CLI rejects optional and required GPU execution together", () => {
 });
 
 Deno.test("CLI defaults to CPU execution", () => {
-  assertEquals(parseCommandLine(["run", "test.hs"]).gpuMode, "off");
+  const invocation = parseCommandLine(["run", "test.hs"]);
+  assertEquals(invocation.gpuMode, "off");
+  assertEquals(invocation.cpuWasmEmitter, "typescript");
 });
 
 Deno.test("CLI accepts optional GPU execution", () => {
   assertEquals(
     parseCommandLine(["run", "test.hs", "--try-gpu"]).gpuMode,
     "optional",
+  );
+});
+
+Deno.test("CLI selects Rust/WebAssembly CPU emission", () => {
+  assertEquals(
+    parseCommandLine(["run", "test.hs", "--rust-wasm-emitter"])
+      .cpuWasmEmitter,
+    "rust-wasm",
   );
 });
 
@@ -94,6 +104,7 @@ Deno.test("CLI accepts a managed host interface and authoritative GPU output", (
     output: "editor.wasm",
     gpuMode: "required",
     gpuWasmVerification: "none",
+    cpuWasmEmitter: "typescript",
     hostInterfaceFile: "host.duck",
   });
 });
@@ -119,7 +130,7 @@ Deno.test("CLI passes the host interface path to managed compilation", async () 
   );
 
   assertEquals(artifact.language, "ducklang");
-  assertEquals(artifact.backends.wasmEmission, "cpu");
+  assertEquals(artifact.backends.wasmEmission, "typescript");
 });
 
 Deno.test("host interfaces are rejected for non-Ducklang compilation", async () => {
@@ -146,11 +157,21 @@ Deno.test("Ducklang compilation sessions are rejected for Haskell", async () => 
   );
 });
 
-Deno.test("default compilation uses the CPU backend", async () => {
+Deno.test("default compilation uses the TypeScript CPU emitter", async () => {
   const artifact = await compileModuleSource("test.hs", "main = 42\n");
 
-  assertEquals(artifact.backends.wasmEmission, "cpu");
+  assertEquals(artifact.backends.wasmEmission, "typescript");
   assertEquals(artifact.gpuWasmResult, undefined);
+});
+
+Deno.test("compiler rejects an unknown CPU Wasm emitter at its boundary", async () => {
+  await assertRejects(
+    () =>
+      compileModuleSource("test.hs", "main = 42\n", {
+        cpuWasmEmitter: "native" as "typescript",
+      }),
+    /test\.hs: CPU Wasm emitter must be "typescript" or "rust-wasm"; received "native"/,
+  );
 });
 
 Deno.test("rank-1 inference generalizes identity across integer and boolean uses", () => {
@@ -936,6 +957,37 @@ Deno.test("plan-only lowering does not materialize CPU Wasm", async () => {
   assertEquals(planned.wasmPlan.atoms.length > 0, true);
 });
 
+Deno.test("compiler emits both source frontends through Rust/WebAssembly", async () => {
+  const haskellTypescript = await compileModuleSource(
+    "test.hs",
+    "main = 42\n",
+    { gpuMode: "off" },
+  );
+  const haskellRust = await compileModuleSource(
+    "test.hs",
+    "main = 42\n",
+    { gpuMode: "off", cpuWasmEmitter: "rust-wasm" },
+  );
+  assertEquals(haskellRust.backends.wasmEmission, "rust-wasm");
+  assertEquals([...haskellRust.wasm], [...haskellTypescript.wasm]);
+
+  const session = createDucklangCompilationSession();
+  const ducklangTypescript = await compileModuleSource(
+    "test.duck",
+    "42\n",
+    { gpuMode: "off", session },
+  );
+  const ducklangRust = await compileModuleSource(
+    "test.duck",
+    "42\n",
+    { gpuMode: "off", cpuWasmEmitter: "rust-wasm", session },
+  );
+  assertEquals(ducklangRust.backends.wasmEmission, "rust-wasm");
+  assertEquals([...ducklangRust.wasm], [...ducklangTypescript.wasm]);
+  assertEquals(await runMain(haskellRust.wasm), 42);
+  assertEquals(await runMain(ducklangRust.wasm), 42);
+});
+
 Deno.test("GPU-authoritative emission matches differential emission", async () => {
   const source = "main = 42\n";
   const differential = await compileModuleSource("test.hs", source, {
@@ -954,6 +1006,18 @@ Deno.test("GPU-authoritative emission matches differential emission", async () =
     formatCompilationBackends(authoritative.backends),
     "backends: type=cpu comptime=cpu core=notApplicable wasm=gpu verification=none",
   );
+});
+
+Deno.test("Rust/WebAssembly is an independent GPU differential oracle", async () => {
+  const artifact = await compileModuleSource("test.hs", "main = 42\n", {
+    gpuMode: "optional",
+    cpuWasmEmitter: "rust-wasm",
+  });
+  if (artifact.gpuWasmResult?.status !== "completed") return;
+
+  assertEquals(artifact.backends.wasmEmission, "gpu");
+  assertEquals(artifact.backends.wasmVerification, "cpuDifferential");
+  assertEquals(await runMain(artifact.wasm), 42);
 });
 
 Deno.test("Ducklang GPU-authoritative emission matches differential emission", async () => {
@@ -1108,7 +1172,7 @@ Deno.test("WebGPU Wasm emission matches the CPU layout byte for byte", async () 
     Math.ceil(plan.atoms.length / 8) * 4 +
       lowWordBytes +
       signed64HighWordBytes +
-      lengthAtoms.length * 12,
+      lengthAtoms.length * 16 + 4,
   );
   assertEquals(gpu.signed64AtomCount, signed64AtomCount);
   assertEquals(gpu.signed64HighWordBytes, signed64HighWordBytes);

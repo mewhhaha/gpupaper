@@ -9,6 +9,19 @@ import {
   emitWasmPlanOnGpu,
   type GpuWasmLowWordLayout,
 } from "../src/gpu_wasm.ts";
+import {
+  createRustWasmEmitter,
+  type RustWasmColdEmission,
+  type RustWasmEmission,
+  type RustWasmResidentPlan,
+} from "../src/rust_wasm_emitter.ts";
+import {
+  inspectBenchmarkEnvironment,
+  repositoryIdentity,
+  runtimeIdentity,
+  sha256,
+} from "./benchmark_environment.ts";
+import { median, summarizeSamples } from "./benchmark_statistics.ts";
 
 const targets = [
   target("editor", "editor/editor.duck", "editor/host.duck"),
@@ -19,7 +32,26 @@ const targets = [
   target("raytracer", "raytracer/raytracer.duck"),
 ] as const;
 const sampleCount = requestedSampleCount(Deno.args);
+const allowContended = Deno.args.includes("--allow-contended");
+const environmentAtStart = await inspectBenchmarkEnvironment();
+if (environmentAtStart.status !== "clear" && !allowContended) {
+  console.log(JSON.stringify({
+    status: "refused",
+    reason: "competing compiler or GPU work is active or inspection failed",
+    environment: environmentAtStart,
+  }));
+  Deno.exit(2);
+}
+const adapter = await navigator.gpu.requestAdapter();
+if (adapter === null) throw new Error("Wasm benchmark has no GPU adapter");
 const preparedTargets = await Promise.all(targets.map(prepareTarget));
+const rustWasmInitialization = await createRustWasmEmitter();
+const rustWasmResidents = new Map(
+  preparedTargets.map((prepared) => [
+    prepared.name,
+    rustWasmInitialization.emitter.prepare(prepared.plan),
+  ]),
+);
 const planningSamples = new Map(
   preparedTargets.map((prepared) => [
     prepared.name,
@@ -45,9 +77,26 @@ const cpuSampleCount = 101;
 const cpuSamples = new Map(
   preparedTargets.map((prepared) => [prepared.name, [] as number[]]),
 );
+const rustWasmColdSamples = new Map(
+  preparedTargets.map((prepared) => [
+    prepared.name,
+    [] as ReturnType<typeof measureRustWasmCold>[],
+  ]),
+);
+const rustWasmResidentSamples = new Map(
+  preparedTargets.map((prepared) => [
+    prepared.name,
+    [] as ReturnType<typeof measureRustWasmResident>[],
+  ]),
+);
 for (const prepared of preparedTargets) {
   for (let warmup = 0; warmup < 10; warmup += 1) {
     measureCpuEmission(prepared);
+    measureRustWasmCold(prepared, rustWasmInitialization.emitter);
+    measureRustWasmResident(
+      prepared,
+      rustWasmResidents.get(prepared.name)!,
+    );
   }
 }
 for (let sample = 0; sample < cpuSampleCount; sample += 1) {
@@ -55,7 +104,24 @@ for (let sample = 0; sample < cpuSampleCount; sample += 1) {
     ? preparedTargets
     : [...preparedTargets].reverse();
   for (const prepared of orderedTargets) {
-    cpuSamples.get(prepared.name)!.push(measureCpuEmission(prepared));
+    const targetIndex = preparedTargets.indexOf(prepared);
+    const measurements = [
+      () => cpuSamples.get(prepared.name)!.push(measureCpuEmission(prepared)),
+      () =>
+        rustWasmColdSamples.get(prepared.name)!.push(
+          measureRustWasmCold(prepared, rustWasmInitialization.emitter),
+        ),
+      () =>
+        rustWasmResidentSamples.get(prepared.name)!.push(
+          measureRustWasmResident(
+            prepared,
+            rustWasmResidents.get(prepared.name)!,
+          ),
+        ),
+    ];
+    for (let backend = 0; backend < measurements.length; backend += 1) {
+      measurements[(backend + sample + targetIndex) % measurements.length]!();
+    }
   }
 }
 
@@ -103,12 +169,36 @@ for (let sample = 0; sample < sampleCount; sample += 1) {
   }
 }
 
+const environmentAtEnd = await inspectBenchmarkEnvironment();
+for (const resident of rustWasmResidents.values()) resident.release();
+const environmentClear = environmentAtStart.status === "clear" &&
+  environmentAtEnd.status === "clear";
 console.log(JSON.stringify({
-  schemaVersion: 2,
-  validity: {
-    status: "diagnostic",
-    reason: "Wasm benchmark does not inspect competing process or GPU load",
+  status: environmentClear || allowContended ? "completed" : "refused",
+  schemaVersion: 3,
+  validity: environmentClear ? { status: "admissible" } : allowContended
+    ? {
+      status: "diagnostic",
+      reason: "competing compiler or GPU work was present during measurement",
+    }
+    : {
+      status: "refused",
+      reason: "competing compiler or GPU work appeared during measurement",
+    },
+  runtime: runtimeIdentity(),
+  repositories: {
+    gpupaper: await repositoryIdentity(
+      new URL("../", import.meta.url).pathname,
+    ),
   },
+  adapter: {
+    vendor: adapter.info.vendor,
+    architecture: adapter.info.architecture,
+    device: adapter.info.device,
+    description: adapter.info.description,
+  },
+  environmentAtStart,
+  environmentAtEnd,
   sampleCount,
   warmupCountPerLayout: 1,
   targetOrder: "alternatingForwardReverse",
@@ -123,6 +213,14 @@ console.log(JSON.stringify({
   cpuTargetOrder: "alternatingForwardReverse",
   cpuMeasuredBoundary: "planValidationThroughCpuByteEmission",
   cpuBoundaryId: "wasm-plan-to-cpu-bytes",
+  rustWasmInitialization: {
+    moduleBytes: rustWasmInitialization.moduleBytes,
+    timings: rustWasmInitialization.timings,
+  },
+  rustWasmColdBoundaryId:
+    "host-wasm-plan-through-column-copy-rust-validation-emission-and-owned-byte-copy",
+  rustWasmResidentBoundaryId:
+    "resident-rust-wasm-plan-through-emission-and-owned-byte-copy",
   measuredBoundary: "hostPlanAnalysisThroughMappedGpuReadbackAndByteCopy",
   boundaryId: "wasm-plan-to-gpu-bytes-and-mapped-readback",
   targets: preparedTargets.map((prepared) => {
@@ -140,21 +238,28 @@ console.log(JSON.stringify({
     );
     return {
       target: prepared.name,
+      inputSha256: prepared.inputSha256,
+      outputSha256: prepared.outputSha256,
       atomCount: prepared.plan.atoms.length,
+      atomKinds: prepared.atomKinds,
       wasmBytes: prepared.expectedBytes.length,
       planning: {
-        medianMilliseconds: median(planningTotals),
-        p95Milliseconds: percentile(planningTotals, 0.95),
-        minimumMilliseconds: Math.min(...planningTotals),
-        maximumMilliseconds: Math.max(...planningTotals),
+        timing: summarizeSamples(planningTotals),
         rawMeasurements: targetPlanning,
       },
       cpuOracle: {
-        medianMilliseconds: median(cpuSamples.get(prepared.name)!),
-        p95Milliseconds: percentile(cpuSamples.get(prepared.name)!, 0.95),
-        minimumMilliseconds: Math.min(...cpuSamples.get(prepared.name)!),
-        maximumMilliseconds: Math.max(...cpuSamples.get(prepared.name)!),
+        timing: summarizeSamples(cpuSamples.get(prepared.name)!),
         rawMilliseconds: cpuSamples.get(prepared.name)!,
+      },
+      rustWasm: {
+        preparation: rustWasmResidents.get(prepared.name)!
+          .preparationTimings,
+        cold: reportRustWasm(
+          rustWasmColdSamples.get(prepared.name)!,
+        ),
+        resident: reportRustWasm(
+          rustWasmResidentSamples.get(prepared.name)!,
+        ),
       },
       dense: reportLayout(targetSamples.dense, targetWork.dense!),
       ranked: reportLayout(targetSamples.ranked, targetWork.ranked!),
@@ -162,12 +267,25 @@ console.log(JSON.stringify({
     };
   }),
 }));
+if (!environmentClear && !allowContended) Deno.exit(2);
 
 type PreparedTarget = {
   readonly name: string;
   readonly flatCore: FlatDucklangCore;
   readonly plan: WasmBinaryPlan;
+  readonly atomKinds: {
+    readonly byte: number;
+    readonly unsigned: number;
+    readonly signed32: number;
+    readonly signed64: number;
+    readonly length: number;
+    readonly simdGroupCount: number;
+    readonly simdTailCount: number;
+    readonly allByteSimdGroupCount: number;
+  };
   readonly expectedBytes: Uint8Array;
+  readonly inputSha256: string;
+  readonly outputSha256: string;
 };
 
 async function prepareTarget(
@@ -183,13 +301,40 @@ async function prepareTarget(
       `${target_.name} Wasm benchmark compiled ${artifact.language}`,
     );
   }
+  const plan = lowerDucklangCoreToFcgAndWasm(artifact.optimizedCore, {
+    emission: "planOnly",
+  }).wasmPlan;
+  const atomKinds = {
+    byte: 0,
+    unsigned: 0,
+    signed32: 0,
+    signed64: 0,
+    length: 0,
+  };
+  for (const atom of plan.atoms) atomKinds[atom.kind] += 1;
+  let allByteSimdGroupCount = 0;
+  for (let atomIndex = 0; atomIndex + 4 <= plan.atoms.length; atomIndex += 4) {
+    if (
+      plan.atoms.slice(atomIndex, atomIndex + 4).every((atom) =>
+        atom.kind === "byte"
+      )
+    ) {
+      allByteSimdGroupCount += 1;
+    }
+  }
   return {
     name: target_.name,
     flatCore: artifact.optimizedFlatCore,
-    plan: lowerDucklangCoreToFcgAndWasm(artifact.optimizedCore, {
-      emission: "planOnly",
-    }).wasmPlan,
+    plan,
+    atomKinds: {
+      ...atomKinds,
+      simdGroupCount: Math.floor(plan.atoms.length / 4),
+      simdTailCount: plan.atoms.length % 4,
+      allByteSimdGroupCount,
+    },
     expectedBytes: artifact.wasm,
+    inputSha256: await sha256(new TextEncoder().encode(source)),
+    outputSha256: await sha256(artifact.wasm),
   };
 }
 
@@ -272,16 +417,66 @@ function measureCpuEmission(prepared: PreparedTarget): number {
   return milliseconds;
 }
 
+function measureRustWasmCold(
+  prepared: PreparedTarget,
+  emitter: Awaited<ReturnType<typeof createRustWasmEmitter>>["emitter"],
+): { readonly milliseconds: number; readonly emission: RustWasmColdEmission } {
+  const start = performance.now();
+  const emission = emitter.emit(prepared.plan);
+  const milliseconds = performance.now() - start;
+  requireExpectedRustWasmBytes(prepared, emission.bytes, "cold");
+  return { milliseconds, emission };
+}
+
+function measureRustWasmResident(
+  prepared: PreparedTarget,
+  resident: RustWasmResidentPlan,
+): { readonly milliseconds: number; readonly emission: RustWasmEmission } {
+  const start = performance.now();
+  const emission = resident.emit();
+  const milliseconds = performance.now() - start;
+  requireExpectedRustWasmBytes(prepared, emission.bytes, "resident");
+  return { milliseconds, emission };
+}
+
+function requireExpectedRustWasmBytes(
+  prepared: PreparedTarget,
+  bytes: Uint8Array,
+  boundary: "cold" | "resident",
+): void {
+  if (!equalBytes(bytes, prepared.expectedBytes)) {
+    throw new Error(
+      `${prepared.name} ${boundary} Rust/Wasm emission disagrees with expected bytes`,
+    );
+  }
+}
+
+function reportRustWasm(
+  samples: readonly {
+    readonly milliseconds: number;
+    readonly emission: RustWasmEmission;
+  }[],
+) {
+  const milliseconds = samples.map((sample) => sample.milliseconds);
+  return {
+    timing: summarizeSamples(milliseconds),
+    rawMilliseconds: milliseconds,
+    rawTimings: samples.map((sample) => sample.emission.timings),
+    rawPreparationTimings: samples.map((sample) =>
+      "preparationTimings" in sample.emission
+        ? sample.emission.preparationTimings
+        : undefined
+    ),
+  };
+}
+
 function reportLayout(
   samples: readonly Awaited<ReturnType<typeof measureEmission>>[],
   work: Awaited<ReturnType<typeof measureEmission>>,
 ) {
   const wallMilliseconds = samples.map((sample) => sample.milliseconds);
   return {
-    medianMilliseconds: median(wallMilliseconds),
-    p95Milliseconds: percentile(wallMilliseconds, 0.95),
-    minimumMilliseconds: Math.min(...wallMilliseconds),
-    maximumMilliseconds: Math.max(...wallMilliseconds),
+    timing: summarizeSamples(wallMilliseconds),
     rawMilliseconds: wallMilliseconds,
     rawGpuTimings: samples.map((sample) => sample.timings),
     rawHarnessMinusGpuTotalMilliseconds: samples.map((sample) =>
@@ -324,25 +519,15 @@ function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
     left.every((byte, index) => byte === right[index]);
 }
 
-function median(values: readonly number[]): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.floor(ordered.length / 2)];
-}
-
-function percentile(values: readonly number[], quantile: number): number {
-  const ordered = [...values].sort((left, right) => left - right);
-  return ordered[Math.ceil((ordered.length - 1) * quantile)]!;
-}
-
 function requestedSampleCount(arguments_: readonly string[]): number {
   const sampleArgument = arguments_.find((argument) =>
     argument.startsWith("--samples=")
   );
-  if (sampleArgument === undefined) return 21;
+  if (sampleArgument === undefined) return 20;
   const count = Number.parseInt(sampleArgument.slice("--samples=".length), 10);
-  if (!Number.isSafeInteger(count) || count < 3 || count % 2 === 0) {
+  if (!Number.isSafeInteger(count) || count < 2 || count % 2 !== 0) {
     throw new TypeError(
-      `--samples must be an odd integer of at least 3; received ${sampleArgument}`,
+      `--samples must be an even integer of at least 2; received ${sampleArgument}`,
     );
   }
   return count;

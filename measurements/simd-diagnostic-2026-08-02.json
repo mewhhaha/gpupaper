@@ -1,0 +1,1776 @@
+{
+  "schemaVersion": 1,
+  "task": "benchmark:simd",
+  "processCount": 1,
+  "maximumAttempts": 3,
+  "processOrder": "sequentialFreshDenoProcesses",
+  "benchmarkArguments": [
+    "--samples=2",
+    "--allow-contended"
+  ],
+  "processes": [
+    {
+      "process": 0,
+      "refusedAttempts": [],
+      "result": {
+        "status": "completed",
+        "validity": {
+          "status": "diagnostic",
+          "reason": "competing compiler work was present during measurement"
+        },
+        "schemaVersion": 1,
+        "warmupCount": 3,
+        "sampleCount": 2,
+        "runtimeSampleCount": 31,
+        "compilationOrder": "balancedScalarFirstAndSimdFirstPairs",
+        "runtimeOrder": "balancedScalarFirstAndSimdFirstPairs",
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3",
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "repositories": {
+          "gpupaper": {
+            "revision": "ef8872dabf446660b75bce84882dd042c176a905",
+            "status": [
+              "M PAPER.md",
+              " M PERFORMANCE.md",
+              " M README.md",
+              " M deno.json",
+              " M scripts/benchmark_blot_batch.ts",
+              " M scripts/benchmark_blot_targets.ts",
+              " M scripts/benchmark_ducklang_frontend.ts",
+              " M scripts/benchmark_ducklang_rebuild.ts",
+              " M scripts/benchmark_ducklang_simd.ts",
+              " M scripts/benchmark_environment.ts",
+              " M scripts/benchmark_gpu_break_even.ts",
+              " M scripts/benchmark_peer_compilers.ts",
+              " M scripts/benchmark_wasm_branch_hints.ts",
+              " M scripts/benchmark_wasm_emission.ts",
+              " M scripts/release_gpu.ts",
+              "?? measurements/",
+              "?? scripts/benchmark_schema.ts",
+              "?? scripts/benchmark_statistics.ts",
+              "?? scripts/record_benchmark_processes.ts",
+              "?? tests/benchmark_environment.test.ts",
+              "?? tests/benchmark_schema.test.ts",
+              "?? tests/benchmark_statistics.test.ts"
+            ],
+            "trackedDiffSha256": "40af1635ba42714d30190f613031f3f263619bd157285e88333018e5f3c7d57e",
+            "untrackedFiles": [
+              {
+                "path": "measurements/README.md",
+                "sha256": "62e5f6a21376184da2245928f25a8ded91f196376950f758601dff7884eb13c7"
+              },
+              {
+                "path": "measurements/blot-batch-diagnostic-2026-08-02.json",
+                "sha256": "e1f6d82917d1d2df805404bf6143d77713f8b45972bbb6464cfb315f1c68cabc"
+              },
+              {
+                "path": "measurements/blot-targets-diagnostic-2026-08-02.json",
+                "sha256": "2f5238da5a9793bf63c7ee091d514eab691d63b2bc592019ae31428d2ab1ee9a"
+              },
+              {
+                "path": "measurements/break-even-diagnostic-2026-08-02.json",
+                "sha256": "8e2c198642c699542c28c53886b255a6e045aa0a94a2b41104de57c49cd6286c"
+              },
+              {
+                "path": "measurements/frontend-diagnostic-2026-08-02.json",
+                "sha256": "e459fe415f2e35b2bff26d9cf893296296d8d8022ee78bba6019fd741108d3c8"
+              },
+              {
+                "path": "measurements/peers-diagnostic-2026-08-02.json",
+                "sha256": "ae5cbae64abe30f8c4b909b8259dae352c30ff02d107be1961adee1a166136d5"
+              },
+              {
+                "path": "measurements/wasm-diagnostic-2026-08-02.json",
+                "sha256": "5ec6df37c211555c39d2ede8d6588964ebe6833194b7d7819c13e7ef9f497614"
+              },
+              {
+                "path": "scripts/benchmark_schema.ts",
+                "sha256": "99fd5cc971b54cb47350c6fb4741a1a371def6acefeab6da0e67a35fdb3e53e8"
+              },
+              {
+                "path": "scripts/benchmark_statistics.ts",
+                "sha256": "e7186566ef22aa0168fc4dc9526a8dbee29e6aa898302e87081ceefb2b2a2208"
+              },
+              {
+                "path": "scripts/record_benchmark_processes.ts",
+                "sha256": "cb6bcf06d821838bc10b1de7ba34bb85ec5ae30d2ef6c6d37557c7d28bb196e3"
+              },
+              {
+                "path": "tests/benchmark_environment.test.ts",
+                "sha256": "bf18c190285677c69498d4a6dc8f6b98c1a2e072b4ee4134ffcd7f39afc7ef0b"
+              },
+              {
+                "path": "tests/benchmark_schema.test.ts",
+                "sha256": "74b6fa6c3f84924a57222e424081f9700acf83a3a50bdf901a05e27adeaa3f0f"
+              },
+              {
+                "path": "tests/benchmark_statistics.test.ts",
+                "sha256": "567a71672878e58431eb0ad43959c9e491b4847ad9f48e9f5de649474f2fe998"
+              }
+            ]
+          }
+        },
+        "environmentAtStart": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 502871,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() old='\"'\"''\"'\"''\"'\"'            self.unsupported(                 \"async for-of with a body await requires an array iterable and a plain binding\",             );'\"'\"''\"'\"''\"'\"' new='\"'\"''\"'\"''\"'\"'            self.unsupported(&format!(\"DEBUG env={_dbg_env:?}\"));'\"'\"''\"'\"''\"'\"' assert old in s s=s.replace(old,new,1) old2='\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"' assert old2 in s s=s.replace(old2, '\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() # add _dbg_env param s=s.replace('\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,         _dbg_env: Option<ForInOfEnvironmentIr>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"',1) s=s.replace('\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,             );'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,                 lexical_environment.clone(),             );'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY ./scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -30; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/l3.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'' && pwd -P >| /tmp/claude-03b9-cwd"
+            },
+            {
+              "pid": 502875,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo build --release -p porffor-cli"
+            },
+            {
+              "pid": 502876,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() old='\"'\"''\"'\"''\"'\"'            self.unsupported(                 \"async for-of with a body await requires an array iterable and a plain binding\",             );'\"'\"''\"'\"''\"'\"' new='\"'\"''\"'\"''\"'\"'            self.unsupported(&format!(\"DEBUG env={_dbg_env:?}\"));'\"'\"''\"'\"''\"'\"' assert old in s s=s.replace(old,new,1) old2='\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"' assert old2 in s s=s.replace(old2, '\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() # add _dbg_env param s=s.replace('\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,         _dbg_env: Option<ForInOfEnvironmentIr>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"',1) s=s.replace('\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,             );'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,                 lexical_environment.clone(),             );'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY ./scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -30; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/l3.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'' && pwd -P >| /tmp/claude-03b9-cwd"
+            },
+            {
+              "pid": 502913,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name porffor_aot_wasm --edition=2021 crates/porffor-aot-wasm/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C debuginfo=line-tables-only --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=4aca8a24f4dc3097 -C extra-filename=-b14b2767448ed00a --out-dir /home/mewhhaha/src/porffor/target/release/deps -L dependency=/home/mewhhaha/src/porffor/target/release/deps --extern icu_normalizer=/home/mewhhaha/src/porffor/target/release/deps/libicu_normalizer-afd32636a0f5c352.rmeta --extern icu_properties=/home/mewhhaha/src/porffor/target/release/deps/libicu_properties-b3bb6068a1848f32.rmeta --extern num_bigint=/home/mewhhaha/src/porffor/target/release/deps/libnum_bigint-8f9ea69574727cdd.rmeta --extern porffor_ir=/home/mewhhaha/src/porffor/target/release/deps/libporffor_ir-8b09c5b053a9ef0c.rmeta --extern wasm_encoder=/home/mewhhaha/src/porffor/target/release/deps/libwasm_encoder-2caa4ff6d3a748e3.rmeta -C link-arg=-fuse-ld=lld"
+            }
+          ],
+          "gpuProcesses": [],
+          "nvidiaDevices": [],
+          "inspectionErrors": []
+        },
+        "environmentAtEnd": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 502871,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() old='\"'\"''\"'\"''\"'\"'            self.unsupported(                 \"async for-of with a body await requires an array iterable and a plain binding\",             );'\"'\"''\"'\"''\"'\"' new='\"'\"''\"'\"''\"'\"'            self.unsupported(&format!(\"DEBUG env={_dbg_env:?}\"));'\"'\"''\"'\"''\"'\"' assert old in s s=s.replace(old,new,1) old2='\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"' assert old2 in s s=s.replace(old2, '\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() # add _dbg_env param s=s.replace('\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,         _dbg_env: Option<ForInOfEnvironmentIr>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"',1) s=s.replace('\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,             );'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,                 lexical_environment.clone(),             );'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY ./scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -30; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/l3.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'' && pwd -P >| /tmp/claude-03b9-cwd"
+            },
+            {
+              "pid": 502875,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo build --release -p porffor-cli"
+            },
+            {
+              "pid": 502876,
+              "command": "/bin/zsh -c source /home/mewhhaha/.claude/shell-snapshots/snapshot-zsh-1785652805427-vpfobj.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() old='\"'\"''\"'\"''\"'\"'            self.unsupported(                 \"async for-of with a body await requires an array iterable and a plain binding\",             );'\"'\"''\"'\"''\"'\"' new='\"'\"''\"'\"''\"'\"'            self.unsupported(&format!(\"DEBUG env={_dbg_env:?}\"));'\"'\"''\"'\"''\"'\"' assert old in s s=s.replace(old,new,1) old2='\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"' assert old2 in s s=s.replace(old2, '\"'\"''\"'\"''\"'\"'                !for_of_environment_is_storage_only(lexical_environment.as_ref(), &storage_name)'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY python3 - <<'\"'\"'PY'\"'\"' p='\"'\"'crates/porffor-ir/src/lowering.rs'\"'\"' s=open(p).read() # add _dbg_env param s=s.replace('\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'        has_unsupported_binding_form: bool,         entry_state: Option<u32>,         _dbg_env: Option<ForInOfEnvironmentIr>,     ) -> (StatementIr, ValueKind) {'\"'\"''\"'\"''\"'\"',1) s=s.replace('\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,             );'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'                    || private_initializer.is_some(),                 plain_async_entry_state,                 lexical_environment.clone(),             );'\"'\"''\"'\"''\"'\"',1) open(p,'\"'\"'w'\"'\"').write(s) PY ./scripts/capped.sh cargo build --release -p porffor-cli 2>&1 | grep -E \"^error\" -A 12 | head -30; timeout 120 ./scripts/capped.sh ./target/release/porf run --execution-backend wasm target/probe/l3.js 2>&1 | grep -v '\"'\"'^capped:'\"'\"'' && pwd -P >| /tmp/claude-03b9-cwd"
+            },
+            {
+              "pid": 502913,
+              "command": "/home/mewhhaha/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name porffor_aot_wasm --edition=2021 crates/porffor-aot-wasm/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 -C embed-bitcode=no -C debuginfo=line-tables-only --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=4aca8a24f4dc3097 -C extra-filename=-b14b2767448ed00a --out-dir /home/mewhhaha/src/porffor/target/release/deps -L dependency=/home/mewhhaha/src/porffor/target/release/deps --extern icu_normalizer=/home/mewhhaha/src/porffor/target/release/deps/libicu_normalizer-afd32636a0f5c352.rmeta --extern icu_properties=/home/mewhhaha/src/porffor/target/release/deps/libicu_properties-b3bb6068a1848f32.rmeta --extern num_bigint=/home/mewhhaha/src/porffor/target/release/deps/libnum_bigint-8f9ea69574727cdd.rmeta --extern porffor_ir=/home/mewhhaha/src/porffor/target/release/deps/libporffor_ir-8b09c5b053a9ef0c.rmeta --extern wasm_encoder=/home/mewhhaha/src/porffor/target/release/deps/libwasm_encoder-2caa4ff6d3a748e3.rmeta -C link-arg=-fuse-ld=lld"
+            }
+          ],
+          "gpuProcesses": [],
+          "nvidiaDevices": [],
+          "inspectionErrors": []
+        },
+        "results": [
+          {
+            "chainCount": 1,
+            "sourceBytes": 1205,
+            "sourceSha256": "de932f64644906862fffe8e65b8f08273b0cceac7016ac63ce636c8b4423abad",
+            "scalar": {
+              "representative": {
+                "totalMilliseconds": 2.545798000000019,
+                "vectorizationMilliseconds": 0,
+                "vectorValidationMilliseconds": 0,
+                "vectorPlanningMilliseconds": 0,
+                "vectorRebuildMilliseconds": 0,
+                "vectorFlatCoreMilliseconds": 0,
+                "wasmMilliseconds": 0.29891800000001467,
+                "wasmBytes": 375
+              },
+              "total": {
+                "count": 2,
+                "median": 3.1695490000000035,
+                "minimum": 2.545798000000019,
+                "maximum": 3.793299999999988,
+                "medianAbsoluteDeviation": 0.6237509999999844,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 2.545798000000019,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.29891800000001467,
+                  "wasmBytes": 375
+                },
+                {
+                  "totalMilliseconds": 3.793299999999988,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.5187669999999969,
+                  "wasmBytes": 375
+                }
+              ]
+            },
+            "simd": {
+              "representative": {
+                "totalMilliseconds": 4.3110989999999845,
+                "vectorizationMilliseconds": 0.5569480000000055,
+                "vectorValidationMilliseconds": 0.06668999999999414,
+                "vectorPlanningMilliseconds": 0.17034000000001015,
+                "vectorRebuildMilliseconds": 0.02150899999998046,
+                "vectorFlatCoreMilliseconds": 0.2887189999999862,
+                "wasmMilliseconds": 0.49479699999997706,
+                "wasmBytes": 287
+              },
+              "total": {
+                "count": 2,
+                "median": 4.279118499999996,
+                "minimum": 4.247138000000007,
+                "maximum": 4.3110989999999845,
+                "medianAbsoluteDeviation": 0.031980499999988865,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 4.3110989999999845,
+                  "vectorizationMilliseconds": 0.5569480000000055,
+                  "vectorValidationMilliseconds": 0.06668999999999414,
+                  "vectorPlanningMilliseconds": 0.17034000000001015,
+                  "vectorRebuildMilliseconds": 0.02150899999998046,
+                  "vectorFlatCoreMilliseconds": 0.2887189999999862,
+                  "wasmMilliseconds": 0.49479699999997706,
+                  "wasmBytes": 287
+                },
+                {
+                  "totalMilliseconds": 4.247138000000007,
+                  "vectorizationMilliseconds": 0.5459969999999998,
+                  "vectorValidationMilliseconds": 0.06903900000000363,
+                  "vectorPlanningMilliseconds": 0.15496899999999414,
+                  "vectorRebuildMilliseconds": 0.02096000000000231,
+                  "vectorFlatCoreMilliseconds": 0.291119000000009,
+                  "wasmMilliseconds": 0.5191269999999975,
+                  "wasmBytes": 287
+                }
+              ]
+            },
+            "compilationPair": {
+              "differences": [
+                1.7653009999999654,
+                0.45383800000001884
+              ],
+              "logRatios": [
+                0.5267487031644797,
+                0.11300899168283213
+              ],
+              "difference": {
+                "count": 2,
+                "median": 1.109569499999992,
+                "minimum": 0.45383800000001884,
+                "maximum": 1.7653009999999654,
+                "medianAbsoluteDeviation": 0.6557314999999733,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "logRatio": {
+                "count": 2,
+                "median": 0.3198788474236559,
+                "minimum": 0.11300899168283213,
+                "maximum": 0.5267487031644797,
+                "medianAbsoluteDeviation": 0.2068698557408238,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "medianRatio": 1.3769609318656486
+            },
+            "execution": {
+              "scalar": {
+                "count": 31,
+                "median": 9.626749999999902,
+                "minimum": 8.896449999999732,
+                "maximum": 14.313629999999762,
+                "medianAbsoluteDeviation": 0.03960000000063246,
+                "p95": {
+                  "status": "measured",
+                  "value": 10.059599999999875
+                }
+              },
+              "simd": {
+                "count": 31,
+                "median": 9.258950000000254,
+                "minimum": 9.152860000000373,
+                "maximum": 11.773340000000303,
+                "medianAbsoluteDeviation": 0.03470000000049822,
+                "p95": {
+                  "status": "measured",
+                  "value": 10.617545000000206
+                }
+              },
+              "pair": {
+                "differences": [
+                  2.4623900000003136,
+                  -0.7933999999994512,
+                  -0.33080000000040855,
+                  0.26270000000010896,
+                  -0.33811000000014246,
+                  -0.44800000000009277,
+                  -0.38958999999977095,
+                  -4.827080000000024,
+                  -0.5343000000004849,
+                  -0.45580000000029486,
+                  -0.3727100000003247,
+                  -0.41580000000010386,
+                  -0.3962899999999081,
+                  -0.363399999999956,
+                  -0.2640000000008058,
+                  -0.4311900000004698,
+                  -0.4174000000000433,
+                  -0.3924899999998388,
+                  -0.46949999999981173,
+                  -0.3766999999999143,
+                  -0.4310099999997874,
+                  -0.4386000000005197,
+                  -0.5234899999999243,
+                  -0.38610000000005584,
+                  -0.4211899999995694,
+                  -0.2507999999994581,
+                  -0.31209999999987303,
+                  -0.30459000000007563,
+                  -0.37529999999946995,
+                  2.1037900000004583,
+                  -0.3708899999998039
+                ],
+                "logRatios": [
+                  0.24434397464188257,
+                  -0.08165111774065748,
+                  -0.033639003876250455,
+                  0.02695932341868763,
+                  -0.035772411692874685,
+                  -0.04768966129977752,
+                  -0.04120980919804677,
+                  -0.41133722420706836,
+                  -0.055934116337537254,
+                  -0.04823118075594095,
+                  -0.039587353089926794,
+                  -0.04415268812964942,
+                  -0.04203991912309714,
+                  -0.038522355201592855,
+                  -0.027820990631736008,
+                  -0.04561932282037549,
+                  -0.0442216674736638,
+                  -0.041822608023254305,
+                  -0.049394184633086306,
+                  -0.03965448819311092,
+                  -0.04567131464510465,
+                  -0.04643553367739763,
+                  -0.05520243039615722,
+                  -0.04094387164899872,
+                  -0.04498991468003202,
+                  -0.02644203624687793,
+                  -0.03310127755122075,
+                  -0.032300328169498654,
+                  -0.03973380633242101,
+                  0.1968558806139145,
+                  -0.03931880987117227
+                ],
+                "difference": {
+                  "count": 31,
+                  "median": -0.38958999999977095,
+                  "minimum": -4.827080000000024,
+                  "maximum": 2.4623900000003136,
+                  "medianAbsoluteDeviation": 0.05147999999962849,
+                  "p95": {
+                    "status": "measured",
+                    "value": 1.1832450000002837
+                  }
+                },
+                "logRatio": {
+                  "count": 31,
+                  "median": -0.04120980919804677,
+                  "minimum": -0.41133722420706836,
+                  "maximum": 0.24434397464188257,
+                  "medianAbsoluteDeviation": 0.005437397505172088,
+                  "p95": {
+                    "status": "measured",
+                    "value": 0.11190760201630107
+                  }
+                },
+                "medianRatio": 0.9596277700920962
+              },
+              "scalarRawNanoseconds": [
+                8.896449999999732,
+                10.119049999999561,
+                10.00015000000019,
+                9.61355000000026,
+                9.621759999999995,
+                9.61985000000027,
+                9.649949999999876,
+                14.313629999999762,
+                9.82195000000047,
+                9.680050000000051,
+                9.602460000000406,
+                9.626749999999902,
+                9.626049999999964,
+                9.616350000000011,
+                9.621850000000336,
+                9.669150000000286,
+                9.649049999999875,
+                9.582250000000272,
+                9.741849999999772,
+                9.689149999999813,
+                9.65436000000011,
+                9.666350000000534,
+                9.74724999999978,
+                9.624350000000277,
+                9.574049999999943,
+                9.610849999999687,
+                9.585549999999898,
+                9.583049999999957,
+                9.634249999999724,
+                9.669549999999845,
+                9.61954999999989
+              ],
+              "simdRawNanoseconds": [
+                11.358840000000045,
+                9.32565000000011,
+                9.669349999999781,
+                9.876250000000368,
+                9.283649999999852,
+                9.171850000000177,
+                9.260360000000105,
+                9.486549999999738,
+                9.287649999999985,
+                9.224249999999756,
+                9.229750000000081,
+                9.210949999999798,
+                9.229760000000056,
+                9.252950000000055,
+                9.35784999999953,
+                9.237959999999816,
+                9.231649999999831,
+                9.189760000000433,
+                9.27234999999996,
+                9.312449999999899,
+                9.223350000000323,
+                9.227750000000015,
+                9.223759999999857,
+                9.238250000000221,
+                9.152860000000373,
+                9.360050000000228,
+                9.273450000000025,
+                9.278459999999882,
+                9.258950000000254,
+                11.773340000000303,
+                9.248660000000086
+              ]
+            },
+            "wasmByteRatio": 0.7653333333333333,
+            "vectorWork": {
+              "candidateWindows": 6,
+              "acceptedPlans": 1,
+              "scalarOperations": 24,
+              "vectorOperations": 6,
+              "packs": 1,
+              "splats": 6,
+              "extracts": 4,
+              "estimatedScalarCost": 24,
+              "estimatedVectorCost": 20
+            }
+          },
+          {
+            "chainCount": 2,
+            "sourceBytes": 2267,
+            "sourceSha256": "cd4d19f08d17652cdd5f0e041fb287add686e54123b87b92a36ddc46f2c7e9a2",
+            "scalar": {
+              "representative": {
+                "totalMilliseconds": 3.6355910000000335,
+                "vectorizationMilliseconds": 0,
+                "vectorValidationMilliseconds": 0,
+                "vectorPlanningMilliseconds": 0,
+                "vectorRebuildMilliseconds": 0,
+                "vectorFlatCoreMilliseconds": 0,
+                "wasmMilliseconds": 0.5050870000000032,
+                "wasmBytes": 699
+              },
+              "total": {
+                "count": 2,
+                "median": 4.1373940000000005,
+                "minimum": 3.6355910000000335,
+                "maximum": 4.639196999999967,
+                "medianAbsoluteDeviation": 0.5018029999999669,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 3.6355910000000335,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.5050870000000032,
+                  "wasmBytes": 699
+                },
+                {
+                  "totalMilliseconds": 4.639196999999967,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.3587280000000419,
+                  "wasmBytes": 699
+                }
+              ]
+            },
+            "simd": {
+              "representative": {
+                "totalMilliseconds": 4.303488000000016,
+                "vectorizationMilliseconds": 0.5149580000000356,
+                "vectorValidationMilliseconds": 0.04263000000003103,
+                "vectorPlanningMilliseconds": 0.17479900000000725,
+                "vectorRebuildMilliseconds": 0.028320000000007894,
+                "vectorFlatCoreMilliseconds": 0.2518890000000056,
+                "wasmMilliseconds": 0.3571680000000015,
+                "wasmBytes": 523
+              },
+              "total": {
+                "count": 2,
+                "median": 4.308632999999986,
+                "minimum": 4.303488000000016,
+                "maximum": 4.313777999999957,
+                "medianAbsoluteDeviation": 0.005144999999970423,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 4.303488000000016,
+                  "vectorizationMilliseconds": 0.5149580000000356,
+                  "vectorValidationMilliseconds": 0.04263000000003103,
+                  "vectorPlanningMilliseconds": 0.17479900000000725,
+                  "vectorRebuildMilliseconds": 0.028320000000007894,
+                  "vectorFlatCoreMilliseconds": 0.2518890000000056,
+                  "wasmMilliseconds": 0.3571680000000015,
+                  "wasmBytes": 523
+                },
+                {
+                  "totalMilliseconds": 4.313777999999957,
+                  "vectorizationMilliseconds": 0.48204800000002024,
+                  "vectorValidationMilliseconds": 0.041980000000023665,
+                  "vectorPlanningMilliseconds": 0.1595100000000116,
+                  "vectorRebuildMilliseconds": 0.02145899999999301,
+                  "vectorFlatCoreMilliseconds": 0.2502689999999461,
+                  "wasmMilliseconds": 0.40397799999999506,
+                  "wasmBytes": 523
+                }
+              ]
+            },
+            "compilationPair": {
+              "differences": [
+                0.6678969999999822,
+                -0.3254190000000108
+              ],
+              "logRatios": [
+                0.16865417293592025,
+                -0.07272720463544853
+              ],
+              "difference": {
+                "count": 2,
+                "median": 0.1712389999999857,
+                "minimum": -0.3254190000000108,
+                "maximum": 0.6678969999999822,
+                "medianAbsoluteDeviation": 0.4966579999999965,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "logRatio": {
+                "count": 2,
+                "median": 0.04796348415023586,
+                "minimum": -0.07272720463544853,
+                "maximum": 0.16865417293592025,
+                "medianAbsoluteDeviation": 0.1206906887856844,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "medianRatio": 1.049132344665921
+            },
+            "execution": {
+              "scalar": {
+                "count": 31,
+                "median": 10.916250000000218,
+                "minimum": 10.808350000000358,
+                "maximum": 12.489940000000388,
+                "medianAbsoluteDeviation": 0.06609999999966476,
+                "p95": {
+                  "status": "measured",
+                  "value": 11.308594999999855
+                }
+              },
+              "simd": {
+                "count": 31,
+                "median": 10.791239999999789,
+                "minimum": 10.560549999999582,
+                "maximum": 14.53633000000025,
+                "medianAbsoluteDeviation": 0.12818999999979042,
+                "p95": {
+                  "status": "measured",
+                  "value": 12.796029999999803
+                }
+              },
+              "pair": {
+                "differences": [
+                  0.16248999999959146,
+                  -0.3903900000000249,
+                  -1.6949000000005299,
+                  -0.019389999999930296,
+                  0.11831000000029235,
+                  -0.1073100000002114,
+                  -0.33539000000075525,
+                  -0.1482899999996352,
+                  -0.16370999999992186,
+                  -0.1814899999999433,
+                  0.11808999999914427,
+                  3.4212900000005693,
+                  -0.05958999999961634,
+                  0.15059000000007927,
+                  0.03380999999933465,
+                  -0.27780000000006844,
+                  -0.27571000000022927,
+                  -0.4633899999998903,
+                  -0.15580999999940737,
+                  -0.08819000000016608,
+                  3.542869999999425,
+                  -0.1963899999998393,
+                  -0.005409999999983484,
+                  -0.3496899999998959,
+                  -0.08380999999985761,
+                  0.04870999999980086,
+                  0.29739000000006577,
+                  -0.1788899999996829,
+                  -0.16790999999955147,
+                  -0.09538999999961106,
+                  -0.7175899999998574
+                ],
+                "logRatios": [
+                  0.01482641410817281,
+                  -0.03601193250373907,
+                  -0.14583675090383638,
+                  -0.0017865135453045725,
+                  0.010831979322443864,
+                  -0.009929118245517614,
+                  -0.03126488252897717,
+                  -0.013797082400134927,
+                  -0.014774879471248432,
+                  -0.01681390731815575,
+                  0.010866556522757963,
+                  0.2683518869425651,
+                  -0.0054369852582781845,
+                  0.013618842667033738,
+                  0.0030917550914627908,
+                  -0.025417328202411382,
+                  -0.025506010475990774,
+                  -0.04252414631441223,
+                  -0.014443893695456964,
+                  -0.008037889234867878,
+                  0.2810728525948372,
+                  -0.018250253661771732,
+                  -0.0004945089951028387,
+                  -0.032081768734893955,
+                  -0.00774541804024416,
+                  0.004496248169301978,
+                  0.027102043399241674,
+                  -0.016452000444139376,
+                  -0.015644601036291707,
+                  -0.008828749346782318,
+                  -0.06469334395595948
+                ],
+                "difference": {
+                  "count": 31,
+                  "median": -0.1073100000002114,
+                  "minimum": -1.6949000000005299,
+                  "maximum": 3.542869999999425,
+                  "medianAbsoluteDeviation": 0.15602000000001226,
+                  "p95": {
+                    "status": "measured",
+                    "value": 1.8593400000003175
+                  }
+                },
+                "logRatio": {
+                  "count": 31,
+                  "median": -0.009929118245517614,
+                  "minimum": -0.14583675090383638,
+                  "maximum": 0.2810728525948372,
+                  "medianAbsoluteDeviation": 0.014425366414819592,
+                  "p95": {
+                    "status": "measured",
+                    "value": 0.1477269651709034
+                  }
+                },
+                "medianRatio": 0.9901200127055836
+              },
+              "scalarRawNanoseconds": [
+                10.878450000000159,
+                11.036940000000186,
+                12.489940000000388,
+                10.863239999999905,
+                10.863239999999905,
+                10.86135000000013,
+                10.895940000000337,
+                10.822239999999965,
+                11.162350000000174,
+                10.885040000000005,
+                10.808350000000358,
+                11.11503999999968,
+                10.989940000000047,
+                10.982349999999883,
+                10.918640000000437,
+                11.069039999999857,
+                10.948050000000078,
+                11.130440000000021,
+                10.865349999999696,
+                11.015940000000342,
+                10.916250000000218,
+                10.859439999999838,
+                10.942850000000135,
+                11.075739999999996,
+                10.862549999999942,
+                10.80914000000007,
+                10.824949999999944,
+                10.963140000000067,
+                10.816949999999679,
+                10.852239999999826,
+                11.454839999999534
+              ],
+              "simdRawNanoseconds": [
+                11.04093999999975,
+                10.646550000000161,
+                10.795039999999858,
+                10.843849999999975,
+                10.981550000000198,
+                10.754039999999918,
+                10.560549999999582,
+                10.67395000000033,
+                10.998640000000252,
+                10.703550000000062,
+                10.926439999999502,
+                14.53633000000025,
+                10.93035000000043,
+                11.132939999999962,
+                10.952449999999772,
+                10.791239999999789,
+                10.67233999999985,
+                10.667050000000131,
+                10.709540000000288,
+                10.927750000000175,
+                14.459119999999643,
+                10.663049999999998,
+                10.937440000000151,
+                10.7260500000001,
+                10.778740000000084,
+                10.857849999999871,
+                11.12234000000001,
+                10.784250000000384,
+                10.649040000000127,
+                10.756850000000215,
+                10.737249999999676
+              ]
+            },
+            "wasmByteRatio": 0.748211731044349,
+            "vectorWork": {
+              "candidateWindows": 13,
+              "acceptedPlans": 2,
+              "scalarOperations": 48,
+              "vectorOperations": 12,
+              "packs": 2,
+              "splats": 12,
+              "extracts": 8,
+              "estimatedScalarCost": 48,
+              "estimatedVectorCost": 40
+            }
+          },
+          {
+            "chainCount": 4,
+            "sourceBytes": 4398,
+            "sourceSha256": "7e7554efe87885dedba69505bc00ad0888a1cfe6f13712199fe19364779b49e0",
+            "scalar": {
+              "representative": {
+                "totalMilliseconds": 6.9520350000000235,
+                "vectorizationMilliseconds": 0,
+                "vectorValidationMilliseconds": 0,
+                "vectorPlanningMilliseconds": 0,
+                "vectorRebuildMilliseconds": 0,
+                "vectorFlatCoreMilliseconds": 0,
+                "wasmMilliseconds": 0.8384759999999574,
+                "wasmBytes": 1347
+              },
+              "total": {
+                "count": 2,
+                "median": 6.763071000000025,
+                "minimum": 6.574107000000026,
+                "maximum": 6.9520350000000235,
+                "medianAbsoluteDeviation": 0.18896399999999858,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 6.9520350000000235,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.8384759999999574,
+                  "wasmBytes": 1347
+                },
+                {
+                  "totalMilliseconds": 6.574107000000026,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 0.6304960000000506,
+                  "wasmBytes": 1347
+                }
+              ]
+            },
+            "simd": {
+              "representative": {
+                "totalMilliseconds": 8.842314999999985,
+                "vectorizationMilliseconds": 0.9857250000000022,
+                "vectorValidationMilliseconds": 0.13868999999999687,
+                "vectorPlanningMilliseconds": 0.28766899999999396,
+                "vectorRebuildMilliseconds": 0.06018899999997984,
+                "vectorFlatCoreMilliseconds": 0.46393799999998464,
+                "wasmMilliseconds": 0.6116069999999922,
+                "wasmBytes": 995
+              },
+              "total": {
+                "count": 2,
+                "median": 8.452296999999987,
+                "minimum": 8.06227899999999,
+                "maximum": 8.842314999999985,
+                "medianAbsoluteDeviation": 0.39001799999999776,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 8.842314999999985,
+                  "vectorizationMilliseconds": 0.9857250000000022,
+                  "vectorValidationMilliseconds": 0.13868999999999687,
+                  "vectorPlanningMilliseconds": 0.28766899999999396,
+                  "vectorRebuildMilliseconds": 0.06018899999997984,
+                  "vectorFlatCoreMilliseconds": 0.46393799999998464,
+                  "wasmMilliseconds": 0.6116069999999922,
+                  "wasmBytes": 995
+                },
+                {
+                  "totalMilliseconds": 8.06227899999999,
+                  "vectorizationMilliseconds": 0.8018559999999866,
+                  "vectorValidationMilliseconds": 0.10351900000000569,
+                  "vectorPlanningMilliseconds": 0.22810900000001766,
+                  "vectorRebuildMilliseconds": 0.03566000000000713,
+                  "vectorFlatCoreMilliseconds": 0.4270180000000323,
+                  "wasmMilliseconds": 1.5859520000000202,
+                  "wasmBytes": 995
+                }
+              ]
+            },
+            "compilationPair": {
+              "differences": [
+                1.8902799999999615,
+                1.4881719999999632
+              ],
+              "logRatios": [
+                0.24051429772073088,
+                0.2040575195441847
+              ],
+              "difference": {
+                "count": 2,
+                "median": 1.6892259999999624,
+                "minimum": 1.4881719999999632,
+                "maximum": 1.8902799999999615,
+                "medianAbsoluteDeviation": 0.20105399999999918,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "logRatio": {
+                "count": 2,
+                "median": 0.22228590863245778,
+                "minimum": 0.2040575195441847,
+                "maximum": 0.24051429772073088,
+                "medianAbsoluteDeviation": 0.018228389088273095,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "medianRatio": 1.2489284062357693
+            },
+            "execution": {
+              "scalar": {
+                "count": 31,
+                "median": 16.206320000000005,
+                "minimum": 15.566119999999728,
+                "maximum": 27.85325999999941,
+                "medianAbsoluteDeviation": 0.4850999999996475,
+                "p95": {
+                  "status": "measured",
+                  "value": 24.101530000000366
+                }
+              },
+              "simd": {
+                "count": 31,
+                "median": 14.068230000000312,
+                "minimum": 13.618129999999837,
+                "maximum": 25.119379999999865,
+                "medianAbsoluteDeviation": 0.24248999999940501,
+                "p95": {
+                  "status": "measured",
+                  "value": 22.396984999999745
+                }
+              },
+              "pair": {
+                "differences": [
+                  -3.502090000000635,
+                  4.381870000000845,
+                  -2.3988900000006197,
+                  -1.5852800000004663,
+                  -12.855429999999615,
+                  -1.6948000000002157,
+                  -2.5925900000004294,
+                  -1.7221999999992477,
+                  -3.0498000000000065,
+                  -10.517050000000836,
+                  -1.7604900000003454,
+                  -5.28927000000067,
+                  -2.0487900000000536,
+                  -5.194870000000266,
+                  -2.3628900000005615,
+                  -1.8201899999996822,
+                  -1.9396900000003825,
+                  1.4158900000006707,
+                  1.4076999999997497,
+                  -5.677280000001019,
+                  -1.8493899999998575,
+                  -2.4510799999995925,
+                  -2.71808999999962,
+                  -3.107279999999264,
+                  -8.68575000000078,
+                  -2.050289999999679,
+                  -2.215689999999313,
+                  -4.393770000000357,
+                  7.132560000000012,
+                  4.516770000000175,
+                  -1.880590000000666
+                ],
+                "logRatios": [
+                  -0.22602341361122452,
+                  0.23946218402053326,
+                  -0.1611814144284824,
+                  -0.10412884061444685,
+                  -0.6190444912077911,
+                  -0.1124682698268158,
+                  -0.1712201490000048,
+                  -0.1132469718467677,
+                  -0.19318975593261098,
+                  -0.56109914377001,
+                  -0.12002027763700171,
+                  -0.32241424890086584,
+                  -0.13970915281690857,
+                  -0.3175694347222403,
+                  -0.1599997748842874,
+                  -0.12167147835940492,
+                  -0.13168210223118246,
+                  0.0855705190346308,
+                  0.057671906020770256,
+                  -0.33774285914661395,
+                  -0.12245136034214821,
+                  -0.1606077720097692,
+                  -0.17586029442152432,
+                  -0.20246851733265997,
+                  -0.47554083514446993,
+                  -0.13737737061682542,
+                  -0.14701346978740454,
+                  -0.2764748752757488,
+                  0.3649136853010042,
+                  0.23625545604119244,
+                  -0.1260687911682154
+                ],
+                "difference": {
+                  "count": 31,
+                  "median": -2.215689999999313,
+                  "minimum": -12.855429999999615,
+                  "maximum": 7.132560000000012,
+                  "medianAbsoluteDeviation": 0.6304099999988466,
+                  "p95": {
+                    "status": "measured",
+                    "value": 4.44932000000051
+                  }
+                },
+                "logRatio": {
+                  "count": 31,
+                  "median": -0.14701346978740454,
+                  "minimum": -0.6190444912077911,
+                  "maximum": 0.3649136853010042,
+                  "medianAbsoluteDeviation": 0.04288462917295768,
+                  "p95": {
+                    "status": "measured",
+                    "value": 0.23785882003086284
+                  }
+                },
+                "medianRatio": 0.8632823491082916
+              },
+              "scalarRawNanoseconds": [
+                17.311320000000023,
+                16.19521999999961,
+                16.114820000000236,
+                16.03061000000025,
+                27.85325999999941,
+                15.932420000000322,
+                16.47512000000006,
+                16.08481999999981,
+                17.360519999999724,
+                24.491380000000618,
+                15.566119999999728,
+                19.191700000000083,
+                15.712919999999714,
+                19.092900000000554,
+                15.981020000000399,
+                15.888419999999995,
+                15.721220000000358,
+                15.848619999999302,
+                23.711680000000115,
+                19.80760000000032,
+                16.04661999999962,
+                16.519609999999147,
+                16.85481999999979,
+                16.953009999999722,
+                22.950780000001032,
+                15.97311999999988,
+                16.206320000000005,
+                18.190099999999347,
+                16.196019999999862,
+                16.948619999999437,
+                15.877220000000989
+              ],
+              "simdRawNanoseconds": [
+                13.809229999999388,
+                20.577090000000453,
+                13.715929999999616,
+                14.445329999999785,
+                14.997829999999794,
+                14.237620000000106,
+                13.882529999999631,
+                14.362620000000561,
+                14.310719999999717,
+                13.974329999999782,
+                13.805629999999383,
+                13.902429999999413,
+                13.66412999999966,
+                13.898030000000288,
+                13.618129999999837,
+                14.068230000000312,
+                13.781529999999975,
+                17.264509999999973,
+                25.119379999999865,
+                14.130319999999301,
+                14.197229999999763,
+                14.068529999999555,
+                14.13673000000017,
+                13.845730000000458,
+                14.265030000000252,
+                13.922830000000202,
+                13.990630000000692,
+                13.79632999999899,
+                23.328579999999874,
+                21.465389999999612,
+                13.996630000000323
+              ]
+            },
+            "wasmByteRatio": 0.7386785449146251,
+            "vectorWork": {
+              "candidateWindows": 27,
+              "acceptedPlans": 4,
+              "scalarOperations": 96,
+              "vectorOperations": 24,
+              "packs": 4,
+              "splats": 24,
+              "extracts": 16,
+              "estimatedScalarCost": 96,
+              "estimatedVectorCost": 80
+            }
+          },
+          {
+            "chainCount": 8,
+            "sourceBytes": 8662,
+            "sourceSha256": "0b6eb94b9390a17402ed808402b9794f971dfc91fa8845eb08953b6103ae4ad2",
+            "scalar": {
+              "representative": {
+                "totalMilliseconds": 13.528120999999942,
+                "vectorizationMilliseconds": 0,
+                "vectorValidationMilliseconds": 0,
+                "vectorPlanningMilliseconds": 0,
+                "vectorRebuildMilliseconds": 0,
+                "vectorFlatCoreMilliseconds": 0,
+                "wasmMilliseconds": 1.1842339999999467,
+                "wasmBytes": 2834
+              },
+              "total": {
+                "count": 2,
+                "median": 13.446181499999966,
+                "minimum": 13.36424199999999,
+                "maximum": 13.528120999999942,
+                "medianAbsoluteDeviation": 0.08193949999997585,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 13.528120999999942,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 1.1842339999999467,
+                  "wasmBytes": 2834
+                },
+                {
+                  "totalMilliseconds": 13.36424199999999,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 1.1937540000000126,
+                  "wasmBytes": 2834
+                }
+              ]
+            },
+            "simd": {
+              "representative": {
+                "totalMilliseconds": 14.432297000000062,
+                "vectorizationMilliseconds": 1.8345509999999194,
+                "vectorValidationMilliseconds": 0.3081579999999349,
+                "vectorPlanningMilliseconds": 0.44276800000000094,
+                "vectorRebuildMilliseconds": 0.07626000000004751,
+                "vectorFlatCoreMilliseconds": 0.9953349999999546,
+                "wasmMilliseconds": 1.0546949999999242,
+                "wasmBytes": 2024
+              },
+              "total": {
+                "count": 2,
+                "median": 15.76282500000002,
+                "minimum": 14.432297000000062,
+                "maximum": 17.09335299999998,
+                "medianAbsoluteDeviation": 1.3305279999999584,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 14.432297000000062,
+                  "vectorizationMilliseconds": 1.8345509999999194,
+                  "vectorValidationMilliseconds": 0.3081579999999349,
+                  "vectorPlanningMilliseconds": 0.44276800000000094,
+                  "vectorRebuildMilliseconds": 0.07626000000004751,
+                  "vectorFlatCoreMilliseconds": 0.9953349999999546,
+                  "wasmMilliseconds": 1.0546949999999242,
+                  "wasmBytes": 2024
+                },
+                {
+                  "totalMilliseconds": 17.09335299999998,
+                  "vectorizationMilliseconds": 2.243048999999928,
+                  "vectorValidationMilliseconds": 0.4452079999999796,
+                  "vectorPlanningMilliseconds": 0.6535370000000285,
+                  "vectorRebuildMilliseconds": 0.060118999999986045,
+                  "vectorFlatCoreMilliseconds": 1.0680949999999712,
+                  "wasmMilliseconds": 1.372143000000051,
+                  "wasmBytes": 2024
+                }
+              ]
+            },
+            "compilationPair": {
+              "differences": [
+                0.9041760000001204,
+                3.729110999999989
+              ],
+              "logRatios": [
+                0.06469798640895,
+                0.2461070418083153
+              ],
+              "difference": {
+                "count": 2,
+                "median": 2.3166435000000547,
+                "minimum": 0.9041760000001204,
+                "maximum": 3.729110999999989,
+                "medianAbsoluteDeviation": 1.4124674999999343,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "logRatio": {
+                "count": 2,
+                "median": 0.15540251410863265,
+                "minimum": 0.06469798640895,
+                "maximum": 0.2461070418083153,
+                "medianAbsoluteDeviation": 0.09070452769968265,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "medianRatio": 1.1681280545117945
+            },
+            "execution": {
+              "scalar": {
+                "count": 31,
+                "median": 30.263150000000678,
+                "minimum": 28.282950000000255,
+                "maximum": 36.38920999999982,
+                "medianAbsoluteDeviation": 1.2384000000008655,
+                "p95": {
+                  "status": "measured",
+                  "value": 35.029779999999846
+                }
+              },
+              "simd": {
+                "count": 31,
+                "median": 23.570179999999255,
+                "minimum": 22.25629000000026,
+                "maximum": 32.608940000000075,
+                "medianAbsoluteDeviation": 0.8080899999993107,
+                "p95": {
+                  "status": "measured",
+                  "value": 28.08930500000031
+                }
+              },
+              "pair": {
+                "differences": [
+                  -6.6881699999999,
+                  -10.840929999999389,
+                  -8.091460000000552,
+                  -8.528559999999743,
+                  -12.55052999999975,
+                  -7.833049999999279,
+                  -3.265780000000408,
+                  -9.118639999999235,
+                  -12.61974999999893,
+                  -7.163050000000339,
+                  -4.389990000000807,
+                  -5.903859999999664,
+                  -7.332749999999347,
+                  -3.49317999999926,
+                  -11.691950000000588,
+                  -10.377650000000358,
+                  -5.917460000000574,
+                  -1.9846899999993184,
+                  -8.542150000000674,
+                  -10.542259999999715,
+                  3.609989999999925,
+                  -3.113600000000364,
+                  -4.416370000000143,
+                  -2.0107899999993606,
+                  -9.228459999999359,
+                  -5.6620699999996305,
+                  -6.145970000000034,
+                  -5.40836000000013,
+                  -9.24485000000005,
+                  -8.64847000000054,
+                  -3.7985699999990175
+                ],
+                "logRatios": [
+                  -0.26192322099089654,
+                  -0.37965763897938376,
+                  -0.2972069655072916,
+                  -0.3084381402852752,
+                  -0.4229628305909197,
+                  -0.29614345167352824,
+                  -0.11925776843167069,
+                  -0.3348373178214722,
+                  -0.4435211081992084,
+                  -0.27087082440475635,
+                  -0.15672466281543104,
+                  -0.22295442945886787,
+                  -0.2799128804938563,
+                  -0.12945093160855492,
+                  -0.4089827918095648,
+                  -0.36484258069078634,
+                  -0.23108789242154307,
+                  -0.06662654709118387,
+                  -0.3138300408417305,
+                  -0.3655612544011712,
+                  0.11732686147202528,
+                  -0.1134568676470268,
+                  -0.16977999558389695,
+                  -0.07088938576969263,
+                  -0.3333994853435697,
+                  -0.21361465481499042,
+                  -0.23231713096523274,
+                  -0.19845389354314855,
+                  -0.34739907036261675,
+                  -0.32328034209841405,
+                  -0.14356364530547355
+                ],
+                "difference": {
+                  "count": 31,
+                  "median": -7.163050000000339,
+                  "minimum": -12.61974999999893,
+                  "maximum": 3.609989999999925,
+                  "medianAbsoluteDeviation": 2.08179999999971,
+                  "p95": {
+                    "status": "measured",
+                    "value": -1.9977399999993395
+                  }
+                },
+                "logRatio": {
+                  "count": 31,
+                  "median": -0.27087082440475635,
+                  "minimum": -0.4435211081992084,
+                  "maximum": 0.11732686147202528,
+                  "medianAbsoluteDeviation": 0.0765282459578604,
+                  "p95": {
+                    "status": "measured",
+                    "value": -0.06875796643043824
+                  }
+                },
+                "medianRatio": 0.762715014207842
+              },
+              "scalarRawNanoseconds": [
+                29.024749999999813,
+                34.31711999999948,
+                31.470840000000635,
+                32.13393999999994,
+                36.38920999999982,
+                30.55973999999992,
+                29.049549999999726,
+                32.04632999999944,
+                35.228329999999914,
+                30.18754000000058,
+                30.263150000000678,
+                29.541649999999887,
+                30.03374000000008,
+                28.768849999999023,
+                34.83122999999978,
+                33.94782999999961,
+                28.679550000000518,
+                30.791639999999916,
+                31.71314000000052,
+                34.43012999999951,
+                28.99895000000015,
+                29.029259999999795,
+                28.282950000000255,
+                29.38244999999938,
+                32.55003999999985,
+                29.437749999999596,
+                29.64695000000006,
+                30.04603999999972,
+                31.50114000000031,
+                31.309049999999843,
+                28.403849999999693
+              ],
+              "simdRawNanoseconds": [
+                22.336579999999913,
+                23.476190000000088,
+                23.379380000000083,
+                23.605380000000196,
+                23.83868000000007,
+                22.72669000000064,
+                25.78376999999932,
+                22.927690000000208,
+                22.608580000000984,
+                23.02449000000024,
+                25.87315999999987,
+                23.637790000000223,
+                22.700990000000733,
+                25.275669999999764,
+                23.13927999999919,
+                23.570179999999255,
+                22.762089999999944,
+                28.806950000000597,
+                23.170989999999847,
+                23.887869999999793,
+                32.608940000000075,
+                25.91565999999943,
+                23.866580000000113,
+                27.37166000000002,
+                23.321580000000495,
+                23.775679999999966,
+                23.500980000000027,
+                24.63767999999959,
+                22.25629000000026,
+                22.660579999999303,
+                24.605280000000675
+              ]
+            },
+            "wasmByteRatio": 0.7141848976711362,
+            "vectorWork": {
+              "candidateWindows": 55,
+              "acceptedPlans": 8,
+              "scalarOperations": 192,
+              "vectorOperations": 48,
+              "packs": 8,
+              "splats": 48,
+              "extracts": 32,
+              "estimatedScalarCost": 192,
+              "estimatedVectorCost": 160
+            }
+          },
+          {
+            "chainCount": 32,
+            "sourceBytes": 35463,
+            "sourceSha256": "c799cec18ebac58fd047c456560a0c9d5f805fbc84f5671abbd71b2df3a37c41",
+            "scalar": {
+              "representative": {
+                "totalMilliseconds": 53.571957999999995,
+                "vectorizationMilliseconds": 0,
+                "vectorValidationMilliseconds": 0,
+                "vectorPlanningMilliseconds": 0,
+                "vectorRebuildMilliseconds": 0,
+                "vectorFlatCoreMilliseconds": 0,
+                "wasmMilliseconds": 4.583737000000156,
+                "wasmBytes": 11954
+              },
+              "total": {
+                "count": 2,
+                "median": 54.38937899999996,
+                "minimum": 53.571957999999995,
+                "maximum": 55.20679999999993,
+                "medianAbsoluteDeviation": 0.8174209999999675,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 53.571957999999995,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 4.583737000000156,
+                  "wasmBytes": 11954
+                },
+                {
+                  "totalMilliseconds": 55.20679999999993,
+                  "vectorizationMilliseconds": 0,
+                  "vectorValidationMilliseconds": 0,
+                  "vectorPlanningMilliseconds": 0,
+                  "vectorRebuildMilliseconds": 0,
+                  "vectorFlatCoreMilliseconds": 0,
+                  "wasmMilliseconds": 4.944614999999885,
+                  "wasmBytes": 11954
+                }
+              ]
+            },
+            "simd": {
+              "representative": {
+                "totalMilliseconds": 63.29105900000013,
+                "vectorizationMilliseconds": 10.347407000000203,
+                "vectorValidationMilliseconds": 3.256012999999939,
+                "vectorPlanningMilliseconds": 2.399367000000211,
+                "vectorRebuildMilliseconds": 0.2674889999998413,
+                "vectorFlatCoreMilliseconds": 4.383988000000045,
+                "wasmMilliseconds": 4.111468999999943,
+                "wasmBytes": 8768
+              },
+              "total": {
+                "count": 2,
+                "median": 62.518422500000156,
+                "minimum": 61.74578600000018,
+                "maximum": 63.29105900000013,
+                "medianAbsoluteDeviation": 0.772636499999976,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "raw": [
+                {
+                  "totalMilliseconds": 63.29105900000013,
+                  "vectorizationMilliseconds": 10.347407000000203,
+                  "vectorValidationMilliseconds": 3.256012999999939,
+                  "vectorPlanningMilliseconds": 2.399367000000211,
+                  "vectorRebuildMilliseconds": 0.2674889999998413,
+                  "vectorFlatCoreMilliseconds": 4.383988000000045,
+                  "wasmMilliseconds": 4.111468999999943,
+                  "wasmBytes": 8768
+                },
+                {
+                  "totalMilliseconds": 61.74578600000018,
+                  "vectorizationMilliseconds": 9.408781999999974,
+                  "vectorValidationMilliseconds": 1.1812239999999292,
+                  "vectorPlanningMilliseconds": 3.671241000000009,
+                  "vectorRebuildMilliseconds": 0.20289900000011585,
+                  "vectorFlatCoreMilliseconds": 4.318727999999965,
+                  "wasmMilliseconds": 4.561746999999741,
+                  "wasmBytes": 8768
+                }
+              ]
+            },
+            "compilationPair": {
+              "differences": [
+                9.719101000000137,
+                6.53898600000025
+              ],
+              "logRatios": [
+                0.16671831161548345,
+                0.11193959616267911
+              ],
+              "difference": {
+                "count": 2,
+                "median": 8.129043500000193,
+                "minimum": 6.53898600000025,
+                "maximum": 9.719101000000137,
+                "medianAbsoluteDeviation": 1.5900574999999435,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "logRatio": {
+                "count": 2,
+                "median": 0.1393289538890813,
+                "minimum": 0.11193959616267911,
+                "maximum": 0.16671831161548345,
+                "medianAbsoluteDeviation": 0.02738935772640217,
+                "p95": {
+                  "status": "insufficient",
+                  "minimumSampleCount": 20
+                }
+              },
+              "medianRatio": 1.1495021710258957
+            },
+            "execution": {
+              "scalar": {
+                "count": 31,
+                "median": 126.97316,
+                "minimum": 123.03617000000031,
+                "maximum": 133.98691999999755,
+                "medianAbsoluteDeviation": 2.7868799999964864,
+                "p95": {
+                  "status": "measured",
+                  "value": 132.44608000000085
+                }
+              },
+              "simd": {
+                "count": 31,
+                "median": 81.46838000000116,
+                "minimum": 77.10351000000173,
+                "maximum": 94.81942000000345,
+                "medianAbsoluteDeviation": 1.9638899999972637,
+                "p95": {
+                  "status": "measured",
+                  "value": 88.34039999999959
+                }
+              },
+              "pair": {
+                "differences": [
+                  -43.76878999999917,
+                  -48.88386000000082,
+                  -45.65417000000025,
+                  -45.48747000000276,
+                  -47.89166000000023,
+                  -40.23119000000179,
+                  -46.82995999999548,
+                  -46.26527000000124,
+                  -42.69397999999684,
+                  -48.385050000001684,
+                  -51.80454000000054,
+                  -39.825299999999984,
+                  -47.468669999996095,
+                  -45.51126999999724,
+                  -41.81988999999703,
+                  -46.96827000000212,
+                  -42.331490000001395,
+                  -44.3077699999958,
+                  -34.15602999999919,
+                  -48.11475000000429,
+                  -51.95213999999851,
+                  -47.90045000000191,
+                  -38.18279999999959,
+                  -42.9190699999981,
+                  -43.49268999999822,
+                  -34.62761999999657,
+                  -42.35439000000042,
+                  -45.8490599999959,
+                  -53.03172999999788,
+                  -44.27038999999695,
+                  -47.262259999997696
+                ],
+                "logRatios": [
+                  -0.41286942538387156,
+                  -0.4762189812289888,
+                  -0.4494166884130192,
+                  -0.4485437782420872,
+                  -0.46525087317016034,
+                  -0.3817244206598806,
+                  -0.4462589205569878,
+                  -0.4274497136101322,
+                  -0.4237188955402379,
+                  -0.47671929174851974,
+                  -0.5073674361732566,
+                  -0.3871676300747329,
+                  -0.46816222748783376,
+                  -0.4563370261861252,
+                  -0.4078400448497869,
+                  -0.46159871760470605,
+                  -0.41845134066443224,
+                  -0.44133708663256493,
+                  -0.32192871168662074,
+                  -0.47295087801742847,
+                  -0.49059887956516723,
+                  -0.45131507915771635,
+                  -0.371553669144974,
+                  -0.41391143361305266,
+                  -0.4333766969751737,
+                  -0.31129759936238294,
+                  -0.41698280869851523,
+                  -0.4279001636642237,
+                  -0.5234254125779443,
+                  -0.4433651504211503,
+                  -0.45291551474077846
+                ],
+                "difference": {
+                  "count": 31,
+                  "median": -45.51126999999724,
+                  "minimum": -53.03172999999788,
+                  "maximum": -34.15602999999919,
+                  "medianAbsoluteDeviation": 2.5921999999991385,
+                  "p95": {
+                    "status": "measured",
+                    "value": -36.40520999999808
+                  }
+                },
+                "logRatio": {
+                  "count": 31,
+                  "median": -0.4433651504211503,
+                  "minimum": -0.5234254125779443,
+                  "maximum": -0.31129759936238294,
+                  "medianAbsoluteDeviation": 0.024913809756718086,
+                  "p95": {
+                    "status": "measured",
+                    "value": -0.3467411904157974
+                  }
+                },
+                "medianRatio": 0.6418727841731212
+              },
+              "scalarRawNanoseconds": [
+                129.39724999999953,
+                129.02454999999918,
+                126.11656000000039,
+                125.84976000000097,
+                128.73325000000023,
+                126.78555000000188,
+                130.08973999999853,
+                133.0112299999996,
+                123.61016999999721,
+                127.60335000000168,
+                130.18784000000096,
+                124.05756999999994,
+                126.97316,
+                124.21206999999868,
+                124.86726999999973,
+                127.03575999999885,
+                123.79987000000256,
+                124.17256999999609,
+                124.09087,
+                127.67975000000207,
+                133.98691999999755,
+                131.88093000000208,
+                123.03617000000031,
+                126.62714999999935,
+                123.66987999999765,
+                129.44704000000002,
+                124.21817000000374,
+                131.70342999999775,
+                130.1352399999996,
+                123.61637999999857,
+                129.76003999999648
+              ],
+              "simdRawNanoseconds": [
+                85.62846000000036,
+                80.14068999999836,
+                80.46239000000014,
+                80.36228999999821,
+                80.84159,
+                86.55436000000009,
+                83.25978000000305,
+                86.74595999999838,
+                80.91619000000037,
+                79.2183,
+                78.38330000000042,
+                84.23226999999996,
+                79.5044900000039,
+                78.70080000000144,
+                83.0473800000027,
+                80.06748999999672,
+                81.46838000000116,
+                79.86480000000029,
+                89.9348400000008,
+                79.56499999999778,
+                82.03477999999905,
+                83.98048000000017,
+                84.85337000000072,
+                83.70808000000125,
+                80.17718999999943,
+                94.81942000000345,
+                81.86378000000332,
+                85.85437000000185,
+                77.10351000000173,
+                79.34599000000162,
+                82.49777999999878
+              ]
+            },
+            "wasmByteRatio": 0.7334783336121801,
+            "vectorWork": {
+              "candidateWindows": 223,
+              "acceptedPlans": 32,
+              "scalarOperations": 768,
+              "vectorOperations": 192,
+              "packs": 32,
+              "splats": 192,
+              "extracts": 128,
+              "estimatedScalarCost": 768,
+              "estimatedVectorCost": 640
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

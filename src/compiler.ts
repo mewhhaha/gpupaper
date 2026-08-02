@@ -93,17 +93,20 @@ import {
 } from "./interaction.ts";
 import { expandMacros, type MacroExpansionReport } from "./macros.ts";
 import { parseModule } from "./parser.ts";
+import { emitWasmPlanOnRustWasm } from "./rust_wasm_emitter.ts";
 import { formatScheme, inferModule, type InferredModule } from "./types.ts";
 import { emitWasmPlanOnCpu, type WasmBinaryPlan } from "./wasm.ts";
 
 export type GpuMode = "off" | "optional" | "required";
 export type GpuWasmVerification = "differential" | "none";
 export type GpuSchedulingPolicy = CompilerGpuSchedulingPolicy;
+export type CpuWasmEmitter = "typescript" | "rust-wasm";
 
 export type CompilationOptions = {
   readonly gpuMode?: GpuMode;
   readonly gpuWasmVerification?: GpuWasmVerification;
   readonly gpuScheduling?: GpuSchedulingPolicy;
+  readonly cpuWasmEmitter?: CpuWasmEmitter;
   readonly hostInterface?: string;
   readonly session?: DucklangCompilationSession;
   readonly wasmTarget?: DucklangWasmTarget;
@@ -113,7 +116,7 @@ export type CompilationBackends = {
   readonly typeCheck: "cpu" | "gpu";
   readonly comptime: "cpu" | "notApplicable";
   readonly coreRewrite: "cpu" | "gpu" | "identity" | "notApplicable";
-  readonly wasmEmission: "cpu" | "gpu";
+  readonly wasmEmission: CpuWasmEmitter | "gpu";
   readonly wasmVerification: "none" | "cpuDifferential";
 };
 
@@ -467,6 +470,17 @@ export async function compileModuleSource(
   source: string,
   options: CompilationOptions = {},
 ): Promise<CompilationArtifact> {
+  if (
+    options.cpuWasmEmitter !== undefined &&
+    options.cpuWasmEmitter !== "typescript" &&
+    options.cpuWasmEmitter !== "rust-wasm"
+  ) {
+    throw new TypeError(
+      `${file}: CPU Wasm emitter must be "typescript" or "rust-wasm"; received ${
+        JSON.stringify(options.cpuWasmEmitter)
+      }`,
+    );
+  }
   if (file.endsWith(".duck")) {
     return await compileDucklangModuleSource(file, source, options);
   }
@@ -495,6 +509,7 @@ async function compileHaskellModuleSource(
 ): Promise<HaskellCompilationArtifact> {
   const gpuMode = options.gpuMode ?? "off";
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
+  const cpuWasmEmitter = options.cpuWasmEmitter ?? "typescript";
   const parseStart = performance.now();
   const parsed = parseModule(file, source);
   const parseMilliseconds = performance.now() - parseStart;
@@ -518,11 +533,12 @@ async function compileHaskellModuleSource(
 
   const wasmStart = performance.now();
   const lowered = lowerToFcgAndWasm(finalInference, {
-    emission: gpuMode === "off" || gpuWasmVerification === "differential"
+    emission: cpuWasmEmitter === "typescript" &&
+        (gpuMode === "off" || gpuWasmVerification === "differential")
       ? "cpu"
       : "planOnly",
   });
-  const wasmMilliseconds = performance.now() - wasmStart;
+  let wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
@@ -530,9 +546,19 @@ async function compileHaskellModuleSource(
       scheduling: options.gpuScheduling,
     });
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
+  let cpuWasm = lowered.wasm;
+  if (
+    cpuWasmEmitter === "rust-wasm" &&
+    (gpuMode === "off" || gpuWasmVerification === "differential" ||
+      gpuWasmResult?.status === "unavailable")
+  ) {
+    const rustWasmStart = performance.now();
+    cpuWasm = (await emitWasmPlanOnRustWasm(lowered.wasmPlan)).bytes;
+    wasmMilliseconds += performance.now() - rustWasmStart;
+  }
   const wasm = selectWasmOutput(
     file,
-    lowered.wasm,
+    cpuWasm,
     lowered.wasmPlan,
     gpuWasmResult,
     gpuMode,
@@ -563,7 +589,9 @@ async function compileHaskellModuleSource(
       typeCheck: "cpu",
       comptime: "cpu",
       coreRewrite: "notApplicable",
-      wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
+      wasmEmission: gpuWasmResult?.status === "completed"
+        ? "gpu"
+        : cpuWasmEmitter,
       wasmVerification: gpuWasmResult?.status === "completed" &&
           gpuWasmVerification === "differential"
         ? "cpuDifferential"
@@ -701,6 +729,7 @@ async function prepareDucklangModuleSource(
       hostInterface: hostInterfaceIdentity,
       gpuMode: options.gpuMode ?? "off",
       gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+      cpuWasmEmitter: options.cpuWasmEmitter ?? "typescript",
       wasmTarget: options.wasmTarget ?? "wasm-simd128",
     });
     semanticContextMilliseconds = performance.now() - semanticContextStart;
@@ -752,6 +781,7 @@ async function prepareDucklangModuleSource(
         hostInterface: hostInterfaceIdentity,
         gpuMode: options.gpuMode ?? "off",
         gpuWasmVerification: options.gpuWasmVerification ?? "differential",
+        cpuWasmEmitter: options.cpuWasmEmitter ?? "typescript",
         wasmTarget: options.wasmTarget ?? "wasm-simd128",
       });
       semanticIdentities.set(sessionContextIdentity, sessionSemanticIdentity);
@@ -1454,6 +1484,7 @@ async function compileDucklangModuleSource(
   const compilationStart = performance.now();
   const gpuMode = options.gpuMode ?? "off";
   const gpuWasmVerification = options.gpuWasmVerification ?? "differential";
+  const cpuWasmEmitter = options.cpuWasmEmitter ?? "typescript";
   const prepared = await prepareDucklangModuleSource(file, source, options);
   let semanticReuseValidationMilliseconds = 0;
   const cachedCompilation = prepared.sessionSemanticIdentity === undefined
@@ -1704,13 +1735,14 @@ async function compileDucklangModuleSource(
   const backendFunctionAnalysesBefore = backendFunctions?.analyses ?? 0;
   const backendFunctionReusesBefore = backendFunctions?.reuses ?? 0;
   const lowered = lowerDucklangCoreToFcgAndWasm(optimizedCore, {
-    emission: gpuMode === "off" || gpuWasmVerification === "differential"
+    emission: cpuWasmEmitter === "typescript" &&
+        (gpuMode === "off" || gpuWasmVerification === "differential")
       ? "cpu"
       : "planOnly",
     functions: backendFunctions,
     target: wasmTarget,
   });
-  const wasmMilliseconds = performance.now() - wasmStart;
+  let wasmMilliseconds = performance.now() - wasmStart;
   const gpuWasmStart = performance.now();
   const gpuWasmResult = gpuMode === "off"
     ? undefined
@@ -1719,10 +1751,21 @@ async function compileDucklangModuleSource(
     });
   const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
 
+  let cpuWasm = lowered.wasm;
+  if (
+    cpuWasmEmitter === "rust-wasm" &&
+    (gpuMode === "off" || gpuWasmVerification === "differential" ||
+      gpuWasmResult?.status === "unavailable")
+  ) {
+    const rustWasmStart = performance.now();
+    cpuWasm = (await emitWasmPlanOnRustWasm(lowered.wasmPlan)).bytes;
+    wasmMilliseconds += performance.now() - rustWasmStart;
+  }
+
   const wasmSelectionStart = performance.now();
   const wasm = selectWasmOutput(
     file,
-    lowered.wasm,
+    cpuWasm,
     lowered.wasmPlan,
     gpuWasmResult,
     gpuMode,
@@ -2029,7 +2072,9 @@ async function compileDucklangModuleSource(
       coreRewrite: gpuCoreResult?.status === "completed"
         ? gpuCoreResult.backend
         : "cpu",
-      wasmEmission: gpuWasmResult?.status === "completed" ? "gpu" : "cpu",
+      wasmEmission: gpuWasmResult?.status === "completed"
+        ? "gpu"
+        : cpuWasmEmitter,
       wasmVerification: gpuWasmResult?.status === "completed" &&
           gpuWasmVerification === "differential"
         ? "cpuDifferential"

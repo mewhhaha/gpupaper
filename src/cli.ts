@@ -2,6 +2,7 @@ import {
   type CompilationArtifact,
   type CompilationBackends,
   compileModuleSource,
+  type CpuWasmEmitter,
   type GpuMode,
   type GpuWasmVerification,
   runMain,
@@ -16,6 +17,7 @@ export type CliInvocation = {
   readonly output: string | undefined;
   readonly gpuMode: GpuMode;
   readonly gpuWasmVerification: GpuWasmVerification;
+  readonly cpuWasmEmitter: CpuWasmEmitter;
   readonly hostInterfaceFile: string | undefined;
 };
 
@@ -26,7 +28,7 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     !["compile", "run", "experiments"].includes(command)
   ) {
     throw new Error(
-      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--try-gpu|--require-gpu] [--no-gpu-verification] [--host-interface host.duck]",
+      "usage: cli.ts <compile|run|experiments> <file.hs|file.duck> [output.wasm] [--cpu|--try-gpu|--require-gpu] [--rust-wasm-emitter] [--no-gpu-verification] [--host-interface host.duck]",
     );
   }
   const positional: string[] = [];
@@ -37,6 +39,7 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     if (
       argument === "--cpu" || argument === "--try-gpu" ||
       argument === "--require-gpu" ||
+      argument === "--rust-wasm-emitter" ||
       argument === "--no-gpu-verification"
     ) {
       index += 1;
@@ -94,6 +97,9 @@ export function parseCommandLine(arguments_: readonly string[]): CliInvocation {
     gpuWasmVerification: rest.includes("--no-gpu-verification")
       ? "none"
       : "differential",
+    cpuWasmEmitter: rest.includes("--rust-wasm-emitter")
+      ? "rust-wasm"
+      : "typescript",
     hostInterfaceFile,
   };
 }
@@ -105,6 +111,7 @@ async function main(arguments_: readonly string[]): Promise<void> {
     output: outputArgument,
     gpuMode,
     gpuWasmVerification,
+    cpuWasmEmitter,
     hostInterfaceFile,
   } = parseCommandLine(arguments_);
   const artifact = await compileCliInput({
@@ -113,6 +120,7 @@ async function main(arguments_: readonly string[]): Promise<void> {
     output: outputArgument,
     gpuMode,
     gpuWasmVerification,
+    cpuWasmEmitter,
     hostInterfaceFile,
   });
 
@@ -190,11 +198,18 @@ async function main(arguments_: readonly string[]): Promise<void> {
 export async function compileCliInput(
   invocation: CliInvocation,
 ): Promise<CompilationArtifact> {
-  const { file, gpuMode, gpuWasmVerification, hostInterfaceFile } = invocation;
+  const {
+    file,
+    gpuMode,
+    gpuWasmVerification,
+    cpuWasmEmitter,
+    hostInterfaceFile,
+  } = invocation;
   const source = await Deno.readTextFile(file);
   return await compileModuleSource(file, source, {
     gpuMode,
     gpuWasmVerification,
+    cpuWasmEmitter,
     hostInterface: hostInterfaceFile,
   });
 }

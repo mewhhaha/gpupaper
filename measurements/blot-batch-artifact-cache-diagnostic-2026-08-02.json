@@ -1,0 +1,1251 @@
+{
+  "schemaVersion": 1,
+  "task": "benchmark:blot-batch",
+  "processCount": 1,
+  "maximumAttempts": 3,
+  "processOrder": "sequentialFreshDenoProcesses",
+  "benchmarkArguments": [
+    "--samples=6",
+    "--allow-contended"
+  ],
+  "processes": [
+    {
+      "process": 0,
+      "refusedAttempts": [],
+      "result": {
+        "status": "completed",
+        "validity": {
+          "status": "diagnostic",
+          "reason": "competing compiler or GPU work was present during measurement"
+        },
+        "schemaVersion": 6,
+        "workload": "target-admitted ../blot/examples/*.blot",
+        "corpusCandidates": 56,
+        "files": 19,
+        "warmupRejections": [
+          {
+            "path": "/home/mewhhaha/src/blot/examples/asking.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 1423..1438"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/breaking.blot",
+            "cause": "Error: typed Core is missing inference for rec at 231..356"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/capabilities.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 1181..1188"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/compiled.blot",
+            "cause": "Error: typed Core is missing inference for tag at 1600..1605"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/composed_handlers.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 867..929"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/comptime.blot",
+            "cause": "Error: typed Core is missing inference for apply at 283..293"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/conditional_rebinding.blot",
+            "cause": "Error: typed Core is missing inference for rec at 847..929"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/conditions.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 1020..1119"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/data.blot",
+            "cause": "Error: typed Core is missing inference for var at 1172..1177"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/dictionary.blot",
+            "cause": "BlotError: BLOT_EXPORT_NOT_FIRST_ORDER: Export `first_previous` does not have a concrete first-order WebAssembly type."
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/effect_case.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 344..351"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/effects.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 1119..1183"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/elements.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 578..974"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/granted.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 992..999"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/guarded.blot",
+            "cause": "Error: typed Core is missing inference for tag at 1598..1603"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/handler_aborts.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 349..356"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/handlers.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 1335..1342"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/indexed.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 708..813"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/layout_table.blot",
+            "cause": "Error: typed Core is missing inference for rec at 447..956"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/linear.blot",
+            "cause": "Error: typed Core is missing inference for tag at 940..945"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/looped.blot",
+            "cause": "Error: typed Core is missing inference for rec at 317..374"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/loops.blot",
+            "cause": "Error: typed Core is missing inference for rec at 844..899"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/matching.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 887..951"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/module_returning.blot",
+            "cause": "Error: typed Core is missing inference for tag at 158..185"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/narrowing.blot",
+            "cause": "Error: typed Core is missing inference for tag at 476..568"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/newtype.blot",
+            "cause": "Error: typed Core is missing inference for apply at 881..1142"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/pinned_patterns.blot",
+            "cause": "Error: typed Core is missing inference for tag at 333..338"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/proved.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 375..548"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/reflect.blot",
+            "cause": "Error: typed Core is missing inference for var at 3474..3480"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/returning.blot",
+            "cause": "Error: typed Core is missing inference for tag at 222..265"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/shadowed_effects.blot",
+            "cause": "Error: typed Core is missing inference for intrinsic at 706..713"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/simd.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 1555..1785"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/storage.blot",
+            "cause": "Error: typed Core is missing inference for field at 937..946"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/tags.blot",
+            "cause": "Error: typed Core is missing inference for var at 1310..1315"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/tour.blot",
+            "cause": "Error: typed Core is missing inference for rec at 2343..2401"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/types.blot",
+            "cause": "Error: typed Core is missing inference for var at 2677..2683"
+          },
+          {
+            "path": "/home/mewhhaha/src/blot/examples/walker.blot",
+            "cause": "Error: typed Core is missing inference for lambda at 1138..1241"
+          }
+        ],
+        "samples": 6,
+        "warmups": 1,
+        "inputSha256": "28b865e8ff72ed62cda138778f0df1ecf85042b6be968b38dee8be031d0eb01d",
+        "admittedInputSha256": "a8b9fec1cab989d49c6c1c238713e59eacc8c78d99160c1e663bb5ca5312aea4",
+        "outputSha256": "7b023f7b8f60052da7a6fe4ed871852526fa0fdab18f059d6c72a7fd64c96c80",
+        "boundary": "separate unchanged-revision rebuild and compiler throughput",
+        "repositories": {
+          "gpupaper": {
+            "revision": "ef8872dabf446660b75bce84882dd042c176a905",
+            "status": [
+              "M PAPER.md",
+              " M PERFORMANCE.md",
+              " M README.md",
+              " M deno.json",
+              " M scripts/benchmark_blot_batch.ts",
+              " M scripts/benchmark_blot_targets.ts",
+              " M scripts/benchmark_ducklang_frontend.ts",
+              " M scripts/benchmark_ducklang_rebuild.ts",
+              " M scripts/benchmark_ducklang_simd.ts",
+              " M scripts/benchmark_environment.ts",
+              " M scripts/benchmark_gpu_break_even.ts",
+              " M scripts/benchmark_peer_compilers.ts",
+              " M scripts/benchmark_wasm_branch_hints.ts",
+              " M scripts/benchmark_wasm_emission.ts",
+              " M scripts/release_gpu.ts",
+              " M tests/blot_batch_target.test.ts",
+              "?? measurements/",
+              "?? scripts/benchmark_schema.ts",
+              "?? scripts/benchmark_statistics.ts",
+              "?? scripts/record_benchmark_processes.ts",
+              "?? tests/benchmark_environment.test.ts",
+              "?? tests/benchmark_schema.test.ts",
+              "?? tests/benchmark_statistics.test.ts"
+            ],
+            "trackedDiffSha256": "b38e2f4d2448230bfd19cea68457e688d57055e752e3729e07df40d77cf01e6c",
+            "untrackedFiles": [
+              {
+                "path": "measurements/README.md",
+                "sha256": "11f689f74a515f8ebc6263689f144380c8de18b8dea3b1e4f56f6c1ecb10f852"
+              },
+              {
+                "path": "measurements/blot-batch-artifact-cache-diagnostic-2026-08-02.json",
+                "sha256": "14cc5587e74de5b8c555e43123b6de42e624bdd751ad2405769086585a978baa"
+              },
+              {
+                "path": "measurements/blot-batch-diagnostic-2026-08-02.json",
+                "sha256": "e1f6d82917d1d2df805404bf6143d77713f8b45972bbb6464cfb315f1c68cabc"
+              },
+              {
+                "path": "measurements/blot-batch-hir-cache-diagnostic-2026-08-02.json",
+                "sha256": "167544c0e06a61c1bb217e9ab2d33dbb94da1b4299ca1a48b9586f175d2619a2"
+              },
+              {
+                "path": "measurements/blot-targets-diagnostic-2026-08-02.json",
+                "sha256": "2f5238da5a9793bf63c7ee091d514eab691d63b2bc592019ae31428d2ab1ee9a"
+              },
+              {
+                "path": "measurements/branch-hints-diagnostic-2026-08-02.json",
+                "sha256": "c486a5865629260c8af94966a49298cd685a7aa92458911f6918665dae27983b"
+              },
+              {
+                "path": "measurements/break-even-diagnostic-2026-08-02.json",
+                "sha256": "8e2c198642c699542c28c53886b255a6e045aa0a94a2b41104de57c49cd6286c"
+              },
+              {
+                "path": "measurements/frontend-diagnostic-2026-08-02.json",
+                "sha256": "e459fe415f2e35b2bff26d9cf893296296d8d8022ee78bba6019fd741108d3c8"
+              },
+              {
+                "path": "measurements/peers-diagnostic-2026-08-02.json",
+                "sha256": "ae5cbae64abe30f8c4b909b8259dae352c30ff02d107be1961adee1a166136d5"
+              },
+              {
+                "path": "measurements/simd-diagnostic-2026-08-02.json",
+                "sha256": "6dc81de525fa72fb8f9792ac00787ff60715165cbf835afa5e7c7ca451c8bbe4"
+              },
+              {
+                "path": "measurements/wasm-diagnostic-2026-08-02.json",
+                "sha256": "5ec6df37c211555c39d2ede8d6588964ebe6833194b7d7819c13e7ef9f497614"
+              },
+              {
+                "path": "scripts/benchmark_schema.ts",
+                "sha256": "99fd5cc971b54cb47350c6fb4741a1a371def6acefeab6da0e67a35fdb3e53e8"
+              },
+              {
+                "path": "scripts/benchmark_statistics.ts",
+                "sha256": "e7186566ef22aa0168fc4dc9526a8dbee29e6aa898302e87081ceefb2b2a2208"
+              },
+              {
+                "path": "scripts/record_benchmark_processes.ts",
+                "sha256": "ef95ca03a1e7865d62462aaf727b533c7a7c61418765f6e77e9c44d3c112a748"
+              },
+              {
+                "path": "tests/benchmark_environment.test.ts",
+                "sha256": "47c65da122084966e48f9da207dae03bba59dfb571c16cf806769e7456964346"
+              },
+              {
+                "path": "tests/benchmark_schema.test.ts",
+                "sha256": "74b6fa6c3f84924a57222e424081f9700acf83a3a50bdf901a05e27adeaa3f0f"
+              },
+              {
+                "path": "tests/benchmark_statistics.test.ts",
+                "sha256": "567a71672878e58431eb0ad43959c9e491b4847ad9f48e9f5de649474f2fe998"
+              }
+            ]
+          },
+          "blot": {
+            "revision": "a939bb6d939fe1e276ca04e91eed929063c77723",
+            "status": [
+              "M LANGUAGE.md",
+              " M PAPER.md",
+              " M backend.test.ts",
+              " M src/backend/compile.ts",
+              " M src/backend/gpupaper.ts",
+              " M src/backend/gpupaper_residual.ts",
+              " M src/backend/lower.ts",
+              " M src/check/mod.ts",
+              " M src/check/primitives.ts",
+              " M src/comptime/eval.ts",
+              " M src/comptime/primitives.ts",
+              " M src/core/computation.test.ts",
+              " M src/core/computation.ts",
+              " M src/linear/check.ts",
+              " M src/prelude/prelude.blot",
+              "?? examples/array_extraction.blot",
+              "?? examples/dictionary.blot",
+              "?? examples/expected/array_extraction.txt",
+              "?? examples/expected/dictionary.txt"
+            ],
+            "trackedDiffSha256": "a1c85899b04aeae62bc4467c93a292371cdc216ddb4716c50d8a33899ff159dd",
+            "untrackedFiles": [
+              {
+                "path": "examples/array_extraction.blot",
+                "sha256": "e998d81ee5a116aa2fe2401c02ab19c6c0c48c496e267653c8ef30978e6c2749"
+              },
+              {
+                "path": "examples/dictionary.blot",
+                "sha256": "ec6355e8fa55df6b1983e7fafde4e39aca08385cad5492b4ef1f4b563c0649dd"
+              },
+              {
+                "path": "examples/expected/array_extraction.txt",
+                "sha256": "405baff5857045f6bf9107721b1f53c24546bd39fb5be8681ab5e0608bfd7ac5"
+              },
+              {
+                "path": "examples/expected/dictionary.txt",
+                "sha256": "26c0b802f79ba9a49ad77d92622e9204172a7907c5344915112c7994e4b07aea"
+              }
+            ]
+          }
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3",
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "adapter": {
+          "vendor": "4318",
+          "architecture": "",
+          "device": "9986",
+          "description": "NVIDIA GeForce RTX 4080 SUPER"
+        },
+        "environmentAtStart": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 11301,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 12174,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 19950,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 22074,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 67087,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 106932,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 228511,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 258198,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 438993,
+              "command": "node /run/user/1000/fnm_multishells/27982_1767611615704/bin/pnpm dev"
+            },
+            {
+              "pid": 439006,
+              "command": "node /home/mewhhaha/src/ink/apps/isometric-city-dev/node_modules/.bin/../vite/bin/vite.js --open"
+            },
+            {
+              "pid": 547986,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 566630,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 572345,
+              "command": "node /run/user/1000/fnm_multishells/27982_1767611615704/bin/pnpm --filter @ink/isometric-city-dev exec vite --host 127.0.0.1 --port 5174"
+            },
+            {
+              "pid": 572377,
+              "command": "node ./node_modules/.bin/../vite/bin/vite.js --host 127.0.0.1 --port 5174"
+            },
+            {
+              "pid": 572463,
+              "command": "deno run -A /home/mewhhaha/src/blot/src/cli.ts serve --port=0"
+            }
+          ],
+          "gpuProcesses": [
+            {
+              "pid": 1481,
+              "command": "anyrun",
+              "memoryMiB": 8
+            },
+            {
+              "pid": 1490,
+              "command": "/opt/zen-browser-bin/zen-bin",
+              "memoryMiB": 329
+            },
+            {
+              "pid": 572463,
+              "command": "deno",
+              "memoryMiB": 205
+            }
+          ],
+          "nvidiaDevices": [
+            {
+              "name": "NVIDIA GeForce RTX 4080 SUPER",
+              "driverVersion": "610.43.03",
+              "pciDeviceId": "0x270210DE"
+            }
+          ],
+          "inspectionErrors": []
+        },
+        "environmentAtEnd": {
+          "status": "contended",
+          "competingProcesses": [
+            {
+              "pid": 11301,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 12174,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 19950,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 22074,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 67087,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 106932,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 228511,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 258198,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 438993,
+              "command": "node /run/user/1000/fnm_multishells/27982_1767611615704/bin/pnpm dev"
+            },
+            {
+              "pid": 439006,
+              "command": "node /home/mewhhaha/src/ink/apps/isometric-city-dev/node_modules/.bin/../vite/bin/vite.js --open"
+            },
+            {
+              "pid": 547986,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 566630,
+              "command": "node /home/mewhhaha/.local/share/pnpm/global/5/.pnpm/@openai+codex@0.146.0/node_modules/@openai/codex/bin/codex.js"
+            },
+            {
+              "pid": 572345,
+              "command": "node /run/user/1000/fnm_multishells/27982_1767611615704/bin/pnpm --filter @ink/isometric-city-dev exec vite --host 127.0.0.1 --port 5174"
+            },
+            {
+              "pid": 572377,
+              "command": "node ./node_modules/.bin/../vite/bin/vite.js --host 127.0.0.1 --port 5174"
+            },
+            {
+              "pid": 572463,
+              "command": "deno run -A /home/mewhhaha/src/blot/src/cli.ts serve --port=0"
+            }
+          ],
+          "gpuProcesses": [
+            {
+              "pid": 1481,
+              "command": "anyrun",
+              "memoryMiB": 8
+            },
+            {
+              "pid": 1490,
+              "command": "/opt/zen-browser-bin/zen-bin",
+              "memoryMiB": 321
+            },
+            {
+              "pid": 572463,
+              "command": "deno",
+              "memoryMiB": 205
+            }
+          ],
+          "nvidiaDevices": [
+            {
+              "name": "NVIDIA GeForce RTX 4080 SUPER",
+              "driverVersion": "610.43.03",
+              "pciDeviceId": "0x270210DE"
+            }
+          ],
+          "inspectionErrors": []
+        },
+        "hirCacheFootprint": {
+          "logicalJsonBytes": 81636,
+          "reachableObjects": 1547
+        },
+        "artifactCacheFootprint": {
+          "artifacts": 19,
+          "wasmBytes": 53366,
+          "manifestBytes": 41400,
+          "capabilityNameBytes": 82,
+          "totalLogicalBytes": 94848
+        },
+        "wasmBytes": 53366,
+        "incrementalRebuild": {
+          "boundary": "unchanged loaded revisions to defensive artifact copies through the public Blot batch API",
+          "runOrder": [
+            "packed",
+            "singleton",
+            "singleton",
+            "packed",
+            "packed",
+            "singleton",
+            "singleton",
+            "packed",
+            "packed",
+            "singleton",
+            "singleton",
+            "packed"
+          ],
+          "packed": {
+            "timing": {
+              "count": 6,
+              "median": 0.7949010000000953,
+              "minimum": 0.6245960000001105,
+              "maximum": 1.0276440000000093,
+              "medianAbsoluteDeviation": 0.059299500000065564,
+              "p95": {
+                "status": "insufficient",
+                "minimumSampleCount": 20
+              }
+            },
+            "rawMilliseconds": [
+              1.0276440000000093,
+              0.7991860000001907,
+              0.695306999999957,
+              0.790616,
+              0.6245960000001105,
+              0.8139060000000882
+            ],
+            "modulesPerSecond": 23902.347587935757
+          },
+          "singleton": {
+            "timing": {
+              "count": 6,
+              "median": 12.794256000000019,
+              "minimum": 11.785931000000119,
+              "maximum": 13.318333000000166,
+              "medianAbsoluteDeviation": 0.4053280000001678,
+              "p95": {
+                "status": "insufficient",
+                "minimumSampleCount": 20
+              }
+            },
+            "rawMilliseconds": [
+              13.318333000000166,
+              12.772735999999895,
+              11.785931000000119,
+              12.815776000000142,
+              13.080835000000206,
+              12.003319000000147
+            ],
+            "modulesPerSecond": 1485.0414123337828
+          },
+          "marginalMedianRatio": 16.09540810742279,
+          "pairedPackedToSingleton": {
+            "differences": [
+              -12.290689000000157,
+              -11.973549999999705,
+              -11.090624000000162,
+              -12.025160000000142,
+              -12.456239000000096,
+              -11.189413000000059
+            ],
+            "logRatios": [
+              -2.56187270357604,
+              -2.7714744685677153,
+              -2.8303083363262487,
+              -2.785619802551213,
+              -3.041798420164116,
+              -2.691093593642421
+            ],
+            "difference": {
+              "count": 6,
+              "median": -11.999354999999923,
+              "minimum": -12.456239000000096,
+              "maximum": -11.090624000000162,
+              "medianAbsoluteDeviation": 0.3741090000002032,
+              "p95": {
+                "status": "insufficient",
+                "minimumSampleCount": 20
+              }
+            },
+            "logRatio": {
+              "count": 6,
+              "median": -2.778547135559464,
+              "minimum": -3.041798420164116,
+              "maximum": -2.56187270357604,
+              "medianAbsoluteDeviation": 0.06960737134191386,
+              "p95": {
+                "status": "insufficient",
+                "minimumSampleCount": 20
+              }
+            },
+            "medianRatio": 0.06212870642630006
+          }
+        },
+        "compilerThroughput": {
+          "boundary": "frozen Runtime HIR through validation, Wasm planning, GPU emission, and artifact validation with Blot artifact reuse bypassed",
+          "stageProfile": {
+            "samples": 6,
+            "fixedCount16": {
+              "stages": {
+                "refreshModules": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.8269255000000157,
+                    "minimum": 0.6645770000000084,
+                    "maximum": 0.8497260000003735,
+                    "medianAbsoluteDeviation": 0.016880000000128348,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.6645770000000084,
+                    0.8221650000000409,
+                    0.8497260000003735,
+                    0.8316859999999906,
+                    0.8378849999999147,
+                    0.7880959999997685
+                  ]
+                },
+                "prepareHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.06050899999968351,
+                    "minimum": 0.05419999999912761,
+                    "maximum": 0.07020000000056825,
+                    "medianAbsoluteDeviation": 0.003384000000096421,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.059859000000187734,
+                    0.06115899999917929,
+                    0.06342799999947601,
+                    0.07020000000056825,
+                    0.05419999999912761,
+                    0.05665999999928317
+                  ]
+                },
+                "validateHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.24001500000042597,
+                    "minimum": 0.17544899999938934,
+                    "maximum": 0.7005569999996624,
+                    "medianAbsoluteDeviation": 0.030044500000258267,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.7005569999996624,
+                    0.23128999999994448,
+                    0.24874000000090746,
+                    0.2500579999996262,
+                    0.17544899999938934,
+                    0.18996899999910966
+                  ]
+                },
+                "planWasm": {
+                  "timing": {
+                    "count": 6,
+                    "median": 6.593937000000437,
+                    "minimum": 5.972830000000613,
+                    "maximum": 12.222969000000148,
+                    "medianAbsoluteDeviation": 0.18140900000003057,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    12.222969000000148,
+                    6.598547000000735,
+                    6.67270599999938,
+                    6.589327000000139,
+                    5.972830000000613,
+                    6.309887999999319
+                  ]
+                },
+                "emitWasmOnGpu": {
+                  "timing": {
+                    "count": 6,
+                    "median": 19.256942999999865,
+                    "minimum": 18.03463899999997,
+                    "maximum": 22.78840500000001,
+                    "medianAbsoluteDeviation": 0.4391574999999648,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    22.78840500000001,
+                    19.60340099999985,
+                    19.34761299999991,
+                    18.03463899999997,
+                    18.72508599999992,
+                    19.16627299999982
+                  ]
+                },
+                "wasmValidation": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.22910950000050434,
+                    "minimum": 0.13685999999961496,
+                    "maximum": 0.30876899999998386,
+                    "medianAbsoluteDeviation": 0.05403150000051937,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.30876899999998386,
+                    0.2949290000005931,
+                    0.27035900000055335,
+                    0.13685999999961496,
+                    0.18786000000045533,
+                    0.18686599999955433
+                  ]
+                },
+                "manifestValidation": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.5790710000007948,
+                    "minimum": 0.4320869999992283,
+                    "maximum": 0.775305999999091,
+                    "medianAbsoluteDeviation": 0.0903675000010935,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.5904660000001059,
+                    0.7290170000005674,
+                    0.775305999999091,
+                    0.4320869999992283,
+                    0.5676760000014838,
+                    0.5453200000001743
+                  ]
+                },
+                "targetUnaccounted": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.028440000001182852,
+                    "minimum": 0.020480000001043663,
+                    "maximum": 0.047539999999798965,
+                    "medianAbsoluteDeviation": 0.003279500000076041,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.047539999999798965,
+                    0.03205899999807116,
+                    0.030830000001060398,
+                    0.020480000001043663,
+                    0.025499999997919076,
+                    0.026050000001305307
+                  ]
+                },
+                "total": {
+                  "timing": {
+                    "count": 6,
+                    "median": 27.775675000000092,
+                    "minimum": 26.376197000000047,
+                    "maximum": 37.43897100000004,
+                    "medianAbsoluteDeviation": 0.913645499999916,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    37.43897100000004,
+                    28.385266999999885,
+                    28.270938000000115,
+                    26.376197000000047,
+                    26.557976000000053,
+                    27.28041200000007
+                  ]
+                }
+              },
+              "gpuBatch": {
+                "physicalPlans": [
+                  {
+                    "firstPayloadIndex": 0,
+                    "payloadCount": 16,
+                    "resources": {
+                      "payloadCount": 16,
+                      "atomCount": 46312,
+                      "maximumOutputBytes": 59280,
+                      "lengthAtomCount": 242,
+                      "lengthSizingDependencyAtomCount": 51472,
+                      "maximumStorageBindingBytes": 185252,
+                      "readbackBytes": 59344,
+                      "workgroupCount": 724
+                    }
+                  },
+                  {
+                    "firstPayloadIndex": 16,
+                    "payloadCount": 3,
+                    "resources": {
+                      "payloadCount": 3,
+                      "atomCount": 6882,
+                      "maximumOutputBytes": 8412,
+                      "lengthAtomCount": 40,
+                      "lengthSizingDependencyAtomCount": 7356,
+                      "maximumStorageBindingBytes": 27532,
+                      "readbackBytes": 8424,
+                      "workgroupCount": 108
+                    }
+                  }
+                ],
+                "adapterLimits": {
+                  "maxBufferSize": 268435456,
+                  "maxStorageBufferBindingSize": 134217728,
+                  "maxUniformBufferBindingSize": 65536,
+                  "maxComputeWorkgroupsPerDimension": 65535,
+                  "maxStorageBuffersPerShaderStage": 8,
+                  "maxUniformBuffersPerShaderStage": 12
+                },
+                "timings": {
+                  "totalMilliseconds": 19.15921299999991,
+                  "deviceRequestMilliseconds": 0.0016000000000531145,
+                  "partitioningMilliseconds": 1.6006519999996272,
+                  "gpuEmissionWallMilliseconds": 17.53269100000034,
+                  "artifactIsolationMilliseconds": 0.02058999999962907,
+                  "unaccountedMilliseconds": 0.0036800000002585875
+                }
+              }
+            },
+            "capacity": {
+              "stages": {
+                "refreshModules": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.787510999999995,
+                    "minimum": 0.6774869999999282,
+                    "maximum": 0.9798250000003463,
+                    "medianAbsoluteDeviation": 0.07298500000001695,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.7625759999998536,
+                    0.8124460000001363,
+                    0.9798250000003463,
+                    0.6774869999999282,
+                    0.6839260000001559,
+                    0.8298960000001898
+                  ]
+                },
+                "prepareHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.06429000000071028,
+                    "minimum": 0.049669999998968706,
+                    "maximum": 0.09041900000056557,
+                    "medianAbsoluteDeviation": 0.010250500001347973,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.0836500000000342,
+                    0.09041900000056557,
+                    0.06237000000101034,
+                    0.058408999999755906,
+                    0.049669999998968706,
+                    0.06621000000041022
+                  ]
+                },
+                "validateHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.2334289999998873,
+                    "minimum": 0.17350899999837566,
+                    "maximum": 0.5706470000000081,
+                    "medianAbsoluteDeviation": 0.03526500000066335,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.5706470000000081,
+                    0.5699679999995624,
+                    0.22281900000007226,
+                    0.23638899999923524,
+                    0.17350899999837566,
+                    0.23046900000053938
+                  ]
+                },
+                "planWasm": {
+                  "timing": {
+                    "count": 6,
+                    "median": 6.985505000000558,
+                    "minimum": 6.101989000000231,
+                    "maximum": 13.490702000000283,
+                    "medianAbsoluteDeviation": 0.515976999999225,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    13.490702000000283,
+                    7.539191999999957,
+                    7.233224000000973,
+                    6.507238000001507,
+                    6.737786000000142,
+                    6.101989000000231
+                  ]
+                },
+                "emitWasmOnGpu": {
+                  "timing": {
+                    "count": 6,
+                    "median": 19.522881500000267,
+                    "minimum": 18.327038000000357,
+                    "maximum": 20.408987000000025,
+                    "medianAbsoluteDeviation": 0.7828409999997348,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    20.20245799999998,
+                    20.408987000000025,
+                    20.100169000000278,
+                    18.945594000000256,
+                    18.327038000000357,
+                    18.44049700000005
+                  ]
+                },
+                "wasmValidation": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.2182180000002063,
+                    "minimum": 0.13023999999995794,
+                    "maximum": 0.29476799999952163,
+                    "medianAbsoluteDeviation": 0.05745599999988826,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.29476799999952163,
+                    0.21060799999986557,
+                    0.22582800000054704,
+                    0.1356980000000476,
+                    0.13023999999995794,
+                    0.2565800000006675
+                  ]
+                },
+                "manifestValidation": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.5531985000003488,
+                    "minimum": 0.4049880000002304,
+                    "maximum": 0.7294269999997596,
+                    "medianAbsoluteDeviation": 0.04223550000006071,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.7294269999997596,
+                    0.5601480000002539,
+                    0.6008369999995011,
+                    0.5462490000004436,
+                    0.4049880000002304,
+                    0.5163659999993797
+                  ]
+                },
+                "targetUnaccounted": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.026344999999878382,
+                    "minimum": 0.02026999999770851,
+                    "maximum": 0.03441000000043459,
+                    "medianAbsoluteDeviation": 0.005895500001201981,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.03441000000043459,
+                    0.03160000000002583,
+                    0.03321999999889158,
+                    0.02026999999770851,
+                    0.020628999999644293,
+                    0.021089999999730935
+                  ]
+                },
+                "total": {
+                  "timing": {
+                    "count": 6,
+                    "median": 28.303902500000277,
+                    "minimum": 26.475416999999652,
+                    "maximum": 36.20456799999988,
+                    "medianAbsoluteDeviation": 1.7951360000004115,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    36.20456799999988,
+                    30.243928000000096,
+                    29.471161000000393,
+                    27.13664400000016,
+                    26.542116000000078,
+                    26.475416999999652
+                  ]
+                }
+              },
+              "gpuBatch": {
+                "physicalPlans": [
+                  {
+                    "firstPayloadIndex": 0,
+                    "payloadCount": 19,
+                    "resources": {
+                      "payloadCount": 19,
+                      "atomCount": 53194,
+                      "maximumOutputBytes": 67692,
+                      "lengthAtomCount": 282,
+                      "lengthSizingDependencyAtomCount": 58828,
+                      "maximumStorageBindingBytes": 212780,
+                      "readbackBytes": 67768,
+                      "workgroupCount": 832
+                    }
+                  }
+                ],
+                "adapterLimits": {
+                  "maxBufferSize": 268435456,
+                  "maxStorageBufferBindingSize": 134217728,
+                  "maxUniformBufferBindingSize": 65536,
+                  "maxComputeWorkgroupsPerDimension": 65535,
+                  "maxStorageBuffersPerShaderStage": 8,
+                  "maxUniformBuffersPerShaderStage": 12
+                },
+                "timings": {
+                  "totalMilliseconds": 18.431896999999935,
+                  "deviceRequestMilliseconds": 0.0017100000000027649,
+                  "partitioningMilliseconds": 1.5016820000000735,
+                  "gpuEmissionWallMilliseconds": 16.906805000000077,
+                  "artifactIsolationMilliseconds": 0.016049999999722786,
+                  "unaccountedMilliseconds": 0.005650000000059663
+                }
+              }
+            },
+            "pipelinedDepth2": {
+              "stages": {
+                "refreshModules": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.7740410000000111,
+                    "minimum": 0.7136160000000018,
+                    "maximum": 0.9292049999999108,
+                    "medianAbsoluteDeviation": 0.04030499999998938,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.7738959999999224,
+                    0.7741860000000997,
+                    0.7354159999999865,
+                    0.7136160000000018,
+                    0.8160259999999653,
+                    0.9292049999999108
+                  ]
+                },
+                "prepareHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 2.4267275000004247,
+                    "minimum": 1.9787890000002335,
+                    "maximum": 2.5762160000001586,
+                    "medianAbsoluteDeviation": 0.13778899999977057,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    2.5762160000001586,
+                    2.5265559999998004,
+                    2.552817000000232,
+                    1.9787890000002335,
+                    2.0202800000001844,
+                    2.326899000001049
+                  ]
+                },
+                "validateHir": {
+                  "timing": {
+                    "count": 6,
+                    "median": 0.2694640000004256,
+                    "minimum": 0.2221899999995003,
+                    "maximum": 0.541398000000072,
+                    "medianAbsoluteDeviation": 0.030845000000681466,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    0.541398000000072,
+                    0.26752000000078624,
+                    0.3984690000011142,
+                    0.2221899999995003,
+                    0.27140800000006493,
+                    0.25504799999998795
+                  ]
+                },
+                "planWasmWork": {
+                  "timing": {
+                    "count": 6,
+                    "median": 6.593140999999832,
+                    "minimum": 6.102418999998463,
+                    "maximum": 13.588551999999481,
+                    "medianAbsoluteDeviation": 0.2730484999995042,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    13.588551999999481,
+                    6.724915999999666,
+                    6.505455999998958,
+                    6.102418999998463,
+                    6.178819000000658,
+                    6.680826000000707
+                  ]
+                },
+                "summedGpuBatchSpan": {
+                  "timing": {
+                    "count": 6,
+                    "median": 36.65864549999981,
+                    "minimum": 35.13446400000021,
+                    "maximum": 43.65486099999998,
+                    "medianAbsoluteDeviation": 1.1268945000001622,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    43.65486099999998,
+                    37.49475099999995,
+                    37.9598390000001,
+                    35.13446400000021,
+                    35.70604999999978,
+                    35.82253999999966
+                  ]
+                },
+                "total": {
+                  "timing": {
+                    "count": 6,
+                    "median": 26.590181000000257,
+                    "minimum": 25.00758399999995,
+                    "maximum": 34.856854999999996,
+                    "medianAbsoluteDeviation": 0.7544509999999036,
+                    "p95": {
+                      "status": "insufficient",
+                      "minimumSampleCount": 20
+                    }
+                  },
+                  "rawMilliseconds": [
+                    34.856854999999996,
+                    27.010633999999982,
+                    26.957364000000325,
+                    25.00758399999995,
+                    25.501732000000175,
+                    26.22299800000019
+                  ]
+                }
+              },
+              "physicalBatchCounts": [
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              "maximumInFlightLeasedBufferBytes": 1140824
+            },
+            "fixedToCapacityP50Ratio": 0.98133729085591,
+            "capacityToPipelineP50Ratio": 1.0644494108558344
+          }
+        }
+      }
+    }
+  ]
+}
