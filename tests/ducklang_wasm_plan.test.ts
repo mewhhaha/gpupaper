@@ -12,7 +12,9 @@ import {
   emitWasmPlanOnGpu,
   emitWasmPlansOnGpu,
   packWasmBinaryPlans,
+  partitionWasmBinaryPlans,
 } from "../src/gpu_wasm.ts";
+import type { CompilerGpuLimits } from "../src/gpu_device.ts";
 
 /**
  * Binary sizes and offsets are calculated by count-scan-write.
@@ -102,6 +104,57 @@ Deno.test("packed Wasm plans rebase only local length dependencies", () => {
   );
 });
 
+Deno.test("Wasm plan partitioning takes the longest stable capacity prefix", () => {
+  const plans = [1, 2, 3].map((count) => buildModule(count).finishPlan());
+  const permissiveLimits = gpuLimits();
+  const firstTwo = partitionWasmBinaryPlans(
+    plans.slice(0, 2),
+    permissiveLimits,
+    { maximumPayloadCount: 64 },
+  )[0]!;
+  const partitions = partitionWasmBinaryPlans(plans, {
+    ...permissiveLimits,
+    maxStorageBufferBindingSize: firstTwo.resources.maximumStorageBindingBytes,
+  }, { maximumPayloadCount: 64 });
+
+  assertEquals(
+    partitions.map((partition) => [
+      partition.firstPayloadIndex,
+      partition.payloadCount,
+    ]),
+    [[0, 2], [2, 1]],
+  );
+  assertEquals(partitions[0].endAtomIndices.length, 2);
+  assertEquals(partitions[1].plan === plans[2], true);
+  assertEquals(
+    partitions.every((partition) =>
+      partition.resources.maximumStorageBindingBytes <=
+        firstTwo.resources.maximumStorageBindingBytes
+    ),
+    true,
+  );
+  assertEquals(
+    partitionWasmBinaryPlans(plans, {
+      ...permissiveLimits,
+      maxComputeWorkgroupsPerDimension: firstTwo.resources.workgroupCount,
+    }, { maximumPayloadCount: 64 }).map((partition) => partition.payloadCount),
+    [2, 1],
+  );
+  assertEquals(
+    partitionWasmBinaryPlans(plans, permissiveLimits, {
+      maximumPayloadCount: 2,
+    }).map((partition) => partition.payloadCount),
+    [2, 1],
+  );
+  assertThrows(
+    () =>
+      partitionWasmBinaryPlans(plans, permissiveLimits, {
+        maximumPayloadCount: 0,
+      }),
+    /positive safe integer/,
+  );
+});
+
 Deno.test("packed GPU Wasm emission preserves ordinal bytes and isolation", async () => {
   const plans = [1, 3, 130].map((count) => buildModule(count).finishPlan());
   const emitted = await emitWasmPlansOnGpu(plans, { scheduling: "latency" });
@@ -111,6 +164,10 @@ Deno.test("packed GPU Wasm emission preserves ordinal bytes and isolation", asyn
   assertEquals(emitted.physicalEmissions[0].payloadBatchSize, 3);
   assertEquals(emitted.physicalEmissions[0].timings.scope, "batch");
   assertEquals(emitted.physicalEmissions[0].payloadByteOffsets.length, 4);
+  assertEquals(emitted.physicalPlans[0].firstPayloadIndex, 0);
+  assertEquals(emitted.physicalPlans[0].payloadCount, 3);
+  assertEquals(emitted.physicalPlans[0].resources.payloadCount, 3);
+  assertEquals(emitted.timings.totalMilliseconds >= 0, true);
   for (const [index, bytes] of emitted.bytes.entries()) {
     assertEquals(
       Array.from(bytes),
@@ -120,7 +177,23 @@ Deno.test("packed GPU Wasm emission preserves ordinal bytes and isolation", asyn
   assertEquals(emitted.bytes[0].buffer === emitted.bytes[1].buffer, false);
 });
 
-Deno.test("packed GPU Wasm emission partitions only at the physical cap", async () => {
+Deno.test("singleton GPU Wasm batches reuse the direct emitted bytes", async () => {
+  const plan = buildModule(3).finishPlan();
+  const emitted = await emitWasmPlansOnGpu([plan], { scheduling: "latency" });
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(emitted.physicalPlans.length, 1);
+  assertEquals(emitted.physicalPlans[0].payloadCount, 1);
+  assertEquals(emitted.bytes[0] === emitted.physicalEmissions[0].bytes, true);
+  assertEquals(emitted.timings.partitioningMilliseconds, 0);
+  assertEquals(
+    emitted.physicalPlans[0].resources.atomCount,
+    emitted.physicalEmissions[0].atomCount,
+  );
+  assertEquals(emitted.timings.artifactIsolationMilliseconds >= 0, true);
+});
+
+Deno.test("packed GPU Wasm emission crosses the command batching cap when capacity permits", async () => {
   const plans = Array.from(
     { length: 17 },
     (_, index) => buildModule(index + 1).finishPlan(),
@@ -130,7 +203,7 @@ Deno.test("packed GPU Wasm emission partitions only at the physical cap", async 
 
   assertEquals(
     emitted.physicalEmissions.map((emission) => emission.payloadBatchSize),
-    [16, 1],
+    [17],
   );
   assertEquals(emitted.bytes.length, plans.length);
   for (const [index, bytes] of emitted.bytes.entries()) {
@@ -398,6 +471,17 @@ function assertThrows(action: () => unknown, expected: RegExp): void {
     throw error;
   }
   throw new Error(`expected action to throw ${expected}`);
+}
+
+function gpuLimits(): CompilerGpuLimits {
+  return {
+    maxBufferSize: 1_000_000_000,
+    maxStorageBufferBindingSize: 1_000_000_000,
+    maxUniformBufferBindingSize: 1_000_000_000,
+    maxComputeWorkgroupsPerDimension: 1_000_000,
+    maxStorageBuffersPerShaderStage: 16,
+    maxUniformBuffersPerShaderStage: 16,
+  };
 }
 
 function removeBranchHintSection(bytes: Uint8Array): Uint8Array {

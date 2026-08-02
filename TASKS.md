@@ -2009,13 +2009,26 @@ grammar are deleted; gpupaper accepts only validated Runtime HIR from Blot.
       not publish that comparison as a release result.
 - [x] Batch multiple Blot target inputs after checked residualization. Rebase
       each plan's local length dependencies into one packed atom graph, perform
-      one sizing/scan/emission/readback per physical group of at most 16, recover
-      byte boundaries from device offsets, and return owned artifacts in input
-      order. Source preparation failures remain local; after submission, a
-      physical GPU failure atomically discards the admitted logical batch.
-      CPU/GPU byte identity,
-      local-range confinement, ordinal preservation, byte isolation, and the
-      16/1 split at 17 modules have executable tests.
+      one sizing/scan/emission/readback per longest capacity-admitted stable
+      prefix, recover byte boundaries from device offsets, and return owned
+      artifacts in input order. Resource witnesses include atoms, maximum
+      output, length dependencies, storage binding, readback, and dispatch work
+      against the active adapter limits. Source preparation failures remain
+      local; after submission, a physical GPU failure atomically discards the
+      admitted logical batch. CPU/GPU byte identity, local-range confinement,
+      ordinal preservation, byte isolation, forced capacity splitting, and
+      crossing the former 16-payload command cap have executable tests.
+- [x] Measure the complete multi-module target boundary by stage. Per-module
+      planning and validation, per-physical-plan GPU timings, resource
+      witnesses, exact leased bytes, artifact isolation, and the unaccounted
+      wall term are reported. The clear 54-file capacity run measured 118.969 ms
+      p50 in the profiled boundary and 121.657 ms in the production boundary.
+- [ ] Admit a bounded two-stage Blot preparation/GPU-emission pipeline only if
+      its depth-two differential benchmark improves the capacity-packed
+      baseline. The benchmark and two-arena leased-byte bound are implemented. A
+      diagnostic clean-revision run improved p50 by 1.71% with a 3.750 MiB bound
+      but contained a severe contention outlier; an admissible run is still
+      required.
 
 Exit criterion: every admitted Blot example produces one validated Runtime HIR
 whose evaluator, gpufuck Wasm, and gpupaper Wasm agree on results, traps,

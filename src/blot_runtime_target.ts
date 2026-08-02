@@ -28,7 +28,13 @@ import {
 } from "./ducklang_core_wasm.ts";
 import { PrimitiveId } from "./ducklang_primitives.ts";
 import type { DucklangBinaryOperator } from "./ducklang_types.ts";
-import { emitWasmPlansOnGpu, type GpuWasmEmissionResult } from "./gpu_wasm.ts";
+import type { CompilerGpuLimits } from "./gpu_device.ts";
+import {
+  emitWasmPlansOnGpu,
+  type GpuWasmBatchEmissionTimings,
+  type GpuWasmEmissionResult,
+  type GpuWasmPhysicalPlan,
+} from "./gpu_wasm.ts";
 import {
   type BlotRuntimeFunction,
   type BlotRuntimeModule,
@@ -61,6 +67,30 @@ export type GpuBlotRuntimeBatch = {
     GpuWasmEmissionResult,
     { readonly status: "completed" }
   >[];
+  readonly gpuBatch:
+    | {
+      readonly physicalPlans: readonly GpuWasmPhysicalPlan[];
+      readonly adapterLimits: CompilerGpuLimits;
+      readonly timings: GpuWasmBatchEmissionTimings;
+    }
+    | undefined;
+  readonly timings: GpuBlotRuntimeBatchTimings;
+};
+
+export type GpuBlotRuntimeModuleTimings = {
+  readonly planWasmMilliseconds: number;
+  readonly wasmValidationMilliseconds: number;
+  readonly manifestValidationMilliseconds: number;
+};
+
+export type GpuBlotRuntimeBatchTimings = {
+  readonly totalMilliseconds: number;
+  readonly planWasmMilliseconds: number;
+  readonly emitWasmOnGpuMilliseconds: number;
+  readonly wasmValidationMilliseconds: number;
+  readonly manifestValidationMilliseconds: number;
+  readonly unaccountedMilliseconds: number;
+  readonly modules: readonly GpuBlotRuntimeModuleTimings[];
 };
 
 export function compileBlotRuntimeModule(
@@ -151,21 +181,51 @@ export async function compileBlotRuntimeModulesOnGpu(
   options: {
     readonly scheduling?: "latency" | "throughput";
     readonly target?: DucklangWasmTarget;
+    readonly maximumPhysicalPayloadCount?: number;
   } = {},
 ): Promise<GpuBlotRuntimeBatch> {
-  if (modules.length === 0) return { artifacts: [], gpuEmissions: [] };
-  const planned = modules.map((module) =>
-    compileBlotRuntimeModule(module, {
+  if (modules.length === 0) {
+    return {
+      artifacts: [],
+      gpuEmissions: [],
+      gpuBatch: undefined,
+      timings: {
+        totalMilliseconds: 0,
+        planWasmMilliseconds: 0,
+        emitWasmOnGpuMilliseconds: 0,
+        wasmValidationMilliseconds: 0,
+        manifestValidationMilliseconds: 0,
+        unaccountedMilliseconds: 0,
+        modules: [],
+      },
+    };
+  }
+  const totalStart = performance.now();
+  const modulePlanningMilliseconds: number[] = [];
+  const planned = modules.map((module) => {
+    const started = performance.now();
+    const artifact = compileBlotRuntimeModule(module, {
       emission: "planOnly",
       target: options.target,
-    })
+    });
+    modulePlanningMilliseconds.push(performance.now() - started);
+    return artifact;
+  });
+  const planWasmMilliseconds = modulePlanningMilliseconds.reduce(
+    (sum, milliseconds) => sum + milliseconds,
+    0,
   );
   const scheduling = options.scheduling ??
     (modules.length === 1 ? "latency" : "throughput");
+  const emissionStart = performance.now();
   const emitted = await emitWasmPlansOnGpu(
     planned.map((artifact) => artifact.wasmPlan),
-    { scheduling },
+    {
+      scheduling,
+      maximumPhysicalPayloadCount: options.maximumPhysicalPayloadCount,
+    },
   );
+  const emitWasmOnGpuMilliseconds = performance.now() - emissionStart;
   if (emitted.status === "unavailable") {
     throw new Error(
       `${
@@ -173,6 +233,10 @@ export async function compileBlotRuntimeModulesOnGpu(
       }: gpupaper GPU Wasm batch emission is unavailable: ${emitted.reason}`,
     );
   }
+  const moduleValidationTimings: {
+    readonly wasmValidationMilliseconds: number;
+    readonly manifestValidationMilliseconds: number;
+  }[] = [];
   const artifacts = planned.map((artifact, index) => {
     const wasm = emitted.bytes[index];
     if (wasm === undefined) {
@@ -182,20 +246,67 @@ export async function compileBlotRuntimeModulesOnGpu(
         }`,
       );
     }
-    requireGpuBlotWasm(modules[index]!, wasm, artifact.manifestBytes);
+    moduleValidationTimings.push(
+      requireGpuBlotWasm(modules[index]!, wasm, artifact.manifestBytes),
+    );
     return { ...artifact, wasm };
   });
-  return { artifacts, gpuEmissions: emitted.physicalEmissions };
+  const wasmValidationMilliseconds = moduleValidationTimings.reduce(
+    (sum, timing) => sum + timing.wasmValidationMilliseconds,
+    0,
+  );
+  const manifestValidationMilliseconds = moduleValidationTimings.reduce(
+    (sum, timing) => sum + timing.manifestValidationMilliseconds,
+    0,
+  );
+  const totalMilliseconds = performance.now() - totalStart;
+  const accountedMilliseconds = planWasmMilliseconds +
+    emitWasmOnGpuMilliseconds + wasmValidationMilliseconds +
+    manifestValidationMilliseconds;
+  return {
+    artifacts,
+    gpuEmissions: emitted.physicalEmissions,
+    gpuBatch: {
+      physicalPlans: emitted.physicalPlans,
+      adapterLimits: emitted.adapterLimits,
+      timings: emitted.timings,
+    },
+    timings: {
+      totalMilliseconds,
+      planWasmMilliseconds,
+      emitWasmOnGpuMilliseconds,
+      wasmValidationMilliseconds,
+      manifestValidationMilliseconds,
+      unaccountedMilliseconds: Math.max(
+        0,
+        totalMilliseconds - accountedMilliseconds,
+      ),
+      modules: modules.map((_, index) => ({
+        planWasmMilliseconds: modulePlanningMilliseconds[index]!,
+        wasmValidationMilliseconds:
+          moduleValidationTimings[index]!.wasmValidationMilliseconds,
+        manifestValidationMilliseconds:
+          moduleValidationTimings[index]!.manifestValidationMilliseconds,
+      })),
+    },
+  };
 }
 
 function requireGpuBlotWasm(
   module: ValidatedBlotRuntimeModule,
   wasm: Uint8Array,
   manifestBytes: Uint8Array,
-): void {
+): {
+  readonly wasmValidationMilliseconds: number;
+  readonly manifestValidationMilliseconds: number;
+} {
+  const wasmValidationStart = performance.now();
   if (!WebAssembly.validate(Uint8Array.from(wasm))) {
     throw new Error(`${module.source}: GPU emitted invalid WebAssembly`);
   }
+  const wasmValidationMilliseconds = performance.now() -
+    wasmValidationStart;
+  const manifestValidationStart = performance.now();
   const embeddedManifest = WebAssembly.Module.customSections(
     new WebAssembly.Module(wasm as BufferSource),
     blotAbiCustomSectionName,
@@ -208,6 +319,11 @@ function requireGpuBlotWasm(
       `${module.source}: GPU emitted a blot:abi custom section that differs from its manifest bytes`,
     );
   }
+  return {
+    wasmValidationMilliseconds,
+    manifestValidationMilliseconds: performance.now() -
+      manifestValidationStart,
+  };
 }
 
 function byteArraysEqual(left: Uint8Array, right: Uint8Array): boolean {

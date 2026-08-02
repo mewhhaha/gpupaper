@@ -3939,36 +3939,38 @@ The required invariants are:
 6. **Semantic noninterference:** batching changes compiler scheduling only. It
    neither executes nor reorders a Blot host effect.
 
-The current throughput cap is `K=16`, so a logical batch of `n` admitted modules
-is partitioned into `ceil(n/K)` contiguous physical plans. This value is inherited
-from the general command queue; it is an implementation limit, not a derived GPU
-capacity or an established optimum. Contiguous partitioning preserves ordinals
+The implementation now partitions by adapter capacity rather than a logical
+payload count. It greedily takes the longest contiguous prefix whose
+conservative resource vector fits `maxBufferSize`,
+`maxStorageBufferBindingSize`, and `maxComputeWorkgroupsPerDimension`. Let `m`
+be the resulting physical-plan count. Contiguous partitioning preserves ordinals
 without a sort. For `A=sum_i a_i` atoms and total maximum encoded capacity
 `Y=sum_i Y_i`, packing, column construction, scan, emission, boundary readback,
 and artifact copying require `O(A+n+Y)` work and `O(A+Y+n)` space. Compared with
 `n` separate emissions, it changes `n` atom scans, output arenas, mappings, and
-payload command buffers into `ceil(n/K)` of each. It does not remove Blot's
+payload command buffers into `m` of each. It does not remove Blot's
 `sum_i T_prepare_i`, gpupaper's `sum_i T_plan_i`, or the total atom work. The
 present owned-artifact API copies `Y` bytes from mapped GPU memory into one
 packed host array and then copies the same `Y` bytes into isolated artifact
 arrays. Thus it performs exactly two linear host-copy passes after mapping,
-although its asymptotic host-copy work remains `Theta(Y)`.
+although its asymptotic host-copy work remains `Theta(Y)`. A singleton reuses
+the first owned array directly and therefore performs only the mapped-memory
+copy.
 
 With per-physical-batch fixed cost `H`, per-module GPU work `g_i`, and packed
 overhead `r(n,A)`, the first break-even condition is
 
-\[nH+\sum_i g_i > \lceil n/K\rceil H+\sum_i g_i+r(n,A).\]
+\[nH+\sum_i g_i > mH+\sum_i g_i+r(n,A).\]
 
-Equivalently, packing is justified only when
-`r(n,A)<(n-ceil(n/K))H`. This predicts no benefit for `n=1` and explains why
-splitting one 29-operation terminal module is the wrong transformation: it
-increases the number of boundaries without exposing an independent semantic
-module. The earlier diagnostic terminal throughput of 524.4 modules/s at
-requested batch 16 corresponds to about 1.91 ms of service capacity per module,
-but it used separate per-module arenas. It motivates the packed experiment; it
-does not establish the new implementation's speedup. Function-level splitting
-remains outside this model until callable relocation, linking, and per-function
-output ownership are specified.
+Equivalently, packing is justified only when `r(n,A)<(n-m)H`. This predicts no
+benefit for `n=1` and explains why splitting one 29-operation terminal module is
+the wrong transformation: it increases the number of boundaries without exposing
+an independent semantic module. The earlier diagnostic terminal throughput of
+524.4 modules/s at requested batch 16 corresponds to about 1.91 ms of service
+capacity per module, but it used separate per-module arenas. It motivates the
+packed experiment; it does not establish the new implementation's speedup.
+Function-level splitting remains outside this model until callable relocation,
+linking, and per-function output ownership are specified.
 
 This construction instantiates the work/depth and scan models already selected
 in Sections 7.1 and 7.10 [17, 36]. The singleton, rebasing, ordinal, isolation,
@@ -3978,27 +3980,30 @@ evidence; runtime improvement remains an empirical claim.
 The packed boundary is implemented. Blot prepares every input path, retains its
 ordinal, excludes local source failures, and sends the admitted sequence through
 `compileBlotRuntimeModulesOnGpu`. Gpupaper validates every local plan before
-packing, partitions at 16, performs one combined GPU layout per partition, maps
+packing, calculates a conservative resource witness, greedily forms
+capacity-admitted prefixes, performs one combined GPU layout per prefix, maps
 the terminal offsets, validates each resulting Wasm and exact embedded manifest,
-and copies each public artifact into its own backing buffer. A singleton uses the
-same batch API. Tests cover a locally invalid Blot source between two admitted
-sources, exact CPU/singleton bytes, rebased nested lengths, a deliberately
-escaping local length range, ordinal identity, distinct output buffers, dynamic
-Wasm validity, and the 16/1 physical partition for 17 modules. Existing queue
-tests establish that one physical command failure rejects every payload in that
-submission. These are executable validations of the listed invariants, not a
-proof for arbitrary driver execution.
+and copies each public artifact into its own backing buffer. A singleton uses
+the same batch API but retains the direct emitter's owned bytes. Tests cover a
+locally invalid Blot source between two admitted sources, exact CPU/singleton
+bytes, rebased nested lengths, a deliberately escaping local length range,
+ordinal identity, distinct output buffers, capacity-forced 2/1 partitioning,
+crossing the former command cap with one 17-module plan, dynamic Wasm validity,
+and reported target timings. Existing queue tests establish that one physical
+command failure rejects every payload in that submission. These are executable
+validations of the listed invariants, not a proof for arbitrary driver
+execution.
 
 The benchmark now counterbalances the old queued-per-module emitter against the
 packed emitter for identical terminal plans. A five-sample run on 2026-08-02 was
 diagnostic because unrelated Cargo work was active:
 
 | modules | queued p50 ms | packed p50 ms | queued/packed | packed modules/s |
-| ------: | ------------: | ------------: | -------------: | ---------------: |
-|       1 |        15.457 |        15.586 |          0.992 |             64.2 |
-|       4 |        19.262 |        15.909 |          1.211 |            251.4 |
-|      16 |        31.647 |        17.935 |          1.765 |            892.1 |
-|      64 |       137.357 |        28.581 |          4.806 |          2,239.3 |
+| ------: | ------------: | ------------: | ------------: | ---------------: |
+|       1 |        15.457 |        15.586 |         0.992 |             64.2 |
+|       4 |        19.262 |        15.909 |         1.211 |            251.4 |
+|      16 |        31.647 |        17.935 |         1.765 |            892.1 |
+|      64 |       137.357 |        28.581 |         4.806 |          2,239.3 |
 
 The singleton counterexample agrees with the break-even equation: packing one
 module was 0.8% slower. At 16 modules one physical packed plan reduced median
@@ -4018,23 +4023,23 @@ samples over all 53 top-level examples ran with a clear environment on the same
 adapter. Packed compilation measured 131.401 ms p50 and 141.779 ms p95, or 403.3
 modules/s. Repeating the former singleton target path measured 930.812 ms p50
 and 1,007.078 ms p95, or 56.9 modules/s. Every paired packed-minus-singleton
-difference was negative (`-790.82`, `-791.85`, `-893.25`, and `-790.05` ms),
-and the p50 ratio was 7.084. All 53 outputs, totalling 173,721 bytes, were
+difference was negative (`-790.82`, `-791.85`, `-893.25`, and `-790.05` ms), and
+the p50 ratio was 7.084. All 53 outputs, totalling 173,721 bytes, were
 identical. This is admissible empirical evidence for the stated warm-process,
 warm-Blot-cache corpus boundary. It is not a cold-build result, an uncertainty
 interval, or evidence that one module benefits.
 
 #### Derived batch frontier and next proof obligations
 
-The measurements reject a constant numerical interpretation of `H`. Dividing
-the observed saving by the number of removed physical boundaries gives 1.118 ms
-at four modules, 0.914 ms at 16, and 1.813 ms at 64. The real 53-module target
+The measurements reject a constant numerical interpretation of `H`. Dividing the
+observed saving by the number of removed physical boundaries gives 1.118 ms at
+four modules, 0.914 ms at 16, and 1.813 ms at 64. The real 53-module target
 removed 49 boundaries and saved 799.411 ms, or 16.315 ms per removed boundary if
 all of the saving is attributed to that count. These incompatible estimates do
-not invalidate amortization; they show that `H` abbreviates queueing, allocation,
-mapping, validation, JavaScript scheduling, and contention whose costs depend on
-the surrounding workload. Treating any one quotient as an adapter constant
-would be an unverified and contradicted model.
+not invalidate amortization; they show that `H` abbreviates queueing,
+allocation, mapping, validation, JavaScript scheduling, and contention whose
+costs depend on the surrounding workload. Treating any one quotient as an
+adapter constant would be an unverified and contradicted model.
 
 Two calculations remain useful without that assumption. First, the 53-module
 packed path retains 14.117% of the old median wall time and removes 85.883%.
@@ -4048,52 +4053,50 @@ per-module constants. They establish that payload work remains after the fixed
 boundary is shared and that the next benchmark must expose the remainder by
 stage.
 
-The physical partition should consequently be derived from resources rather
-than a payload count. Associate plan `i` with the monotone resource vector
+The physical partition should consequently be derived from resources rather than
+a payload count. Associate plan `i` with the monotone resource vector
 
 \[w_i=(a_i,Y_i,d_i,s_i,r_i),\]
 
 where `a_i` is atom count, `Y_i` is output capacity, `d_i` is length-sizing
-dependency work, `s_i` is the largest storage-binding requirement contributed
-by its columns, and `r_i` is readback boundary count. For a contiguous interval
-`[j,k)`, the existing plan analysis can calculate the exact combined buffer and
-dispatch requirements before allocation. Define `F(j,k)` when every resulting
-buffer, binding, dispatch, safe-integer, and implementation-memory constraint is
-satisfied. `F` is interval-hereditary: if `[j,k)` is feasible, every contiguous
-subinterval is feasible because removing plans cannot add atoms, bytes,
-dependencies, or boundaries. This property must be tested for every adaptive
-column representation; capacity admission must consider every supported
-representation rather than let a heuristic representation choice make a larger
-interval feasible when one of its subintervals is refused.
+dependency work, `s_i` is a conservative largest storage-binding requirement,
+and `r_i` is readback boundary count. The selected `s_i` bounds adaptive columns
+by charging four bytes for every atom where a dense or sparse choice could vary.
+For a contiguous interval `[j,k)`, plan inspection calculates this resource
+witness before allocation. Define `F(j,k)` when the witness satisfies every
+buffer, binding, dispatch, and safe-integer constraint. `F` is sufficient rather
+than necessary: it may split a plan that a particular compact column layout
+could admit, but it cannot admit a plan that the selected layout makes larger
+than the bound. It is interval-hereditary because removing plans cannot add
+atoms, bytes, dependencies, or boundaries. This deliberately conservative
+predicate preserves the greedy proof across every adaptive representation.
 
-Under the restricted objective “minimize the number of physical boundaries”
-with a fixed cost per feasible partition, greedily selecting the longest
-feasible stable prefix is optimal. Let its first endpoint be `g`. Any feasible
-partition has first endpoint `e<=g`. If `g` crosses later partitions of an
-alternative, remove every consumed partition and retain only the unconsumed
-suffix of the last crossed one; interval heredity makes that suffix feasible.
-The transformed alternative begins with `[j,g)` and uses no more partitions.
-Induction on the remaining suffix proves optimality. This is a proof for
-boundary count only. It does not prove minimum latency when large plans change
-shader occupancy, length-level divergence, allocation bucket size, or queue
-overlap. For that objective, measured interval cost `C(j,k)` leads to the
-ordered recurrence
+Under the restricted objective “minimize the number of physical boundaries” with
+a fixed cost per feasible partition, greedily selecting the longest feasible
+stable prefix is optimal. Let its first endpoint be `g`. Any feasible partition
+has first endpoint `e<=g`. If `g` crosses later partitions of an alternative,
+remove every consumed partition and retain only the unconsumed suffix of the
+last crossed one; interval heredity makes that suffix feasible. The transformed
+alternative begins with `[j,g)` and uses no more partitions. Induction on the
+remaining suffix proves optimality. This is a proof for boundary count only. It
+does not prove minimum latency when large plans change shader occupancy,
+length-level divergence, allocation bucket size, or queue overlap. For that
+objective, measured interval cost `C(j,k)` leads to the ordered recurrence
 
 \[D(k)=\min_{0\le j<k,\ F(j,k)}(D(j)+C(j,k)),\qquad D(0)=0.\]
 
 The recurrence has `O(nK)` work if measurement or a proven capacity bound limits
-predecessors to `K`, and `O(n^2)` otherwise. Introducing it before stage timings
-would fit noise rather than structure. The next implementation step is therefore
-capacity-derived maximal-prefix packing, retaining 16 only as a measured guard
-until larger admissible prefixes are tested. Size-sorting modules is not needed:
-compilation purity would permit restoring ordinals after a physical reorder, but
-stable prefixes already minimize boundary count under a single hereditary
-capacity predicate and avoid a new permutation, failure-attribution, and memory
-cost.
+predecessors to `K`, and `O(n^2)` otherwise. Introducing it before stable stage
+timings would fit noise rather than structure. The implemented longest-prefix
+rule instead has `O(n)` resource aggregation plus `O(A)` packing. Size-sorting
+modules is not needed: compilation purity would permit restoring ordinals after
+a physical reorder, but stable prefixes already minimize boundary count under a
+single hereditary capacity predicate and avoid a new permutation,
+failure-attribution, and memory cost.
 
-There is a second independent frontier between sequential source preparation
-and GPU emission. Let `c_j` be CPU preparation plus planning time for physical
-batch `j`, and `g_j` its GPU emission plus readback time. In the idealized
+There is a second independent frontier between sequential source preparation and
+GPU emission. Let `c_j` be CPU preparation plus planning time for physical batch
+`j`, and `g_j` its GPU emission plus readback time. In the idealized
 non-overlapped model, preparing every module before submitting any packed work
 has makespan
 
@@ -4131,34 +4134,89 @@ artifact `i` to this path” without returning a view or buffer to caller code.
 The arena remains live until all asynchronous writes settle, then is released as
 one region. A generic caller-provided sink would not suffice if it received and
 could retain the view. This changes the API and lifetime proof, so it is not an
-implementation detail. Returning ordinary typed-array views and documenting
-them as immutable is a counterexample, not an ownership model.
+implementation detail. Returning ordinary typed-array views and documenting them
+as immutable is a counterexample, not an ownership model.
 
-The required next evidence is thus ordered rather than speculative:
+The resulting evidence is ordered rather than speculative:
 
 1. Add per-module and per-physical-batch timings for Blot preparation,
-   residual-to-HIR conversion, plan construction, packing and inspection,
-   column construction, GPU allocation/upload, device completion, mapping,
-   artifact isolation, Wasm validation, and manifest validation. For the
-   non-overlapped baseline, timings must sum to the measured boundary up to an
-   explicitly reported unaccounted term; an overlapped implementation must also
-   report critical-path and overlapped time rather than summing concurrent work.
+   residual-to-HIR conversion, plan construction, packing and inspection, column
+   construction, GPU allocation/upload, device completion, mapping, artifact
+   isolation, Wasm validation, and manifest validation. For the non-overlapped
+   baseline, timings must sum to the measured boundary up to an explicitly
+   reported unaccounted term; an overlapped implementation must also report
+   critical-path and overlapped time rather than summing concurrent work.
+   **Implemented for target planning, every emitter substage, validation, and
+   the unaccounted term. Blot currently reports preparation and residualization
+   together, so separating those producer substages remains external work.**
 2. Record each plan's resource vector and the adapter limits, then compare
    count-16 partitions with longest-feasible-prefix partitions on the same
-   randomized order and exact output differential.
+   randomized order and exact output differential. **Implemented and measured.**
 3. Test the singleton direct specialization with counterbalanced process-level
    samples; retain it only if its paired distribution improves without changing
-   bytes, manifests, or error classification.
+   bytes, manifests, or error classification. **Byte reuse is implemented; the
+   first five-sample measurement does not establish a latency improvement.**
 4. Measure a bounded two-stage pipeline at in-flight depths one and two. Reject
-   it if overlap is absent or peak leased bytes violate its declared bound.
+   it if overlap is absent or peak leased bytes violate its declared bound. **A
+   differential depth-two benchmark and exact leased-byte accounting are
+   implemented. A diagnostic run improved p50 slightly but contained a severe
+   contention outlier, so production remains non-overlapped pending admissible
+   evidence.**
 5. Consider an opaque arena sink only after profiling shows the second `Y`-byte
-   copy is material. Owned byte arrays remain the smaller proved interface until
-   then.
+   copy is material. **Rejected for now:** artifact isolation measured 0.037 ms
+   in the representative reported capacity sample, about 0.031% of the 118.969
+   ms target p50. Owned byte arrays remain the smaller proved interface.
 
 The partition-count theorem and singleton identity are proved properties of the
 stated model. Plan and Wasm differentials are executable validations. The
-reported slopes and ratios are empirical measurements. Capacity-derived packing,
-CPU/GPU overlap, and an opaque arena sink remain unimplemented hypotheses.
+reported slopes and ratios are empirical measurements. Capacity-derived packing
+and singleton byte reuse are implemented. CPU/GPU overlap remains a benchmarked
+hypothesis pending an admissible run; an opaque arena sink is deliberately not
+implemented.
+
+The first instrumented clear run covered 54 current top-level Blot examples. The
+stage-profile p50 values for the capacity path were 70.133 ms preparing HIR,
+0.652 ms validating HIR, 18.928 ms planning Wasm, 26.949 ms emitting on the GPU,
+0.472 ms validating Wasm, and 1.587 ms validating manifests, for 118.969 ms
+total. Thus preparation, planning, and GPU emission accounted for approximately
+59.0%, 15.9%, and 22.7% of the boundary. The target's unaccounted term was 0.059
+ms. These timings share warm Blot caches and are empirical work decomposition,
+not independent cold samples.
+
+In the same counterbalanced stage run, four count-16 plans took 30.962 ms p50 in
+the emission boundary and 125.028 ms total. One capacity-admitted 54-module plan
+took 26.949 ms and 118.969 ms, reductions of 13.0% and 4.85%. Its 174,330 atoms
+required at most 697,324 storage-binding bytes and 2,724 workgroups: 0.520% of
+the adapter's 134,217,728-byte storage-binding limit and 4.16% of its 65,535
+workgroup limit. A separate clear repeated-plan comparison at 64 modules found
+18.831 ms for one physical plan versus 19.575 ms for four, a 3.95% improvement.
+This evidence removes the inherited count-16 guard from Wasm physical plans; the
+general command queue retains its independent submission-batching cap.
+
+After promotion, an admissible four-sample production-boundary run compiled all
+54 examples in 121.657 ms p50, or 443.9 modules/s, versus 768.546 ms and 70.3
+modules/s through repeated singleton target calls. The ratio was 6.317 and all
+artifacts remained byte-identical. The singleton plan-level comparison remained
+slightly negative: 15.311 ms through the plural API versus 15.248 ms through the
+queued direct API. Avoiding the second byte copy is proved by object identity,
+but the first version still duplicated plan inspection. The final singleton path
+now delegates to the direct queued emitter and reuses the resource and adapter
+witnesses produced by that pass. An unguarded 12-sample synthetic follow-up
+measured 11.856 ms through the plural API and 11.829 ms directly, a 0.23%
+difference with mixed paired signs. This removes the known redundant work but is
+still not admissible evidence of a latency improvement.
+
+The depth-two harness was also run against the clean published Blot revision
+after unrelated edits made the adjacent worktree non-executable. It retains
+stable group order, compares every result byte with the one-plan capacity path,
+and bounds simultaneous leased buffers by summing the exact pool leases and scan
+buffers reported by both emissions. The diagnostic four-sample result measured
+114.403 ms p50 versus 116.395 ms for one capacity plan, a 1.71% difference, with
+a 3,932,220-byte (3.750 MiB) worst-case two-arena bound. One pipeline sample
+took 172.642 ms while the other three took 116.987, 111.819, and 110.600 ms;
+competing work was observed. This is evidence that overlap is viable, but not
+admissible evidence that the extra physical boundary improves expected latency.
+The production target therefore remains one longest capacity-safe plan.
 
 #### Canonical ABI and call-scoped result regions
 
@@ -4291,8 +4349,8 @@ ordering across UTF-8 length boundaries, and every malformed UTF-8 sequence
 family. Two source integration tests prove that an
 observed `Text` host result remains an SSA dependency through append and a later
 host call and that both residual terminal branches execute with their exact
-ordered trace. The complete gpupaper suite passes 594 tests and the complete Blot
-suite passes 673 tests in this checkout.
+ordered trace. The complete gpupaper suite now passes 596 tests; the published
+Blot revision used for the target baseline passed 673 tests.
 
 A single warm-process corpus pass after the dynamic-Text implementation measured
 1,442.60 ms in Blot-to-HIR production, 4.95 ms in explicit HIR validation, and

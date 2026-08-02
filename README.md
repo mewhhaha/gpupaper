@@ -226,11 +226,13 @@ parser is a transitional payload-lowering reference, not a fallback. Blot owns
 its Baba frontend, checking, staging, specialization, and ownership analysis;
 gpupaper no longer carries a copied Blot grammar or reconstructs source
 semantics. The boundary is validated typed Runtime HIR. A multi-path Blot build
-packs at most 16 admitted Wasm plans into one rebased atom graph and performs
-one GPU sizing, scan, emission, and boundary readback per physical group. Run
-`deno task blot:verify` for semantic agreement,
-`deno task benchmark:blot-targets` for singleton and plan-level measurements,
-and `deno task benchmark:blot-batch` for the real 53-module target batch.
+packs the longest adapter-capacity-safe prefix of admitted Wasm plans into one
+rebased atom graph and performs one GPU sizing, scan, emission, and boundary
+readback per physical group. Every group reports its resource witness and the
+adapter limits used for admission. Run `deno task blot:verify` for semantic
+agreement, `deno task benchmark:blot-targets` for singleton and plan-level
+measurements, and `deno task benchmark:blot-batch` for the current 54-module
+target batch and its stage profile.
 
 ## Deliberate boundaries
 

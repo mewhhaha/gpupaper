@@ -53,7 +53,13 @@ Deno.test("Blot Runtime target emits an ordinal-preserving packed GPU batch", as
 
   assertEquals(batch.artifacts.length, 3);
   assertEquals(batch.gpuEmissions.length, 1);
+  if (batch.gpuBatch === undefined) {
+    throw new Error("non-empty target batch omitted GPU evidence");
+  }
   assertEquals(batch.gpuEmissions[0].payloadBatchSize, 3);
+  assertEquals(batch.gpuBatch.physicalPlans[0].payloadCount, 3);
+  assertEquals(batch.timings.modules.length, 3);
+  assertEquals(batch.timings.totalMilliseconds >= 0, true);
   for (const [ordinal, artifact] of batch.artifacts.entries()) {
     assertBytesEqual(artifact.wasm, expected[ordinal].wasm!);
     const instance = await instantiate(artifact.wasm, artifact.textLiterals);
@@ -67,6 +73,8 @@ Deno.test("Blot Runtime target emits an ordinal-preserving packed GPU batch", as
   const empty = await compileBlotRuntimeModulesOnGpu([]);
   assertEquals(empty.artifacts.length, 0);
   assertEquals(empty.gpuEmissions.length, 0);
+  assertEquals(empty.gpuBatch, undefined);
+  assertEquals(empty.timings.totalMilliseconds, 0);
 });
 
 Deno.test("Blot Runtime target preserves dynamic scalar export parameters", async () => {

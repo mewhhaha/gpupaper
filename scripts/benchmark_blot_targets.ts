@@ -102,7 +102,7 @@ try {
     {
       status: validity.status === "refused" ? "refused" : "completed",
       validity,
-      schemaVersion: 4,
+      schemaVersion: 5,
       workload: file,
       sourceBytes,
       samples: sampleCount,
@@ -241,14 +241,18 @@ async function measureGpuEmissionBatches(
   for (const batchSize of [1, 4, 16, 64]) {
     const queuedMilliseconds: number[] = [];
     const packedMilliseconds: number[] = [];
+    const capacityPackedMilliseconds: number[] = [];
     let queuedSubmissionBatchSize = 0;
     let packedSubmissionBatchSize = 0;
+    let capacityPackedSubmissionBatchSize = 0;
     let physicalPackedBatchCount = 0;
+    let capacityPhysicalBatchCount = 0;
     const plans = Array.from({ length: batchSize }, () => plan);
     for (let sample = 0; sample < Math.min(samples, 5); sample += 1) {
-      const order = sample % 2 === 0
-        ? ["queued", "packed"] as const
-        : ["packed", "queued"] as const;
+      const modes = ["queued", "packed", "capacity-packed"] as const;
+      const order = modes.map((_, index) =>
+        modes[(index + sample) % modes.length]!
+      );
       for (const mode of order) {
         const started = performance.now();
         if (mode === "queued") {
@@ -273,20 +277,38 @@ async function measureGpuEmissionBatches(
         }
         const packed = await emitWasmPlansOnGpu(plans, {
           scheduling: "throughput",
+          maximumPhysicalPayloadCount: mode === "capacity-packed"
+            ? batchSize
+            : 16,
         });
-        packedMilliseconds.push(performance.now() - started);
+        const elapsed = performance.now() - started;
+        if (mode === "packed") {
+          packedMilliseconds.push(elapsed);
+        } else {
+          capacityPackedMilliseconds.push(elapsed);
+        }
         if (packed.status === "unavailable") {
           throw new Error(
             `packed GPU emission unavailable: ${packed.reason}`,
           );
         }
-        physicalPackedBatchCount = packed.physicalEmissions.length;
-        packedSubmissionBatchSize = Math.max(
-          packedSubmissionBatchSize,
-          ...packed.physicalEmissions.map((emission) =>
-            emission.submissionBatchSize
-          ),
-        );
+        if (mode === "packed") {
+          physicalPackedBatchCount = packed.physicalEmissions.length;
+          packedSubmissionBatchSize = Math.max(
+            packedSubmissionBatchSize,
+            ...packed.physicalEmissions.map((emission) =>
+              emission.submissionBatchSize
+            ),
+          );
+        } else {
+          capacityPhysicalBatchCount = packed.physicalEmissions.length;
+          capacityPackedSubmissionBatchSize = Math.max(
+            capacityPackedSubmissionBatchSize,
+            ...packed.physicalEmissions.map((emission) =>
+              emission.submissionBatchSize
+            ),
+          );
+        }
         for (const bytes of packed.bytes) {
           if (!WebAssembly.validate(Uint8Array.from(bytes))) {
             throw new Error("packed GPU emission produced invalid Wasm");
@@ -296,6 +318,10 @@ async function measureGpuEmissionBatches(
     }
     const queuedMedian = percentile(queuedMilliseconds, 0.5);
     const packedMedian = percentile(packedMilliseconds, 0.5);
+    const capacityPackedMedian = percentile(
+      capacityPackedMilliseconds,
+      0.5,
+    );
     measurements.push({
       batchSize,
       queued: {
@@ -313,7 +339,17 @@ async function measureGpuEmissionBatches(
         modulesPerSecond: batchSize / (packedMedian / 1_000),
         rawMilliseconds: packedMilliseconds,
       },
+      capacityPacked: {
+        maximumPhysicalPayloadCount: batchSize,
+        physicalBatchCount: capacityPhysicalBatchCount,
+        submissionBatchSize: capacityPackedSubmissionBatchSize,
+        p50Milliseconds: capacityPackedMedian,
+        p95Milliseconds: percentile(capacityPackedMilliseconds, 0.95),
+        modulesPerSecond: batchSize / (capacityPackedMedian / 1_000),
+        rawMilliseconds: capacityPackedMilliseconds,
+      },
       queuedToPackedP50Ratio: queuedMedian / packedMedian,
+      fixedToCapacityPackedP50Ratio: packedMedian / capacityPackedMedian,
     });
   }
   return measurements;
