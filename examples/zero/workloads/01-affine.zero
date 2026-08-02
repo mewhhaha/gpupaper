@@ -1,2 +1,2 @@
-export fn run(seed, rounds) =
-  repeat rounds from seed as value { value * 1664525 + 1013904223 };
+private: step value = @value 1664525 * 1013904223 + ;
+export: run seed rounds = @rounds @seed repeat:step ;

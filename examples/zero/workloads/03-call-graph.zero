@@ -1,8 +1,8 @@
-fn mix(value) = value * 1664525 + 1013904223;
-fn negative(value) = value * 3 + 7;
-fn positive(value) = value * 5 - 11;
-fn choose(value) = if value < 0 then negative(value) else positive(value);
-fn step(value) = choose(mix(value));
+private: mix value = @value 1664525 * 1013904223 + ;
+private: negative value = @value 3 * 7 + ;
+private: positive value = @value 5 * 11 - ;
+private: choose value =
+  @value 0 < @value call:negative:1 @value call:positive:1 select! ;
+private: step value = @value call:mix:1 call:choose:1 ;
 
-export fn run(seed, rounds) =
-  repeat rounds from seed as value { step(value) };
+export: run seed rounds = @rounds @seed repeat:step ;

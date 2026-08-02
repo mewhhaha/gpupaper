@@ -1,6 +1,5 @@
-fn step(value) =
-  let mixed = value * 1664525 + 1013904223 in
-  if mixed < 0 then mixed + 12345 else mixed - 12345;
+private: step value =
+  @value 1664525 * 1013904223 + let:mixed
+  @mixed 0 < @mixed 12345 + @mixed 12345 - select! ;
 
-export fn run(seed, rounds) =
-  repeat rounds from seed as value { step(value) };
+export: run seed rounds = @rounds @seed repeat:step ;

@@ -43,6 +43,6 @@
     "zero:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts zero grammar/zero.baba grammar/zero.baba.json grammar/zero-generated"
   },
   "imports": {
-    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.10.0"
+    "@mewhhaha/baba": "jsr:@mewhhaha/baba@8.0.0"
   }
 }

@@ -2,21 +2,29 @@
 
 Zero is gpupaper's controlled end-to-end example language. It is intentionally
 small: every value is a wrapping WebAssembly `i32`, functions are first-order,
-and expressions provide lexical `let`, direct calls, arithmetic, comparisons,
-conditionals, and a bounded `repeat` fold.
+and postfix instruction streams provide lexical bindings, direct calls,
+arithmetic, comparisons, lazy selection, and a bounded fold.
 
 ```zero
-fn step(value) = value * 1664525 + 1013904223;
+private: step value = @value 1664525 * 1013904223 + ;
 
-fn run(seed, rounds) =
-  repeat rounds from seed as value { step(value) };
+export: run seed rounds = @rounds @seed repeat:step ;
 ```
+
+`@name` pushes a reference, binary operators consume two stack expressions,
+`call:name:arity` consumes its arguments, `select!` consumes a condition and two
+lazy expression trees, and `repeat:name` consumes a count and initial value and
+calls the named unary step. Every function body must leave exactly one value.
+This regular concrete syntax is deliberate: Baba 8 can prove that each
+semicolon-terminated function is a strict terminal-only island, while the Zero
+adapter checks the typed stack and scope invariants before producing Core.
 
 The maintained pipeline is:
 
 ```text
 Zero source
-  -> Baba-generated Wasm parser
+  -> Baba 8 generated CPU-Wasm lexer
+  -> Baba 8 strict SIMD Wasm validator and cursor parser
   -> Zero cursor-to-Core adapter
   -> validated gpupaper Core and Wasm plan
   -> gpupaper's Rust-compiled WebAssembly emitter

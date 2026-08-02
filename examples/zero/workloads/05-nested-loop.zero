@@ -1,8 +1,6 @@
-fn inner(seed) =
-  repeat 4 from seed as value {
-    let mixed = value * 1664525 + 1013904223 in
-    if mixed < 0 then mixed + 97 else mixed - 89
-  };
+private: inner_step value =
+  @value 1664525 * 1013904223 + let:mixed
+  @mixed 0 < @mixed 97 + @mixed 89 - select! ;
 
-export fn run(seed, rounds) =
-  repeat rounds from seed as value { inner(value) };
+private: inner seed = 4 @seed repeat:inner_step ;
+export: run seed rounds = @rounds @seed repeat:inner ;

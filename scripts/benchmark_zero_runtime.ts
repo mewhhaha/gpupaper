@@ -35,6 +35,8 @@ type WorkloadMeasurements = {
 
 const sampleCount = requestedPositiveInteger(Deno.args, "samples", 30);
 const rounds = requestedPositiveInteger(Deno.args, "rounds", 100_000);
+const minimumRuntimeBatchMilliseconds = 5;
+const maximumRuntimeRepetitions = 131_072;
 const selectedWorkload = requestedString(Deno.args, "workload");
 const allowContended = Deno.args.includes("--allow-contended");
 const gpupaperDirectory = new URL("../", import.meta.url).pathname;
@@ -368,19 +370,60 @@ function measureRuntime(
   );
   const zeroSamples: number[] = [];
   const rustSamples: number[] = [];
+  const zeroCalibration = calibrateRuntimeRepetitions(
+    zeroRun,
+    seeds,
+    roundsPerInvocation,
+    expectedChecksum,
+  );
+  const rustCalibration = calibrateRuntimeRepetitions(
+    rustRun,
+    seeds,
+    roundsPerInvocation,
+    expectedChecksum,
+  );
+  const zeroRepetitions = zeroCalibration.repetitions;
+  const rustRepetitions = rustCalibration.repetitions;
   for (let sample = 0; sample < samples; sample += 1) {
     const ordered = sample % 2 === 0
-      ? [[zeroRun, zeroSamples], [rustRun, rustSamples]] as const
-      : [[rustRun, rustSamples], [zeroRun, zeroSamples]] as const;
-    for (const [run, measurements] of ordered) {
+      ? [[zeroRun, zeroSamples, zeroRepetitions], [
+        rustRun,
+        rustSamples,
+        rustRepetitions,
+      ]] as const
+      : [[rustRun, rustSamples, rustRepetitions], [
+        zeroRun,
+        zeroSamples,
+        zeroRepetitions,
+      ]] as const;
+    for (const [run, measurements, repetitions] of ordered) {
       measurements.push(
-        measureRuntimeSample(run, seeds, roundsPerInvocation, expectedChecksum),
+        measureRuntimeSample(
+          run,
+          seeds,
+          roundsPerInvocation,
+          repetitions,
+          expectedChecksum,
+        ),
       );
     }
   }
   return {
-    invocationsPerSample: seeds.length,
-    outerRoundsPerSample: roundsPerInvocation * seeds.length,
+    repetitions: { zero: zeroRepetitions, rust: rustRepetitions },
+    calibration: {
+      targetMilliseconds: minimumRuntimeBatchMilliseconds,
+      maximumRepetitions: maximumRuntimeRepetitions,
+      zero: zeroCalibration,
+      rust: rustCalibration,
+    },
+    invocationsPerSample: {
+      zero: seeds.length * zeroRepetitions,
+      rust: seeds.length * rustRepetitions,
+    },
+    outerRoundsPerSample: {
+      zero: roundsPerInvocation * seeds.length * zeroRepetitions,
+      rust: roundsPerInvocation * seeds.length * rustRepetitions,
+    },
     zero: summarizeSamples(zeroSamples),
     rust: summarizeSamples(rustSamples),
     pair: summarizePairedSamples(zeroSamples, rustSamples),
@@ -393,18 +436,75 @@ function measureRuntimeSample(
   run: (seed: number, rounds: number) => number,
   seeds: readonly number[],
   rounds: number,
+  repetitions: number,
+  expectedChecksum: number,
+): number {
+  const elapsed = measureRuntimeBatch(
+    run,
+    seeds,
+    rounds,
+    repetitions,
+    expectedChecksum,
+  );
+  return elapsed * 1_000_000 / (rounds * seeds.length * repetitions);
+}
+
+function calibrateRuntimeRepetitions(
+  run: (seed: number, rounds: number) => number,
+  seeds: readonly number[],
+  rounds: number,
+  expectedChecksum: number,
+): {
+  readonly repetitions: number;
+  readonly elapsedMilliseconds: number;
+  readonly targetReached: boolean;
+} {
+  for (
+    let repetitions = 1;
+    repetitions <= maximumRuntimeRepetitions;
+    repetitions *= 2
+  ) {
+    const elapsed = measureRuntimeBatch(
+      run,
+      seeds,
+      rounds,
+      repetitions,
+      expectedChecksum,
+    );
+    if (
+      elapsed >= minimumRuntimeBatchMilliseconds ||
+      repetitions === maximumRuntimeRepetitions
+    ) {
+      return {
+        repetitions,
+        elapsedMilliseconds: elapsed,
+        targetReached: elapsed >= minimumRuntimeBatchMilliseconds,
+      };
+    }
+  }
+  throw new Error("runtime calibration exceeded its repetition bound");
+}
+
+function measureRuntimeBatch(
+  run: (seed: number, rounds: number) => number,
+  seeds: readonly number[],
+  rounds: number,
+  repetitions: number,
   expectedChecksum: number,
 ): number {
   let checksum = 0;
   const start = performance.now();
-  for (const seed of seeds) checksum += run(seed, rounds);
+  for (let repetition = 0; repetition < repetitions; repetition += 1) {
+    for (const seed of seeds) checksum += run(seed, rounds);
+  }
   const elapsed = performance.now() - start;
-  if (checksum !== expectedChecksum) {
+  const repeatedChecksum = expectedChecksum * repetitions;
+  if (checksum !== repeatedChecksum) {
     throw new Error(
-      `runtime sample produced checksum ${checksum}; expected ${expectedChecksum}`,
+      `runtime batch produced checksum ${checksum}; expected ${repeatedChecksum}`,
     );
   }
-  return elapsed * 1_000_000 / (rounds * seeds.length);
+  return elapsed;
 }
 
 function measureModuleBoundaries(

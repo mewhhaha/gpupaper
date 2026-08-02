@@ -28,8 +28,20 @@ const parserPlanUrl = new URL(
   "../../grammar/zero-generated/parser.plan",
   import.meta.url,
 );
-const minimumI32 = -2_147_483_648;
 const maximumI32 = 2_147_483_647;
+const zeroBinaryOperators = new Set<ZeroBinaryOperator>([
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "==",
+  "!=",
+  "<",
+  "<=",
+  ">",
+  ">=",
+]);
 const i32 = 0 as CoreTypeId;
 
 type SourceSpan = {
@@ -641,214 +653,165 @@ async function getZeroParser(): Promise<ZeroParser> {
 }
 
 function parseZeroFunction(file: string, node: RuleCursor): ZeroFunction {
+  const visibility = requiredToken(node, "visibility");
   const name = requiredToken(node, "name");
-  const parameters = optionalRuleField(node, "parameters");
+  const parameters = tokenFieldArray(node, "parameters");
+  const instructions = tokenFieldArray(node, "body");
   return {
-    exported: optionalRuleField(node, "visibility") !== undefined,
+    exported: visibility.text === "export:",
     name: name.text,
-    parameters: parameters === undefined ? [] : [
-      requiredToken(parameters, "head"),
-      ...ruleFieldArray(parameters, "tail").map((tail) =>
-        requiredToken(tail, "value")
-      ),
-    ].map((token) => ({ name: token.text, span: sourceSpan(file, token) })),
-    body: parseZeroExpression(file, requiredRuleField(node, "body")),
+    parameters: parameters.map((token) => ({
+      name: token.text,
+      span: sourceSpan(file, token),
+    })),
+    body: parseZeroInstructions(file, instructions),
     span: sourceSpan(file, node),
   };
 }
 
-function parseZeroExpression(file: string, node: RuleCursor): ZeroExpression {
-  switch (node.name) {
-    case "expr":
-    case "primary":
-      return parseZeroExpression(file, childRule(node));
-    case "let_expr": {
-      const name = requiredToken(node, "name");
-      return {
-        kind: "let",
-        binding: { name: name.text, span: sourceSpan(file, name) },
-        value: parseZeroExpression(file, requiredRuleField(node, "value")),
-        body: parseZeroExpression(file, requiredRuleField(node, "body")),
-        span: sourceSpan(file, node),
-      };
-    }
-    case "if_expr":
-      return {
-        kind: "if",
-        condition: parseZeroExpression(
-          file,
-          requiredRuleField(node, "condition"),
-        ),
-        consequent: parseZeroExpression(
-          file,
-          requiredRuleField(node, "consequent"),
-        ),
-        alternate: parseZeroExpression(
-          file,
-          requiredRuleField(node, "alternate"),
-        ),
-        span: sourceSpan(file, node),
-      };
-    case "repeat_expr": {
-      const name = requiredToken(node, "name");
-      return {
-        kind: "repeat",
-        count: parseZeroExpression(file, requiredRuleField(node, "count")),
-        initial: parseZeroExpression(file, requiredRuleField(node, "initial")),
-        binding: { name: name.text, span: sourceSpan(file, name) },
-        body: parseZeroExpression(file, requiredRuleField(node, "body")),
-        span: sourceSpan(file, node),
-      };
-    }
-    case "comparison":
-      return foldBinary(file, node, comparisonOperator);
-    case "additive":
-      return foldBinary(file, node, additiveOperator);
-    case "multiplicative":
-      return foldBinary(file, node, multiplicativeOperator);
-    case "call": {
-      const callee = parseZeroExpression(
-        file,
-        requiredRuleField(node, "callee"),
-      );
-      const arguments_ = optionalRuleField(node, "arguments");
-      if (arguments_ === undefined) return callee;
-      if (callee.kind !== "variable") {
-        throw semanticError(callee.span, "call target must be a function name");
-      }
-      const values = optionalRuleField(arguments_, "values");
-      return {
-        kind: "call",
-        functionName: callee.name,
-        arguments: values === undefined ? [] : [
-          parseZeroExpression(file, requiredRuleField(values, "head")),
-          ...ruleFieldArray(values, "tail").map((tail) =>
-            parseZeroExpression(file, requiredRuleField(tail, "value"))
-          ),
-        ],
-        span: sourceSpan(file, node),
-      };
-    }
-    case "integer": {
-      const token = requiredToken(node, "value");
-      const value = Number(token.text);
-      if (
-        !Number.isSafeInteger(value) || value < minimumI32 || value > maximumI32
-      ) {
+function parseZeroInstructions(
+  file: string,
+  instructions: readonly TokenCursor[],
+  startIndex = 0,
+): ZeroExpression {
+  const stack: ZeroExpression[] = [];
+  for (let index = startIndex; index < instructions.length; index += 1) {
+    const instruction = instructions[index]!;
+    const span = sourceSpan(file, instruction);
+    const text = instruction.text;
+    if (/^[0-9]+$/.test(text)) {
+      const value = Number(text);
+      if (!Number.isSafeInteger(value) || value > maximumI32) {
         throw semanticError(
-          sourceSpan(file, token),
-          `integer literal ${token.text} is outside signed i32`,
+          span,
+          `integer literal ${text} is outside signed i32`,
         );
       }
-      return { kind: "integer", value, span: sourceSpan(file, node) };
+      stack.push({ kind: "integer", value, span });
+      continue;
     }
-    case "variable": {
-      const name = requiredToken(node, "name");
+    if (text.startsWith("@")) {
+      stack.push({ kind: "variable", name: text.slice(1), span });
+      continue;
+    }
+    if (zeroBinaryOperators.has(text as ZeroBinaryOperator)) {
+      const right = popZeroExpression(stack, span, text);
+      const left = popZeroExpression(stack, span, text);
+      stack.push({
+        kind: "binary",
+        operator: text as ZeroBinaryOperator,
+        left,
+        right,
+        span: { file, start: left.span.start, end: span.end },
+      });
+      continue;
+    }
+    if (text.startsWith("let:")) {
+      if (stack.length !== 1) {
+        throw semanticError(
+          span,
+          `binding ${text} requires one value; stack contains ${stack.length}`,
+        );
+      }
+      const value = stack[0]!;
+      const body = parseZeroInstructions(file, instructions, index + 1);
       return {
-        kind: "variable",
-        name: name.text,
-        span: sourceSpan(file, node),
+        kind: "let",
+        binding: { name: text.slice(4), span },
+        value,
+        body,
+        span: { file, start: value.span.start, end: body.span.end },
       };
     }
-    case "group":
-      return parseZeroExpression(file, requiredRuleField(node, "body"));
-    default:
-      throw new Error(
-        `${file}:${node.span.start}: unsupported Zero syntax ${node.name}`,
-      );
+    if (text.startsWith("call:")) {
+      const segments = text.split(":");
+      const functionName = segments[1]!;
+      const arity = Number(segments[2]);
+      if (!Number.isSafeInteger(arity) || arity < 0 || arity > stack.length) {
+        throw semanticError(
+          span,
+          `call ${functionName} requests ${
+            String(arity)
+          } arguments; stack contains ${stack.length}`,
+        );
+      }
+      const arguments_ = stack.splice(stack.length - arity, arity);
+      stack.push({
+        kind: "call",
+        functionName,
+        arguments: arguments_,
+        span: {
+          file,
+          start: arguments_[0]?.span.start ?? span.start,
+          end: span.end,
+        },
+      });
+      continue;
+    }
+    if (text === "select!") {
+      const alternate = popZeroExpression(stack, span, text);
+      const consequent = popZeroExpression(stack, span, text);
+      const condition = popZeroExpression(stack, span, text);
+      stack.push({
+        kind: "if",
+        condition,
+        consequent,
+        alternate,
+        span: { file, start: condition.span.start, end: span.end },
+      });
+      continue;
+    }
+    if (text.startsWith("repeat:")) {
+      const functionName = text.slice(7);
+      const initial = popZeroExpression(stack, span, text);
+      const count = popZeroExpression(stack, span, text);
+      const binding: ZeroBinding = {
+        name: `#repeat_${span.start}`,
+        span,
+      };
+      stack.push({
+        kind: "repeat",
+        count,
+        initial,
+        binding,
+        body: {
+          kind: "call",
+          functionName,
+          arguments: [{ kind: "variable", name: binding.name, span }],
+          span,
+        },
+        span: { file, start: count.span.start, end: span.end },
+      });
+      continue;
+    }
+    throw semanticError(span, `unsupported instruction ${text}`);
   }
-}
-
-function foldBinary(
-  file: string,
-  node: RuleCursor,
-  operator: (name: string, span: SourceSpan) => ZeroBinaryOperator,
-): ZeroExpression {
-  let expression = parseZeroExpression(file, requiredRuleField(node, "left"));
-  for (const tail of ruleFieldArray(node, "rest")) {
-    const operation = childRule(requiredRuleField(tail, "op"));
-    const right = parseZeroExpression(file, requiredRuleField(tail, "right"));
-    expression = {
-      kind: "binary",
-      operator: operator(operation.name, sourceSpan(file, operation)),
-      left: expression,
-      right,
-      span: {
-        file,
-        start: expression.span.start,
-        end: right.span.end,
-      },
-    };
+  if (stack.length !== 1) {
+    const start = instructions[startIndex]?.span.start ?? 0;
+    throw semanticError(
+      { file, start, end: instructions.at(-1)?.span.end ?? start },
+      `function body leaves ${stack.length} values; expected one`,
+    );
   }
-  return expression;
-}
-
-function comparisonOperator(
-  name: string,
-  span: SourceSpan,
-): ZeroBinaryOperator {
-  const operators: Readonly<Record<string, ZeroBinaryOperator>> = {
-    eq: "==",
-    ne: "!=",
-    lt: "<",
-    le: "<=",
-    gt: ">",
-    ge: ">=",
-  };
-  return requiredOperator(operators, name, span);
-}
-
-function additiveOperator(name: string, span: SourceSpan): ZeroBinaryOperator {
-  return requiredOperator({ plus: "+", minus: "-" }, name, span);
-}
-
-function multiplicativeOperator(
-  name: string,
-  span: SourceSpan,
-): ZeroBinaryOperator {
-  return requiredOperator(
-    { star: "*", slash: "/", remainder: "%" },
-    name,
-    span,
-  );
-}
-
-function requiredOperator(
-  operators: Readonly<Record<string, ZeroBinaryOperator>>,
-  name: string,
-  span: SourceSpan,
-): ZeroBinaryOperator {
-  const operator = operators[name];
-  if (operator === undefined) {
-    throw semanticError(span, `unknown binary operator ${name}`);
-  }
-  return operator;
-}
-
-function requiredRuleField(node: RuleCursor, name: string): RuleCursor {
-  const value = node.field(name);
-  if (!isRuleCursor(value)) {
-    throw new Error(`expected rule field ${name} on ${node.name}`);
-  }
-  return value;
-}
-
-function optionalRuleField(
-  node: RuleCursor,
-  name: string,
-): RuleCursor | undefined {
-  const value = node.field(name);
-  if (value === null || value === undefined) return undefined;
-  if (!isRuleCursor(value)) {
-    throw new Error(`expected optional rule field ${name} on ${node.name}`);
-  }
-  return value;
+  return stack[0]!;
 }
 
 function ruleFieldArray(node: RuleCursor, name: string): readonly RuleCursor[] {
   return node.fieldArray(name).map((value) => {
     if (!isRuleCursor(value)) {
       throw new Error(`expected rule array field ${name} on ${node.name}`);
+    }
+    return value;
+  });
+}
+
+function tokenFieldArray(
+  node: RuleCursor,
+  name: string,
+): readonly TokenCursor[] {
+  return node.fieldArray(name).map((value) => {
+    if (!isTokenCursor(value)) {
+      throw new Error(`expected token array field ${name} on ${node.name}`);
     }
     return value;
   });
@@ -862,17 +825,24 @@ function requiredToken(node: RuleCursor, name: string): TokenCursor {
   return value;
 }
 
-function childRule(node: RuleCursor): RuleCursor {
-  const child = node.children().find(isRuleCursor);
-  if (child === undefined) {
-    throw new Error(`expected child rule on ${node.name}`);
-  }
-  return child;
-}
-
 function isRuleCursor(value: unknown): value is RuleCursor {
   return value !== null && typeof value === "object" &&
     !Array.isArray(value) && "type" in value && value.type === "rule";
+}
+
+function popZeroExpression(
+  stack: ZeroExpression[],
+  span: SourceSpan,
+  instruction: string,
+): ZeroExpression {
+  const expression = stack.pop();
+  if (expression === undefined) {
+    throw semanticError(
+      span,
+      `instruction ${instruction} underflows the stack`,
+    );
+  }
+  return expression;
 }
 
 function isTokenCursor(value: unknown): value is TokenCursor {

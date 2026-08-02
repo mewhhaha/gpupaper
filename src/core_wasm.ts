@@ -129,9 +129,19 @@ type FunctionValueLayout = {
   readonly locals: readonly number[];
   readonly dispatchLocal: number | undefined;
   readonly byteIndexLocal: number | undefined;
+  readonly affineMultiplierLocal: number | undefined;
+  readonly affineOffsetLocal: number | undefined;
   readonly inlineDiamondByCallResult: ReadonlyMap<
     CoreValueId,
     InlineDiamondLayout
+  >;
+  readonly inlineLoopByCallResult: ReadonlyMap<
+    CoreValueId,
+    InlineLoopLayout
+  >;
+  readonly inlineScalarTreeByCallResult: ReadonlyMap<
+    CoreValueId,
+    InlineScalarTreeLayout
   >;
 };
 
@@ -145,7 +155,52 @@ type InlineDiamondLayout = {
   >;
 };
 
+type InlineLoopLayout = InlineDiamondLayout & {
+  readonly loop: DiamondBodyNaturalLoop;
+};
+
+type InlineScalarTreeShape = {
+  readonly function: CoreFunction;
+  readonly structure: "single" | "diamond";
+  readonly callsByResult: ReadonlyMap<CoreValueId, InlineScalarTreeShape>;
+  readonly operationCount: number;
+  readonly total: boolean;
+};
+
+type InlineScalarTreeLayout = Omit<InlineScalarTreeShape, "callsByResult"> & {
+  readonly localByValue: ReadonlyMap<CoreValueId, number>;
+  readonly callsByResult: ReadonlyMap<CoreValueId, InlineScalarTreeLayout>;
+};
+
+type StructuredAcyclicFunction = {
+  readonly immediatePostdominatorByBlock: readonly (
+    | CoreBlockId
+    | undefined
+  )[];
+};
+
+type DiamondBodyNaturalLoop = {
+  readonly entry: CoreFunction["blocks"][number];
+  readonly header: CoreFunction["blocks"][number];
+  readonly bodyCondition: CoreFunction["blocks"][number];
+  readonly trueBlock: CoreFunction["blocks"][number];
+  readonly falseBlock: CoreFunction["blocks"][number];
+  readonly latch: CoreFunction["blocks"][number];
+  readonly exit: CoreFunction["blocks"][number];
+  readonly continuesOnTrue: boolean;
+};
+
+type AffineNaturalLoop = {
+  readonly loop: NonNullable<ReturnType<typeof simpleNaturalLoop>>;
+  readonly counter: CoreValueId;
+  readonly state: CoreValueId;
+  readonly multiplier: number;
+  readonly offset: number;
+};
+
 const maximumInlineDiamondOperations = 16;
+const maximumInlineLoopOperations = 24;
+const maximumInlineScalarTreeOperations = 32;
 
 type ClosureTarget = {
   readonly functionId: CoreFunctionId;
@@ -292,7 +347,14 @@ export function lowerCoreToWasm(
         fcg: publicFunction(core, function_, layout),
       };
     } else {
-      const functionIdentity = contentIdentity(function_);
+      const affine = affineNaturalLoop(core, function_);
+      const functionIdentity = contentIdentity({
+        function: function_,
+        affine: affine === undefined ? undefined : {
+          multiplier: affine.multiplier,
+          offset: affine.offset,
+        },
+      });
       loweredFunction = options.functions.instantiate(
         backendEnvironmentIdentity,
         functionIdentity,
@@ -427,8 +489,7 @@ function findReachableFunctions(
         const target = operation.kind === "closure.make"
           ? operation.functionId
           : operation.kind === "call.direct" &&
-              inlineableLoopCall(core, function_, block, operation) ===
-                undefined
+              !isInlineableLoopCall(core, function_, block, operation)
           ? operation.functionId
           : undefined;
         if (target === undefined || reachable.has(target)) continue;
@@ -728,6 +789,10 @@ function planFunctionValues(
   const locals: number[] = [];
   let nextLocal = signature.parameters.length;
   const naturalLoop = simpleNaturalLoop(function_);
+  const diamondBodyLoop = diamondBodyNaturalLoop(function_);
+  const structuredAcyclic = simpleDiamond(function_) === undefined
+    ? structuredAcyclicFunction(function_)
+    : undefined;
   for (const block of function_.blocks) {
     for (const parameter of block.parameters) {
       if (localByValue.has(parameter.value)) continue;
@@ -737,12 +802,23 @@ function planFunctionValues(
     }
     for (const operation of block.operations) {
       const stackifiesSingleBlock = function_.blocks.length === 1 &&
-        !operationNeedsLocal(
+        (!operationNeedsLocal(
           operation,
           useCounts.get(operation.result) ?? 0,
           returnedValues.has(operation.result),
-        );
-      const sinksInNaturalLoop = naturalLoop !== undefined &&
+        ) ||
+          canSinkTotalScalarOperation(
+            core,
+            function_,
+            block,
+            operation,
+            typeByValue,
+            useCounts,
+            useBlocks,
+          ));
+      const sinksInStructuredControl =
+        (naturalLoop !== undefined || diamondBodyLoop !== undefined ||
+          structuredAcyclic !== undefined) &&
         canSinkTotalScalarOperation(
           core,
           function_,
@@ -752,7 +828,7 @@ function planFunctionValues(
           useCounts,
           useBlocks,
         );
-      if (stackifiesSingleBlock || sinksInNaturalLoop) {
+      if (stackifiesSingleBlock || sinksInStructuredControl) {
         continue;
       }
       localByValue.set(operation.result, nextLocal);
@@ -764,15 +840,71 @@ function planFunctionValues(
     CoreValueId,
     InlineDiamondLayout
   >();
+  const inlineLoopByCallResult = new Map<CoreValueId, InlineLoopLayout>();
+  const inlineScalarTreeByCallResult = new Map<
+    CoreValueId,
+    InlineScalarTreeLayout
+  >();
+  const allocateScalarTree = (
+    shape: InlineScalarTreeShape,
+  ): InlineScalarTreeLayout => {
+    const inlineLocalByValue = new Map<CoreValueId, number>();
+    for (const block of shape.function.blocks) {
+      for (const parameter of block.parameters) {
+        inlineLocalByValue.set(parameter.value, nextLocal);
+        nextLocal += 1;
+        locals.push(wasmValueType(core, parameter.type));
+      }
+      for (const operation of block.operations) {
+        inlineLocalByValue.set(operation.result, nextLocal);
+        nextLocal += 1;
+        locals.push(wasmValueType(core, operation.type));
+      }
+    }
+    return {
+      ...shape,
+      localByValue: inlineLocalByValue,
+      callsByResult: new Map(
+        [...shape.callsByResult].map(([result, child]) =>
+          [result, allocateScalarTree(child)] as const
+        ),
+      ),
+    };
+  };
   if (naturalLoop !== undefined) {
     for (const operation of naturalLoop.body.operations) {
       if (operation.kind !== "call.direct") continue;
-      const inlineFunction = inlineableLoopCall(
+      const inlineDiamond = inlineableLoopCall(
         core,
         function_,
         naturalLoop.body,
         operation,
       );
+      const inlineLoop = inlineDiamond === undefined
+        ? inlineableDiamondBodyLoopCall(
+          core,
+          function_,
+          naturalLoop.body,
+          operation,
+        )
+        : undefined;
+      const inlineScalarTree = inlineDiamond === undefined &&
+          inlineLoop === undefined
+        ? inlineableScalarTreeCall(
+          core,
+          function_,
+          naturalLoop.body,
+          operation,
+        )
+        : undefined;
+      if (inlineScalarTree !== undefined) {
+        inlineScalarTreeByCallResult.set(
+          operation.result,
+          allocateScalarTree(inlineScalarTree),
+        );
+        continue;
+      }
+      const inlineFunction = inlineDiamond ?? inlineLoop?.function;
       if (inlineFunction === undefined) continue;
       const inlineLocalByValue = new Map<CoreValueId, number>();
       const inlineTypeByValue = valueTypes(inlineFunction);
@@ -824,7 +956,7 @@ function planFunctionValues(
           locals.push(wasmValueType(core, inlineOperation.type));
         }
       }
-      inlineDiamondByCallResult.set(operation.result, {
+      const inlineLayout = {
         function: inlineFunction,
         localByValue: inlineLocalByValue,
         typeByValue: inlineTypeByValue,
@@ -838,13 +970,23 @@ function planFunctionValues(
             )
           ),
         ),
-      });
+      };
+      if (inlineLoop === undefined) {
+        inlineDiamondByCallResult.set(operation.result, inlineLayout);
+      } else {
+        inlineLoopByCallResult.set(operation.result, {
+          ...inlineLayout,
+          loop: inlineLoop.loop,
+        });
+      }
     }
   }
   let dispatchLocal: number | undefined;
   if (
     function_.blocks.length > 1 && simpleDiamond(function_) === undefined &&
-    simpleNaturalLoop(function_) === undefined
+    simpleNaturalLoop(function_) === undefined &&
+    diamondBodyNaturalLoop(function_) === undefined &&
+    structuredAcyclic === undefined
   ) {
     dispatchLocal = nextLocal;
     nextLocal += 1;
@@ -859,7 +1001,16 @@ function planFunctionValues(
   let byteIndexLocal: number | undefined;
   if (hasByteGeneration) {
     byteIndexLocal = nextLocal;
+    nextLocal += 1;
     locals.push(wasmType.i32);
+  }
+  const affineLoop = affineNaturalLoop(core, function_);
+  let affineMultiplierLocal: number | undefined;
+  let affineOffsetLocal: number | undefined;
+  if (affineLoop !== undefined) {
+    affineMultiplierLocal = nextLocal;
+    affineOffsetLocal = nextLocal + 1;
+    locals.push(wasmType.i32, wasmType.i32);
   }
   return {
     localByValue,
@@ -868,7 +1019,11 @@ function planFunctionValues(
     locals,
     dispatchLocal,
     byteIndexLocal,
+    affineMultiplierLocal,
+    affineOffsetLocal,
     inlineDiamondByCallResult,
+    inlineLoopByCallResult,
+    inlineScalarTreeByCallResult,
   };
 }
 
@@ -973,6 +1128,16 @@ function emitFunction(
   }
   const naturalLoop = simpleNaturalLoop(function_);
   if (naturalLoop !== undefined) {
+    const affineLoop = affineNaturalLoop(core, function_);
+    if (affineLoop !== undefined) {
+      return emitAffineNaturalLoop(
+        function_,
+        layout,
+        affineLoop,
+        emitBlockOperations,
+        emitValue,
+      );
+    }
     const continuesOnTrue = naturalLoop.header.terminator.kind ===
         "conditional_branch" &&
       naturalLoop.header.terminator.trueTarget === naturalLoop.body.id;
@@ -1012,9 +1177,16 @@ function emitFunction(
       ...wasmInstruction.blockVoid,
       ...wasmInstruction.loopVoid,
       ...emitBlockOperations(naturalLoop.header.id),
+      ...emitEdgeAssignment(
+        exitArguments,
+        naturalLoop.exit,
+        function_,
+        layout,
+        emitValue,
+      ),
       ...emitValue(condition),
-      ...(continuesOnTrue ? [] : wasmInstruction.i32EqualZero),
-      ...wasmInstruction.ifVoid,
+      ...(continuesOnTrue ? wasmInstruction.i32EqualZero : []),
+      ...wasmInstruction.branchIf(1),
       ...emitEdgeAssignment(
         bodyArguments,
         naturalLoop.body,
@@ -1030,18 +1202,7 @@ function emitFunction(
         layout,
         emitValue,
       ),
-      ...wasmInstruction.branch(1),
-      ...wasmInstruction.else,
-      ...emitEdgeAssignment(
-        exitArguments,
-        naturalLoop.exit,
-        function_,
-        layout,
-        emitValue,
-      ),
-      ...wasmInstruction.branch(2),
-      ...wasmInstruction.end,
-      ...wasmInstruction.unreachable,
+      ...wasmInstruction.branch(0),
       ...wasmInstruction.end,
       ...wasmInstruction.end,
       ...emitBlockOperations(naturalLoop.exit.id),
@@ -1053,6 +1214,37 @@ function emitFunction(
         emitValue,
       ),
     ];
+  }
+  const diamondBodyLoop = diamondBodyNaturalLoop(function_);
+  if (diamondBodyLoop !== undefined) {
+    return [
+      ...emitDiamondBodyNaturalLoopRegion(
+        function_,
+        layout,
+        diamondBodyLoop,
+        diamondBodySelection(core, function_, diamondBodyLoop),
+        emitBlockOperations,
+        emitValue,
+      ),
+      ...emitBlockOperations(diamondBodyLoop.exit.id),
+      ...emitTerminator(
+        diamondBodyLoop.exit.terminator,
+        function_,
+        layout,
+        0,
+        emitValue,
+      ),
+    ];
+  }
+  const structuredAcyclic = structuredAcyclicFunction(function_);
+  if (structuredAcyclic !== undefined) {
+    return emitStructuredAcyclicFunction(
+      function_,
+      layout,
+      structuredAcyclic,
+      emitBlockOperations,
+      emitValue,
+    );
   }
   if (layout.dispatchLocal === undefined) {
     throw new Error(
@@ -1121,6 +1313,227 @@ function simpleDiamond(
   return { entry, trueBlock, falseBlock, join };
 }
 
+function structuredAcyclicFunction(
+  function_: CoreFunction,
+): StructuredAcyclicFunction | undefined {
+  if (function_.blocks.length <= 1 || !hasAcyclicControlFlow(function_)) {
+    return undefined;
+  }
+  const allBlocks = new Set(function_.blocks.map((block) => block.id));
+  const postdominators = function_.blocks.map((block) =>
+    block.terminator.kind === "return" || block.terminator.kind === "trap"
+      ? new Set([block.id])
+      : new Set(allBlocks)
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const block of function_.blocks.toReversed()) {
+      const successors = coreTerminatorSuccessors(block.terminator);
+      if (successors.length === 0) continue;
+      const intersection = new Set(postdominators[successors[0]]);
+      for (const successor of successors.slice(1)) {
+        for (const candidate of intersection) {
+          if (!postdominators[successor].has(candidate)) {
+            intersection.delete(candidate);
+          }
+        }
+      }
+      intersection.add(block.id);
+      if (!equalSets(intersection, postdominators[block.id])) {
+        postdominators[block.id] = intersection;
+        changed = true;
+      }
+    }
+  }
+
+  const immediatePostdominatorByBlock = function_.blocks.map((block) => {
+    const strict = [...postdominators[block.id]].filter((candidate) =>
+      candidate !== block.id
+    );
+    return strict.find((candidate) =>
+      strict.every((other) =>
+        other === candidate || postdominators[candidate].has(other)
+      )
+    );
+  });
+  const certificate = { immediatePostdominatorByBlock };
+  const visited = new Set<CoreBlockId>();
+  if (
+    !verifyStructuredAcyclicRegion(
+      function_,
+      certificate,
+      function_.entryBlock,
+      undefined,
+      visited,
+    ) || visited.size !== function_.blocks.length
+  ) {
+    return undefined;
+  }
+  return certificate;
+}
+
+function hasAcyclicControlFlow(function_: CoreFunction): boolean {
+  const incomingEdges = function_.blocks.map(() => 0);
+  for (const block of function_.blocks) {
+    for (const successor of coreTerminatorSuccessors(block.terminator)) {
+      incomingEdges[successor] += 1;
+    }
+  }
+  const ready = function_.blocks.filter((block) =>
+    incomingEdges[block.id] === 0
+  )
+    .map((block) => block.id);
+  let visited = 0;
+  while (ready.length > 0) {
+    const block = ready.pop()!;
+    visited += 1;
+    for (
+      const successor of coreTerminatorSuccessors(
+        function_.blocks[block].terminator,
+      )
+    ) {
+      incomingEdges[successor] -= 1;
+      if (incomingEdges[successor] === 0) ready.push(successor);
+    }
+  }
+  return visited === function_.blocks.length;
+}
+
+function verifyStructuredAcyclicRegion(
+  function_: CoreFunction,
+  certificate: StructuredAcyclicFunction,
+  start: CoreBlockId,
+  stop: CoreBlockId | undefined,
+  visited: Set<CoreBlockId>,
+): boolean {
+  if (start === stop) return true;
+  if (visited.has(start)) return false;
+  visited.add(start);
+  const terminator = function_.blocks[start].terminator;
+  if (terminator.kind === "return" || terminator.kind === "trap") {
+    return stop === undefined;
+  }
+  if (terminator.kind === "branch") {
+    return verifyStructuredAcyclicRegion(
+      function_,
+      certificate,
+      terminator.target,
+      stop,
+      visited,
+    );
+  }
+  const join = certificate.immediatePostdominatorByBlock[start];
+  if (join === undefined) return false;
+  return verifyStructuredAcyclicRegion(
+    function_,
+    certificate,
+    terminator.trueTarget,
+    join,
+    visited,
+  ) &&
+    verifyStructuredAcyclicRegion(
+      function_,
+      certificate,
+      terminator.falseTarget,
+      join,
+      visited,
+    ) &&
+    verifyStructuredAcyclicRegion(
+      function_,
+      certificate,
+      join,
+      stop,
+      visited,
+    );
+}
+
+function emitStructuredAcyclicFunction(
+  function_: CoreFunction,
+  layout: FunctionValueLayout,
+  certificate: StructuredAcyclicFunction,
+  emitBlockOperations: (block: number) => readonly WasmInstruction[],
+  emitValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  const emitRegion = (
+    start: CoreBlockId,
+    stop: CoreBlockId | undefined,
+  ): readonly WasmInstruction[] => {
+    if (start === stop) return [];
+    const block = function_.blocks[start];
+    const instructions = [...emitBlockOperations(start)];
+    const terminator = block.terminator;
+    if (terminator.kind === "return" || terminator.kind === "trap") {
+      instructions.push(
+        ...emitTerminator(terminator, function_, layout, 0, emitValue),
+      );
+      return instructions;
+    }
+    if (terminator.kind === "branch") {
+      instructions.push(
+        ...emitEdgeAssignment(
+          terminator.arguments,
+          function_.blocks[terminator.target],
+          function_,
+          layout,
+          emitValue,
+        ),
+        ...emitRegion(terminator.target, stop),
+      );
+      return instructions;
+    }
+    const join = certificate.immediatePostdominatorByBlock[start];
+    if (join === undefined) {
+      throw new Error(
+        `Core function ${function_.name} lost the postdominator for block ${start}`,
+      );
+    }
+    instructions.push(
+      ...emitValue(terminator.condition),
+      ...wasmInstruction.ifVoid,
+      ...emitEdgeAssignment(
+        terminator.trueArguments,
+        function_.blocks[terminator.trueTarget],
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...emitRegion(terminator.trueTarget, join),
+      ...wasmInstruction.else,
+      ...emitEdgeAssignment(
+        terminator.falseArguments,
+        function_.blocks[terminator.falseTarget],
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...emitRegion(terminator.falseTarget, join),
+      ...wasmInstruction.end,
+      ...emitRegion(join, stop),
+    );
+    return instructions;
+  };
+  return emitRegion(function_.entryBlock, undefined);
+}
+
+function coreTerminatorSuccessors(
+  terminator: CoreTerminator,
+): readonly CoreBlockId[] {
+  if (terminator.kind === "return" || terminator.kind === "trap") return [];
+  if (terminator.kind === "branch") return [terminator.target];
+  return terminator.trueTarget === terminator.falseTarget
+    ? [terminator.trueTarget]
+    : [terminator.trueTarget, terminator.falseTarget];
+}
+
+function equalSets<Value>(
+  left: ReadonlySet<Value>,
+  right: ReadonlySet<Value>,
+): boolean {
+  return left.size === right.size &&
+    [...left].every((value) => right.has(value));
+}
+
 function inlineableScalarDiamond(
   core: CoreModule,
   function_: CoreFunction,
@@ -1167,6 +1580,38 @@ function selectableScalarDiamond(
     : undefined;
 }
 
+function diamondBodySelection(
+  core: CoreModule,
+  function_: CoreFunction,
+  loop: DiamondBodyNaturalLoop,
+): "select" | "branch" {
+  if (
+    loop.bodyCondition.terminator.kind !== "conditional_branch" ||
+    loop.trueBlock.terminator.kind !== "branch" ||
+    loop.falseBlock.terminator.kind !== "branch" ||
+    loop.bodyCondition.terminator.trueArguments.length !== 0 ||
+    loop.bodyCondition.terminator.falseArguments.length !== 0 ||
+    loop.latch.parameters.length !== 1 ||
+    loop.trueBlock.terminator.arguments.length !== 1 ||
+    loop.falseBlock.terminator.arguments.length !== 1
+  ) {
+    return "branch";
+  }
+  const types = valueTypes(function_);
+  const eagerBlocks = [
+    loop.bodyCondition,
+    loop.trueBlock,
+    loop.falseBlock,
+  ];
+  return eagerBlocks.every((block) =>
+      block.operations.every((operation) =>
+        isTotalPureScalarOperation(core, function_, operation, types)
+      )
+    )
+    ? "select"
+    : "branch";
+}
+
 function inlineableLoopCall(
   core: CoreModule,
   caller: CoreFunction,
@@ -1180,6 +1625,154 @@ function inlineableLoopCall(
       inlineableScalarDiamond(core, target) !== undefined
     ? target
     : undefined;
+}
+
+function inlineableDiamondBodyLoopCall(
+  core: CoreModule,
+  caller: CoreFunction,
+  block: CoreFunction["blocks"][number],
+  operation: Extract<CoreOperation, { readonly kind: "call.direct" }>,
+):
+  | { readonly function: CoreFunction; readonly loop: DiamondBodyNaturalLoop }
+  | undefined {
+  const callerLoop = simpleNaturalLoop(caller);
+  if (callerLoop?.body.id !== block.id) return undefined;
+  const target = core.functions[operation.functionId];
+  const loop = target === undefined
+    ? undefined
+    : diamondBodyNaturalLoop(target);
+  if (target === undefined || loop === undefined) return undefined;
+  const operations = target.blocks.flatMap((candidate) => candidate.operations);
+  if (
+    operations.length > maximumInlineLoopOperations ||
+    operations.some((candidate) =>
+      candidate.kind !== "constant" && candidate.kind !== "scalar.binary"
+    ) ||
+    target.blocks.some((candidate) =>
+      candidate.parameters.some((parameter) =>
+        core.types[parameter.type]?.kind !== "scalar"
+      )
+    ) || countFunctionReferences(core, target.id) !== 1 ||
+    loop.exit.terminator.kind !== "return" ||
+    loop.exit.terminator.values.length !== 1
+  ) {
+    return undefined;
+  }
+  return { function: target, loop };
+}
+
+function isInlineableLoopCall(
+  core: CoreModule,
+  caller: CoreFunction,
+  block: CoreFunction["blocks"][number],
+  operation: Extract<CoreOperation, { readonly kind: "call.direct" }>,
+): boolean {
+  return inlineableLoopCall(core, caller, block, operation) !== undefined ||
+    inlineableDiamondBodyLoopCall(core, caller, block, operation) !==
+      undefined ||
+    inlineableScalarTreeCall(core, caller, block, operation) !== undefined;
+}
+
+function inlineableScalarTreeCall(
+  core: CoreModule,
+  caller: CoreFunction,
+  block: CoreFunction["blocks"][number],
+  operation: Extract<CoreOperation, { readonly kind: "call.direct" }>,
+): InlineScalarTreeShape | undefined {
+  if (simpleNaturalLoop(caller)?.body.id !== block.id) return undefined;
+  const build = (
+    functionId: CoreFunctionId,
+    ancestors: ReadonlySet<CoreFunctionId>,
+  ): InlineScalarTreeShape | undefined => {
+    if (
+      ancestors.has(functionId) ||
+      countFunctionReferences(core, functionId) !== 1
+    ) {
+      return undefined;
+    }
+    const function_ = core.functions[functionId];
+    const diamond = simpleDiamond(function_);
+    const single = function_.blocks.length === 1 &&
+      function_.blocks[0].terminator.kind === "return" &&
+      function_.blocks[0].terminator.values.length === 1;
+    if (
+      !single &&
+      (diamond === undefined || diamond.join.operations.length !== 0 ||
+        diamond.join.terminator.kind !== "return" ||
+        diamond.join.terminator.values[0] !== diamond.join.parameters[0]?.value)
+    ) {
+      return undefined;
+    }
+    const operations = function_.blocks.flatMap((candidate) =>
+      candidate.operations
+    );
+    if (
+      operations.some((candidate) =>
+        candidate.kind !== "constant" && candidate.kind !== "scalar.binary" &&
+        candidate.kind !== "call.direct"
+      ) ||
+      function_.blocks.some((candidate) =>
+        candidate.parameters.some((parameter) =>
+          core.types[parameter.type]?.kind !== "scalar"
+        ) || candidate.operations.some((operation) =>
+          core.types[operation.type]?.kind !== "scalar"
+        )
+      )
+    ) {
+      return undefined;
+    }
+    const descendants = new Set(ancestors);
+    descendants.add(functionId);
+    const callsByResult = new Map<CoreValueId, InlineScalarTreeShape>();
+    let operationCount = operations.length;
+    let total = true;
+    for (const candidate of operations) {
+      if (candidate.kind === "call.direct") {
+        const child = build(candidate.functionId, descendants);
+        if (child === undefined) return undefined;
+        callsByResult.set(candidate.result, child);
+        operationCount += child.operationCount;
+        total &&= child.total;
+        continue;
+      }
+      if (
+        candidate.kind === "scalar.binary" &&
+        (candidate.operator === "/" || candidate.operator === "%")
+      ) {
+        total = false;
+      }
+    }
+    if (operationCount > maximumInlineScalarTreeOperations) return undefined;
+    return {
+      function: function_,
+      structure: single ? "single" : "diamond",
+      callsByResult,
+      operationCount,
+      total,
+    };
+  };
+  return build(operation.functionId, new Set());
+}
+
+function countFunctionReferences(
+  core: CoreModule,
+  functionId: CoreFunctionId,
+): number {
+  let references = 0;
+  for (const function_ of core.functions) {
+    for (const block of function_.blocks) {
+      for (const operation of block.operations) {
+        if (
+          (operation.kind === "call.direct" ||
+            operation.kind === "closure.make") &&
+          operation.functionId === functionId
+        ) {
+          references += 1;
+        }
+      }
+    }
+  }
+  return references;
 }
 
 function simpleNaturalLoop(
@@ -1216,6 +1809,495 @@ function simpleNaturalLoop(
     return undefined;
   }
   return { entry, header, body, exit };
+}
+
+function affineNaturalLoop(
+  core: CoreModule,
+  function_: CoreFunction,
+): AffineNaturalLoop | undefined {
+  const loop = simpleNaturalLoop(function_);
+  if (
+    loop === undefined || loop.entry.terminator.kind !== "branch" ||
+    loop.header.terminator.kind !== "conditional_branch" ||
+    loop.header.terminator.trueTarget !== loop.body.id ||
+    loop.body.terminator.kind !== "branch" ||
+    loop.header.parameters.length !== 2 ||
+    loop.body.terminator.arguments.length !== 2 ||
+    loop.header.terminator.falseArguments.length !== 1
+  ) {
+    return undefined;
+  }
+  const operations = new Map(
+    function_.blocks.flatMap((block) =>
+      block.operations.map((operation) =>
+        [operation.result, operation] as const
+      )
+    ),
+  );
+  const condition = operations.get(loop.header.terminator.condition);
+  if (
+    condition?.kind !== "scalar.binary" || condition.operator !== ">" ||
+    condition.operands.length !== 2
+  ) {
+    return undefined;
+  }
+  const counter = condition.operands[0];
+  const zero = operations.get(condition.operands[1]);
+  if (zero?.kind !== "constant" || zero.value !== 0) return undefined;
+  const counterIndex = loop.header.parameters.findIndex((parameter) =>
+    parameter.value === counter
+  );
+  if (counterIndex < 0) return undefined;
+  const stateIndex = counterIndex === 0 ? 1 : 0;
+  const state = loop.header.parameters[stateIndex].value;
+  if (loop.header.terminator.falseArguments[0] !== state) return undefined;
+
+  const nextCounter = operations.get(
+    loop.body.terminator.arguments[counterIndex],
+  );
+  const nextState = operations.get(loop.body.terminator.arguments[stateIndex]);
+  if (
+    nextCounter?.kind !== "scalar.binary" || nextCounter.operator !== "-" ||
+    nextCounter.operands[0] !== counter || nextState === undefined
+  ) {
+    return undefined;
+  }
+  const one = operations.get(nextCounter.operands[1]);
+  if (one?.kind !== "constant" || one.value !== 1) return undefined;
+
+  if (nextState.kind === "call.direct") {
+    if (nextState.operands.length !== 1 || nextState.operands[0] !== state) {
+      return undefined;
+    }
+    const callee = core.functions[nextState.functionId];
+    if (
+      callee === undefined || callee.blocks.length !== 1 ||
+      callee.entryBlock !== 0
+    ) {
+      return undefined;
+    }
+    const block = callee.blocks[0];
+    if (
+      block.parameters.length !== 1 || block.terminator.kind !== "return" ||
+      block.terminator.values.length !== 1
+    ) {
+      return undefined;
+    }
+    const calleeOperations = new Map(
+      block.operations.map((operation) =>
+        [operation.result, operation] as const
+      ),
+    );
+    const add = calleeOperations.get(block.terminator.values[0]);
+    if (
+      add?.kind !== "scalar.binary" || add.operator !== "+" ||
+      add.operands.length !== 2
+    ) {
+      return undefined;
+    }
+    const multiply = add.operands.map((operand) =>
+      calleeOperations.get(operand)
+    )
+      .find((operation) =>
+        operation?.kind === "scalar.binary" && operation.operator === "*"
+      );
+    const offset = add.operands.map((operand) => calleeOperations.get(operand))
+      .find((operation) => operation?.kind === "constant");
+    if (
+      multiply?.kind !== "scalar.binary" || offset?.kind !== "constant" ||
+      typeof offset.value !== "number"
+    ) {
+      return undefined;
+    }
+    const multiplier = multiply.operands.map((operand) =>
+      calleeOperations.get(operand)
+    ).find((operation) => operation?.kind === "constant");
+    if (
+      multiplier?.kind !== "constant" ||
+      typeof multiplier.value !== "number" ||
+      !multiply.operands.includes(block.parameters[0].value)
+    ) {
+      return undefined;
+    }
+    const requiredCalleeResults = new Set([
+      add.result,
+      multiply.result,
+      multiplier.result,
+      offset.result,
+    ]);
+    const requiredBodyResults = new Set([
+      nextCounter.result,
+      nextState.result,
+      one.result,
+    ]);
+    if (
+      block.operations.length !== requiredCalleeResults.size ||
+      block.operations.some((operation) =>
+        !requiredCalleeResults.has(operation.result)
+      ) || loop.body.operations.length !== requiredBodyResults.size ||
+      loop.body.operations.some((operation) =>
+        !requiredBodyResults.has(operation.result)
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      loop,
+      counter,
+      state,
+      multiplier: multiplier.value | 0,
+      offset: offset.value | 0,
+    };
+  }
+  if (nextState.kind !== "scalar.binary" || nextState.operator !== "+") {
+    return undefined;
+  }
+  const multiply = nextState.operands.map((operand) => operations.get(operand))
+    .find((operation) =>
+      operation?.kind === "scalar.binary" && operation.operator === "*"
+    );
+  const offset = nextState.operands.map((operand) => operations.get(operand))
+    .find((operation) => operation?.kind === "constant");
+  if (
+    multiply?.kind !== "scalar.binary" || offset?.kind !== "constant" ||
+    typeof offset.value !== "number"
+  ) {
+    return undefined;
+  }
+  const multiplier = multiply.operands.map((operand) => operations.get(operand))
+    .find((operation) => operation?.kind === "constant");
+  if (
+    multiplier?.kind !== "constant" || typeof multiplier.value !== "number" ||
+    !multiply.operands.includes(state)
+  ) {
+    return undefined;
+  }
+  const requiredResults = new Set([
+    nextCounter.result,
+    nextState.result,
+    one.result,
+    multiply.result,
+    multiplier.result,
+    offset.result,
+  ]);
+  if (
+    loop.body.operations.length !== requiredResults.size ||
+    loop.body.operations.some((operation) =>
+      !requiredResults.has(operation.result)
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    loop,
+    counter,
+    state,
+    multiplier: multiplier.value | 0,
+    offset: offset.value | 0,
+  };
+}
+
+function emitAffineNaturalLoop(
+  function_: CoreFunction,
+  layout: FunctionValueLayout,
+  affine: AffineNaturalLoop,
+  emitBlockOperations: (block: number) => readonly WasmInstruction[],
+  emitValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  const { loop } = affine;
+  if (
+    loop.entry.terminator.kind !== "branch" ||
+    loop.header.terminator.kind !== "conditional_branch" ||
+    layout.affineMultiplierLocal === undefined ||
+    layout.affineOffsetLocal === undefined
+  ) {
+    throw new Error(
+      `Core function ${function_.name} lost its affine-loop certificate`,
+    );
+  }
+  const counterLocal = requiredLocal(layout, function_, affine.counter);
+  const stateLocal = requiredLocal(layout, function_, affine.state);
+  return [
+    ...emitBlockOperations(loop.entry.id),
+    ...emitEdgeAssignment(
+      loop.entry.terminator.arguments,
+      loop.header,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...wasmInstruction.i32Constant(affine.multiplier),
+    ...wasmInstruction.localSet(layout.affineMultiplierLocal),
+    ...wasmInstruction.i32Constant(affine.offset),
+    ...wasmInstruction.localSet(layout.affineOffsetLocal),
+    ...wasmInstruction.blockVoid,
+    ...wasmInstruction.loopVoid,
+    ...emitEdgeAssignment(
+      loop.header.terminator.falseArguments,
+      loop.exit,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...emitValue(loop.header.terminator.condition),
+    ...wasmInstruction.i32EqualZero,
+    ...wasmInstruction.branchIf(1),
+    ...wasmInstruction.localGet(counterLocal),
+    ...wasmInstruction.i32Constant(1),
+    ...wasmInstruction.i32And,
+    ...wasmInstruction.ifVoid,
+    ...wasmInstruction.localGet(stateLocal),
+    ...wasmInstruction.localGet(layout.affineMultiplierLocal),
+    ...wasmInstruction.i32Multiply,
+    ...wasmInstruction.localGet(layout.affineOffsetLocal),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.localSet(stateLocal),
+    ...wasmInstruction.end,
+    ...wasmInstruction.localGet(layout.affineMultiplierLocal),
+    ...wasmInstruction.localGet(layout.affineOffsetLocal),
+    ...wasmInstruction.i32Multiply,
+    ...wasmInstruction.localGet(layout.affineOffsetLocal),
+    ...wasmInstruction.i32Add,
+    ...wasmInstruction.localSet(layout.affineOffsetLocal),
+    ...wasmInstruction.localGet(layout.affineMultiplierLocal),
+    ...wasmInstruction.localGet(layout.affineMultiplierLocal),
+    ...wasmInstruction.i32Multiply,
+    ...wasmInstruction.localSet(layout.affineMultiplierLocal),
+    ...wasmInstruction.localGet(counterLocal),
+    ...wasmInstruction.i32Constant(1),
+    ...wasmInstruction.i32ShiftRightUnsigned,
+    ...wasmInstruction.localSet(counterLocal),
+    ...wasmInstruction.branch(0),
+    ...wasmInstruction.end,
+    ...wasmInstruction.end,
+    ...emitBlockOperations(loop.exit.id),
+    ...emitTerminator(loop.exit.terminator, function_, layout, 0, emitValue),
+  ];
+}
+
+function diamondBodyNaturalLoop(
+  function_: CoreFunction,
+): DiamondBodyNaturalLoop | undefined {
+  if (function_.blocks.length !== 7) return undefined;
+  const entry = function_.blocks[function_.entryBlock];
+  if (entry.terminator.kind !== "branch") return undefined;
+  const header = function_.blocks[entry.terminator.target];
+  if (header.terminator.kind !== "conditional_branch") return undefined;
+  const trueSuccessor = function_.blocks[header.terminator.trueTarget];
+  const falseSuccessor = function_.blocks[header.terminator.falseTarget];
+  const continuesOnTrue = trueSuccessor.terminator.kind ===
+    "conditional_branch";
+  const bodyCondition = continuesOnTrue ? trueSuccessor : falseSuccessor;
+  const exit = continuesOnTrue ? falseSuccessor : trueSuccessor;
+  if (
+    bodyCondition.terminator.kind !== "conditional_branch" ||
+    (exit.terminator.kind !== "return" && exit.terminator.kind !== "trap")
+  ) {
+    return undefined;
+  }
+  const trueBlock = function_.blocks[bodyCondition.terminator.trueTarget];
+  const falseBlock = function_.blocks[bodyCondition.terminator.falseTarget];
+  if (
+    trueBlock.terminator.kind !== "branch" ||
+    falseBlock.terminator.kind !== "branch" ||
+    trueBlock.terminator.target !== falseBlock.terminator.target
+  ) {
+    return undefined;
+  }
+  const latch = function_.blocks[trueBlock.terminator.target];
+  if (
+    latch.terminator.kind !== "branch" ||
+    latch.terminator.target !== header.id ||
+    new Set([
+        entry.id,
+        header.id,
+        bodyCondition.id,
+        trueBlock.id,
+        falseBlock.id,
+        latch.id,
+        exit.id,
+      ]).size !== 7
+  ) {
+    return undefined;
+  }
+  return {
+    entry,
+    header,
+    bodyCondition,
+    trueBlock,
+    falseBlock,
+    latch,
+    exit,
+    continuesOnTrue,
+  };
+}
+
+function emitDiamondBodyNaturalLoopRegion(
+  function_: CoreFunction,
+  layout: FunctionValueLayout,
+  loop: DiamondBodyNaturalLoop,
+  selection: "select" | "branch",
+  emitBlockOperations: (block: number) => readonly WasmInstruction[],
+  emitValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  if (
+    loop.entry.terminator.kind !== "branch" ||
+    loop.header.terminator.kind !== "conditional_branch" ||
+    loop.bodyCondition.terminator.kind !== "conditional_branch" ||
+    loop.trueBlock.terminator.kind !== "branch" ||
+    loop.falseBlock.terminator.kind !== "branch" ||
+    loop.latch.terminator.kind !== "branch"
+  ) {
+    throw new Error(
+      `Core function ${function_.name} lost its diamond-body loop certificate`,
+    );
+  }
+  const bodyArguments = loop.continuesOnTrue
+    ? loop.header.terminator.trueArguments
+    : loop.header.terminator.falseArguments;
+  const exitArguments = loop.continuesOnTrue
+    ? loop.header.terminator.falseArguments
+    : loop.header.terminator.trueArguments;
+  return [
+    ...emitBlockOperations(loop.entry.id),
+    ...emitEdgeAssignment(
+      loop.entry.terminator.arguments,
+      loop.header,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...wasmInstruction.blockVoid,
+    ...wasmInstruction.loopVoid,
+    ...emitBlockOperations(loop.header.id),
+    ...emitEdgeAssignment(
+      exitArguments,
+      loop.exit,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...emitValue(loop.header.terminator.condition),
+    ...(loop.continuesOnTrue ? wasmInstruction.i32EqualZero : []),
+    ...wasmInstruction.branchIf(1),
+    ...emitDiamondBodyIteration(
+      function_,
+      layout,
+      loop,
+      bodyArguments,
+      selection,
+      emitBlockOperations,
+      emitValue,
+    ),
+    ...wasmInstruction.branch(0),
+    ...wasmInstruction.end,
+    ...wasmInstruction.end,
+  ];
+}
+
+function emitDiamondBodyIteration(
+  function_: CoreFunction,
+  layout: FunctionValueLayout,
+  loop: DiamondBodyNaturalLoop,
+  bodyArguments: readonly CoreValueId[],
+  selection: "select" | "branch",
+  emitBlockOperations: (block: number) => readonly WasmInstruction[],
+  emitValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  if (
+    loop.bodyCondition.terminator.kind !== "conditional_branch" ||
+    loop.trueBlock.terminator.kind !== "branch" ||
+    loop.falseBlock.terminator.kind !== "branch" ||
+    loop.latch.terminator.kind !== "branch"
+  ) {
+    throw new Error(
+      `Core function ${function_.name} lost its diamond-body iteration certificate`,
+    );
+  }
+  const prelude = [
+    ...emitEdgeAssignment(
+      bodyArguments,
+      loop.bodyCondition,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...emitBlockOperations(loop.bodyCondition.id),
+  ];
+  const suffix = [
+    ...emitBlockOperations(loop.latch.id),
+    ...emitEdgeAssignment(
+      loop.latch.terminator.arguments,
+      loop.header,
+      function_,
+      layout,
+      emitValue,
+    ),
+  ];
+  if (selection === "select") {
+    const latchParameter = loop.latch.parameters[0];
+    const trueValue = loop.trueBlock.terminator.arguments[0];
+    const falseValue = loop.falseBlock.terminator.arguments[0];
+    if (
+      latchParameter === undefined || trueValue === undefined ||
+      falseValue === undefined
+    ) {
+      throw new Error(
+        `Core function ${function_.name} lost its selectable loop diamond`,
+      );
+    }
+    return [
+      ...prelude,
+      ...emitBlockOperations(loop.trueBlock.id),
+      ...emitValue(trueValue),
+      ...emitBlockOperations(loop.falseBlock.id),
+      ...emitValue(falseValue),
+      ...emitValue(loop.bodyCondition.terminator.condition),
+      ...wasmInstruction.select,
+      ...wasmInstruction.localSet(
+        requiredLocal(layout, function_, latchParameter.value),
+      ),
+      ...suffix,
+    ];
+  }
+  return [
+    ...prelude,
+    ...emitValue(loop.bodyCondition.terminator.condition),
+    ...wasmInstruction.ifVoid,
+    ...emitEdgeAssignment(
+      loop.bodyCondition.terminator.trueArguments,
+      loop.trueBlock,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...emitBlockOperations(loop.trueBlock.id),
+    ...emitEdgeAssignment(
+      loop.trueBlock.terminator.arguments,
+      loop.latch,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...wasmInstruction.else,
+    ...emitEdgeAssignment(
+      loop.bodyCondition.terminator.falseArguments,
+      loop.falseBlock,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...emitBlockOperations(loop.falseBlock.id),
+    ...emitEdgeAssignment(
+      loop.falseBlock.terminator.arguments,
+      loop.latch,
+      function_,
+      layout,
+      emitValue,
+    ),
+    ...wasmInstruction.end,
+    ...suffix,
+  ];
 }
 
 function emitStackValue(
@@ -1490,6 +2572,40 @@ function emitOperation(
     );
   }
   if (operation.kind === "call.direct") {
+    const inlineScalarTree = layout.inlineScalarTreeByCallResult.get(
+      operation.result,
+    );
+    if (inlineScalarTree !== undefined) {
+      return finish(
+        emitInlineScalarTree(
+          core,
+          operation,
+          inlineScalarTree,
+          importedFunctions,
+          functionIndices,
+          closureTargets,
+          closureTypeIndices,
+          textHandles,
+          getValue,
+        ),
+      );
+    }
+    const inlineLoop = layout.inlineLoopByCallResult.get(operation.result);
+    if (inlineLoop !== undefined) {
+      return finish(
+        emitInlineDiamondBodyLoop(
+          core,
+          operation,
+          inlineLoop,
+          importedFunctions,
+          functionIndices,
+          closureTargets,
+          closureTypeIndices,
+          textHandles,
+          getValue,
+        ),
+      );
+    }
     const inlineLayout = layout.inlineDiamondByCallResult.get(
       operation.result,
     );
@@ -1617,6 +2733,137 @@ function emitOperation(
   );
 }
 
+function emitInlineScalarTree(
+  core: CoreModule,
+  call: Extract<CoreOperation, { readonly kind: "call.direct" }>,
+  tree: InlineScalarTreeLayout,
+  importedFunctions: ReadonlyMap<string, number>,
+  functionIndices: readonly number[],
+  closureTargets: readonly ClosureTarget[],
+  closureTypeIndices: ReadonlyMap<CoreSignatureId, number>,
+  textHandles: ReadonlyMap<string, number>,
+  getCallerValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  const layout: FunctionValueLayout = {
+    localByValue: tree.localByValue,
+    typeByValue: valueTypes(tree.function),
+    operationByResult: new Map(
+      tree.function.blocks.flatMap((block) =>
+        block.operations.map((operation) =>
+          [operation.result, operation] as const
+        )
+      ),
+    ),
+    locals: [],
+    dispatchLocal: undefined,
+    byteIndexLocal: undefined,
+    affineMultiplierLocal: undefined,
+    affineOffsetLocal: undefined,
+    inlineDiamondByCallResult: new Map(),
+    inlineLoopByCallResult: new Map(),
+    inlineScalarTreeByCallResult: new Map(),
+  };
+  const getValue = (value: CoreValueId): readonly WasmInstruction[] =>
+    wasmInstruction.localGet(requiredLocal(layout, tree.function, value));
+  const emitOperations = (
+    block: CoreFunction["blocks"][number],
+  ): readonly WasmInstruction[] =>
+    block.operations.flatMap((operation) => {
+      if (operation.kind === "call.direct") {
+        const child = tree.callsByResult.get(operation.result);
+        if (child === undefined) {
+          throw new Error(
+            `Core inline tree ${tree.function.name} lost call result ${operation.result}`,
+          );
+        }
+        return [
+          ...emitInlineScalarTree(
+            core,
+            operation,
+            child,
+            importedFunctions,
+            functionIndices,
+            closureTargets,
+            closureTypeIndices,
+            textHandles,
+            getValue,
+          ),
+          ...wasmInstruction.localSet(
+            requiredLocal(layout, tree.function, operation.result),
+          ),
+        ];
+      }
+      return emitOperation(
+        core,
+        tree.function,
+        operation,
+        layout,
+        importedFunctions,
+        functionIndices,
+        closureTargets,
+        closureTypeIndices,
+        textHandles,
+        getValue,
+      );
+    });
+  const entry = tree.function.blocks[tree.function.entryBlock];
+  if (entry.parameters.length !== call.operands.length) {
+    throw new Error(
+      `Core inline tree ${tree.function.name} expects ${entry.parameters.length} operands; received ${call.operands.length}`,
+    );
+  }
+  const binding = [
+    ...call.operands.flatMap(getCallerValue),
+    ...[...entry.parameters].reverse().flatMap((parameter) =>
+      wasmInstruction.localSet(
+        requiredLocal(layout, tree.function, parameter.value),
+      )
+    ),
+  ];
+  if (tree.structure === "single") {
+    const returned = entry.terminator.kind === "return"
+      ? entry.terminator.values[0]
+      : undefined;
+    if (returned === undefined) {
+      throw new Error(`Core inline tree ${tree.function.name} lost its return`);
+    }
+    return [...binding, ...emitOperations(entry), ...getValue(returned)];
+  }
+  const diamond = simpleDiamond(tree.function);
+  if (
+    diamond === undefined || diamond.entry.terminator.kind !==
+      "conditional_branch" ||
+    diamond.trueBlock.terminator.kind !== "branch" ||
+    diamond.falseBlock.terminator.kind !== "branch"
+  ) {
+    throw new Error(
+      `Core inline tree ${tree.function.name} lost its diamond certificate`,
+    );
+  }
+  const trueValue = diamond.trueBlock.terminator.arguments[0];
+  const falseValue = diamond.falseBlock.terminator.arguments[0];
+  const selection = tree.total
+    ? [
+      ...emitOperations(diamond.trueBlock),
+      ...getValue(trueValue),
+      ...emitOperations(diamond.falseBlock),
+      ...getValue(falseValue),
+      ...getValue(diamond.entry.terminator.condition),
+      ...wasmInstruction.select,
+    ]
+    : [
+      ...getValue(diamond.entry.terminator.condition),
+      ...ifInstruction(wasmValueType(core, diamond.join.parameters[0].type)),
+      ...emitOperations(diamond.trueBlock),
+      ...getValue(trueValue),
+      ...wasmInstruction.else,
+      ...emitOperations(diamond.falseBlock),
+      ...getValue(falseValue),
+      ...wasmInstruction.end,
+    ];
+  return [...binding, ...emitOperations(diamond.entry), ...selection];
+}
+
 function emitInlineDiamond(
   core: CoreModule,
   call: Extract<CoreOperation, { readonly kind: "call.direct" }>,
@@ -1641,7 +2888,11 @@ function emitInlineDiamond(
     locals: [],
     dispatchLocal: undefined,
     byteIndexLocal: undefined,
+    affineMultiplierLocal: undefined,
+    affineOffsetLocal: undefined,
     inlineDiamondByCallResult: new Map(),
+    inlineLoopByCallResult: new Map(),
+    inlineScalarTreeByCallResult: new Map(),
   };
   const getInlineValue = (value: CoreValueId): readonly WasmInstruction[] =>
     emitStackValue(
@@ -1721,6 +2972,97 @@ function emitInlineDiamond(
     ),
     ...emitBlockOperations(diamond.entry),
     ...selection,
+  ];
+}
+
+function emitInlineDiamondBodyLoop(
+  core: CoreModule,
+  call: Extract<CoreOperation, { readonly kind: "call.direct" }>,
+  inline: InlineLoopLayout,
+  importedFunctions: ReadonlyMap<string, number>,
+  functionIndices: readonly number[],
+  closureTargets: readonly ClosureTarget[],
+  closureTypeIndices: ReadonlyMap<CoreSignatureId, number>,
+  textHandles: ReadonlyMap<string, number>,
+  getCallerValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  const inlineValueLayout: FunctionValueLayout = {
+    localByValue: inline.localByValue,
+    typeByValue: inline.typeByValue,
+    operationByResult: inline.operationByResult,
+    locals: [],
+    dispatchLocal: undefined,
+    byteIndexLocal: undefined,
+    affineMultiplierLocal: undefined,
+    affineOffsetLocal: undefined,
+    inlineDiamondByCallResult: new Map(),
+    inlineLoopByCallResult: new Map(),
+    inlineScalarTreeByCallResult: new Map(),
+  };
+  const getInlineValue = (value: CoreValueId): readonly WasmInstruction[] =>
+    emitStackValue(
+      core,
+      inline.function,
+      value,
+      inlineValueLayout,
+      importedFunctions,
+      functionIndices,
+      closureTargets,
+      closureTypeIndices,
+      textHandles,
+    );
+  const emitBlockOperations = (
+    block: CoreFunction["blocks"][number],
+  ): readonly WasmInstruction[] =>
+    block.operations.flatMap((operation) => {
+      if (!inline.localByValue.has(operation.result)) return [];
+      return emitOperation(
+        core,
+        inline.function,
+        operation,
+        inlineValueLayout,
+        importedFunctions,
+        functionIndices,
+        closureTargets,
+        closureTypeIndices,
+        textHandles,
+        getInlineValue,
+      );
+    });
+  const returned = inline.loop.exit.terminator.kind === "return"
+    ? inline.loop.exit.terminator.values[0]
+    : undefined;
+  if (returned === undefined) {
+    throw new Error(
+      `Core inline target ${inline.function.name} lost its return value`,
+    );
+  }
+  const entry = inline.function.blocks[inline.function.entryBlock];
+  if (entry.parameters.length !== call.operands.length) {
+    throw new Error(
+      `Core inline target ${inline.function.name} expects ${entry.parameters.length} operands; received ${call.operands.length}`,
+    );
+  }
+  const emitOperationsById = (block: number): readonly WasmInstruction[] =>
+    emitBlockOperations(inline.function.blocks[block]);
+  const body = emitDiamondBodyNaturalLoopRegion(
+    inline.function,
+    inlineValueLayout,
+    inline.loop,
+    diamondBodySelection(core, inline.function, inline.loop),
+    emitOperationsById,
+    getInlineValue,
+  );
+  return [
+    ...call.operands.flatMap(getCallerValue),
+    ...[...entry.parameters].reverse().flatMap((parameter) =>
+      wasmInstruction.localSet(
+        requiredLocal(inlineValueLayout, inline.function, parameter.value),
+      )
+    ),
+    ...body,
+    ...emitBlockOperations(inline.loop.exit),
+    ...getInlineValue(returned),
   ];
 }
 

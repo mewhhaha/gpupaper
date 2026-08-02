@@ -1,1 +1,16 @@
-{}
+{
+  "version": 2,
+  "gpuFrontend": {
+    "version": 3,
+    "throughput": "strict",
+    "root": "module",
+    "islands": [
+      { "rule": "module", "boundary": { "kind": "root" } },
+      {
+        "rule": "function",
+        "boundary": { "kind": "terminated", "terminal": ";" }
+      }
+    ],
+    "semantics": { "rules": {} }
+  }
+}

@@ -1,14 +1,14 @@
-fn left(value) = value * 3 + 17;
-fn right(value) = value * 5 - 29;
-fn join(value) = left(value) + right(value);
-fn classify(value) = if value < 0 then value + 101 else value - 103;
-fn rotate(value) = value * 9 + 7;
-fn finish(value, left_value, right_value) =
-  if value % 11 == 0 then value + left_value else value - right_value;
-fn step(value) =
-  let left_value = left(value) in
-  let right_value = right(value) in
-  finish(rotate(classify(join(value))), left_value, right_value);
+private: left value = @value 3 * 17 + ;
+private: right value = @value 5 * 29 - ;
+private: join value = @value call:left:1 @value call:right:1 + ;
+private: classify value = @value 0 < @value 101 + @value 103 - select! ;
+private: rotate value = @value 9 * 7 + ;
+private: finish value left_value right_value =
+  @value 11 % 0 == @value @left_value + @value @right_value - select! ;
+private: step value =
+  @value call:left:1 let:left_value
+  @value call:right:1 let:right_value
+  @value call:join:1 call:classify:1 call:rotate:1
+  @left_value @right_value call:finish:3 ;
 
-export fn run(seed, rounds) =
-  repeat rounds from seed as value { step(value) };
+export: run seed rounds = @rounds @seed repeat:step ;

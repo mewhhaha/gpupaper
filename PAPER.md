@@ -339,7 +339,58 @@ Zero is the controlled end-to-end producer. Its grammar, parser, Core adapter,
 equivalent Rust workloads, and benchmark live under `examples/zero`. It is test
 scaffolding, not a privileged source language.
 
-### 8.1 Structural complexity ladder
+### 8.1 Baba 8 strict-island frontend
+
+Zero's concrete syntax is a regular language chosen to lie inside Baba 8's Wasm
+parser class. A module is a nonempty sequence of semicolon-terminated function
+records. Each record has the form
+
+\[ v\;n\;p^*\;=\;i^+\;;, \]
+
+where \(v\) is `export:` or `private:`, \(n\) and each \(p\) are identifiers,
+and every \(i\) is one lexical instruction. Baba metadata declares the module as
+the root and the function as its sole repeated, terminated island under
+`throughput: "strict"`. Generation succeeds only when that island is a
+terminal-only transducer with at most seven states. Thus acceptance of the
+checked parser plan is an executable certificate that the concrete grammar
+satisfies Baba's restriction; it is not a proof for an arbitrary future grammar.
+
+The old infix grammar contained recursive `expr` references inside a function
+island. Baba 8 rejected it because replacing declared nested islands could not
+eliminate that recursion. Keeping it would require a separate recursive CPU
+parser and violate the selected frontend boundary. Treating a body as one opaque
+token would satisfy the automaton but make Baba's validation vacuous. Zero
+instead uses a postfix semantic algebra over a stack \(S\): constants and
+references push one expression; a binary instruction replaces \(x,y\) by
+\(x\mathbin{op}y\); `call:f:n` replaces the top \(n\) expressions by a direct
+call; and `select!` replaces \(p,t,f\) by the lazy expression
+`if p then t else f`. `repeat:f` replaces \(n,z\) by the bounded fold
+\(\operatorname{repeat}(n,z,f)\). `let:x` requires a singleton stack and binds
+that expression across the remaining suffix. A function is accepted by the
+adapter exactly when no transition underflows and the final stack has one
+expression. Function existence, call arity, lexical scope, and Core typing are
+then checked by the existing lowering and Core validators.
+
+For \(L\) UTF-16 source units and \(I\) instructions, Baba's deterministic lexer
+and bounded-state island transducer perform \(O(L+I)\) work for the certified
+plan. The postfix adapter performs \(O(I)\) work and retains \(O(D+I)\) memory,
+where \(D\le I\) is maximum stack depth and the \(O(I)\) term is the immutable
+expression tree. Calling `parser.validate()` and then `parser.parse()` would run
+the same lexing and island analysis twice. The compiler calls `parse()` once; in
+Baba 8 that integrated operation executes the generated Wasm lexer, the shared
+653-byte `simd128` validation transducer, and cursor materialization.
+
+With Baba 8.0.0, the checked Zero artifacts are 6,007 bytes of parser Wasm and
+16,148 bytes of plan, 22,155 bytes total. Baba 7.10.0 produced 17,983 and 68,015
+bytes respectively, 85,998 total, so the checked frontend payload decreases by
+63,843 bytes or 74.24%. The v8 plan inspection reports 46 lexer states, two
+islands, one strict root-loop island, one parallel long-region island, and 3,488
+packed profile bytes. These are empirical artifact facts. Lexer-error and
+unexpected-token tests exercise the Wasm lexer and SIMD validator diagnostics;
+the existing cursor-to-Core, differential runtime, and emitter-equality tests
+exercise successful parsing and semantic preservation.
+
+### 8.2 Structural complexity ladder
 
 Program difficulty is not a scalar. For workload \(w\), the benchmark records
 
@@ -392,6 +443,215 @@ samples only first-order scalar programs. The emitted structural vector, raw
 paired samples, source hashes, and output hashes make these limitations
 auditable.
 
+### 8.3 Zero/Rust counterexample analysis
+
+A 30-sample diagnostic run on 2026-08-02 used 100,000 outer rounds and admitted
+host contention. Median Zero/Rust nanoseconds per outer round were 0.84/0.10 for
+affine arithmetic, 1.26/1.46 for the diamond, 2.50/1.67 for the call graph,
+9.42/4.14 for the branch forest, 29.94/5.87 for the nested loop, and 2.94/4.41
+for the broad module. Median initialized Zero compilation ranged from 0.49 to
+1.28 milliseconds; fresh `rustc` processes ranged from 28.27 to 29.64
+milliseconds. These are empirical diagnostic observations, not admissible
+performance claims, because concurrent compiler work was present.
+
+Disassembly separates four causes that must not be conflated:
+
+1. LLVM partially unrolls the affine recurrence by eight and algebraically
+   composes eight affine steps into one multiply-add. For
+   \(f(x)=ax+b\pmod{2^{32}}\),
+   \(f^k(x)=a^kx+b\sum_{i=0}^{k-1}a^i\pmod{2^{32}}\). This explains the
+   unusually low Rust time without implying a general eightfold backend gap.
+2. Rust inlines the scalar call graphs. gpupaper currently preserves calls
+   except for a scalar diamond directly inside a canonical loop.
+3. A nested acyclic conditional with \(B\) blocks falls back to a dispatch loop
+   whose dynamic dispatch work is \(O(B)\) comparisons per visited transition. A
+   structured series-parallel region requires only the source predicates, hence
+   \(O(1)\) extra dispatch work.
+4. The constant four-trip inner loop is both dispatched and called by gpupaper;
+   LLVM structures, inlines, and fully unrolls it. The transformations are
+   separable and require different legality arguments.
+
+The first implementation correction is canonical natural-loop emission. Given a
+header predicate \(p\), exit edge \(e\), body edge \(b\), and back edge \(k\),
+the existing encoding
+
+\[ \texttt{loop}\{\texttt{if}(p)\{b;k;\operatorname{br}(loop)\}
+\texttt{else}\{e;\operatorname{br}(exit)\}\} \]
+
+is replaced by
+
+\[ \texttt{block}\{\texttt{loop}\{e;p';\operatorname{br\_if}(exit);b;k;
+\operatorname{br}(loop)\}\}, \]
+
+where \(p'=\neg p\) exactly when the source continues on true. Edge assignment
+\(e\) may execute before the condition because it writes only compiler-owned
+locals and the assigned values dominate the header; no Core effect is moved.
+Both encodings choose the same edge and establish the same block-parameter
+tuple. The replacement removes one `if`, one `else`, two unconditional branch
+depth adjustments, and one `unreachable` per loop without increasing dynamic
+work.
+
+The second correction extends expression-tree stack sinking. An operation
+\(v=o(v_1,\ldots,v_n)\) may move from its definition to its sole use when it is
+pure, total, scalar, both sites are in one block, and `use_count(v)=1`. SSA
+dominance gives availability, purity permits reordering, totality preserves trap
+behavior, and the single-use condition prevents duplication. The work remains
+one operation, local traffic decreases by one set/get pair, and live-local
+storage decreases by one Wasm value. Division and remainder remain excluded
+because Wasm traps on a zero divisor and signed minimum divided by negative one.
+
+The remaining candidate order is theoretically constrained: structure
+series-parallel regions using postdominators before considering inlining; inline
+only effect-free, nonrecursive scalar callees under an explicit expanded-size
+budget; then fully unroll only statically bounded loops whose cloned body
+preserves the Core effect order. Dispatch elimination changes overhead without
+duplicating work, whereas inlining and unrolling trade code size for dynamic
+work and therefore require workload-independent cost models. LLVM likewise
+represents inlining as cost versus threshold and guards loop unrolling with a
+profitability model; those mechanisms are comparison points, not proofs that a
+particular threshold is correct for gpupaper.
+
+For an acyclic CFG, gpupaper admits direct structured emission only when a
+recursive postdominator decomposition succeeds. At conditional block \(h\), its
+immediate postdominator \(j\) is the join. The two successor regions must be
+vertex-disjoint before \(j\); each is emitted as one Wasm arm, edge arguments
+assign \(j\)'s block parameters, and compilation resumes at \(j\). A global
+visited set rejects overlapping arms, and cycle detection rejects back edges.
+Thus the accepted class is a conservative series-parallel subset: rejection
+falls back to the semantics-preserving dispatcher. Iterative postdominator sets
+cost \(O(B^2E)\) with the current set representation and \(O(B^2)\) temporary
+membership in the worst case. This is acceptable for the present small-function
+backend but is explicitly not the asymptotically preferred Lengauer-Tarjan
+representation for large CFGs.
+
+The next cyclic certificate is deliberately narrow. A diamond-body natural loop
+contains seven distinct blocks: preheader \(e\), header \(h\), body predicate
+\(d\), arms \(t,f\), latch \(l\), and exit \(x\). The only back edge is \(l\to
+h\); both arms target \(l\); and the header's other successor is \(x\). This
+graph maps directly to one Wasm `block`, one `loop`, and one nested `if`. Edge
+assignments implement the corresponding SSA parallel copies. The certificate
+rejects additional entries, exits, back edges, or overlapping arm blocks. Work
+and emitted control operators are \(O(1)\) per source iteration, whereas the
+dispatcher performs up to seven state comparisons per transition. This special
+case is not claimed to solve general reducible control flow; it is the smallest
+extension justified by the nested-loop counterexample.
+
+Full unrolling was derived and tested but rejected. The candidate required an
+integer constant \(0\le n\le8\), header condition `remaining > 0`, unique latch
+argument `remaining - 1`, and \(nO_b\le64\) cloned body operations. Those
+conditions prove exactly \(n\) iterations and preserve body effect order. On the
+four-trip example, however, unrolling expanded the payload from 196 to 340 bytes
+(73%) while changing the contended median only from approximately 12.55 to 11.80
+nanoseconds per outer round (6%). This identifies the outer-loop call as the
+dominant remaining cost and falsifies operation count alone as a sufficient
+unroll-profit model. The implementation was removed; future unrolling requires a
+model that includes eliminated call boundaries or measured target-specific
+control cost.
+
+The implemented inlining case therefore couples call elimination with the
+structured-loop certificate. A callee is eligible only when it is referenced by
+exactly one direct call, has no closure reference, contains only scalar
+constants and scalar binary operations, has a diamond-body natural-loop
+certificate, and contains at most 24 operations. The unique call must occur in
+the body of a canonical caller loop. Argument values are first assigned to fresh
+callee-parameter locals, preserving eager evaluation exactly once; the certified
+nested region is then emitted in place and its return value becomes the call
+result. Since residual reachability removes the uniquely referenced standalone
+callee, code is moved rather than duplicated. Analysis scans all Core operations
+once per candidate, \(O(O)\), and adds at most 24 operations to one caller
+before removing the same callee operations and a call boundary. Recursive,
+effectful, aggregate, multiply referenced, and unstructured callees remain
+calls.
+
+The first inlining measurement refined the failed-unroll diagnosis. Structured
+inlining reduced the payload from 196 to 189 bytes but changed the contended
+median only from about 12.55 to 11.88 nanoseconds per outer round. The call was
+not independently dominant; call and inner-loop control were jointly dominant.
+Accordingly, constant-trip unrolling is reconsidered only inside this unique,
+effect-free, structurally hot inlined call. The earlier bounds \(n\le8\) and
+\(nO_b\le64\) still apply, but the profitability comparison is now against the
+residual module after both the call and standalone callee have been removed.
+That combined hypothesis also failed: the payload grew from 189 to 332 bytes
+(76%) while the median changed from about 11.88 to 11.53 nanoseconds (3%). The
+unroll implementation was again removed. Disassembly instead identifies four
+unpredictable conditional diamonds per outer round; Rust if-converts these to
+`select`, so loop-body if-conversion is the next independent hypothesis.
+
+Loop-body if-conversion is legal when the predicate region and both arm regions
+contain only pure total scalar operations, both arms supply exactly one value to
+one latch parameter, and neither arm accepts edge arguments. Eagerly evaluating
+both arms cannot add effects or traps under these conditions; `select` chooses
+the same value as the conditional. This removed four unpredictable branches per
+outer round. The nested workload fell to 184 bytes and approximately 5.09
+nanoseconds per outer round, versus Rust at 5.91 in the paired diagnostic run.
+This is executable and empirical evidence under contention, not a universal
+claim that if-conversion is profitable for predictable branches.
+
+For a unique scalar call tree, beta reduction supplies a more general inlining
+model. Every function must be single-block or a certified scalar diamond; every
+operation must be a scalar constant, scalar binary operation, or direct call;
+every callee must have exactly one module reference; the call graph must be
+acyclic; and the expanded tree may contain at most 32 operations. Fresh locals
+bind every formal parameter and SSA result, so argument evaluation occurs once
+in source order. Conditional arms remain lazy unless the recursively expanded
+arm trees are total, in which case the existing selection proof applies. With
+unique references, residualization normally removes every standalone callee, so
+the transformation changes \(k\) calls into \(k\) local bindings without
+duplicating operations; an independently exported callee remains, but the
+32-operation bound still limits duplication. The current repeated
+reference-count scans cost \(O(FO)\) in the worst case; emitted tree size is
+bounded by 32 Core operations.
+
+The call-tree hypothesis succeeded empirically: the call-graph workload changed
+from approximately 2.5--2.7 to 1.44 nanoseconds per round, versus Rust at 1.64,
+while the payload grew from 239 to 265 bytes because explicit frame locals cost
+more bytes than the removed tiny function shells. This validates runtime call
+elimination but refutes the stronger size-neutral hypothesis; operation
+nonduplication does not imply byte-size nonincrease.
+
+The affine recurrence admits an algebraic optimization rather than heuristic
+unrolling. Wrapping i32 affine maps are pairs \((a,b)\) acting as \(x\mapsto
+ax+b\pmod{2^{32}}\), with composition
+
+\[ (a,b)\circ(c,d)=(ac,ad+b)\pmod{2^{32}}. \]
+
+This operation is associative and has identity \((1,0)\), so the maps form a
+monoid. Binary exponentiation applies selected powers directly to the carried
+state and squares the base map each step, computing \(f^n(x)\) in \(O(\log n)\)
+wrapping operations and \(O(1)\) locals instead of \(O(n)\). The certificate
+requires a canonical two-parameter natural loop, header test `remaining > 0`,
+latch `remaining - 1`, and state latch equal to
+`state * constant_a + constant_b`. The affine expression may occur directly in
+the body or behind one direct unary call whose callee is a single block
+containing exactly the two constants, multiply, add, and return. Looking through
+that call is beta reduction of a pure total function, not speculative inlining;
+the exact operation catalog excludes effects, traps, recursion, and hidden
+state. The loop body may contain no operations beyond the certified recurrence
+and counter update. Negative and zero counts retain the initial state. The
+transformation is exact for all i32 inputs by induction over the bits of \(n\);
+it does not depend on division by \(a-1\), which need not be invertible modulo
+\(2^{32}\). Recognition constructs result maps for the caller and possible
+callee and therefore costs \(O(O_f+O_g)\) work and memory. Non-affine,
+effectful, multi-state, or noncanonical loops retain ordinary lowering. A cached
+caller's content identity includes the certified multiplier and offset, so
+changing a callee cannot reuse machine code specialized for stale affine
+coefficients.
+
+Affine acceleration also creates a measurement counterexample: dividing a
+near-clock-resolution batch by 800,000 source rounds produced an apparent
+0.00074 nanoseconds per round. The normalization is mathematically defined but
+the observed numerator is not precise enough. Runtime sampling therefore
+calibrates a repetition count for each compiler by doubling until its timed
+batch reaches at least 5 milliseconds, capped at 131,072 repetitions. If clock
+quantization is \(q\) and elapsed batch time is \(T\), relative quantization
+error is bounded approximately by \(q/T\); batching increases \(T\) without
+changing the per-round estimator. Separate repetition counts avoid making the
+slower compiler inherit the faster compiler's batch count; pairing applies to
+normalized per-round estimates and alternating sample order, not equal raw
+invocation counts. The cap is a practical runtime bound, and reports expose
+whether each compiler reached the target so undersized samples can be rejected
+rather than silently trusted.
+
 ## 9. Limitations
 
 - The managed runtime uses host-side handles rather than a standardized public
@@ -416,13 +676,79 @@ auditable.
 6. MLIR Dialect Conversion documentation, LLVM Project.
 7. Brent, “The Parallel Evaluation of General Arithmetic Expressions,” Journal
    of the ACM 21(2), 1974.
+8. Ramsey, “Beyond Relooper: Recursive Generation of WebAssembly,” 2026.
+9. LLVM Project, `InlineCost.h` and `LoopUnrollPass.cpp`, cost models for
+   inlining and loop unrolling.
+10. Baba 8.0.0 changelog, generated-Wasm runtime, and WebGPU frontend profile,
+    `github.com/mewhhaha/baba` and `jsr:@mewhhaha/baba@8.0.0`.
 
 ## 11. Continuous implementation log
+
+### 2026-08-02: Baba 8 CPU-Wasm frontend
+
+The controlled frontend moved from Baba 7.10.0 to 8.0.0 and regenerated both
+version-coupled parser artifacts. Baba 8 removes the LR Wasm parser in favor of
+its shared strict SIMD island transducer. The former recursive infix Zero
+grammar was a concrete counterexample to the new parser class, so Zero now
+presents regular function records and a postfix semantic stack as specified in
+Section 8.1. No CPU parser fallback remains: one Baba `parse()` call performs
+Wasm lexing and SIMD validation before cursor materialization, and the existing
+adapter begins only at the cursor boundary.
+
+Generation itself certifies the strict island restriction. Seventeen Zero tests
+cover successful cursor lowering, lexical and structural diagnostics, stack and
+scope failures, runtime differential cases, affine cache invalidation, lazy
+partial arms, emitter byte equality, and payload bounds. The generated parser
+plus plan shrank from 85,998 to 22,155 bytes.
+
+A fresh 30-sample, 100,000-round diagnostic run admitted competing compiler
+work, and every calibrated batch reached five milliseconds. Median Baba
+lex/validate/parse time ranged from 0.127 to 0.232 milliseconds; initialized
+Zero compilation ranged from 0.611 to 1.133 milliseconds, versus fresh `rustc`
+processes at 31.30 to 33.30 milliseconds. Median Zero/Rust nanoseconds per
+semantic outer round and paired median ratios were: affine 0.000162/0.105
+(0.00154), diamond 1.287/1.487 (0.857), call graph 1.509/1.724 (0.879), branch
+forest 4.617/4.381 (1.071), nested loop 5.195/5.929 (0.862), and broad module
+2.518/4.417 (0.562). Zero payloads were 146, 135, 265, 230, 199, and 391 bytes;
+Rust payloads remained 226, 371, 326, 236, 280, and 200 bytes. The first Baba 8
+run exposed that the regular syntax placed the affine body behind a unary call;
+extending the existing affine certificate through that exact pure call restored
+the logarithmic monoid lowering. These are empirical diagnostic observations,
+not uncontended performance claims.
+
+### 2026-08-02: Rust-workload counterexample cycle
+
+Nine paper/implementation/measurement cycles replaced ad hoc dispatch with
+certified structure, canonicalized natural loops, sank single-use total scalar
+trees, if-converted total loop diamonds, inlined bounded unique scalar call
+trees, and accelerated certified affine recurrences by monoid exponentiation.
+General and fused full unrolling were both implemented, measured, rejected, and
+removed because 73--76% payload growth bought only 3--6% in the nested case.
+
+The final 30-sample diagnostic run used independently calibrated batches of at
+least 5 milliseconds; every compiler/workload pair reached that floor. Median
+Zero/Rust nanoseconds per semantic outer round and their ratios were: affine
+0.000162/0.105 (0.0015), diamond 1.234/1.461 (0.849), call graph 1.495/1.705
+(0.878), branch forest 4.486/4.190 (1.082), nested loop 4.859/5.777 (0.850), and
+broad module 2.444/4.319 (0.550). Zero payloads were respectively 134, 135, 265,
+230, 184, and 391 bytes; Rust payloads were 226, 371, 326, 236, 280, and 200
+bytes. Initialized Zero compilation medians ranged from 0.49 to 1.18
+milliseconds, versus 26.53 to 27.61 milliseconds for fresh `rustc` processes;
+those boundaries remain incomparable.
+
+This is empirical diagnostic evidence because competing compiler work was
+present. The affine per-round value measures semantic throughput after reducing
+100,000 source iterations to logarithmic work; it is not an instruction latency.
+The branch forest is the sole final runtime loss, about 8%, and is small enough
+that an uncontended run is required before motivating another mechanism. The new
+differential, large-count, partial-arm laziness, emitter-equality, and
+payload-bound tests are executable validations; they do not prove equivalence
+outside the certified shapes.
 
 ### 2026-08-02: Zero structural complexity ladder
 
 The single affine-diamond workload was replaced by six paired Zero/Rust
-workloads covering the structural dimensions defined in Section 8.1. The
+workloads covering the structural dimensions defined in Section 8.2. The
 benchmark now emits one report per workload with Core and binary-plan counts,
 hashes, boundary-separated compilation timings, and paired runtime samples. A
 three-sample diagnostic run at 10,000 outer rounds passed all 420 differential

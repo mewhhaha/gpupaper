@@ -151,17 +151,19 @@ source semantics part of gpupaper:
 
 ```text
 Zero source
-  -> Baba-generated Wasm parser
+  -> Baba 8 CPU-Wasm lexer and strict SIMD parser/validator
   -> cursor-to-Core frontend adapter
   -> validated Core and deterministic Wasm plan
   -> Rust compiled to WebAssembly plan emitter
   -> payload .wasm
 ```
 
-Zero has one wrapping `i32` type, first-order functions, lexical bindings,
-direct calls, conditionals, and a bounded fold. That is enough to exercise SSA
-values, multi-function calls, CFG joins, loops, validation, and executable
-output while keeping the source-to-Core mapping auditable.
+Zero has one wrapping `i32` type and a regular, postfix concrete syntax chosen
+to fit Baba 8's strict island parser class. Its semantic adapter provides
+first-order functions, lexical bindings, direct calls, lazy conditionals, and a
+bounded fold. That is enough to exercise SSA values, multi-function calls, CFG
+joins, loops, validation, and executable output while keeping the source-to-Core
+mapping auditable.
 
 ```sh
 deno task zero:grammar

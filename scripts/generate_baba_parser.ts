@@ -16,7 +16,6 @@ const metadata = parseMetadata(await Deno.readTextFile(metadataPath));
 const bundle = generate(grammar, {
   name: languageName,
   metadata,
-  wasm: { parserStateLimit: 100_000 },
 });
 
 await Deno.mkdir(outputDirectory, { recursive: true });
