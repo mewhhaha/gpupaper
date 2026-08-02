@@ -125,7 +125,23 @@ type FunctionValueLayout = {
   readonly locals: readonly number[];
   readonly dispatchLocal: number | undefined;
   readonly byteIndexLocal: number | undefined;
+  readonly inlineDiamondByCallResult: ReadonlyMap<
+    CoreValueId,
+    InlineDiamondLayout
+  >;
 };
+
+type InlineDiamondLayout = {
+  readonly function: DucklangCoreFunction;
+  readonly localByValue: ReadonlyMap<CoreValueId, number>;
+  readonly typeByValue: ReadonlyMap<CoreValueId, CoreTypeId>;
+  readonly operationByResult: ReadonlyMap<
+    CoreValueId,
+    DucklangCoreOperation
+  >;
+};
+
+const maximumInlineDiamondOperations = 16;
 
 type ClosureTarget = {
   readonly functionId: CoreFunctionId;
@@ -223,6 +239,9 @@ export function lowerDucklangCoreToFcgAndWasm(
       closureTargets,
       closureTypeIndices,
       textLiterals,
+      inlineDiamondFunctions: core.functions.filter((function_) =>
+        inlineableScalarDiamond(core, function_) !== undefined
+      ),
     });
   const fcgFunctions: FcgFunction[] = [];
   for (const function_ of core.functions) {
@@ -784,6 +803,48 @@ function planFunctionValues(
       locals.push(wasmValueType(core, operation.type));
     }
   }
+  const inlineDiamondByCallResult = new Map<
+    CoreValueId,
+    InlineDiamondLayout
+  >();
+  const naturalLoop = simpleNaturalLoop(function_);
+  if (naturalLoop !== undefined) {
+    for (const operation of naturalLoop.body.operations) {
+      if (operation.kind !== "call.direct") continue;
+      const inlineFunction = core.functions[operation.functionId];
+      if (inlineFunction === undefined) continue;
+      const diamond = inlineableScalarDiamond(core, inlineFunction);
+      if (diamond === undefined) continue;
+      const inlineLocalByValue = new Map<CoreValueId, number>();
+      for (const block of inlineFunction.blocks) {
+        for (const parameter of block.parameters) {
+          inlineLocalByValue.set(parameter.value, nextLocal);
+          nextLocal += 1;
+          locals.push(wasmValueType(core, parameter.type));
+        }
+        for (const inlineOperation of block.operations) {
+          inlineLocalByValue.set(inlineOperation.result, nextLocal);
+          nextLocal += 1;
+          locals.push(wasmValueType(core, inlineOperation.type));
+        }
+      }
+      inlineDiamondByCallResult.set(operation.result, {
+        function: inlineFunction,
+        localByValue: inlineLocalByValue,
+        typeByValue: valueTypes(inlineFunction),
+        operationByResult: new Map(
+          inlineFunction.blocks.flatMap((block) =>
+            block.operations.map((operation) =>
+              [
+                operation.result,
+                operation,
+              ] as const
+            )
+          ),
+        ),
+      });
+    }
+  }
   let dispatchLocal: number | undefined;
   if (
     function_.blocks.length > 1 && simpleDiamond(function_) === undefined &&
@@ -811,6 +872,7 @@ function planFunctionValues(
     locals,
     dispatchLocal,
     byteIndexLocal,
+    inlineDiamondByCallResult,
   };
 }
 
@@ -1061,6 +1123,36 @@ function simpleDiamond(
     return undefined;
   }
   return { entry, trueBlock, falseBlock, join };
+}
+
+function inlineableScalarDiamond(
+  core: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+): ReturnType<typeof simpleDiamond> {
+  const diamond = simpleDiamond(function_);
+  if (
+    diamond === undefined || diamond.join.operations.length !== 0 ||
+    diamond.join.terminator.kind !== "return" ||
+    diamond.join.terminator.values.length !== 1 ||
+    diamond.join.terminator.values[0] !== diamond.join.parameters[0]?.value
+  ) {
+    return undefined;
+  }
+  const operations = function_.blocks.flatMap((block) => block.operations);
+  const definitionTypes = function_.blocks.flatMap((block) => [
+    ...block.parameters.map((parameter) => parameter.type),
+    ...block.operations.map((operation) => operation.type),
+  ]);
+  if (
+    operations.length > maximumInlineDiamondOperations ||
+    definitionTypes.some((type) => core.types[type]?.kind !== "scalar") ||
+    operations.some((operation) =>
+      operation.kind !== "constant" && operation.kind !== "scalar.binary"
+    )
+  ) {
+    return undefined;
+  }
+  return diamond;
 }
 
 function simpleNaturalLoop(
@@ -1371,6 +1463,24 @@ function emitOperation(
     );
   }
   if (operation.kind === "call.direct") {
+    const inlineLayout = layout.inlineDiamondByCallResult.get(
+      operation.result,
+    );
+    if (inlineLayout !== undefined) {
+      return finish(
+        emitInlineDiamond(
+          core,
+          operation,
+          inlineLayout,
+          importedFunctions,
+          functionIndices,
+          closureTargets,
+          closureTypeIndices,
+          textHandles,
+          getValue,
+        ),
+      );
+    }
     return finish([
       ...getOperands(),
       ...wasmInstruction.call(functionIndices[operation.functionId]),
@@ -1478,6 +1588,90 @@ function emitOperation(
   throw new Error(
     `${operation.span.file}:${operation.span.start}: unhandled Core operation ${operation.kind}`,
   );
+}
+
+function emitInlineDiamond(
+  core: DucklangCoreModule,
+  call: Extract<DucklangCoreOperation, { readonly kind: "call.direct" }>,
+  inline: InlineDiamondLayout,
+  importedFunctions: ReadonlyMap<string, number>,
+  functionIndices: readonly number[],
+  closureTargets: readonly ClosureTarget[],
+  closureTypeIndices: ReadonlyMap<CoreSignatureId, number>,
+  textHandles: ReadonlyMap<string, number>,
+  getCallerValue: (value: CoreValueId) => readonly WasmInstruction[],
+): readonly WasmInstruction[] {
+  const diamond = inlineableScalarDiamond(core, inline.function);
+  if (diamond === undefined) {
+    throw new Error(
+      `Core inline target ${inline.function.name} lost its diamond certificate`,
+    );
+  }
+  const inlineValueLayout: FunctionValueLayout = {
+    localByValue: inline.localByValue,
+    typeByValue: inline.typeByValue,
+    operationByResult: inline.operationByResult,
+    locals: [],
+    dispatchLocal: undefined,
+    byteIndexLocal: undefined,
+    inlineDiamondByCallResult: new Map(),
+  };
+  const getInlineValue = (value: CoreValueId): readonly WasmInstruction[] =>
+    wasmInstruction.localGet(
+      requiredLocal(inlineValueLayout, inline.function, value),
+    );
+  const emitBlockOperations = (
+    block: DucklangCoreFunction["blocks"][number],
+  ): readonly WasmInstruction[] =>
+    block.operations.flatMap((operation) =>
+      emitOperation(
+        core,
+        inline.function,
+        operation,
+        inlineValueLayout,
+        importedFunctions,
+        functionIndices,
+        closureTargets,
+        closureTypeIndices,
+        textHandles,
+        getInlineValue,
+      )
+    );
+  if (diamond.entry.terminator.kind !== "conditional_branch") {
+    throw new Error(
+      `Core inline target ${inline.function.name} has no diamond condition`,
+    );
+  }
+  const trueValue = diamond.trueBlock.terminator.kind === "branch"
+    ? diamond.trueBlock.terminator.arguments[0]
+    : undefined;
+  const falseValue = diamond.falseBlock.terminator.kind === "branch"
+    ? diamond.falseBlock.terminator.arguments[0]
+    : undefined;
+  if (trueValue === undefined || falseValue === undefined) {
+    throw new Error(
+      `Core inline target ${inline.function.name} has no diamond result`,
+    );
+  }
+  return [
+    ...call.operands.flatMap(getCallerValue),
+    ...[...diamond.entry.parameters].reverse().flatMap((parameter) =>
+      wasmInstruction.localSet(
+        requiredLocal(inlineValueLayout, inline.function, parameter.value),
+      )
+    ),
+    ...emitBlockOperations(diamond.entry),
+    ...getInlineValue(diamond.entry.terminator.condition),
+    ...ifInstruction(
+      wasmValueType(core, diamond.join.parameters[0]!.type),
+    ),
+    ...emitBlockOperations(diamond.trueBlock),
+    ...getInlineValue(trueValue),
+    ...wasmInstruction.else,
+    ...emitBlockOperations(diamond.falseBlock),
+    ...getInlineValue(falseValue),
+    ...wasmInstruction.end,
+  ];
 }
 
 function emitBytesGenerate(

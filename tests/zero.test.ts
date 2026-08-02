@@ -108,6 +108,20 @@ Deno.test("Zero rejects a standalone module without an export", async () => {
   );
 });
 
+Deno.test("Zero loop-call fusion preserves conditional arm laziness", async () => {
+  const compiled = await compileZeroSource(
+    "fusion.zero",
+    `
+      fn choose(value) = if value > 0 then 42 else 1 / value;
+      export fn run(value, rounds) =
+        repeat rounds from value as current { choose(current) };
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(1, 1), 42);
+  assertEquals(run(0, 0), 0);
+});
+
 async function instantiate(wasm: Uint8Array): Promise<WebAssembly.Instance> {
   const module = await WebAssembly.compile(Uint8Array.from(wasm));
   return await WebAssembly.instantiate(module);

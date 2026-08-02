@@ -5591,6 +5591,61 @@ callable from an export, is absent from the instantiated export object, and that
 a module with no public root is rejected. This is executable validation of the
 boundary, not yet an implementation of reachability pruning.
 
+#### 7.13.6 Certified loop-call diamond fusion
+
+Let a call in the body `B` of the natural-loop certificate target a function
+whose CFG is the diamond `(E,T,F,J)` from Section 7.13.4 without a back-edge.
+The admitted callee has one result, `J` contains no operations and returns its
+sole parameter, and every definition has a scalar type. Its operations are only
+constants and scalar binary operations. At most 16 operations are admitted.
+Calls, host operations, managed values, stores, resources, regions, closures,
+multiple exits, recursion, and arbitrary CFGs are outside this certificate.
+
+Fusion substitutes the diamond at the direct call's Wasm emission point. It
+first evaluates every already-ordered caller operand once, then assigns the
+values in reverse to fresh locals representing the callee entry parameters.
+Every other callee SSA definition receives a fresh caller local. The condition
+and exactly one arm execute, and the selected branch argument becomes the call
+result. This is alpha-renaming plus call-by-value beta reduction, expressed as a
+structured Wasm `if (result t)` rather than a Core CFG rewrite; it therefore
+leaves the surrounding four-block natural-loop certificate intact.
+
+Relate the pre-call states by equality of caller locals. Parallel parameter
+assignment establishes equality between actual arguments and renamed formal
+locals. Induction over the entry and selected arm operations preserves equality
+for every renamed SSA definition. Wasm's `if` selects the same nonzero branch,
+and the branch argument equals the callee return and hence the original call
+result. Argument evaluation, partial scalar traps, and arm laziness are
+preserved because arguments are captured once and the unselected arm is not
+emitted on the executed path. This is a local simulation proof for the admitted
+certificate, not a proof of general inlining.
+
+For `n` loop iterations, let `C_call` be the engine's dynamic direct-call cost,
+`C_copy` the cost of the extra local transfers after optimization, `D` the
+one-time compilation/code-cache cost of duplicated code, and `m <= 16` the
+callee operation count. Fusion is runtime-profitable only if
+
+```text
+n(C_call - C_copy) > D.
+```
+
+Both forms retain `Theta(nm)` payload work and `Theta(m)` scalar storage. The
+current policy treats loop membership as a hotness prior and the 16-operation
+limit as a code-growth guard; neither proves the inequality for a particular
+engine or trip count. Retaining the original callee can increase bytes even
+when runtime improves. Deleting it requires the separate reachability argument
+from Section 7.13.5. The compiler scans only the certified body and at most 16
+callee operations, so selection is `O(1)` for this exact loop shape. Every
+callee that may affect a cached caller is included in the backend environment
+identity; changing its body therefore invalidates dependent cached emission.
+
+The backend implements this exact certificate. The Zero differential workload
+exercises the fused call across signed boundary values and iteration counts. A
+separate conformance case proves that the unselected trapping arm remains lazy
+and that zero iterations never enter the callee. These are executable
+validations of the simulation obligations; the performance inequality remains
+an empirical hypothesis until measured.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9769,6 +9824,34 @@ were independently contended and therefore cannot establish a speedup or
 regression. The result preserves the leading hypothesis: dynamic call and
 callee-local overhead, not export metadata, explains the remaining static
 difference and may explain part of the runtime gap.
+
+### 2026-08-02: certified loop-call fusion closes most of the runtime gap
+
+Section 7.13.6 derives and implements only small scalar diamonds called from a
+certified natural-loop body. Fresh locals capture arguments once and alpha-rename
+callee definitions; the surrounding loop remains structured. Ten Zero tests and
+the public natural-loop test pass, including a fused conditional whose
+unselected arm would trap and a zero-iteration case that must not enter the
+callee. Backend cache identity now includes every eligible callee body.
+
+`measurements/zero-loop-call-fusion-diagnostic-2026-08-02.json` retains one
+contended 30-pair process. Zero measured 2.878 ns/iteration, Rust measured 1.463,
+and the paired ratio was 1.940. The artifact grew from 233 to 334 bytes, or
+43.3%, while remaining smaller than Rust's 371 bytes. Relative to the prior
+independently contended process, Zero's median fell by 25.4%; this is diagnostic
+evidence consistent with the call-boundary hypothesis, not an admissible
+cross-process speedup claim. The static growth is predicted by retaining both
+the original callee and its fused copy. Export-root reachability is therefore
+the next derived transformation; local pressure and redundant scalar transfers
+remain subsequent hypotheses.
+
+The full Ducklang corpus supplies a counterexample to universal code growth.
+With the same transform, editor shrank from 24,460 to 24,440 bytes, codex from
+226,211 to 226,149, and tar from 26,106 to 26,104; grep remained 3,911 bytes.
+The deterministic size sentinels were updated only after all executable corpus
+semantics passed. These four observations show that local/control encoding can
+offset duplication, but they do not identify runtime wins or a general size
+law.
 
 ## References
 
