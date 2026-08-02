@@ -25,7 +25,7 @@ defines gpupaper's architecture or public target boundary.
 ## Install
 
 ```sh
-deno add jsr:@mewhhaha/gpupaper@0.1.1
+deno add jsr:@mewhhaha/gpupaper@0.1.2
 ```
 
 The default entrypoint contains Core, Core-to-Wasm lowering, TypeScript CPU
