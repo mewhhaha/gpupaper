@@ -46,6 +46,7 @@ not admissible speedup evidence:
 - `zero-loop-call-fusion-diagnostic-2026-08-02.json`
 - `zero-reachability-diagnostic-2026-08-02.json`
 - `zero-stack-sinking-diagnostic-2026-08-02.json`
+- `zero-eager-select-diagnostic-2026-08-02.json`
 
 The peer record deliberately contains three incomparable boundaries. It must not
 be converted into a cross-compiler speedup ratio.

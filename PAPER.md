@@ -5727,6 +5727,46 @@ its expression. Differential Zero tests cover signed boundary values and a
 partial division that is deliberately not admitted. This establishes executable
 validation for the selected total subset, not general effect-aware scheduling.
 
+#### 7.13.9 Eager selection for total diamonds
+
+A fused scalar diamond may use Wasm `select` instead of `if` only when every
+entry and arm operation satisfies the total-pure predicate from Section 7.13.8.
+The backend emits the true value, the false value, and the condition, then
+`select`. Both arms are evaluated eagerly, whereas the source conditional is
+lazy; totality and purity are therefore semantic premises rather than cost
+hints. A diamond containing division, remainder, effects, allocation, state, or
+another call retains structured `if`.
+
+Let `c` be the condition and `t` and `f` the two arm computations. Source
+evaluation produces `t` when `c != 0` and `f` otherwise. Eager evaluation
+produces both values before Wasm `select` returns the same chosen value. Since
+`t` and `f` terminate, cannot trap, and have no observations other than their
+values, evaluating the unchosen arm and commuting it with the condition cannot
+change return, trap, effect, or divergence behavior. This proof fails
+immediately for `if c then 1 else 1/0`, which is retained as an executable
+counterexample.
+
+If arm costs are `T` and `F`, branch cost is `B(p)` at true probability `p`, and
+select overhead is `S`, the dynamic break-even condition is
+
+```text
+T + F + S < pT + (1-p)F + B(p).
+```
+
+Thus eager selection is attractive only when avoided branch cost exceeds the
+unchosen arm's work. The current policy establishes semantic legality but lacks
+profile probabilities and an engine-calibrated cost model; it applies only
+inside the existing at-most-16-operation loop-fusion certificate. Selection
+work is `Theta(m)` over the admitted callee and needs no new payload storage.
+Binary size replaces a typed `if`/`else`/`end` envelope with one opcode but may
+retain both arm instruction sequences, which were already present statically.
+
+The Wasm plan vocabulary now includes untyped scalar `select`, and inline
+emission chooses it only after rechecking the total-pure certificate. The Zero
+recurrence exercises a roughly unpredictable sign branch; the separate division
+fixture proves the legality boundary remains lazy. This is a proved local
+equivalence with executable counterexample coverage; profitability is empirical.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9971,6 +10011,32 @@ instructions without a corresponding runtime improvement refutes local traffic
 as the dominant V8 bottleneck for this workload; the engine evidently removes
 most of that administrative work itself. Branch selection and bounded unrolling
 remain the two visible differences with Rust's optimized loop.
+
+### 2026-08-02: eager selection bridges the Rust runtime gap
+
+Section 7.13.9 strengthens the fused-diamond certificate with totality and emits
+eager Wasm `select` only under that stronger premise. The generated Zero module
+replaces the inner `if` with two total arm expressions and `select`; its division
+counterexample still uses lazy `if`. All 643 tests pass, including the full
+Ducklang corpus and Rust/Wasm-versus-TypeScript byte identity.
+
+`measurements/zero-eager-select-diagnostic-2026-08-02.json` records one
+contended 30-pair process. Zero measured 1.273 ns/iteration, Rust 1.473, and the
+paired ratio was 0.858; Zero was 14.2% faster by that paired diagnostic. Its
+module shrank only from 142 to 139 bytes and is 62.5% smaller than Rust's 371
+bytes. The 2.23-fold Zero runtime improvement from the preceding independent
+diagnostic, despite only a three-byte structural change, identifies the
+approximately balanced inner branch as the dominant observed cost. It also
+falsifies the need for four-way unrolling on this recurrence: the non-unrolled
+branchless loop already crosses the optimized Rust result.
+
+This is not an admissible release speedup claim because competing compiler work
+was present. It is sufficient to stop microbenchmark-driven optimization:
+unrolling or further local coalescing would now optimize beyond the observed
+gap and risk overfitting one recurrence. The next performance work should first
+obtain uncontended process-level replication and then add workloads with
+different branch probabilities, arm costs, trip counts, memory behavior, and
+code-size pressure to calibrate the inequality in Section 7.13.9.
 
 ## References
 

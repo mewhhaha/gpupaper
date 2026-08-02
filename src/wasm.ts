@@ -902,6 +902,7 @@ export const wasmInstruction = {
   },
   return: instruction(0x0f),
   drop: instruction(0x1a),
+  select: instruction(0x1b),
   i32Constant(value: number): readonly WasmInstruction[] {
     requireSigned32(value);
     return [byte(0x41), { kind: "signed32", value }];

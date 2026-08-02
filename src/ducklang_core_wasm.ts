@@ -1266,6 +1266,22 @@ function inlineableScalarDiamond(
   return diamond;
 }
 
+function selectableScalarDiamond(
+  core: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+): ReturnType<typeof simpleDiamond> {
+  const diamond = inlineableScalarDiamond(core, function_);
+  if (diamond === undefined) return undefined;
+  const types = valueTypes(function_);
+  return function_.blocks.every((block) =>
+      block.operations.every((operation) =>
+        isTotalPureScalarOperation(core, function_, operation, types)
+      )
+    )
+    ? diamond
+    : undefined;
+}
+
 function inlineableLoopCall(
   core: DucklangCoreModule,
   caller: DucklangCoreFunction,
@@ -1788,6 +1804,29 @@ function emitInlineDiamond(
       `Core inline target ${inline.function.name} has no diamond result`,
     );
   }
+  const usesSelect = selectableScalarDiamond(core, inline.function) !==
+    undefined;
+  const selection = usesSelect
+    ? [
+      ...emitBlockOperations(diamond.trueBlock),
+      ...getInlineValue(trueValue),
+      ...emitBlockOperations(diamond.falseBlock),
+      ...getInlineValue(falseValue),
+      ...getInlineValue(diamond.entry.terminator.condition),
+      ...wasmInstruction.select,
+    ]
+    : [
+      ...getInlineValue(diamond.entry.terminator.condition),
+      ...ifInstruction(
+        wasmValueType(core, diamond.join.parameters[0]!.type),
+      ),
+      ...emitBlockOperations(diamond.trueBlock),
+      ...getInlineValue(trueValue),
+      ...wasmInstruction.else,
+      ...emitBlockOperations(diamond.falseBlock),
+      ...getInlineValue(falseValue),
+      ...wasmInstruction.end,
+    ];
   return [
     ...call.operands.flatMap(getCallerValue),
     ...[...diamond.entry.parameters].reverse().flatMap((parameter) =>
@@ -1796,16 +1835,7 @@ function emitInlineDiamond(
       )
     ),
     ...emitBlockOperations(diamond.entry),
-    ...getInlineValue(diamond.entry.terminator.condition),
-    ...ifInstruction(
-      wasmValueType(core, diamond.join.parameters[0]!.type),
-    ),
-    ...emitBlockOperations(diamond.trueBlock),
-    ...getInlineValue(trueValue),
-    ...wasmInstruction.else,
-    ...emitBlockOperations(diamond.falseBlock),
-    ...getInlineValue(falseValue),
-    ...wasmInstruction.end,
+    ...selection,
   ];
 }
 
@@ -2434,6 +2464,20 @@ function canSinkTotalScalarOperation(
   if (useCounts.get(operation.result) !== 1) return false;
   const blocks = useBlocks.get(operation.result);
   if (blocks?.size !== 1 || !blocks.has(block.id)) return false;
+  return isTotalPureScalarOperation(
+    core,
+    function_,
+    operation,
+    typeByValue,
+  );
+}
+
+function isTotalPureScalarOperation(
+  core: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  operation: DucklangCoreOperation,
+  typeByValue: ReadonlyMap<CoreValueId, CoreTypeId>,
+): boolean {
   if (operation.kind === "constant") {
     return core.types[operation.type]?.kind === "scalar";
   }
