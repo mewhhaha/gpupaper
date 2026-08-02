@@ -44,6 +44,7 @@ type ZeroProgram = {
 };
 
 type ZeroFunction = {
+  readonly exported: boolean;
   readonly name: string;
   readonly parameters: readonly ZeroBinding[];
   readonly body: ZeroExpression;
@@ -183,10 +184,14 @@ export async function compileZeroSource(
   const lowered = lowerCoreToWasm(core, {
     emission: "planOnly",
     target: "wasm-scalar",
-    exports: core.functions.map((function_) => ({
-      name: function_.name,
-      functionId: function_.id,
-    })),
+    exports: parsed.program.functions.flatMap((function_, index) =>
+      function_.exported
+        ? [{
+          name: function_.name,
+          functionId: index as CoreFunctionId,
+        }]
+        : []
+    ),
   });
   const wasmPlanningMilliseconds = performance.now() - planningStart;
 
@@ -218,6 +223,14 @@ export async function compileZeroSource(
 export function lowerZeroProgramToCore(program: ZeroProgram): CoreModule {
   if (program.functions.length === 0) {
     throw new TypeError(`${program.file}: Zero program has no functions`);
+  }
+  const entryFunction = program.functions.findIndex((function_) =>
+    function_.exported
+  );
+  if (entryFunction < 0) {
+    throw new TypeError(
+      `${program.file}: Zero program has no exported functions`,
+    );
   }
   const descriptions = new Map<string, ZeroFunctionDescription>();
   for (const [index, function_] of program.functions.entries()) {
@@ -255,7 +268,7 @@ export function lowerZeroProgramToCore(program: ZeroProgram): CoreModule {
       result: i32,
     })),
     functions,
-    entryFunction: 0 as CoreFunctionId,
+    entryFunction: entryFunction as CoreFunctionId,
   };
 }
 
@@ -631,6 +644,7 @@ function parseZeroFunction(file: string, node: RuleCursor): ZeroFunction {
   const name = requiredToken(node, "name");
   const parameters = optionalRuleField(node, "parameters");
   return {
+    exported: optionalRuleField(node, "visibility") !== undefined,
     name: name.text,
     parameters: parameters === undefined ? [] : [
       requiredToken(parameters, "head"),

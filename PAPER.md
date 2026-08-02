@@ -5555,6 +5555,42 @@ less-than-160-byte module bound also rejects reintroduction of the larger
 dispatcher shape. The ordinary Zero differential suite remains the independent
 source-level oracle.
 
+#### 7.13.5 Explicit module roots
+
+A Zero program distinguishes its finite function table `F` from a nonempty set
+of public roots `E ⊆ F`. The declaration `export fn f(...) = e;` places
+`f` in `E`; an unmarked declaration remains callable by functions in `F` but is
+not observable through the standalone module boundary. Requiring `E` to be
+nonempty makes an accidentally closed benchmark module a frontend error instead
+of silently producing an artifact with no callable experiment. This visibility
+rule changes neither expression evaluation nor the Core call graph.
+
+The lowering maps every member of `E`, in source order, to one WebAssembly
+function export with the same name and dense function ID. Every direct call is
+still resolved against all of `F`. Therefore an observer restricted to declared
+exports sees exactly the Zero public interface, while internal calls preserve
+the source function table semantics. Duplicate names remain illegal, so the
+export-name map is injective without a second namespace check. The first member
+of `E` is recorded as Core's entry function; this is metadata and does not grant
+visibility to any other function.
+
+For an internal function named `step`, removing its Wasm export removes
+`1 + leb(|step|) + |step| + 1 + leb(index) = 7` bytes while all relevant lengths
+fit in one-byte LEB encodings. It removes no function body or runtime call. The
+expected runtime delta is therefore zero; a material timing change would be
+evidence of measurement instability rather than an optimization. Computing
+`E` and its first member takes `Theta(|F|)` work and `Theta(|E|)` output space,
+already bounded by the existing function-table pass. Export-driven dead-code
+elimination is deliberately separate: deleting an unexported but reachable
+callee would be unsound, while deleting an unreachable function requires a
+call-graph reachability proof.
+
+The Baba grammar, Zero AST, Core entry selection, and Wasm export plan implement
+this rule. Executable tests prove that an internal function remains directly
+callable from an export, is absent from the instantiated export object, and that
+a module with no public root is rejected. This is executable validation of the
+boundary, not yet an implementation of reachability pruning.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9716,6 +9752,23 @@ administrative-work removal without a corresponding observed runtime change
 refutes the hypothesis that dispatch alone explains most of the 2.7-fold gap. A
 non-inlined call and local-heavy callee are now the leading unverified
 explanation.
+
+### 2026-08-02: explicit exports correct the Zero comparison boundary
+
+Section 7.13.5 now separates Zero's public roots from its internal function
+table. The benchmark marks only `run` for export; `step` remains an ordinary
+direct-call target. Two executable tests cover positive and negative boundary
+cases. As predicted, the artifact shrank by exactly seven bytes, from 240 to 233
+bytes, without deleting code or calls.
+
+`measurements/zero-explicit-export-diagnostic-2026-08-02.json` records one
+contended 30-pair process. It observed 3.856 ns/iteration for Zero, 1.467 for
+Rust, and a paired ratio of 2.621. The apparent 4.1% Zero change from the prior
+diagnostic exceeds the transformation's zero-work prediction, but the processes
+were independently contended and therefore cannot establish a speedup or
+regression. The result preserves the leading hypothesis: dynamic call and
+callee-local overhead, not export metadata, explains the remaining static
+difference and may explain part of the runtime gap.
 
 ## References
 

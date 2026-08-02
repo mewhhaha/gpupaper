@@ -8,7 +8,7 @@ Deno.test("Zero lowers shadowing, calls, and conditional values", async () => {
     "expressions.zero",
     `
       fn add(left, right) = left + right;
-      fn choose(value) =
+      export fn choose(value) =
         let value = value + 1 in
         if value > 10 then add(value, 2) else 0 - value;
     `,
@@ -49,14 +49,22 @@ Deno.test("Zero Rust/Wasm emission is byte-identical to CPU plan emission", asyn
 
 Deno.test("Zero rejects duplicate function parameters", async () => {
   await assertRejects(
-    () => compileZeroSource("duplicate.zero", "fn run(value, value) = value;"),
+    () =>
+      compileZeroSource(
+        "duplicate.zero",
+        "export fn run(value, value) = value;",
+      ),
     /duplicate\.zero:\d+: duplicate parameter value/,
   );
 });
 
 Deno.test("Zero rejects unbound variables", async () => {
   await assertRejects(
-    () => compileZeroSource("unbound.zero", "fn run(value) = missing;"),
+    () =>
+      compileZeroSource(
+        "unbound.zero",
+        "export fn run(value) = missing;",
+      ),
     /unbound\.zero:\d+: unbound variable missing/,
   );
 });
@@ -66,7 +74,7 @@ Deno.test("Zero rejects direct-call arity mismatches", async () => {
     () =>
       compileZeroSource(
         "arity.zero",
-        "fn add(left, right) = left + right; fn run(value) = add(value);",
+        "fn add(left, right) = left + right; export fn run(value) = add(value);",
       ),
     /arity\.zero:\d+: function add expects 2 arguments; received 1/,
   );
@@ -74,8 +82,29 @@ Deno.test("Zero rejects direct-call arity mismatches", async () => {
 
 Deno.test("Zero rejects integer literals outside signed i32", async () => {
   await assertRejects(
-    () => compileZeroSource("literal.zero", "fn run() = 2147483648;"),
+    () =>
+      compileZeroSource(
+        "literal.zero",
+        "export fn run() = 2147483648;",
+      ),
     /literal\.zero:\d+: integer literal 2147483648 is outside signed i32/,
+  );
+});
+
+Deno.test("Zero exposes only explicitly exported functions", async () => {
+  const compiled = await compileZeroSource(
+    "exports.zero",
+    "fn hidden(value) = value + 1; export fn run(value) = hidden(value);",
+  );
+  const instance = await instantiate(compiled.wasm);
+  assertEquals(Object.keys(instance.exports), ["run"]);
+  assertEquals(exportedFunction(instance, "run")(41), 42);
+});
+
+Deno.test("Zero rejects a standalone module without an export", async () => {
+  await assertRejects(
+    () => compileZeroSource("closed.zero", "fn hidden(value) = value;"),
+    /closed\.zero: Zero program has no exported functions/,
   );
 });
 

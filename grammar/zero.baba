@@ -5,7 +5,8 @@ skip COMMENT = /\/\/[^\n]*/ ;
 
 module = functions:function+ ;
 
-function = "fn" name:IDENT "(" parameters:parameter_list? ")" "=" body:expr ";" ;
+function = visibility:export_keyword? "fn" name:IDENT "(" parameters:parameter_list? ")" "=" body:expr ";" ;
+export_keyword = "export" ;
 parameter_list = head:IDENT tail:parameter_tail* ;
 parameter_tail = "," value:IDENT ;
 

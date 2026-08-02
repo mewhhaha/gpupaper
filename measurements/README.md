@@ -42,6 +42,7 @@ not admissible speedup evidence:
 - `blot-crossover-resident-diagnostic-2026-08-02.json`
 - `zero-runtime-diagnostic-2026-08-02.json`
 - `zero-natural-loop-diagnostic-2026-08-02.json`
+- `zero-explicit-export-diagnostic-2026-08-02.json`
 
 The peer record deliberately contains three incomparable boundaries. It must not
 be converted into a cross-compiler speedup ratio.
