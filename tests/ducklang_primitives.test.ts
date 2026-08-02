@@ -16,7 +16,7 @@ import {
 } from "../src/ducklang_types.ts";
 
 Deno.test("Ducklang primitive IDs remain unique and stable", () => {
-  assertEquals(primitiveDescriptors.length, 63);
+  assertEquals(primitiveDescriptors.length, 67);
   assertEquals(primitiveDescriptor(PrimitiveId.add).name, "scalar.add");
   assertEquals(
     primitiveDescriptor(PrimitiveId.utf8Decode).name,
@@ -37,6 +37,14 @@ Deno.test("Ducklang primitive IDs remain unique and stable", () => {
   assertEquals(
     primitiveDescriptor(PrimitiveId.f32x4Select).name,
     "f32x4.select",
+  );
+  assertEquals(
+    primitiveDescriptor(PrimitiveId.textCodePointLength).name,
+    "text.code_point_length",
+  );
+  assertEquals(
+    primitiveDescriptor(PrimitiveId.textContains).name,
+    "text.contains",
   );
 });
 

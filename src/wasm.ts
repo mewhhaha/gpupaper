@@ -81,7 +81,9 @@ export class WasmModuleBuilder {
   readonly #imports: WasmNode[][] = [];
   readonly #functions: number[] = [];
   readonly #tables: WasmNode[][] = [];
+  readonly #memories: WasmNode[][] = [];
   readonly #elements: WasmNode[][] = [];
+  readonly #dataSegments: WasmNode[][] = [];
   readonly #exports: WasmNode[][] = [];
   readonly #exportNames = new Set<string>();
   readonly #globals: WasmNode[][] = [];
@@ -196,6 +198,50 @@ export class WasmModuleBuilder {
     return tableIndex;
   }
 
+  addMemory(minimumPages: number, maximumPages?: number): number {
+    requireUnsigned32(minimumPages, "Wasm memory minimum");
+    if (maximumPages !== undefined) {
+      requireUnsigned32(maximumPages, "Wasm memory maximum");
+      if (maximumPages < minimumPages) {
+        throw new RangeError(
+          `Wasm memory maximum ${maximumPages} is below minimum ${minimumPages}`,
+        );
+      }
+    }
+    const index = this.#memories.length;
+    this.#memories.push(
+      maximumPages === undefined
+        ? [byte(0x00), unsigned(minimumPages)]
+        : [byte(0x01), unsigned(minimumPages), unsigned(maximumPages)],
+    );
+    return index;
+  }
+
+  addActiveData(
+    memoryIndex: number,
+    offset: number,
+    contents: Uint8Array,
+  ): void {
+    if (!Number.isSafeInteger(memoryIndex) || !this.#memories[memoryIndex]) {
+      throw new RangeError(
+        `Wasm data segment uses memory index ${memoryIndex}; ${this.#memories.length} memories are defined`,
+      );
+    }
+    if (memoryIndex !== 0) {
+      throw new RangeError(
+        `active Wasm data segments currently require memory 0; received ${memoryIndex}`,
+      );
+    }
+    requireSigned32(offset);
+    this.#dataSegments.push([
+      byte(0x00),
+      byte(0x41),
+      { kind: "signed32", value: offset },
+      byte(0x0b),
+      ...vector(Array.from(contents, byte)),
+    ]);
+  }
+
   /**
    * Declares a mutable global initialised to zero for its type.
    *
@@ -204,6 +250,31 @@ export class WasmModuleBuilder {
    * own local space.
    */
   addMutableGlobal(valueType: number): number {
+    return this.addI32Global(valueType, 0, true);
+  }
+
+  addI32Global(valueType: number, value: number, mutable: boolean): number {
+    if (valueType !== 0x7f) {
+      if (value !== 0 || !mutable) {
+        throw new TypeError(
+          `non-i32 Wasm globals only support mutable zero initialization; received type ${valueType}, value ${value}, mutable ${mutable}`,
+        );
+      }
+      return this.#addZeroGlobal(valueType);
+    }
+    requireSigned32(value);
+    const index = this.#globals.length;
+    this.#globals.push([
+      byte(valueType),
+      byte(mutable ? 0x01 : 0x00),
+      byte(0x41),
+      { kind: "signed32", value },
+      byte(0x0b),
+    ]);
+    return index;
+  }
+
+  #addZeroGlobal(valueType: number): number {
     const index = this.#globals.length;
     const zero = valueType === 0x7e
       ? [byte(0x42), { kind: "signed64" as const, value: 0n }]
@@ -231,15 +302,33 @@ export class WasmModuleBuilder {
         `export ${name_} uses function index ${functionIndex}; ${functionCount} functions are defined`,
       );
     }
+    this.#export(name_, 0x00, functionIndex);
+  }
+
+  exportMemory(name_: string, memoryIndex: number): void {
+    if (!Number.isSafeInteger(memoryIndex) || !this.#memories[memoryIndex]) {
+      throw new RangeError(
+        `export ${name_} uses memory index ${memoryIndex}; ${this.#memories.length} memories are defined`,
+      );
+    }
+    this.#export(name_, 0x02, memoryIndex);
+  }
+
+  exportGlobal(name_: string, globalIndex: number): void {
+    if (!Number.isSafeInteger(globalIndex) || !this.#globals[globalIndex]) {
+      throw new RangeError(
+        `export ${name_} uses global index ${globalIndex}; ${this.#globals.length} globals are defined`,
+      );
+    }
+    this.#export(name_, 0x03, globalIndex);
+  }
+
+  #export(name_: string, kind: number, index: number): void {
     if (this.#exportNames.has(name_)) {
       throw new Error(`duplicate Wasm export ${name_}`);
     }
     this.#exportNames.add(name_);
-    this.#exports.push([
-      ...name(name_),
-      byte(0x00),
-      unsigned(functionIndex),
-    ]);
+    this.#exports.push([...name(name_), byte(kind), unsigned(index)]);
   }
 
   addCustomSection(name_: string, contents: Uint8Array): void {
@@ -267,6 +356,9 @@ export class WasmModuleBuilder {
     if (this.#tables.length > 0) {
       module.push(...section(4, this.#tables));
     }
+    if (this.#memories.length > 0) {
+      module.push(...section(5, this.#memories));
+    }
     if (this.#globals.length > 0) {
       module.push(...section(6, this.#globals));
     }
@@ -281,6 +373,9 @@ export class WasmModuleBuilder {
     }
     if (this.#codes.length > 0) {
       module.push(...section(10, this.#codes));
+    }
+    if (this.#dataSegments.length > 0) {
+      module.push(...section(11, this.#dataSegments));
     }
     for (const customSection of this.#customSections) {
       module.push(
@@ -779,6 +874,9 @@ export const wasmInstruction = {
   localSet(index: number): readonly WasmInstruction[] {
     return [byte(0x21), unsigned(index)];
   },
+  localTee(index: number): readonly WasmInstruction[] {
+    return [byte(0x22), unsigned(index)];
+  },
   globalGet(index: number): readonly WasmInstruction[] {
     return [byte(0x23), unsigned(index)];
   },
@@ -831,15 +929,40 @@ export const wasmInstruction = {
   i32EqualZero: instruction(0x45),
   i32NotEqual: instruction(0x47),
   i32LessThanSigned: instruction(0x48),
+  i32LessThanUnsigned: instruction(0x49),
   i32GreaterThanSigned: instruction(0x4a),
+  i32GreaterThanUnsigned: instruction(0x4b),
   i32LessThanOrEqualSigned: instruction(0x4c),
+  i32LessThanOrEqualUnsigned: instruction(0x4d),
   i32GreaterThanOrEqualSigned: instruction(0x4e),
+  i32GreaterThanOrEqualUnsigned: instruction(0x4f),
   i32And: instruction(0x71),
   i32Or: instruction(0x72),
   i32Xor: instruction(0x73),
   i32ShiftLeft: instruction(0x74),
   i32ShiftRightSigned: instruction(0x75),
   i32ShiftRightUnsigned: instruction(0x76),
+  memorySize: [byte(0x3f), byte(0x00)],
+  memoryGrow: [byte(0x40), byte(0x00)],
+  memoryCopy: [byte(0xfc), unsigned(10), byte(0x00), byte(0x00)],
+  i32Load(alignmentExponent = 2, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x28), unsigned(alignmentExponent), unsigned(offset)];
+  },
+  i32Load8Unsigned(offset = 0): readonly WasmInstruction[] {
+    return [byte(0x2d), unsigned(0), unsigned(offset)];
+  },
+  i32Store(alignmentExponent = 2, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x36), unsigned(alignmentExponent), unsigned(offset)];
+  },
+  i64Store(alignmentExponent = 3, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x37), unsigned(alignmentExponent), unsigned(offset)];
+  },
+  f32Store(alignmentExponent = 2, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x38), unsigned(alignmentExponent), unsigned(offset)];
+  },
+  f64Store(alignmentExponent = 3, offset = 0): readonly WasmInstruction[] {
+    return [byte(0x39), unsigned(alignmentExponent), unsigned(offset)];
+  },
   i64Add: instruction(0x7c),
   i64Subtract: instruction(0x7d),
   i64Multiply: instruction(0x7e),
@@ -1164,6 +1287,12 @@ function requireSigned32(value: number): void {
     value > 0x7fff_ffff
   ) {
     throw new RangeError(`signed LEB128 value must fit i32; received ${value}`);
+  }
+}
+
+function requireUnsigned32(value: number, name_: string): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new RangeError(`${name_} must fit u32; received ${value}`);
   }
 }
 

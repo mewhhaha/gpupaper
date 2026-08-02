@@ -206,6 +206,7 @@ function computeLayout(
         alignment: representation.alignment,
       };
     }
+    case "store":
     case "function":
       return {
         kind: "handle",

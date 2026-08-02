@@ -8,6 +8,7 @@ import {
   PrimitiveId,
   primitiveRuntimeImportName,
 } from "./ducklang_primitives.ts";
+import { ducklangStoreRuntimeImport } from "./ducklang_store.ts";
 
 export type DucklangRuntimeValue =
   | number
@@ -47,6 +48,7 @@ export type DucklangRuntimeHeap = {
     number,
     { readonly tag: number; readonly payload: number | bigint }
   >;
+  readonly stores: Map<number, (number | bigint)[]>;
   readonly allocateHandle: () => number;
 };
 
@@ -62,6 +64,7 @@ export function createDucklangRuntimeHeap(
     bytes: new Map(),
     products: new Map(),
     sums: new Map(),
+    stores: new Map(),
     allocateHandle: () => {
       const handle = nextHandle;
       nextHandle += 1;
@@ -176,7 +179,7 @@ export async function runDucklangManaged(
 export function createDucklangRuntimeImports(
   heap: DucklangRuntimeHeap,
 ): Record<string, CallableFunction> {
-  const { texts, bytes, products, sums, allocateHandle } = heap;
+  const { texts, bytes, products, sums, stores, allocateHandle } = heap;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const requireHandle = (
@@ -204,6 +207,110 @@ export function createDucklangRuntimeImports(
     );
   };
   const bufferRuntime: Record<string, CallableFunction> = {
+    [primitiveRuntimeImportName(PrimitiveId.textCodePointLength)]: (
+      handle: number,
+    ) => {
+      const text = requireHandle(handle);
+      if (text.kind !== "text") {
+        throw new TypeError("Blot text length requires Text");
+      }
+      return BigInt([...text.value].length);
+    },
+    [primitiveRuntimeImportName(PrimitiveId.textFromI64)]: (value: bigint) => {
+      const handle = allocateHandle();
+      texts.set(handle, value.toString());
+      return handle;
+    },
+    [primitiveRuntimeImportName(PrimitiveId.textCompare)]: (
+      leftHandle: number,
+      rightHandle: number,
+    ) => {
+      const left = requireHandle(leftHandle);
+      const right = requireHandle(rightHandle);
+      if (left.kind !== "text" || right.kind !== "text") {
+        throw new TypeError("Blot text comparison requires Text operands");
+      }
+      return compareUnicodeScalars(left.value, right.value);
+    },
+    [primitiveRuntimeImportName(PrimitiveId.textContains)]: (
+      textHandle: number,
+      queryHandle: number,
+    ) => {
+      const text = requireHandle(textHandle);
+      const query = requireHandle(queryHandle);
+      if (text.kind !== "text" || query.kind !== "text") {
+        throw new TypeError("Blot text containment requires Text operands");
+      }
+      return Number(text.value.includes(query.value));
+    },
+    [ducklangStoreRuntimeImport.empty]: () => {
+      const handle = allocateHandle();
+      stores.set(handle, []);
+      return handle;
+    },
+    [ducklangStoreRuntimeImport.new]: (
+      rawLength: bigint,
+      initial: number | bigint,
+    ) => {
+      const length = storeLength(rawLength);
+      const handle = allocateHandle();
+      stores.set(handle, Array<number | bigint>(length).fill(initial));
+      return handle;
+    },
+    [ducklangStoreRuntimeImport.length]: (handle: number) =>
+      BigInt(requireStore(stores, handle).length),
+    [ducklangStoreRuntimeImport.read]: (
+      handle: number,
+      rawIndex: bigint,
+    ) => {
+      const store = requireStore(stores, handle);
+      const index = storeIndex(rawIndex, store.length);
+      return store[index];
+    },
+    [ducklangStoreRuntimeImport.writePersistent]: (
+      handle: number,
+      rawIndex: bigint,
+      value: number | bigint,
+    ) => {
+      const source = requireStore(stores, handle);
+      const index = storeIndex(rawIndex, source.length);
+      const result = source.slice();
+      result[index] = value;
+      const resultHandle = allocateHandle();
+      stores.set(resultHandle, result);
+      return resultHandle;
+    },
+    [ducklangStoreRuntimeImport.writeOwned]: (
+      handle: number,
+      rawIndex: bigint,
+      value: number | bigint,
+    ) => {
+      const store = requireStore(stores, handle);
+      store[storeIndex(rawIndex, store.length)] = value;
+      return handle;
+    },
+    [ducklangStoreRuntimeImport.growPersistent]: (
+      handle: number,
+      rawLength: bigint,
+      initial: number | bigint,
+    ) => {
+      const source = requireStore(stores, handle);
+      const result = growStore(source, rawLength, initial);
+      const resultHandle = allocateHandle();
+      stores.set(resultHandle, result);
+      return resultHandle;
+    },
+    [ducklangStoreRuntimeImport.growOwned]: (
+      handle: number,
+      rawLength: bigint,
+      initial: number | bigint,
+    ) => {
+      const store = requireStore(stores, handle);
+      const length = storeLength(rawLength);
+      if (length < store.length) store.length = length;
+      while (store.length < length) store.push(initial);
+      return handle;
+    },
     [primitiveRuntimeImportName(PrimitiveId.bufferLength)]: (
       handle: number,
     ) => {
@@ -548,6 +655,62 @@ export function createDucklangRuntimeImports(
       return undefined;
     },
   });
+}
+
+const maximumDucklangStoreLength = 16_777_216;
+
+function requireStore(
+  stores: ReadonlyMap<number, (number | bigint)[]>,
+  handle: number,
+): (number | bigint)[] {
+  const store = stores.get(handle);
+  if (store !== undefined) return store;
+  throw new RangeError(
+    `Ducklang Store operation uses unknown handle ${handle}`,
+  );
+}
+
+function storeLength(rawLength: bigint): number {
+  if (rawLength < 0n || rawLength > BigInt(maximumDucklangStoreLength)) {
+    throw new RangeError(
+      `Ducklang Store length ${rawLength} is outside 0..${maximumDucklangStoreLength}`,
+    );
+  }
+  return Number(rawLength);
+}
+
+function storeIndex(rawIndex: bigint, length: number): number {
+  if (rawIndex < 0n || rawIndex >= BigInt(length)) {
+    throw new RangeError(
+      `Ducklang Store index ${rawIndex} is outside length ${length}`,
+    );
+  }
+  return Number(rawIndex);
+}
+
+function growStore(
+  source: readonly (number | bigint)[],
+  rawLength: bigint,
+  initial: number | bigint,
+): (number | bigint)[] {
+  const length = storeLength(rawLength);
+  const result = source.slice(0, length);
+  while (result.length < length) result.push(initial);
+  return result;
+}
+
+function compareUnicodeScalars(left: string, right: string): -1 | 0 | 1 {
+  const leftScalars = [...left];
+  const rightScalars = [...right];
+  const sharedLength = Math.min(leftScalars.length, rightScalars.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftScalar = leftScalars[index].codePointAt(0)!;
+    const rightScalar = rightScalars[index].codePointAt(0)!;
+    if (leftScalar < rightScalar) return -1;
+    if (leftScalar > rightScalar) return 1;
+  }
+  if (leftScalars.length < rightScalars.length) return -1;
+  return leftScalars.length === rightScalars.length ? 0 : 1;
 }
 
 function findOperation(

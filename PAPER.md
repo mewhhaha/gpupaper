@@ -185,6 +185,33 @@ Sequencing combines rows and transfers the returned value:
 The ownership split is subject to the value's multiplicity and the language's
 existing ownership rules.
 
+#### 3.3.1 Source order is semantic; compiler work order is not
+
+For a block
+
+```text
+let x1 <- c1
+...
+let xn <- cn
+r
+```
+
+the source semantics evaluates `c1 ... cn` from left to right. Shadowing does
+not weaken this rule: resolution gives every binder a fresh symbol identity, but
+the newer identity enters the lexical environment only after its right-hand side
+returns. The observable behavior includes the returned value, the ordered host
+and capability trace, the first trap, termination versus divergence, and
+ownership cleanup. A compiler may not infer a different evaluation order from an
+unordered effect row.
+
+This is distinct from the order in which the compiler analyzes or lowers the
+already-resolved right-hand sides. Once name resolution, typing, effect closure,
+and ownership validation have produced one immutable HIR snapshot, compiling two
+right-hand sides into private fragments does not evaluate either source
+computation. Those compiler jobs may run in any dependency-respecting order if
+deterministic assembly restores source order and stable IDs. Section 7.11
+derives that weaker and more useful freedom separately from payload reordering.
+
 ### 3.4 Callable types and row polymorphism
 
 Every function type carries the latent row of its body:
@@ -3191,8 +3218,8 @@ The Wasm-plan microbenchmark now retains every raw wall observation, every raw
 GPU timing record (inspection, column construction, context, allocation/upload,
 command encoding, submission, queue/device completion, mapping witness, and
 copy), CPU raw samples, and the wall-minus-internal residual. Because this
-microbenchmark does not yet inspect load, it labels the record `diagnostic`.
-It also names and times the currently nonresident boundary as
+microbenchmark does not yet inspect load, it labels the record `diagnostic`. It
+also names and times the currently nonresident boundary as
 `validated-flat-core-through-object-stackifier-to-wasm-plan`. Three contaminated
 samples split Editor into 3.20--4.21 ms of flat-to-object inflation plus
 5.27--5.47 ms of object stackification/planning. Codex required 35.29--37.71 ms
@@ -3216,6 +3243,42 @@ while gpupaper emitted a minimal module, and gpufuck's public timer could not
 isolate function bodies from CPU module assembly. The shared-source timing
 remains unmeasured because the validity gate refused; there is deliberately no
 fabricated speedup.
+
+An explicit `--allow-contended` escape hatch may execute the same harness for
+diagnosis, but it labels the validity status `diagnostic` and never
+`admissible`. It retains the detected processes and raw samples, so such a run
+can expose gross setup costs without becoming speedup evidence.
+
+The adjacent dirty gpufuck checkout removed the obsolete
+`EvaluationProfile.StrictEager` surface option before the adjacent dirty Blot
+checkout removed its import. The peer harness supplies that one ignored legacy
+name through an import-map compatibility module and otherwise re-exports the
+exact local gpufuck API. The synthetic peer fixture omits the removed option.
+This repairs benchmark construction without restoring strict evaluation or
+changing the compiled Blot source.
+
+A 15-pair `--allow-contended` diagnostic on 2026-08-01 then completed while the
+Porffor test suite, a gpufuck GPU differential test, and Playwright were active
+at the start. On the equal 11-byte `return 42;\n` boundary, gpupaper measured
+251.642 ms p50 and 317.832 ms p95; gpufuck measured 183.671 ms p50 and 330.663
+ms p95. The p50 ratio was therefore 1.370, or gpupaper 37.0% slower, while the
+opposite p95 ordering and broad raw ranges show the expected contention noise.
+Both outputs validated and returned `42n`. Gpupaper emitted 37 bytes versus
+gpufuck's 2,371 bytes, 64.1 times smaller. This is executable diagnostic
+evidence of a large cold-session setup cost and output-size difference, but its
+validity status is explicitly `diagnostic`; it is not an admissible speedup or
+tail-latency claim. Peer schema version 4 adds that status.
+
+An independent byte-level check of the 37-byte gpupaper result found the
+eight-byte Wasm header followed by a seven-byte type section, four-byte function
+section, ten-byte export section, and eight-byte code section. The only function
+has type `[] -> [i64]` and body `i64.const 42; end`; the only export is `main`.
+`WebAssembly.validate` accepted the bytes and instantiation returned `42n`.
+There are intentionally no imports, memory, table, globals, runtime, custom
+sections, or embedded Baba parser. For this ABI and four-byte export name, every
+field is already one-byte encoded, so 37 bytes is the exact structural minimum,
+not omitted compiler output. Baba is compiler machinery and its plan and shaders
+do not become part of the compiled payload.
 
 Specialization now reports rejected optional candidates, the permanently zero
 widening count, emitted/reused/pending requests, and source-span-indexed
@@ -3284,6 +3347,962 @@ replacement is faster. Phase 15 implementation must update this section with
 retained and rejected mechanisms, exact work equations, differential evidence,
 and uncontended equal-boundary measurements.
 
+### 7.11 Dependency-preserving compilation order
+
+“Reorder let statements” names three different transformations with different
+proof obligations:
+
+1. execute compiler jobs for typed right-hand sides in another order while
+   emitting the same source-ordered program;
+2. reorder payload evaluation while retaining sequential execution; or
+3. evaluate payload computations concurrently.
+
+Only the first follows from the compiler's functional architecture. The second
+requires a commutation theorem. The third additionally requires a parallel
+effect semantics, deterministic join, race freedom, and a cancellation policy.
+Conflating them would turn compiler parallelism into a source-language semantic
+change.
+
+#### Compiler-task reordering
+
+Let a resolved, typed, effect-closed, ownership-validated HIR block contain jobs
+
+\[ J_i=(s_i,c_i,i), \]
+
+where \(s_i\) is a stable binder identity, \(c_i\) is its right-hand side, and
+\(i\) is its source ordinal. There are two graphs. The semantic-readiness graph
+\(G_s\) orders inference, staged evaluation, or interface construction when a
+predecessor's semantic result is genuinely unavailable. Its recursive edges are
+collapsed into strongly connected components. The compiler-execution graph
+\(G_c=(V,E_c)\) is constructed only after every global table used by downstream
+lowering is immutable. It contains an edge \(J_j\to J_i\) only when compiling
+\(c_i\) needs information that is neither in the frozen snapshot nor expressible
+as a stable relocation.
+
+Ordinary resolved value use \(s_j\in FV(c_i)\) is therefore a relocation edge,
+not necessarily a compiler scheduling edge. A consumer fragment can record the
+stable symbol ID and expected type before the producer fragment finishes. After
+all exact fragment counts are known, ordered scans map every exported local
+result to its global ID and resolve those relocations. Mutually recursive
+function bodies can likewise lower independently once their signatures, function
+IDs, captures, and layouts are frozen. An SCC remains indivisible only at a
+stage that still computes one of those interfaces or executes staged code.
+
+For immutable snapshot \(H\), fragment lowering has the contract
+
+\[ C(H,J_i)=(F_i,n_i,d_i), \]
+
+where \(F_i\) uses fragment-local IDs and stable-symbol relocations, \(n_i\)
+gives exact output-column counts, and \(d_i\) is a finite set of diagnostic
+records. \(C\) must be a deterministic pure compiler computation. It does not
+run \(c_i\), call a source host capability, allocate a source-visible object, or
+consume a source owner. Thus source effects and ordinary value-flow relocations
+do not add edges to \(G_c\). They remain ordered operations and checked
+references inside the returned fragment.
+
+After all predecessor components finish, fragments are committed by source
+ordinal. For every output column \(k\), compute
+
+\[ o_{i,k}=\operatorname{exclusiveScan}_i(n_{i,k}) \]
+
+and rebase local IDs into the half-open range \([o_{i,k},o_{i,k}+n_{i,k})\).
+Diagnostics are sorted by the existing canonical key containing stage, source
+span, and stable diagnostic identity; completion order is never a tie-breaker.
+The output is therefore the same as sequential source-order construction if the
+current constructor can be factored into the same \(C\) and ordered
+concatenation.
+
+**Deterministic-fragment theorem obligation.** For every valid snapshot \(H\),
+let \(S\) be any topological schedule of the SCC quotient of \(G_c\). If
+fragment lowering reads only \(H\) and predecessor fragment interfaces, every
+local ID is rebased by source-ordinal scans, and commit is ordered by source
+ordinal, then
+
+\[ \operatorname{assemble}(\{C(H,J_i)\}_{S})
+=\operatorname{compile}_{source}(H). \]
+
+The proof is induction over source ordinals: the count scan assigns the same
+range that sequential append would assign, local rebasing preserves every
+intra-fragment reference, relocation resolution preserves every cross-fragment
+reference, and ordered concatenation preserves operation and diagnostic order.
+This is currently a theorem obligation, not an implemented transform. The
+present object Core constructor mutates global type, block, operation, and value
+counters, so it does not yet satisfy the fragment contract.
+
+#### Implemented job-analysis boundary
+
+The first executable slice constructs schema-versioned `DucklangCompilerJobIR`
+immediately after specialization and before Core lowering. There is one job for
+each retained top-level binding and one final-result job. Its flat columns store
+source ordinals, stable symbol IDs, source spans, typed-node work estimates,
+packed relocation occurrences, packed semantic-dependency ranges, and the SCC ID
+and level induced by the relocation graph. Reference occurrences are emitted in
+deterministic expression-preorder and target the source-ordinal job owning the
+exact resolved symbol ID. Consequently a shadowed name cannot accidentally
+relocate to a textual-name match.
+
+This slice deliberately represents a narrower boundary than the general \(G_s\)
+model. Specialization has already produced the typed module and every downstream
+interface inspected by the analysis is frozen, so its semantic dependency ranges
+must be empty. Validation rejects a nonempty range rather than silently treating
+it as a relocation. Relocation SCCs are retained only as a conservative
+comparison with the earlier direct-reference audit; they do not constrain the
+true downstream schedule. Thus mutually recursive functions share one relocation
+SCC while remaining separate semantic-ready jobs.
+
+For job weights \(w_i\), the implemented semantic-ready measurements are
+
+\[ W=\sum_i w_i,\qquad L_s=\max_i w_i,\qquad P_s=W/L_s. \]
+
+The implementation also contracts the relocation graph and reports its
+conservative weighted span \(L_r\), level count, maximum level frontier, and
+\(P_r=W/L_r\). Both analyses use the same typed-node proxy, so their difference
+isolates false serialization by ordinary references rather than claiming a
+wall-clock speedup. The validator recomputes SCC IDs and levels, checks every
+packed range and target, requires ordinal \(i\) at job index \(i\), requires one
+symbol-less final job, and rejects zero work. These are executable validations,
+not proofs of the still-unimplemented fragment theorem.
+
+One warm-up followed by seven warm-process, cold-compilation CPU observations on
+2026-08-01 produced the following medians. `analysis` includes expression
+inspection, IR construction, validation, SCC contraction, frontier analysis, and
+metric calculation. This was an exploratory single-process measurement, not a
+contention-screened benchmark:
+
+| target    | jobs | nodes \(W\) | \(L_s\) | \(P_s\) | \(L_r\) | \(P_r\) | analysis ms |
+| --------- | ---: | ----------: | ------: | ------: | ------: | ------: | ----------: |
+| Editor    |   79 |       3,129 |     621 |    5.04 |   1,360 |    2.30 |       0.814 |
+| Codex     |  264 |      32,675 |   2,177 |   15.01 |   3,502 |    9.33 |       4.225 |
+| grep      |   14 |         439 |     201 |    2.18 |     328 |    1.34 |       0.150 |
+| Tar       |   30 |       4,274 |   3,915 |    1.09 |   4,101 |    1.04 |       0.458 |
+| wav       |    6 |         215 |     130 |    1.65 |     167 |    1.29 |       0.086 |
+| raytracer |   15 |         447 |     131 |    3.41 |     350 |    1.28 |       0.140 |
+
+The conservative spans exactly reproduce the earlier one-off audit. The new IR
+also distinguishes relocation occurrences from distinct job edges and counts a
+self-reference as a graph cycle; those quantities therefore must not be compared
+to the audit's differently defined `direct edges` and `cyclic jobs` columns.
+Codex exposes the largest top-level opportunity but also pays a measured 4.225
+ms median analysis cost before any parallel lowering exists. Under the
+break-even inequality this is presently an overhead, not a speedup.
+
+No fragment column counts, frozen function/signature/layout table, local Core
+fragment, rebasing, relocation commit, diagnostic merge, randomized schedule, or
+GPU scheduler is implemented yet. In particular, this analysis does not justify
+changing `downstreamParallelFunctionCount`: no physical parallel work ran. Those
+omissions remain explicit tasks rather than being represented by placeholder
+counts.
+
+This graph is related to the program dependence graph of Ferrante, Ottenstein,
+and Warren [44], but its nodes are compiler computations, not payload
+operations. Their separation of data and control dependence motivates retaining
+only real dependencies rather than a total source-order edge set. Stable
+count/scan/write assembly is the GPU-compatible replacement for shared append.
+
+#### Payload commutation is a pairwise semantic property
+
+Moggi's computational lambda calculus gives the correct starting point: `let` is
+monadic sequencing, not ordinary substitution [40]. Two value-independent
+computations may be exchanged only when the relevant computational effects
+commute. A set-valued effect row records which capabilities may occur, but its
+union is commutative even when execution is not. Gordon's effect quantales make
+the missing distinction explicit by giving sequential effects a generally
+noncommutative product [41]. Tate likewise distinguishes nominal
+order-insensitivity from a semantic proof that left-to-right and right-to-left
+evaluation agree [42].
+
+For runtime state \(\sigma\), define an observation as one of
+
+\[ \begin{aligned} &\operatorname{return}(v,\sigma',\tau),\\
+&\operatorname{trap}(p,\sigma',\tau),\\ &\operatorname{diverge}(\tau).
+\end{aligned} \]
+
+where \(\tau\) is the ordered trace of host operations, capability performances,
+logical resource transitions, and cleanup, and \(p\) identifies the first source
+trap. Two computations commute, written \(c\bowtie d\), only when, for every
+well-typed input state, executing `c; d` and `d; c` produces equivalent paired
+values and observations, modulo only explicitly unobservable representation
+renaming.
+
+For
+
+```text
+let x <- c
+let y <- d
+k
+```
+
+the adjacent exchange is admissible only if \(x\notin FV(d)\), \(y\notin
+FV(c)\), and \(c\bowtie d\). The second free-variable condition is normally
+guaranteed by lexical scope, but remains explicit for recursive groups and
+transformed IR. Arbitrary sequential reorderings then follow by repeated
+adjacent exchanges. This is stronger than finding a topological order of value
+dependencies.
+
+A conservative executable certificate would summarize each computation with
+
+\[ Q(c)=(R_c,W_c,U_c,E_c,A_c,G_c,K_c), \]
+
+where \(R,W\) are logical resource read/write footprints; \(U\) is an ownership
+transition over moves, borrows, freezes, drops, and regions; \(E\) is a
+sequential host/capability trace abstraction; \(A\) records possible trap, early
+exit, and divergence; \(G\) records allocation and generative identity; and
+\(K\) records control dependence. The first admitted exchange rule should
+require all of the following:
+
+1. value independence as above;
+2. Bernstein's noninterference conditions [43], \(W_c\cap(R_d\cup
+   W_d)=\varnothing\) and \(W_d\cap(R_c\cup W_c)=\varnothing\);
+3. disjoint ownership transitions, except compatible shared reads through values
+   already proved frozen and live for both computations;
+4. a semantic primitive or handler certificate proving
+   \(E_c\mathbin{\triangleright}E_d= E_d\mathbin{\triangleright}E_c\), not
+   merely equal effect-row membership;
+5. no trap, early exit, or divergence in the initial implementation;
+6. no observable or fallible allocation and no generative identity whose order
+   can escape, until logical source-ordinal identities and allocation-failure
+   behavior are proved invariant; and
+7. the same control region, unless separate speculation and control-dependence
+   proofs apply.
+
+These conditions are sufficient and deliberately incomplete. LLVM and MLIR
+similarly separate memory effects from speculatability: absence of a write does
+not prove that moving an operation onto a newly executed path is safe [45].
+WebAssembly itself executes instruction sequences in order and reports traps to
+the embedding [27], so the backend cannot appeal to an out-of-order hardware
+implementation to change source observations.
+
+The current primitive catalog demonstrates why `pure` is not a reorder
+certificate. Integer division and truncating conversions may trap despite having
+no algebraic capability row. Bounds-checked immutable reads may trap. Two host
+calls with disjoint return values can still expose their order. A diverging
+computation followed by panic is not equivalent to panic followed by divergence.
+Moving or dropping one owner can invalidate another computation's borrow.
+Allocation order can change a fallible allocator or a source-visible handle
+unless the representation-independence proof explicitly hides it.
+
+The following initial classification is therefore normative for future work:
+
+| Computation                                       | Compiler jobs | Payload exchange                                                   |
+| ------------------------------------------------- | ------------- | ------------------------------------------------------------------ |
+| Independent typed RHSs, emitted in source order   | admissible    | unchanged                                                          |
+| Total scalar operations with no trace or owner    | admissible    | admissible                                                         |
+| Division, conversion, bounds check, or panic      | admissible    | ordered                                                            |
+| Reads of the same frozen value with proved bounds | admissible    | admissible                                                         |
+| Allocation or region transition                   | admissible    | ordered initially                                                  |
+| Host or algebraic operation                       | admissible    | ordered unless its semantic handler certificate proves commutation |
+| Move, freeze, drop, or live borrow transition     | admissible    | ordered unless footprints and ownership transitions are disjoint   |
+
+Function bodies and source computations can therefore be compiled concurrently
+even when the right-hand sides in the last four rows must execute sequentially.
+
+#### Parallel payload execution is deferred
+
+Pairwise sequential commutation does not by itself define concurrent execution.
+A parallel source construct must specify which interleavings are observable, how
+two failures are selected, whether one branch cancels another, how cleanup is
+ordered, and how one-shot resumptions interact with scheduling. Tate shows that
+useful parallel effects may admit arbitrary interleaving without making
+same-thread logging commutative [42]. Ducklang currently has neither that
+parallel merge operation nor a task calculus. The compiler must not manufacture
+one from let syntax.
+
+#### Pass ordering is a separate problem
+
+Reordering compiler passes is also not justified by right-hand-side
+independence. Two read-only analyses over one immutable snapshot can overlap.
+Two transforms \(P,Q\) can be exchanged only with a checked property such as
+
+\[ P(Q(I))=Q(P(I)) \]
+
+for every admitted \(I\), or a proof that both terminating rewrite systems reach
+one canonical normal form. Profitability, fixed iteration budgets, source
+diagnostics, and code-size thresholds commonly break that equality. The current
+snapshot/propose/resolve/commit model should overlap analyses, then preserve the
+proved transform order until a confluence or differential certificate exists.
+
+#### Work, span, and structural opportunity
+
+For SCC jobs \(j\) with measured or estimated compiler work \(w_j\), let
+
+\[ W=\sum_jw_j,\qquad L=\max_{\pi\in paths(G_c)}\sum_{j\in\pi}w_j. \]
+
+On \(P\) effective workers, any scheduler satisfies
+
+\[ T_P\ge\max(W/P,L). \]
+
+With graph construction \(T_g\), \(q\) dispatches of latency \(D\), fragment
+traffic \(M\) at effective bandwidth \(B\), and ordered scan/assembly \(T_a\),
+the transform can repay itself only if
+
+\[ T_{seq}-\max(W/P,L) > T_g+qD+M/B+T_a. \]
+
+Graph construction and Tarjan SCC contraction take \(O(|V|+|E_c|)\) work [19].
+Column offsets take \(O(|V|)\) work and \(O(\log |V|)\) scan span. Variable-size
+fragments require exact count/scan/write; atomics into a shared append arena
+would make IDs and diagnostics depend on completion order.
+
+A one-off 2026-08-01 structural audit compiled the six frozen applications on
+the CPU, treated every top-level typed binding plus the final result as one job,
+used complete typed-expression node count as \(w_j\), conservatively treated
+every direct value reference as a scheduling edge, collapsed its SCCs, and
+calculated the weighted DAG span. A relocation-capable fragment compiler can
+remove many of those scheduling edges, so the table understates downstream
+lowering freedom. It did not time a parallel implementation and does not model
+nested function-body parallelism:
+
+| target    | jobs | typed nodes \(W\) | direct edges | cyclic jobs | levels | max frontier | weighted span \(L\) | \(W/L\) |
+| --------- | ---: | ----------------: | -----------: | ----------: | -----: | -----------: | ------------------: | ------: |
+| Editor    |   79 |             3,129 |          125 |           3 |     16 |           26 |               1,360 |    2.30 |
+| Codex     |  264 |            32,675 |          333 |          20 |     19 |          108 |               3,502 |    9.33 |
+| grep      |   14 |               439 |           15 |           0 |      5 |            6 |                 328 |    1.34 |
+| Tar       |   30 |             4,274 |           13 |           0 |      6 |           22 |               4,101 |    1.04 |
+| wav       |    6 |               215 |            6 |           0 |      4 |            2 |                 167 |    1.29 |
+| raytracer |   15 |               447 |           19 |           0 |     11 |            3 |                 350 |    1.28 |
+
+This is a static work proxy, not a speedup measurement. It supports a bounded
+conclusion: top-level fragment parallelism is promising for Codex, modest for
+Editor, and structurally unable to help Tar until its dominant function body is
+partitioned internally. Maximum frontier width alone is misleading; Tar has 22
+ready components but nearly all node work lies on one critical path. Scheduling
+must use measured work, not job count.
+
+#### Selected implementation order
+
+The next implementation should not reorder source evaluation. It should:
+
+1. freeze resolved symbol, type, effect, ownership, signature, capture, and
+   layout tables;
+2. separate true semantic-readiness edges from relocatable value references and
+   form SCCs only for the former;
+3. lower independent function and binding jobs into local flat fragments with
+   stable-symbol relocations;
+4. count, scan by source ordinal, rebase, resolve relocations, and emit
+   canonical flat Core;
+5. compare every result byte and diagnostic with sequential construction;
+6. profile \(W,L,M,qD,T_g,T_a\) and reject parallel execution below the measured
+   adapter-specific break-even point; and only then
+7. consider a Core-level payload scheduler using explicit totality,
+   trace-commutation, footprint, ownership, generativity, and control evidence.
+
+The first six steps expose compiler parallelism without changing Ducklang. Step
+seven is a new optimization with its own validation and remains unimplemented.
+
+### 7.12 Blot Runtime HIR as a backend-neutral target
+
+The copied Blot grammar and the earlier `let*; return` payload were not a sound
+route to full Blot compilation and have now been deleted. Blot's checker owns
+staging, algebraic subtyping, nominal constructor sets, effect rows, ownership
+proofs, imported module identities, and pinned-pattern domains. Reconstructing
+any of those from Baba compact syntax would create a second type checker whose
+agreement was neither specified nor proved. The selected target boundary is
+therefore after Blot has erased compile-time values and specialized
+polymorphism, but before a particular backend chooses Wasm layouts.
+
+The boundary is a first-order typed SSA/CFG calculus. A module contains stable
+type, signature, function, block, and value tables; explicit products, sums,
+seals, stores, vectors, calls, host calls, ownership transitions, branches,
+returns, and traps; declared capability signatures; and source-to-Wasm export
+descriptors. Every operation carries its result type, ownership class, operands,
+and source span. Effects inhabit function signatures, not a side table inferred
+from host calls after lowering.
+
+For a checked and staged Blot module \(M\), target lowering \(L\), gpupaper
+emission \(E\), and an observation function containing results, traps, ordered
+host operations, exported ABI values, and ownership-visible allocation behavior,
+the required simulation is
+
+\[ \operatorname{Obs}(M) =\operatorname{Obs}(L(M)) =\operatorname{Obs}(E(L(M))).
+\]
+
+Binary equality with gpufuck is not required because layout and optimization are
+target choices. Equality of observations and Blot Core Wasm ABI 1 metadata is
+required. The gpufuck backend remains an independent differential oracle until
+the complete Blot corpus satisfies this equation.
+
+An unvalidated JSON-shaped module is not accepted by lowering. The validator
+returns an opaque `ValidatedBlotRuntimeModule` capability, and the CPU planner
+and GPU target require that capability. This makes validation a parse boundary:
+downstream code cannot accidentally treat structurally similar, untrusted input
+as proved HIR without an explicit unsafe cast. The validator currently enforces
+the following executable invariants:
+
+1. schema version, table indices, stable table-order IDs, and unique exported,
+   capability, operation, field, and constructor names;
+2. signature/type closure and exact entry-block parameters;
+3. single SSA definition and dominance for every operand and terminator value;
+4. typed block-edge arguments and exact function result types;
+5. every host call names a declared capability operation and every function's
+   declared row is exactly the least fixed point of the capabilities named by
+   its reachable host calls, direct callees, and indirect-call signatures; and
+6. an in-place Store update is labelled `owned-reuse` only when its result
+   carries owned evidence.
+
+Dominance is calculated as the least fixed point
+
+\[ D(entry)=\{entry\},\qquad D(b)=\{b\}\cup\bigcap_{p\in pred(b)}D(p). \]
+
+The implementation uses immutable input and constructs predecessor and
+definition maps before validation. For \(B\) blocks, \(V\) values, \(R\)
+operand/edge references, and \(E\) CFG edges, table validation takes
+\(O(V+R+E)\) work apart from the simple bit-set-free dominance iteration. That
+iteration takes at most \(B\) shrinking rounds over \(B\)-element sets, giving
+an explicit \(O(B^3+EB)\) conservative bound and \(O(B^2+V)\) memory. This CPU
+trust-boundary validator is selected for clarity; the production GPU transform
+will consume already validated flat columns. Replacing it with Lengauer--Tarjan
+would change constants and asymptotics but not the target semantics, and is not
+justified until validation is measured as material.
+
+The executable target now maps scalar operations, typed CFG edges, direct and
+indirect calls, captured closures, recursive functions, products, sums, seals,
+SIMD operations, Store operations, text operations, host calls, and ownership
+transitions into validated gpupaper Core. Checked signed 64-bit addition,
+subtraction, and multiplication use explicit overflow predicates before the Wasm
+operation; tests cover the safe and overflowing regions of all three families.
+Store updates have separate persistent-copy and proved-owned-reuse operations.
+Text length and comparison operate on Unicode scalar values rather than
+JavaScript UTF-16 code units.
+
+Effect labels at this boundary name capabilities, not individual operations. A
+host call `C.o` therefore requires `C` in its enclosing row, while its import
+still records the exact operation `o` and its signature. This is the algebra
+that Blot handlers implement: handling `C` discharges the family of operations
+belonging to that capability rather than one member selected after inference.
+The rejected operation-labelled model produced `Console.write` where Blot and
+its ABI require `Console`; exact-manifest comparison exposed the counterexample.
+
+#### Checked staging and unit-effect residualization
+
+The producer is now inside Blot after checking, staging, specialization, and
+ordinary lowering have fixed expression types, export schemas, runtime nominal
+types, grants, capability signatures, and staged values. Inference retains an
+expression-to-type map instead of asking the target to infer syntax again. The
+producer consumes Blot `Value`, `TypeSchema`, and runtime-type declarations and
+emits Runtime HIR; it does not parse Blot or invent constructor sets.
+
+The admitted source-to-target subset consists of closed value exports whose
+strict-eager module evaluation can be residualized, plus synchronous host
+operations with a stage-known first-order argument and either an inferred `Unit`
+result or an unconstrained result that no expression observes. Blot's existing
+host lowering canonicalizes exactly that unobservable result to `Unit`; the
+target consumes the same checked grant fact rather than claiming the
+unconstrained source variable was itself proved equal to `Unit`. Write
+
+\[ \operatorname{eval}_{sym}(M)=(v,\tau),\qquad
+\tau=[(C_0,o_0,a_0),\ldots,(C_{k-1},o_{k-1},a_{k-1})]. \]
+
+The symbolic host answers each `C.o : A -> Unit` with `Unit` and appends the
+call and its already evaluated argument to `tau`. If `pi_x` projects export `x`,
+its generated runtime function is
+
+\[ L_x(M)=\operatorname{replay}(\tau);\operatorname{encode}(\pi_x(v)). \]
+
+This is an online partial-evaluation boundary in the sense of Jones, Gomard, and
+Sestoft [10], with a deliberately smaller binding-time rule. The proof is by
+induction over the strict evaluator. Pure steps are evaluated identically. At a
+residual host step the result is the unique `Unit` inhabitant, so no host return
+value can change later value flow or control; appending the exact capability,
+operation, and argument preserves the sequential trace. Replay performs those
+calls in the same order before exposing the result, so an external side effect
+or trap is observed at the corresponding point. A non-`Unit` result, unknown
+argument, asynchronous operation, or unresolved function value invalidates this
+argument and is rejected rather than guessed.
+
+#### Checked residual SSA for input-dependent effects
+
+The admitted input-dependent binding-time rule generalizes the unit-trace proof
+without turning an arbitrary evaluator value into a compiler IR node. For each
+checked first-order type `t`, the residual domain is the disjoint sum
+
+\[D_t=\operatorname{Static}(v:t)+\operatorname{Dynamic}(x:t).\]
+
+Products used only to apply source closures may contain members from either
+summand, but every `Dynamic` leaf names one dominating Runtime-HIR SSA
+definition. Closures, host effects, operations, and partially applied intrinsics
+remain static compiler values; they never cross the Runtime-HIR boundary. The
+producer consumes the checker's expression types, open bindings, compile-time
+declaration values, host signatures, and staged export schemas. It does not
+infer a type, reconstruct a capability, or identify a primitive from a surface
+spelling.
+
+Residual evaluation is strict left-to-right call-by-value. Write
+
+\[\langle e,\rho,b\rangle\Downarrow(d,b',G)\]
+
+for expression `e`, residual environment `rho`, current block `b`, result `d`,
+final block `b'`, and appended HIR graph fragment `G`. A pure operation whose
+arguments are all static is evaluated at staging time. An admitted primitive
+with at least one dynamic operand emits one typed SSA operation. A synchronous
+host operation `C.o : A -> B` first residualizes `A`; it then emits `host.call`
+in program order and returns `Dynamic(x:B)`, including when `B` is not `Unit`.
+Therefore a later operation may depend on the host result without fabricating a
+placeholder value. A dynamic Boolean conditional creates two successor blocks
+and a join whose parameters are exactly the branch result's dynamic leaves;
+static conditions select one arm and create no CFG. This is ordinary online
+partial evaluation [10], but the residual language is the validated HIR rather
+than source syntax.
+
+Blot has already lowered source `return` through conditionals into finite
+control sums when this boundary runs. Residual branches whose results are
+different constructors therefore create an internal sum with one unit payload
+per constructor, and a later case emits `sum.tag`, the checked branch, and
+`sum.payload`. The rule depends on the constructor set carried by the residual
+value, not generated name prefixes. For a binary generated sum, the canonical
+text emitter represents the internal value by its `i32` discriminant; the unit
+payload has no runtime information. This is the standard elimination rule for a
+finite coproduct and preserves the already explicit source-control order.
+
+The first executable calculus is intentionally `Unit + Bool + I32 + Text`,
+synchronous host calls over `Unit` and `Text`, text concatenation and
+comparison, and finite conditionals. It is enough for the terminal study: a host
+returns a name, the program compares it with empty text, selects one of two
+writes, and concatenates the dynamic name on one path. Loops, recursion,
+handlers surviving staging, dynamic stores, and dynamic nominal aggregates
+remain rejected. This boundary is semantic rather than fixture-specific:
+admission is decided from checked types and HIR constructors, and any program in
+the calculus receives the same lowering.
+
+The producer must preserve four invariants. First, every dynamic use is
+dominated by its definition or corresponding block parameter. Second, emitted
+host calls have the same total order as the strict source evaluation along each
+path. Third, a residual value's HIR type is the checked source type translated
+once at the boundary. Fourth, joining control never merges different types or
+different value arities. Static evaluation of a dynamic operand, syntax-based
+primitive recognition, and answering a non-unit host operation with a dummy
+value are counterexamples and are forbidden. Validation establishes the graph
+invariants; differential tests compare both terminal branches and the exact host
+trace.
+
+For `N` visited source nodes, `R` residual operations, and `E` CFG edges, the
+producer performs `O(N+R+E)` work and retains `O(R+E)` HIR words. It allocates
+no runtime object while specializing static closure applications. A conditional
+whose predicate is static discards one whole branch; a dynamic predicate emits
+both once. This makes discard-before-parallelize explicit: staging removes
+provably static work, while the remaining flat operations and blocks are the GPU
+compiler's payload.
+
+Strict eagerness requires evaluating the complete module result before
+projecting an export. An earlier producer projected the syntax first; this
+incorrectly omitted module-initialization effects from otherwise constant
+fields. Exact effect-row comparison supplied the counterexample. The selected
+producer evaluates the module symbolically once, obtaining one `v` and `tau`,
+then projects all exports and attaches a copy of the same runtime replay trace.
+For source-evaluation work `S` and `E` runtime exports, this changes
+compile-time work from `O(E S)` to `O(S+E)` without memoizing or discarding
+runtime effects.
+
+#### Stable packed module batches
+
+Blot exposes compilation parallelism only after checking and residualization.
+A logical target batch is the ordered sequence
+
+\[\mathcal B=[(o_0,M_0),\ldots,(o_{n-1},M_{n-1})],\]
+
+where `o_i=i` is the input ordinal and every `M_i` is independently validated
+Runtime HIR. Compilation performs no payload effects: host operations in `M_i`
+are encoded into Wasm but never executed by the compiler. Consequently modules
+have no cross-job effect edge. Import dependencies have already been checked and
+specialized into each residual module, so inventing an inter-module effect DAG
+at this boundary would confuse program execution with compiler execution.
+
+Let `plan(M_i)=P_i`, let `a_i` be the atom count of `P_i`, and define prefix
+atom boundaries `b_0=0` and `b_{i+1}=b_i+a_i`. The physical packed plan is the
+ordered concatenation
+
+\[P_{\mathcal B}=P_0\mathbin{+}\cdots\mathbin{+}P_{n-1}.\]
+
+A non-length atom is copied unchanged. A length atom from `P_i` with local
+range `[s,s+c)` becomes `[b_i+s,b_i+s+c)` and retains its dependency level.
+Because every local length range lies inside its own plan, rebasing preserves
+the length dependency graph and creates no cross-module edge. Independent
+length atoms at the same level are therefore sized by the same GPU frontier.
+One exclusive scan over the packed atom sizes gives global byte offsets. The
+emitter copies offsets at `b_1,...,b_n` into the readback, yielding byte
+boundaries `q_0=0,q_1,...,q_n`; artifact `i` is the isolated copy
+`output[q_i:q_{i+1}]`.
+
+The required invariants are:
+
+1. **Singleton equivalence:** packing `[M]` emits exactly the bytes and ABI
+   manifest of ordinary compilation of `M`.
+2. **Stable identity:** output position `i` belongs to input ordinal `o_i`, not
+   GPU completion order.
+3. **Range confinement:** every rebased length range remains inside
+   `[b_i,b_{i+1})`, and every returned byte range remains inside
+   `[q_i,q_{i+1})`.
+4. **Byte isolation:** public artifacts receive disjoint owned byte arrays; a
+   caller cannot reach the packed backing allocation through one artifact.
+5. **Failure monotonicity:** a source preparation failure is local and excluded
+   before GPU work. After submission the admitted logical batch is atomic: if
+   one physical partition fails, completed sibling partitions are discarded and
+   no admitted artifact is returned.
+6. **Semantic noninterference:** batching changes compiler scheduling only. It
+   neither executes nor reorders a Blot host effect.
+
+The throughput cap remains `K=16`, so a logical batch of `n` admitted modules is
+partitioned into `ceil(n/K)` contiguous physical plans. Contiguous partitioning
+preserves ordinals without a sort. For `A=sum_i a_i` atoms and total maximum
+encoded capacity `Y=sum_i Y_i`, packing, column construction, scan, emission,
+boundary readback, and artifact copying require `O(A+n+Y)` work and `O(A+Y+n)`
+space. Compared with `n` separate emissions, it changes `n` atom scans, output
+arenas, mappings, and payload command buffers into `ceil(n/K)` of each. It does
+not remove Blot's `sum_i T_prepare_i`, gpupaper's `sum_i T_plan_i`, the total
+atom work, or the final `Theta(Y)` host copy.
+
+With per-physical-batch fixed cost `H`, per-module GPU work `g_i`, and packed
+overhead `r(n,A)`, the first break-even condition is
+
+\[nH+\sum_i g_i > \lceil n/K\rceil H+\sum_i g_i+r(n,A).\]
+
+Equivalently, packing is justified only when
+`r(n,A)<(n-ceil(n/K))H`. This predicts no benefit for `n=1` and explains why
+splitting one 29-operation terminal module is the wrong transformation: it
+increases the number of boundaries without exposing an independent semantic
+module. The earlier diagnostic terminal throughput of 524.4 modules/s at
+requested batch 16 corresponds to about 1.91 ms of service capacity per module,
+but it used separate per-module arenas. It motivates the packed experiment; it
+does not establish the new implementation's speedup. Function-level splitting
+remains outside this model until callable relocation, linking, and per-function
+output ownership are specified.
+
+This construction instantiates the work/depth and scan models already selected
+in Sections 7.1 and 7.10 [17, 36]. The singleton, rebasing, ordinal, isolation,
+physical-failure, and CPU/GPU byte differentials are required executable
+evidence; runtime improvement remains an empirical claim.
+
+The packed boundary is implemented. Blot prepares every input path, retains its
+ordinal, excludes local source failures, and sends the admitted sequence through
+`compileBlotRuntimeModulesOnGpu`. Gpupaper validates every local plan before
+packing, partitions at 16, performs one combined GPU layout per partition, maps
+the terminal offsets, validates each resulting Wasm and exact embedded manifest,
+and copies each public artifact into its own backing buffer. A singleton uses the
+same batch API. Tests cover a locally invalid Blot source between two admitted
+sources, exact CPU/singleton bytes, rebased nested lengths, a deliberately
+escaping local length range, ordinal identity, distinct output buffers, dynamic
+Wasm validity, and the 16/1 physical partition for 17 modules. Existing queue
+tests establish that one physical command failure rejects every payload in that
+submission. These are executable validations of the listed invariants, not a
+proof for arbitrary driver execution.
+
+The benchmark now counterbalances the old queued-per-module emitter against the
+packed emitter for identical terminal plans. A five-sample run on 2026-08-02 was
+diagnostic because unrelated Cargo work was active:
+
+| modules | queued p50 ms | packed p50 ms | queued/packed | packed modules/s |
+| ------: | ------------: | ------------: | -------------: | ---------------: |
+|       1 |        15.457 |        15.586 |          0.992 |             64.2 |
+|       4 |        19.262 |        15.909 |          1.211 |            251.4 |
+|      16 |        31.647 |        17.935 |          1.765 |            892.1 |
+|      64 |       137.357 |        28.581 |          4.806 |          2,239.3 |
+
+The singleton counterexample agrees with the break-even equation: packing one
+module was 0.8% slower. At 16 modules one physical packed plan reduced median
+emission by 43.3% and provided about 1.12 ms of service capacity per artifact.
+At 64 modules, four packed plans shared one four-command submission and provided
+about 0.447 ms per artifact, while the old path still allocated and mapped 64
+arenas. These measurements support fixed-boundary amortization under this
+adapter and workload but are not release evidence. They exclude Blot's serial
+HIR preparation and gpupaper's per-module Wasm planning, neither of which this
+batch changes. The same run's singleton source-to-Wasm latency remained 19.106
+ms p50 versus gpufuck's 1.280 ms, as the model predicts for `n=1`.
+
+`deno task benchmark:blot-batch` measures the actual multi-path Blot target and
+requires every packed artifact and manifest to be byte-identical to singleton
+compilation before reporting. One warmup followed by four counterbalanced
+samples over all 53 top-level examples ran with a clear environment on the same
+adapter. Packed compilation measured 131.401 ms p50 and 141.779 ms p95, or 403.3
+modules/s. Repeating the former singleton target path measured 930.812 ms p50
+and 1,007.078 ms p95, or 56.9 modules/s. Every paired packed-minus-singleton
+difference was negative (`-790.82`, `-791.85`, `-893.25`, and `-790.05` ms),
+and the p50 ratio was 7.084. All 53 outputs, totalling 173,721 bytes, were
+identical. This is admissible empirical evidence for the stated warm-process,
+warm-Blot-cache corpus boundary. It is not a cold-build result, an uncertainty
+interval, or evidence that one module benefits.
+
+#### Canonical ABI and call-scoped result regions
+
+The target derives the Blot ABI 1 manifest directly from Runtime HIR,
+pretty-prints one canonical byte sequence, and embeds those exact bytes in the
+`blot:abi` custom section. Modules export memory, a preserving alignment-checked
+bump `cabi_realloc`, and immutable ABI version globals. Text and arrays use
+`(pointer:u32,length:u32)`, records place name-sorted fields at their
+recursively aligned offsets, variants use a minimum-width sorted-case
+discriminant followed by an aligned maximum payload, and seals reuse their
+representation layout. Direct scalars flatten to one Wasm value; unit flattens
+to none.
+
+For a closed composite result, compilation constructs a template of `T` bytes
+and `R` relative-pointer relocations. Each call allocates a fresh `T`-byte
+region, copies the template, patches each relocation by adding the new base, and
+returns the root pointer. Excluding `memory.grow`, call work is `O(T+R)` and
+temporary compiler memory is `O(T+R)`. The allocator itself is `O(1)`;
+preserving reallocation copies `O(min(old,new))`. Static UTF-8 host arguments
+are borrowed from active data while the synchronous import executes. These
+flattening and ownership conventions are the selected memory32, UTF-8 subset of
+the Component Model Canonical ABI [46], not a claim that a Core module is itself
+a Component.
+
+The closed composite path now gives each export call a stack-disciplined result
+region, following the region lifetime model of Tofte and Talpin [47]. Let the
+allocator state be
+
+\[q=(h,a,r,c),\]
+
+where `h` is the current heap frontier, `a` is zero or the active export ID, `r`
+is the active root pointer, and `c` is the call's heap checkpoint. A call to
+export `i` is admitted only when `a=0`, then performs
+
+\[\operatorname{begin}_i(h,0,0,c)=(h,i,0,h).\]
+
+A direct result restores `h:=c` before returning. An indirect result at root `p`
+leaves `(h,i,p,c)` active while the caller reads it. Its post-return is defined
+only for the exact pair `(i,p)` and performs
+
+\[\operatorname{post}_{i,p}(h,i,p,c)=(c,0,0,c).\]
+
+A second export call, wrong export ID, wrong root pointer, or repeated
+post-return traps. Consequently no allocation from one completed call aliases a
+live allocation from another admitted call. This proof depends on the current
+closed emitter placing every call-temporary allocation above `c` and exposing no
+reference to it except the result graph. Resetting the frontier reclaims the
+whole region in `O(1)` rather than walking its `N` nested allocations in `O(N)`.
+If `H` is persistent pre-call memory and `A_i` is the aligned allocation volume
+of call `i`, repeated sequential calls peak at
+
+\[M_{peak}=H+\max_i A_i\]
+
+rather than `H + sum_i A_i`. Reentrant exports through a host callback are
+deliberately refused because they would violate the single-region stack law.
+This is executable validation and a local simulation argument, not a general
+proof for multiple outstanding results or asynchronous calls.
+
+Dynamic direct scalar export parameters and non-unit scalar host results now
+cross the direct Core path without staging: an executable `i64 -> i64` export
+preserves two boundary values and an imported `i64 -> i64` result flows into the
+export result. The import module is exactly `blot:host/<capability>`. The direct
+admission predicate enforces the 16-flat-parameter limit. General parameter
+lifting, boolean input validation, host operations returning indirect canonical
+values other than `Text`, asynchronous effects, dynamic composite production,
+and malformed caller-memory validation remain outside the admitted target. The
+zero-parameter staged composite subset has no untrusted composite caller value
+to validate; extending it requires canonical lifting checks rather than
+broadening the template proof.
+
+The remaining composite boundary cannot be obtained by wrapping the current
+general Core representation. Core products, sums, stores, and text are opaque
+managed-runtime handles of one `i32`, whereas Blot ABI text alone flattens to
+`(i32,i32)` and nested aggregates are canonical memory graphs. There is no
+representation-preserving cast from a caller graph to an opaque handle, nor a
+way to lower a returned handle without the private projection tables. A bridge
+would have to traverse `N` boundary nodes in `Theta(N)` work, allocate private
+handles, and add undeclared JavaScript imports; the latter would violate the
+published Blot module contract. Reusing the closed template would instead make
+dynamic values constant. The implemented `Text` fragment therefore uses a
+module-local canonical lowering whose ordinary operations use the same memory
+representation as its adapters. General dynamic aggregates must extend that
+route rather than introduce a hidden managed bridge or template generalization;
+both remain rejected alternatives.
+
+For the admitted dynamic `Text` calculus the selected module-local canonical
+representation is two `i32` SSA components `(p,n)`, not a managed handle. Text
+block arguments copy both components, while ordinary scalar values copy one.
+Static UTF-8 literals occupy immutable active data. Concatenation allocates
+`n_1+n_2` bytes through the exported `cabi_realloc` and performs two bounded
+copies. Comparison scans the two valid UTF-8 byte sequences lexicographically;
+UTF-8 preserves Unicode scalar ordering, so the byte order implements Blot's
+declared text comparison without decoding scalar values. A host returning `Text`
+uses Canonical ABI indirect-result form: the module passes an eight-byte result
+header, the host writes `(p,n)` and allocates the payload with the module's
+allocator, and the module validates the range and UTF-8 before use.
+`Text -> Unit` imports receive the two flat components directly [46].
+
+Every top-level direct-result call checkpoints the bump frontier and restores it
+on every return, so host-returned and concatenated text have the same region
+lifetime as the computation. With returned byte count `H`, concatenated byte
+count `C`, and temporary headers `8K`, peak transient memory is `O(H+C+8K)` and
+reclamation is `O(1)`. Concatenating lengths `a` and `b` costs `Theta(a+b)`
+bytes copied; comparing them costs `O(min(a,b))` byte loads after constant-time
+bounds checks. Validating a host result of `n` bytes costs `Theta(n)` loads and
+constant auxiliary space. Packing text into a single opaque `i32`, importing
+JavaScript text operations, or treating host memory as trusted would
+respectively violate the ABI shape, module import contract, or
+boundary-validation rule and are rejected alternatives.
+
+Blot exposes this target explicitly as `blot build --target=gpupaper`. That
+command checks and stages in the Blot checkout, validates Runtime HIR once, and
+uses gpupaper's GPU Wasm emitter. Gpupaper's former `.blot` parser, copied Baba
+grammar, payload lowering, fixtures, and syntax benchmark have been deleted;
+passing Blot source to gpupaper now reports the target-boundary command instead
+of reconstructing Blot semantics.
+
+#### Executable and empirical evidence
+
+On 2026-08-02 the live corpus contained 53 top-level Blot examples. All 53
+produced validated Runtime HIR and Wasm. The differential command admits all 53
+and compares 313 runtime exports against the exact public ABI manifest, decoded
+result, ordered capability/operation/argument trace, and required post-return
+call from Blot's gpufuck CPU oracle with zero rejections. This is executable
+validation over the admitted corpus, not a proof for programs outside the
+binding-time rule. Twenty-six focused tests cover seven validator properties
+and nineteen target scenarios, including dynamic scalar parameters, canonical
+import identity, call-region pressure, repeated-call reclamation, Unicode scalar
+ordering across UTF-8 length boundaries, and every malformed UTF-8 sequence
+family. Two source integration tests prove that an
+observed `Text` host result remains an SSA dependency through append and a later
+host call and that both residual terminal branches execute with their exact
+ordered trace. The complete gpupaper suite passes 594 tests and the complete Blot
+suite passes 673 tests in this checkout.
+
+A single warm-process corpus pass after the dynamic-Text implementation measured
+1,442.60 ms in Blot-to-HIR production, 4.95 ms in explicit HIR validation, and
+60.00 ms in target emission across all 53 files; medians were 23.997, 0.0435,
+and 0.734 ms respectively. The artifacts totalled 173,721 bytes. These stage sums
+share frontend caches and are workload evidence rather than independent cold
+samples.
+
+The alternating equal-source benchmark on `minimal.blot` used one warmup and
+five samples on the RTX 4080 SUPER. Gpupaper measured 3.048 ms p50 (2.125 HIR
+production, 0.0338 validation, 0.768 emission) and emitted 956 bytes; the
+configured gpufuck GPU target measured 0.567 ms p50 and emitted 2,390 bytes.
+Gpupaper was therefore 5.38 times slower at this boundary while emitting 60.0%
+fewer bytes. A three-sample diagnostic on `storage.blot` before the module-wide
+residualization measured 66.07 versus 3.18 ms; two subsequent runs were rejected
+nondeterministically by published gpufuck 0.9.0 GPU inference with code
+2201/detail 177, so that ratio is not admissible performance evidence. The
+sibling `../gpufuck` checkout is API-incompatible with the current Blot checkout
+and was not silently substituted. The benchmark command defaults to the
+consistently admitted minimal workload and accepts `--file=` for explicit
+diagnostics.
+
+The target benchmark now shares the peer environment gate and separates HIR
+production, HIR validation, Wasm planning, and GPU emission. It also records
+physical plan traffic and throughput batches. A three-sample 2026-08-02 run was
+explicitly diagnostic because unrelated Cargo and Deno GPU work was active.
+Gpupaper measured 17.279 ms p50: 2.555 ms HIR production, 0.0476 ms validation,
+0.4508 ms planning, and 14.0645 ms GPU emission, producing 956 bytes. Gpufuck
+measured 1.907 ms p50 and produced 2,390 bytes, so the contended ratio was 9.06,
+not release evidence. One module required 953 plan atoms, 2,036 atom-input
+bytes, 1,288 output-buffer bytes, 3,816 offset bytes, 1,440 low-word bytes, 240
+byte-rank bytes, 8 signed-64 high bytes, and 4,224 dispatched invocations. The
+corresponding logical encodings were 871 bytes of diagnostic Runtime HIR JSON,
+660 manifest bytes, and 956 final Wasm bytes. Throughput scheduling measured
+60.06, 194.78, 412.11, and 432.78 modules/s at requested batches 1, 4, 16, and
+64; the emitter capped physical submission batches at 16. The rebuild harness
+uses separate temporary source identities, alternates literal edits, includes
+cache invalidation, and executes each rebuilt artifact to require the new value.
+A one-sample contended smoke run measured 57.997 ms for gpupaper, including
+0.221 ms invalidation, and 36.729 ms for gpufuck. One sample under contention is
+only executable benchmark validation, not performance evidence. An uncontended
+multi-sample release run remains open.
+
+A later 15-sample diagnostic on the same date again found a separate Deno
+process holding 205 MiB on the GPU, so the normal gate refused and the run
+required `--allow-contended`. Gpupaper measured 14.107 ms p50 and 16.648 ms p95;
+its median stages were 1.596 ms HIR production, 0.0214 ms validation, 0.286 ms
+planning, and 12.083 ms GPU emission. GPU emission was therefore 85.65% of
+median end-to-end latency. Gpufuck measured 0.481 ms p50 and 1.330 ms p95,
+making gpupaper 29.32 times slower for this one-operation cached module while
+retaining the 956-byte versus 2,390-byte artifact advantage. Throughput
+scheduling reached 66.09, 207.85, 560.62, and 529.37 modules/s at requested
+batches 1, 4, 16, and 64. Five alternating literal rebuilds measured 27.703 ms
+p50 for gpupaper, including 0.102 ms invalidation, and 12.200 ms for gpufuck.
+These are diagnostic observations of the latency and batching shape, not
+admissible release comparisons.
+
+The same minimal source was then compiled at one identical temporary path to
+explain the byte difference rather than infer from totals. Both modules had no
+imports, returned `42`, and carried byte-identical 647-byte JSON manifests. The
+`blot:abi` section occupied 659 bytes in each binary after its section and name
+encoding. Whole-section bytes, including section headers, were:
+
+| Binary component | gpupaper |   gpufuck | gpufuck excess |
+| ---------------- | -------: | --------: | -------------: |
+| Wasm preamble    |        8 |         8 |              0 |
+| type             |       15 |        45 |             30 |
+| function         |        5 |        14 |              9 |
+| table            |        0 |         6 |              6 |
+| memory           |        5 |         5 |              0 |
+| global           |       18 |        51 |             33 |
+| export           |       76 |       110 |             34 |
+| element          |        0 |        11 |             11 |
+| branch hints     |        0 |        92 |             92 |
+| code             |      157 |     1,376 |          1,219 |
+| `blot:abi`       |      659 |       659 |              0 |
+| **module**       |  **943** | **2,377** |      **1,434** |
+
+Gpupaper's exported body is five bytes and consists of the constant and return;
+its other function is the 145-byte ABI allocator. Gpufuck has eleven functions.
+Its body sizes expose 747 bytes of validated free-list allocation/reclamation,
+134 bytes of cached thunk forcing and tagged-value resolution, 193 bytes of
+runtime node/closure initialization and indirect-call support, a 131-byte ABI
+wrapper instead of the five-byte direct export, and a 152-byte allocator. The
+roles here are an inference from the disassembled state tests, block headers,
+function table, indirect calls, and payload loads. The constant `42` is present,
+but gpufuck constructs it inside the general graph representation and later
+forces, resolves, unwraps, and releases that representation. Gpupaper consumes
+Blot's already staged constant Runtime HIR and emits the public scalar directly.
+Thus 1,219 of the 1,434 excess bytes are executable code and only 92 are branch
+metadata; the difference is primarily retained generality, not the shared ABI
+manifest.
+
+Larger admitted examples preserve the same size direction, but they also expose
+what is being measured. Deterministic same-process compilation produced:
+
+| Blot example | Source bytes | gpupaper Wasm | gpufuck Wasm | gpufuck / gpupaper |
+| ------------ | -----------: | ------------: | -----------: | -----------------: |
+| `data`       |        1,732 |        10,259 |       31,048 |               3.03 |
+| `storage`    |        3,887 |        13,218 |       37,783 |               2.86 |
+| `tour`       |        4,393 |        12,687 |       36,018 |               2.84 |
+| `simd`       |        3,363 |         3,380 |       11,309 |               3.35 |
+| `walker`     |        2,088 |         1,256 |        3,119 |               2.48 |
+| `effects`    |        3,154 |         2,789 |        6,244 |               2.24 |
+
+These are output measurements, not equivalent evidence that both artifacts
+retain the source computation. The current Blot-to-gpupaper producer evaluates
+closed strict-eager regions at compile time, replays synchronous stage-known
+unit-result host calls, and serializes their exported values; the separate
+input-dependent calculus retains admitted `Text` host results and control. Thus
+the mutually recursive walker reaches gpupaper as its final result, not as a
+runtime tree walker. The SIMD fixture's unit `Console.write` is replayed, but
+its vector chain is evaluated before Runtime HIR and its scalar exports are
+serialized. Large composite results grow gpupaper through canonical templates,
+relocations, and per-export wrappers rather than through the erased algorithm.
+Gpufuck keeps the general runtime computation. The 2.24--3.35 size ratios
+therefore quantify the selected partial-evaluation boundary as much as backend
+compactness.
+
+Blot's advanced case studies form the counterexample required to delimit that
+claim. Gpufuck currently emits the 8,121-byte grep application with four host
+imports, the 5,412-byte terminal application with two, the 11,828-byte agent
+loop with three, and the 155,958-byte four-module engine with twelve. The engine
+contains 790 Blot lines and 30,331 source bytes across its main, ECS, maths, and
+renderer modules. Gpupaper now emits terminal as a 2,783-byte module with the
+same 1,299-byte manifest and the same two imports as gpufuck's 5,412-byte
+module. Its 29 residual operations in ten blocks retain `Terminal.read_line`,
+text comparison, both branches, concatenation, three possible writes, and Blot's
+two generated unit-payload control sums. Source-to-Wasm execution tests cover
+empty and Unicode input; target tests repeat calls to prove checkpoint reuse and
+trap lone continuation bytes, truncation, overlong encodings, surrogate
+encodings, and out-of-range scalar encodings before they can influence control.
+This is the first genuinely input-dependent gpupaper case study.
+
+Grep, agent, and engine remain outside the admitted calculus at
+`Arguments.pattern`, `Terminal.read_line` followed by a runtime loop, or
+`Assets.count`. They require dynamic stores/loops and additional canonical
+aggregate adapters. Using closed-value sizes as a proxy for those applications
+would still overstate present coverage.
+
+A five-sample alternating terminal benchmark on 2026-08-02 was diagnostic
+because unrelated Cargo work and another Deno GPU allocation were present.
+Gpupaper measured 19.832 ms p50 and 21.873 ms p95, including median stages of
+4.894 ms HIR production, 0.138 ms validation, 2.268 ms Wasm planning, and 12.632
+ms GPU emission. Gpufuck measured 1.747 ms p50 and 2.616 ms p95, so the
+contended gpupaper ratio was 11.35 while its artifact was 48.6% smaller. GPU
+emission was 63.7% of gpupaper's median. Throughput scheduling reached 65.1,
+201.7, 524.4, and 456.0 modules/s at requested batches 1, 4, 16, and 64. These
+figures establish measurement coverage and the output-size direction; they are
+not admissible release performance evidence.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -3334,6 +4353,13 @@ The implementation must establish:
 21. **Advisory erasure**: removing branch-likelihood metadata leaves the same
     semantic Wasm module and observations; condition inversion preserves hint
     polarity, and an inaccurate hint cannot change execution semantics.
+22. **Compiler-fragment determinism**: every parallel compiler-job schedule
+    assembles the same flat columns, stable IDs, diagnostics, and Wasm bytes as
+    source-order construction.
+23. **Payload exchange safety**: a payload reordering is admitted only by a
+    checked pairwise certificate covering value dependence, sequential effects,
+    traps and divergence, resource footprints, ownership transitions, allocation
+    identity, cleanup, and control dependence.
 
 ## 9. Cost model
 
@@ -7292,6 +8318,35 @@ successful arm of aggregate selection's final trapping bounds check. Six fresh
 V8 benchmark processes improve in five cases and regress in one, preserving the
 distinction between useful empirical evidence and a universal speedup claim.
 
+### 2026-08-01: compiler jobs may reorder before source computations
+
+The ordering review retained Ducklang's left-to-right call-by-value semantics.
+The Core constructor, compile-time evaluator, and specializer all currently walk
+block steps in source order. Resolved shadow bindings already have fresh symbol
+IDs, which removes name ambiguity but does not itself commute their evaluation.
+The algebraic effect analysis records unordered capability membership, while the
+primitive catalog separately records coarse `pure`, `read`, `allocate`, and
+`trap` labels. Integer division demonstrates that these are not a totality or
+commutation proof: its descriptor is algebraically pure while its Wasm operation
+can trap.
+
+The retained design first parallelizes the compiler's pure work over an
+immutable typed snapshot. Stable-symbol relocations allow a consumer fragment to
+compile before its producer even when runtime value flow must remain ordered.
+Source-ordinal count/scan/rebase/relocate assembly must reproduce sequential
+flat Core exactly. The source audit and one-off six-target calculation are
+recorded in Section 7.11. They are measurements of structural opportunity using
+typed-node count as a proxy, not timings or implementation evidence.
+
+Runtime let exchange, compiler-pass permutation, and concurrent source execution
+were rejected as consequences of that compiler freedom. They require,
+respectively, a pairwise observational commutation certificate, pass commutation
+or common-normal-form evidence, and an explicit parallel effect and failure
+calculus. No payload reorder or parallel fragment compiler is implemented by
+this change. The first subsequent executable slice adds the validated
+job-analysis boundary described in Section 7.11, profiles its cost, and leaves
+the source-order Core constructor unchanged.
+
 ## References
 
 1. Gordon Plotkin and Matija Pretnar. “Handlers of Algebraic Effects.” ESOP
@@ -7389,3 +8444,24 @@ distinction between useful empirical evidence and a universal speedup claim.
     Time.” ISMM 2013. <https://doi.org/10.1145/2464157.2464160>
 39. William W. Tait. “Intensional Interpretations of Functionals of Finite Type
     I.” Journal of Symbolic Logic 32(2), 1967. <https://doi.org/10.2307/2271658>
+40. Eugenio Moggi. “Computational Lambda-Calculus and Monads.” LICS 1989.
+    <https://www.lfcs.inf.ed.ac.uk/reports/88/ECS-LFCS-88-66/>
+41. Colin S. Gordon. “Polymorphic Iterable Sequential Effect Systems.” ACM
+    TOPLAS 41(3), 2019. <https://arxiv.org/abs/1808.02010>
+42. Ross Tate. “A Flexible Semantic Framework for Effects.” 2013.
+    <https://cseweb.ucsd.edu/~rtate/effectstr.pdf>
+43. Arthur J. Bernstein. “Analysis of Programs for Parallel Processing.” IEEE
+    Transactions on Electronic Computers EC-15(5), 1966.
+    <https://doi.org/10.1109/PGEC.1966.264565>
+44. Jeanne Ferrante, Karl J. Ottenstein, and Joe D. Warren. “The Program
+    Dependence Graph and Its Use in Optimization.” ACM TOPLAS 9(3), 1987.
+    <https://doi.org/10.1145/24039.24041>
+45. LLVM Project. “LLVM Language Reference: Memory Effects and Speculatable” and
+    “MLIR Side Effects and Speculation.”
+    <https://llvm.org/docs/LangRef.html#function-attributes>
+    <https://mlir.llvm.org/docs/Rationale/SideEffectsAndSpeculation/>
+46. WebAssembly Community Group. “Component Model Canonical ABI.”
+    <https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md>
+47. Mads Tofte and Jean-Pierre Talpin. “Region-Based Memory Management.”
+    Information and Computation 132(2), 1997.
+    <https://doi.org/10.1006/inco.1996.2613>

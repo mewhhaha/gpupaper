@@ -1852,6 +1852,177 @@ lowering, optimization, layout, and emission over device-resident flat data,
 does no work for proved-empty domains, maps only the final artifact, and has an
 equal-boundary comparison whose benchmark-validity gate passes.
 
+## Phase 16: Dependency-preserving compilation order
+
+This phase separates parallel compiler execution from payload evaluation order.
+The compiler may lower independent typed right-hand sides concurrently while
+assembling the exact source-ordered artifact. Ducklang evaluation remains
+left-to-right unless a separate pairwise commutation certificate proves an
+exchange observationally equivalent.
+
+- [x] Specify the distinction between compiler-job scheduling, sequential
+      payload exchange, concurrent payload execution, and compiler pass
+      ordering. Derive the deterministic-fragment theorem, adjacent exchange
+      rule, sufficient noninterference conditions, cost model, counterexamples,
+      and six-target structural opportunity audit in `PAPER.md`.
+- [ ] Add a flat `CompilerJobIR` after resolution, typing, effect closure, and
+      ownership validation. Its columns must include source ordinal, stable
+      symbol and function IDs, semantic-readiness dependency ranges, relocation
+      ranges, SCC ID, estimated work, fragment column counts, and canonical
+      diagnostic key. Collapse an SCC only while its semantic interface or
+      staged value is unresolved; typed mutually recursive bodies may lower
+      separately through frozen signatures and relocations.
+  - [x] Implement and validate the post-specialization analysis slice with
+        source ordinals, stable binding symbols, exact relocation occurrences,
+        empty frozen-interface dependency ranges, relocation SCCs/frontiers,
+        typed-node work/span metrics, compiler-profile timing, shadowing and
+        recursion tests, and six-target measurements. This is instrumentation,
+        not fragment lowering.
+  - [ ] Add stable function IDs, fragment column counts, canonical diagnostic
+        keys, and semantic SCCs at any earlier boundary where staged values or
+        interfaces are genuinely unresolved.
+- [ ] Freeze symbol, type, effect, ownership, signature, primitive, and layout
+      tables before fragment lowering. A job may read those snapshots and
+      predecessor interfaces but may not mutate a shared registry or allocate a
+      completion-ordered global ID.
+- [ ] Implement deterministic local fragments with the primitives `graph.scc`,
+      `graph.frontier`, `arena.count`, `par.scan`, `arena.emit`,
+      `fragment.rebase`, `fragment.relocate`, and `diagnostic.stable_min`. Scan
+      exact column counts in source order, resolve stable-symbol relocations,
+      and prove every rebased range equals sequential append.
+- [ ] Differentially compare randomized valid job schedules with sequential
+      construction. Cover empty, singleton, broad independent frontiers,
+      shadowing, forward and mutual recursion, captures, unequal fragment sizes,
+      malformed input, multiple diagnostics, capacity failure, device loss, Core
+      validation, and byte-identical Wasm.
+- [ ] Measure graph construction, SCC contraction, frontier widths, weighted
+      work and span, fragment bytes, dispatches, count/scan/write, and ordered
+      assembly separately. Calibrate the scheduling inequality
+      `sequential saving > graph + dispatch + traffic + assembly`; retain the
+      sequential identity when it fails.
+- [ ] Partition dominant function bodies only after top-level fragment
+      scheduling is measured. The current node-weighted audit gives Codex a 9.33
+      theoretical top-level work/span ratio but Tar only 1.04 despite a frontier
+      of 22, so job count alone must never select parallel execution.
+- [ ] Add a distinct payload `CommutationCertificate` with value dependencies,
+      sequential trace effects, logical read/write footprints, ownership
+      transitions, totality/trap/divergence, generativity, cleanup, and control
+      dependence. Required primitives are `effect.sequence`, `effect.commutes`,
+      `resource.footprint`, `ownership.transition`, `control.total`, and
+      `control.speculatable`.
+- [ ] Keep every host operation, algebraic performance, fallible or generative
+      allocation, trap-capable primitive, divergent computation, and ownership
+      transition ordered by default. Add negative tests for division by zero,
+      two distinguishable traps, print order, divergence before panic, dynamic
+      bounds, allocation failure/identity, borrow versus move, cleanup order,
+      and handler operations without an explicit commutation theorem.
+- [ ] Admit the first sequential payload exchange only for value-independent,
+      total, trace-free scalar computations with no resource or ownership
+      transition. Prove it by adjacent transposition and compare values, traps,
+      traces, cleanup, Core, and Wasm against the source-order oracle.
+- [ ] Do not infer concurrent source execution from commutation. Introduce it
+      only with an explicit task calculus defining interleavings, deterministic
+      failure selection, cancellation, cleanup, and one-shot resumption
+      behavior.
+- [ ] Overlap read-only compiler analyses over one immutable snapshot. Reorder
+      mutating passes only after executable commutation or common-normal-form
+      evidence; profitability and fixed iteration budgets are counterexamples to
+      assuming pass order irrelevant.
+
+Exit criterion: compiler scheduling may vary arbitrarily without changing flat
+IR, stable IDs, diagnostics, or Wasm bytes; scheduling pays its measured cost on
+the selected adapter; and no payload evaluation order changes without a checked
+certificate for every observable dimension.
+
+## Phase 17: Blot as a gpupaper target
+
+This phase replaces the copied-source-fragment experiment with a target boundary
+owned by Blot's checked and staged compiler. The old `.blot` path and copied
+grammar are deleted; gpupaper accepts only validated Runtime HIR from Blot.
+
+- [x] Specify versioned Blot Runtime HIR as typed first-order SSA/CFG with
+      products, sums, seals, Store, SIMD, effects, ownership, capabilities, and
+      ABI exports. State the observational simulation equation, alternatives,
+      failure modes, and validator cost in `PAPER.md`.
+- [x] Implement the Runtime HIR contract and validate schema identity, stable
+      IDs, type/signature closure, SSA uniqueness and dominance, typed edges and
+      returns, capability/effect closure, owned Store reuse, and unique boundary
+      names. Cover positive control flow and independent negative invariants.
+- [x] Export Runtime HIR from Blot after checking, staging, specialization, and
+      ownership validation. Carry every inference fact needed downstream; do not
+      reconstruct shapes, variants, pins, imports, grants, or ownership from
+      syntax. The admitted producer residualizes the checked strict-eager module
+      once and projects closed value exports. Its input-dependent fragment now
+      retains synchronous `Unit`/`Text` host results as typed SSA, specializes
+      static closures, emits text operations and finite branches, and lowers
+      Blot's generated unit-payload control sums without recognizing their
+      constructor spellings. Other residual behavior remains rejected.
+- [x] Lower scalar values, immutable bindings, direct/indirect functions,
+      closures, recursive groups, branches, and traps into gpupaper Core.
+- [x] Lower nominal products, sums, seals, and exhaustive pattern decisions
+      without changing constructor identity or branch order.
+- [x] Implement dynamic persistent Store and proved-owned reuse, including
+      length, checked read, write, grow, allocation failure, and deterministic
+      trap semantics. Implement UTF-8 text by the Blot scalar-value rules rather
+      than Ducklang's existing byte-oriented host handles.
+- [x] Map residual host capabilities, handled-effect residuals, ownership
+      transitions, and cleanup into explicit Core. Require exact equality among
+      Runtime HIR effects, reachable host calls, and ABI imports.
+- [x] Implement Blot Core Wasm ABI 1 for the admitted closed-value boundary:
+      canonical flattening, indirect result areas, memory, `cabi_realloc`,
+      post-return functions, ABI globals, imports, exports, and byte-identical
+      JSON/custom-section manifests. Closed composites use copied templates and
+      relative-pointer relocation; staged text imports use canonical UTF-8.
+      Composite calls use one checked call-scoped region: exact post-return
+      resets the heap checkpoint in constant work, while reentry, a wrong root,
+      a wrong export, and double post-return trap.
+- [ ] Extend ABI 1 to all dynamic parameters and results, non-unit host returns,
+      malformed caller-memory traps, and reclaiming post-return traversal. These
+      are outside the proved closed-value producer and must not reuse its
+      template argument as a general lifting proof. Direct scalar parameters and
+      non-unit scalar host returns are implemented. Canonical dynamic `Text`
+      host results now use indirect result headers, range and UTF-8 validation,
+      native comparison/concatenation, and whole-call-region reclamation. Other
+      indirect dynamic values, caller aggregates, and their validation remain
+      open.
+- [x] Differentially compare every current top-level Blot example against the
+      gpufuck CPU oracle. The 2026-08-02 run admitted 53/53 files and compared
+      313 runtime results, exact manifests, ordered effect traces and arguments,
+      and post-return calls with zero rejection.
+- [ ] Extend differential generation to nested accepted fixtures and explicit
+      negative producer cases, including non-unit host returns, unknown effect
+      arguments, functions crossing the staged boundary, asynchronous effects,
+      malformed canonical memory, and repeated post-return pressure. Explicit
+      dynamic-Text dependency, malformed host-Text, function-export refusal, and
+      1,000-call post-return pressure are covered; generated nested, scalar
+      non-unit refusal, and malformed caller-memory cases remain open.
+- [x] Add an alternating equal-source target benchmark with HIR production,
+      validation, emission, HIR work cardinalities, output size, and exact
+      manifest equality. The peer environment gate is shared and defaults to
+      refusal; an explicit contended override is labelled diagnostic.
+- [x] Add logical/physical memory, rebuild, and batch measurements and integrate
+      the peer validity gate. Physical plan traffic and 1/4/16/64 throughput
+      batches are implemented; literal rebuilds use separate cache identities
+      and execute the edited result. Published gpufuck 0.9.0
+      nondeterministically rejects the larger storage workload with inference
+      code 2201/detail 177, while the sibling checkout is API-incompatible; do
+      not publish that comparison as a release result.
+- [x] Batch multiple Blot target inputs after checked residualization. Rebase
+      each plan's local length dependencies into one packed atom graph, perform
+      one sizing/scan/emission/readback per physical group of at most 16, recover
+      byte boundaries from device offsets, and return owned artifacts in input
+      order. Source preparation failures remain local; after submission, a
+      physical GPU failure atomically discards the admitted logical batch.
+      CPU/GPU byte identity,
+      local-range confinement, ordinal preservation, byte isolation, and the
+      16/1 split at 17 modules have executable tests.
+
+Exit criterion: every admitted Blot example produces one validated Runtime HIR
+whose evaluator, gpufuck Wasm, and gpupaper Wasm agree on results, traps,
+ordered effects, ownership-visible behavior, and Blot Core Wasm ABI 1; the
+direct copied grammar frontend is deleted; and peer benchmarks compare the same
+semantics.
+
 ## Final boundary inventory
 
 The live targets have no remaining first-error boundary inside the admitted

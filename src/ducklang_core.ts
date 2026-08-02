@@ -48,6 +48,10 @@ export type DucklangCoreType =
     readonly buffer: "text" | "bytes";
   }
   | {
+    readonly kind: "store";
+    readonly element: CoreTypeId;
+  }
+  | {
     readonly kind: "product";
     readonly fields: readonly CoreTypeId[];
   }
@@ -121,6 +125,17 @@ export type DucklangCoreOperation =
     readonly caseIndex: number;
   })
   | (CoreOperationBase & {
+    readonly kind:
+      | "store.empty"
+      | "store.new"
+      | "store.length"
+      | "store.read";
+  })
+  | (CoreOperationBase & {
+    readonly kind: "store.write" | "store.grow";
+    readonly update: "persistent" | "owned-reuse";
+  })
+  | (CoreOperationBase & {
     readonly kind: "call.direct";
     readonly functionId: CoreFunctionId;
   })
@@ -139,6 +154,8 @@ export type DucklangCoreOperation =
   })
   | (CoreOperationBase & {
     readonly kind:
+      | "seal.wrap"
+      | "seal.unwrap"
       | "resource.move"
       | "resource.borrow"
       | "resource.freeze"
@@ -1794,6 +1811,18 @@ class CoreFunctionLowerer {
 
 export function validateDucklangCore(module: DucklangCoreModule): void {
   for (const [typeId, type] of module.types.entries()) {
+    if (type.kind === "store") {
+      requireIndex(type.element, module.types.length, "store element type");
+      if (
+        module.types[type.element].kind === "vector" ||
+        module.types[type.element].kind === "mask"
+      ) {
+        throw new TypeError(
+          `Core store type ${typeId} has JavaScript-inexpressible vector element ${type.element}`,
+        );
+      }
+      continue;
+    }
     if (type.kind !== "vector" && type.kind !== "mask") continue;
     const elementBits = type.element === "i64" || type.element === "f64"
       ? 64
@@ -1907,6 +1936,14 @@ function validateCoreCallOperation(
   function_: DucklangCoreFunction,
   operation: DucklangCoreOperation,
 ): void {
+  if (
+    operation.kind === "store.empty" || operation.kind === "store.new" ||
+    operation.kind === "store.length" || operation.kind === "store.read" ||
+    operation.kind === "store.write" || operation.kind === "store.grow"
+  ) {
+    validateCoreStoreOperation(module, function_, operation);
+    return;
+  }
   if (operation.kind === "vector.shuffle") {
     requireCoreOperationOperands(function_, operation, 2);
     const resultType = module.types[operation.type];
@@ -1945,6 +1982,16 @@ function validateCoreCallOperation(
       operation,
     )
   ) return;
+  if (operation.kind === "seal.wrap" || operation.kind === "seal.unwrap") {
+    requireCoreOperationOperands(function_, operation, 1);
+    const operandType = coreValueType(function_, operation.operands[0]);
+    if (!sameCoreRuntimeRepresentation(module, operandType, operation.type)) {
+      throw new TypeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} changes representation from type ${operandType} to ${operation.type}`,
+      );
+    }
+    return;
+  }
   if (
     operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
@@ -2072,6 +2119,102 @@ function validateCoreCallOperation(
       `Core indirect call ${function_.name}:${operation.result} has result type ${operation.type}; signature returns ${signature.result}`,
     );
   }
+}
+
+function sameCoreRuntimeRepresentation(
+  module: DucklangCoreModule,
+  left: CoreTypeId,
+  right: CoreTypeId,
+): boolean {
+  return JSON.stringify(module.types[left]) ===
+    JSON.stringify(module.types[right]);
+}
+
+function validateCoreStoreOperation(
+  module: DucklangCoreModule,
+  function_: DucklangCoreFunction,
+  operation: Extract<
+    DucklangCoreOperation,
+    { readonly kind: `store.${string}` }
+  >,
+): void {
+  const resultType = module.types[operation.type];
+  if (operation.kind === "store.empty" || operation.kind === "store.new") {
+    if (resultType.kind !== "store") {
+      throw new TypeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} has non-store result ${operation.type}`,
+      );
+    }
+    const expectedOperands = operation.kind === "store.empty" ? 0 : 2;
+    requireCoreOperationOperands(function_, operation, expectedOperands);
+    if (operation.kind === "store.empty") return;
+    requireCoreI64Type(
+      module,
+      coreValueType(function_, operation.operands[0]),
+      `${operation.kind} length`,
+    );
+    const initial = coreValueType(function_, operation.operands[1]);
+    if (initial !== resultType.element) {
+      throw new TypeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} initial type ${initial} differs from element ${resultType.element}`,
+      );
+    }
+    return;
+  }
+  requireCoreOperationOperands(
+    function_,
+    operation,
+    operation.kind === "store.length"
+      ? 1
+      : operation.kind === "store.read"
+      ? 2
+      : 3,
+  );
+  const storeTypeId = coreValueType(function_, operation.operands[0]);
+  const storeType = module.types[storeTypeId];
+  if (storeType.kind !== "store") {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} has non-store operand ${storeTypeId}`,
+    );
+  }
+  if (operation.kind === "store.length") {
+    requireCoreI64Type(module, operation.type, operation.kind);
+    return;
+  }
+  requireCoreI64Type(
+    module,
+    coreValueType(function_, operation.operands[1]),
+    `${operation.kind} index or length`,
+  );
+  if (operation.kind === "store.read") {
+    if (operation.type !== storeType.element) {
+      throw new TypeError(
+        `Core store.read ${function_.name}:${operation.result} result ${operation.type} differs from element ${storeType.element}`,
+      );
+    }
+    return;
+  }
+  if (operation.type !== storeTypeId) {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} changes store type ${storeTypeId} to ${operation.type}`,
+    );
+  }
+  const valueType = coreValueType(function_, operation.operands[2]);
+  if (valueType !== storeType.element) {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} value type ${valueType} differs from element ${storeType.element}`,
+    );
+  }
+}
+
+function requireCoreI64Type(
+  module: DucklangCoreModule,
+  type: CoreTypeId,
+  role: string,
+): void {
+  const coreType = module.types[type];
+  if (coreType.kind === "scalar" && coreType.scalar === "i64") return;
+  throw new TypeError(`Core ${role} has non-i64 type ${type}`);
 }
 
 function validateCoreSimdPrimitive(

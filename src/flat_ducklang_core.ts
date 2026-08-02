@@ -21,7 +21,7 @@ import type { PrimitiveId } from "./ducklang_primitives.ts";
 import type { DucklangBinaryOperator } from "./ducklang_types.ts";
 import type { SourceSpan } from "./syntax.ts";
 
-export const flatDucklangCoreSchemaVersion = 2 as const;
+export const flatDucklangCoreSchemaVersion = 4 as const;
 
 export type FlatDucklangCore = {
   readonly schemaVersion: typeof flatDucklangCoreSchemaVersion;
@@ -137,6 +137,7 @@ const typeKinds = [
   "vector",
   "mask",
   "buffer",
+  "store",
   "product",
   "sum",
   "function",
@@ -158,10 +159,18 @@ const operationKinds = [
   "sum.make",
   "sum.tag",
   "sum.payload",
+  "store.empty",
+  "store.new",
+  "store.length",
+  "store.read",
+  "store.write",
+  "store.grow",
   "call.direct",
   "closure.make",
   "call.indirect",
   "host.call",
+  "seal.wrap",
+  "seal.unwrap",
   "resource.move",
   "resource.borrow",
   "resource.freeze",
@@ -345,10 +354,13 @@ export function flattenDucklangCore(
   const typeAuxiliaries: number[] = [];
   for (const type of module.types) {
     typePayloadStarts.push(typePayloads.length);
+    if (type.kind === "store") typePayloads.push(type.element);
     if (type.kind === "product") typePayloads.push(...type.fields);
     if (type.kind === "sum") typePayloads.push(...type.cases);
     typePayloadCounts.push(
-      type.kind === "product"
+      type.kind === "store"
+        ? 1
+        : type.kind === "product"
         ? type.fields.length
         : type.kind === "sum"
         ? type.cases.length
@@ -1258,6 +1270,13 @@ function inflateValidatedFlatCore(
             kind: "buffer",
             buffer: bufferKinds[package_.typeAuxiliaries[typeId]],
           };
+        case "store":
+          if (payloads.length !== 1) {
+            throw new TypeError(
+              `flat Ducklang Core store type ${typeId} has ${payloads.length} element types; expected one`,
+            );
+          }
+          return { kind: "store", element: payloads[0] };
         case "product":
           return { kind: "product", fields: payloads };
         case "sum":
@@ -1436,6 +1455,19 @@ function inflateOperation(
     case "sum.payload":
       requireAttributeCount(kind, attributes, 1);
       return { ...base, kind, caseIndex: attributes[0] as number };
+    case "store.write":
+    case "store.grow":
+      requireAttributeCount(kind, attributes, 1);
+      if (attributes[0] !== 0 && attributes[0] !== 1) {
+        throw new TypeError(
+          `flat Ducklang Core ${kind} has unknown update mode ${attributes[0]}`,
+        );
+      }
+      return {
+        ...base,
+        kind,
+        update: attributes[0] === 0 ? "persistent" : "owned-reuse",
+      };
     case "call.direct":
     case "closure.make":
       requireAttributeCount(kind, attributes, 1);
@@ -1464,6 +1496,12 @@ function inflateOperation(
     case "product.index_update":
     case "product.select":
     case "sum.tag":
+    case "store.empty":
+    case "store.new":
+    case "store.length":
+    case "store.read":
+    case "seal.wrap":
+    case "seal.unwrap":
     case "resource.move":
     case "resource.borrow":
     case "resource.freeze":
@@ -1573,6 +1611,10 @@ function appendOperationAttributes(
     case "constant":
       appendConstantAttribute(operation.value, pushAttribute, pushString);
       return;
+    case "store.write":
+    case "store.grow":
+      pushUnsigned(operation.update === "persistent" ? 0 : 1);
+      return;
     case "scalar.binary":
       pushUnsigned(
         requiredKindId(binaryOperators, operation.operator, "binary operator"),
@@ -1610,6 +1652,12 @@ function appendOperationAttributes(
     case "product.index_update":
     case "product.select":
     case "sum.tag":
+    case "store.empty":
+    case "store.new":
+    case "store.length":
+    case "store.read":
+    case "seal.wrap":
+    case "seal.unwrap":
     case "resource.move":
     case "resource.borrow":
     case "resource.freeze":

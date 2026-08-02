@@ -78,6 +78,10 @@ export const PrimitiveId = {
   f32x4GreaterThan: 60,
   f32x4GreaterThanOrEqual: 61,
   f32x4Select: 62,
+  textCodePointLength: 63,
+  textFromI64: 64,
+  textCompare: 65,
+  textContains: 66,
 } as const;
 
 export type PrimitiveId = typeof PrimitiveId[keyof typeof PrimitiveId];
@@ -614,6 +618,58 @@ export const primitiveDescriptors: readonly PrimitiveDescriptor[] = [
     effects: pure,
     lowering: "wasm.v128.bitselect",
     sourceNames: ["@f32x4_select"],
+    imports: [],
+  },
+  {
+    id: PrimitiveId.textCodePointLength,
+    name: "text.code_point_length",
+    signature: {
+      operands: [BuiltinTypeId.text],
+      result: BuiltinTypeId.i64,
+    },
+    stages: ["runtime"],
+    effects: ["read"],
+    lowering: "text.code_point_length",
+    sourceNames: [],
+    imports: [],
+  },
+  {
+    id: PrimitiveId.textFromI64,
+    name: "text.from_i64",
+    signature: {
+      operands: [BuiltinTypeId.i64],
+      result: BuiltinTypeId.text,
+    },
+    stages: ["runtime"],
+    effects: ["allocate"],
+    lowering: "text.from_i64",
+    sourceNames: [],
+    imports: [],
+  },
+  {
+    id: PrimitiveId.textCompare,
+    name: "text.compare",
+    signature: {
+      operands: [BuiltinTypeId.text, BuiltinTypeId.text],
+      result: BuiltinTypeId.i32,
+    },
+    stages: ["runtime"],
+    effects: ["read"],
+    lowering: "text.compare",
+    sourceNames: [],
+    imports: [],
+  },
+  {
+    id: PrimitiveId.textContains,
+    name: "text.contains",
+    signature: {
+      operands: [BuiltinTypeId.text, BuiltinTypeId.text],
+      result: BuiltinTypeId.bool,
+    },
+    stages: ["runtime"],
+    effects: ["read"],
+    lowering: "text.contains",
+    sourceNames: [],
     imports: [],
   },
   {

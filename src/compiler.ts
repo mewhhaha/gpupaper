@@ -1,9 +1,4 @@
 import { contentIdentity } from "./content_identity.ts";
-import {
-  type BlotGpuFrontendTimings,
-  type BlotI64Module,
-  compileBlotPayload,
-} from "./blot_compiler.ts";
 import { type ComptimeValue, evaluateModuleComptime } from "./comptime.ts";
 import {
   parseDucklangTextLiterals,
@@ -11,6 +6,10 @@ import {
   validateSelectedWasm,
 } from "./artifact_validation.ts";
 import { evaluateDucklangComptime } from "./ducklang_comptime.ts";
+import {
+  constructDucklangCompilerJobs,
+  type DucklangCompilerJobIR,
+} from "./ducklang_compiler_jobs.ts";
 import {
   type DucklangConstValue,
   evaluateDucklangConstModule,
@@ -153,6 +152,7 @@ export type DucklangCompilationStageTimings = {
   readonly preComptimeSpecializationMilliseconds: number;
   readonly comptimeMilliseconds: number;
   readonly postComptimeSpecializationMilliseconds: number;
+  readonly compilerJobAnalysisMilliseconds: number;
   readonly coreLoweringMilliseconds: number;
   readonly coreFlatteningMilliseconds: number;
   readonly gpuCorePassMilliseconds: number;
@@ -288,6 +288,21 @@ export type DucklangCompilationWork = {
   readonly specializationNodeCountCacheHitNodeCount: number;
   readonly postSpecializationFrontierBindingCount: number;
   readonly postSpecializationFrontierNodeCount: number;
+  readonly compilerJobCount: number;
+  readonly compilerJobEstimatedWork: number;
+  readonly compilerJobRelocationCount: number;
+  readonly compilerJobDistinctRelocationEdgeCount: number;
+  readonly compilerJobSemanticDependencyCount: number;
+  readonly compilerJobSemanticMaximumFrontierJobCount: number;
+  readonly compilerJobSemanticWeightedSpan: number;
+  readonly compilerJobSemanticWorkToSpanRatio: number;
+  readonly compilerJobRelocationComponentCount: number;
+  readonly compilerJobRelocationCyclicComponentCount: number;
+  readonly compilerJobRelocationCyclicJobCount: number;
+  readonly compilerJobRelocationLevelCount: number;
+  readonly compilerJobRelocationMaximumFrontierJobCount: number;
+  readonly compilerJobRelocationWeightedSpan: number;
+  readonly compilerJobRelocationWorkToSpanRatio: number;
   readonly downstreamParallelFunctionCount: number;
   readonly coreFunctionCount: number;
   readonly coreBlockCount: number;
@@ -370,6 +385,7 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly language: "ducklang";
   readonly inferred: TypedDucklangModule;
   readonly effectHir: TypedDucklangEffectModule;
+  readonly compilerJobs: DucklangCompilerJobIR;
   readonly core: DucklangCoreModule;
   readonly flatCore: FlatDucklangCore;
   readonly optimizedFlatCore: FlatDucklangCore;
@@ -380,26 +396,9 @@ export type DucklangCompilationArtifact = SharedCompilationArtifact & {
   readonly wasmTarget: DucklangWasmTarget;
 };
 
-export type BlotCompilationTimings = BlotGpuFrontendTimings & {
-  readonly gpuWasmMilliseconds: number;
-  readonly wasmValidationMilliseconds: number;
-};
-
-export type BlotCompilationArtifact = {
-  readonly language: "blot";
-  readonly wasm: Uint8Array;
-  readonly core: BlotI64Module;
-  readonly initialTypes: readonly string[];
-  readonly finalTypes: readonly string[];
-  readonly gpuWasmResult: GpuWasmEmissionResult;
-  readonly backends: CompilationBackends;
-  readonly timings: BlotCompilationTimings;
-};
-
 export type CompilationArtifact =
   | HaskellCompilationArtifact
-  | DucklangCompilationArtifact
-  | BlotCompilationArtifact;
+  | DucklangCompilationArtifact;
 
 type DucklangDependencyIdentity = {
   readonly importer: string;
@@ -459,11 +458,6 @@ export function compileModuleSource(
   options?: CompilationOptions,
 ): Promise<DucklangCompilationArtifact>;
 export function compileModuleSource(
-  file: `${string}.blot`,
-  source: string,
-  options?: CompilationOptions,
-): Promise<BlotCompilationArtifact>;
-export function compileModuleSource(
   file: string,
   source: string,
   options?: CompilationOptions,
@@ -477,7 +471,9 @@ export async function compileModuleSource(
     return await compileDucklangModuleSource(file, source, options);
   }
   if (file.endsWith(".blot")) {
-    return await compileBlotModuleSource(file, source, options);
+    throw new TypeError(
+      `${file}: Blot source must be checked and staged by ../blot; use blot build --target=gpupaper`,
+    );
   }
   if (options.hostInterface !== undefined) {
     throw new TypeError(
@@ -490,72 +486,6 @@ export async function compileModuleSource(
     );
   }
   return await compileHaskellModuleSource(file, source, options);
-}
-
-async function compileBlotModuleSource(
-  file: string,
-  source: string,
-  options: CompilationOptions,
-): Promise<BlotCompilationArtifact> {
-  if (options.hostInterface !== undefined) {
-    throw new TypeError(
-      `hostInterface is available only for Ducklang compilation; received ${file}`,
-    );
-  }
-  if (options.session !== undefined) {
-    throw new TypeError(
-      `session is available only for Ducklang compilation; received ${file}`,
-    );
-  }
-  if (options.gpuMode !== undefined && options.gpuMode !== "required") {
-    throw new TypeError(
-      `${file}: admitted Blot compilation requires GPU syntax and GPU Wasm emission; received gpuMode ${options.gpuMode}`,
-    );
-  }
-
-  const verification = options.gpuWasmVerification ?? "none";
-  const payload = await compileBlotPayload(file, source);
-  const cpuWasm = verification === "differential"
-    ? emitWasmPlanOnCpu(payload.wasmPlan)
-    : undefined;
-  const gpuWasmStart = performance.now();
-  const gpuWasmResult = await emitWasmPlanOnGpu(payload.wasmPlan, {
-    scheduling: options.gpuScheduling,
-  });
-  const gpuWasmMilliseconds = performance.now() - gpuWasmStart;
-  const wasm = selectWasmOutput(
-    file,
-    cpuWasm,
-    payload.wasmPlan,
-    gpuWasmResult,
-    "required",
-    verification,
-  );
-  const validationStart = performance.now();
-  validateSelectedWasm(file, wasm);
-  const wasmValidationMilliseconds = performance.now() - validationStart;
-  return {
-    language: "blot",
-    wasm,
-    core: payload.core,
-    initialTypes: ["main :: I64"],
-    finalTypes: ["main :: I64"],
-    gpuWasmResult,
-    backends: {
-      typeCheck: "gpu",
-      comptime: "notApplicable",
-      coreRewrite: "notApplicable",
-      wasmEmission: "gpu",
-      wasmVerification: verification === "differential"
-        ? "cpuDifferential"
-        : "none",
-    },
-    timings: {
-      ...payload.timings,
-      gpuWasmMilliseconds,
-      wasmValidationMilliseconds,
-    },
-  };
 }
 
 async function compileHaskellModuleSource(
@@ -1196,6 +1126,7 @@ async function elaborateDucklangModuleSource(
         preComptimeSpecializationMilliseconds,
         comptimeMilliseconds,
         postComptimeSpecializationMilliseconds,
+        compilerJobAnalysisMilliseconds: 0,
         coreLoweringMilliseconds: 0,
         coreFlatteningMilliseconds: 0,
         gpuCorePassMilliseconds: 0,
@@ -1432,6 +1363,21 @@ async function elaborateDucklangModuleSource(
           postComptimeSpecialization?.metrics.rewrittenBindingCount ?? 0,
         postSpecializationFrontierNodeCount:
           postComptimeSpecialization?.metrics.rewrittenInputNodeCount ?? 0,
+        compilerJobCount: 0,
+        compilerJobEstimatedWork: 0,
+        compilerJobRelocationCount: 0,
+        compilerJobDistinctRelocationEdgeCount: 0,
+        compilerJobSemanticDependencyCount: 0,
+        compilerJobSemanticMaximumFrontierJobCount: 0,
+        compilerJobSemanticWeightedSpan: 0,
+        compilerJobSemanticWorkToSpanRatio: 0,
+        compilerJobRelocationComponentCount: 0,
+        compilerJobRelocationCyclicComponentCount: 0,
+        compilerJobRelocationCyclicJobCount: 0,
+        compilerJobRelocationLevelCount: 0,
+        compilerJobRelocationMaximumFrontierJobCount: 0,
+        compilerJobRelocationWeightedSpan: 0,
+        compilerJobRelocationWorkToSpanRatio: 0,
         downstreamParallelFunctionCount: 0,
         coreFunctionCount: 0,
         coreBlockCount: 0,
@@ -1556,6 +1502,7 @@ async function compileDucklangModuleSource(
         preComptimeSpecializationMilliseconds: 0,
         comptimeMilliseconds: 0,
         postComptimeSpecializationMilliseconds: 0,
+        compilerJobAnalysisMilliseconds: 0,
         coreLoweringMilliseconds: 0,
         coreFlatteningMilliseconds: 0,
         gpuCorePassMilliseconds: 0,
@@ -1705,6 +1652,11 @@ async function compileDucklangModuleSource(
 
   const frontend = await elaborateDucklangModuleSource(prepared, options);
   const specialized = frontend.module;
+  const compilerJobAnalysisStart = performance.now();
+  const constructedCompilerJobs = constructDucklangCompilerJobs(specialized);
+  const compilerJobs = constructedCompilerJobs.package;
+  const compilerJobAnalysisMilliseconds = performance.now() -
+    compilerJobAnalysisStart;
   const coreStart = performance.now();
   const core = lowerDucklangToCore(specialized);
   const effectClosed = closeDucklangEffectBoundary(specialized, core);
@@ -1795,6 +1747,7 @@ async function compileDucklangModuleSource(
   const stages: DucklangCompilationStageTimings = {
     ...frontend.profile.stages,
     semanticReuseValidationMilliseconds,
+    compilerJobAnalysisMilliseconds,
     coreLoweringMilliseconds: coreMilliseconds,
     coreFlatteningMilliseconds: flatCoreMilliseconds,
     gpuCorePassMilliseconds,
@@ -1886,6 +1839,34 @@ async function compileDucklangModuleSource(
       rootCapabilityCount: new Set(
         effectClosed.requiredEffects.map((effect) => effect.effectName),
       ).size,
+      compilerJobCount: constructedCompilerJobs.metrics.jobCount,
+      compilerJobEstimatedWork: constructedCompilerJobs.metrics.estimatedWork,
+      compilerJobRelocationCount:
+        constructedCompilerJobs.metrics.relocationCount,
+      compilerJobDistinctRelocationEdgeCount:
+        constructedCompilerJobs.metrics.distinctRelocationEdgeCount,
+      compilerJobSemanticDependencyCount:
+        constructedCompilerJobs.metrics.semanticDependencyCount,
+      compilerJobSemanticMaximumFrontierJobCount:
+        constructedCompilerJobs.metrics.semanticMaximumFrontierJobCount,
+      compilerJobSemanticWeightedSpan:
+        constructedCompilerJobs.metrics.semanticWeightedSpan,
+      compilerJobSemanticWorkToSpanRatio:
+        constructedCompilerJobs.metrics.semanticWorkToSpanRatio,
+      compilerJobRelocationComponentCount:
+        constructedCompilerJobs.metrics.relocationComponentCount,
+      compilerJobRelocationCyclicComponentCount:
+        constructedCompilerJobs.metrics.relocationCyclicComponentCount,
+      compilerJobRelocationCyclicJobCount:
+        constructedCompilerJobs.metrics.relocationCyclicJobCount,
+      compilerJobRelocationLevelCount:
+        constructedCompilerJobs.metrics.relocationLevelCount,
+      compilerJobRelocationMaximumFrontierJobCount:
+        constructedCompilerJobs.metrics.relocationMaximumFrontierJobCount,
+      compilerJobRelocationWeightedSpan:
+        constructedCompilerJobs.metrics.relocationWeightedSpan,
+      compilerJobRelocationWorkToSpanRatio:
+        constructedCompilerJobs.metrics.relocationWorkToSpanRatio,
       coreFunctionCount: core.functions.length,
       coreBlockCount: core.functions.reduce(
         (total, function_) => total + function_.blocks.length,
@@ -2023,6 +2004,7 @@ async function compileDucklangModuleSource(
     flatFcg: lowered.flatFcg,
     inferred: effectClosed,
     effectHir: frontend.effectHir,
+    compilerJobs,
     core,
     flatCore,
     optimizedFlatCore,

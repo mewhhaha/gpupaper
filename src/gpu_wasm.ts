@@ -6,6 +6,7 @@ import {
   compilerGpuUnavailabilityReason,
   createCompilerGpuBatchQueue,
   dispatchCompilerGpuWorkgroups,
+  maximumCompilerGpuPayloadBatchSize,
   requestCompilerGpuDevice,
   requireCompilerGpuCapacity,
   submitCompilerGpuCommandWithReadback,
@@ -46,12 +47,29 @@ export type GpuWasmEmissionResult =
     readonly signed64AtomCount: number;
     readonly signed64HighWordBytes: number;
     readonly dispatchedInvocationCount: number;
+    readonly payloadByteOffsets: readonly number[];
     readonly submissionBatchSize: number;
     readonly payloadBatchSize: number;
     readonly queueWaitMilliseconds: number;
     readonly timings: GpuWasmEmissionTimings;
   }
   | { readonly status: "unavailable"; readonly reason: string };
+
+export type GpuWasmBatchEmissionResult =
+  | {
+    readonly status: "completed";
+    readonly bytes: readonly Uint8Array[];
+    readonly physicalEmissions: readonly Extract<
+      GpuWasmEmissionResult,
+      { readonly status: "completed" }
+    >[];
+  }
+  | { readonly status: "unavailable"; readonly reason: string };
+
+export type PackedWasmBinaryPlans = {
+  readonly plan: WasmBinaryPlan;
+  readonly endAtomIndices: readonly number[];
+};
 
 export type GpuWasmEmissionTimings = {
   readonly totalMilliseconds: number;
@@ -397,6 +415,92 @@ fn size_length_atoms(@builtin(global_invocation_id) invocation: vec3<u32>) {
 }
 `;
 
+export function packWasmBinaryPlans(
+  plans: readonly WasmBinaryPlan[],
+): PackedWasmBinaryPlans {
+  if (plans.length === 0) {
+    throw new TypeError("a packed Wasm batch requires at least one plan");
+  }
+  const atoms: WasmAtom[] = [];
+  const endAtomIndices: number[] = [];
+  let maximumDependencyLevel = 0;
+  for (const plan of plans) {
+    inspectWasmBinaryPlanStructure(plan);
+    const atomBase = atoms.length;
+    for (const atom of plan.atoms) {
+      atoms.push(
+        atom.kind === "length"
+          ? { ...atom, rangeStart: atomBase + atom.rangeStart }
+          : atom,
+      );
+    }
+    endAtomIndices.push(atoms.length);
+    maximumDependencyLevel = Math.max(
+      maximumDependencyLevel,
+      plan.maximumDependencyLevel,
+    );
+  }
+  return {
+    plan: { atoms, maximumDependencyLevel },
+    endAtomIndices,
+  };
+}
+
+export async function emitWasmPlansOnGpu(
+  plans: readonly WasmBinaryPlan[],
+  options: {
+    readonly scheduling?: CompilerGpuSchedulingPolicy;
+    readonly lowWordLayout?: GpuWasmLowWordLayout;
+  } = {},
+): Promise<GpuWasmBatchEmissionResult> {
+  if (plans.length === 0) {
+    throw new TypeError("GPU Wasm batch emission requires at least one plan");
+  }
+  const physicalPlans: PackedWasmBinaryPlans[] = [];
+  for (
+    let start = 0;
+    start < plans.length;
+    start += maximumCompilerGpuPayloadBatchSize
+  ) {
+    physicalPlans.push(packWasmBinaryPlans(
+      plans.slice(start, start + maximumCompilerGpuPayloadBatchSize),
+    ));
+  }
+  const emissions = await Promise.all(physicalPlans.map(async (packed) => {
+    const emission = await emitWasmPlanWithGpu(
+      packed.plan,
+      options.scheduling ?? "throughput",
+      options.lowWordLayout ?? "adaptive",
+      packed.endAtomIndices,
+    );
+    if (emission.status === "unavailable") return emission;
+    return {
+      ...emission,
+      payloadBatchSize: packed.endAtomIndices.length,
+      timings: { ...emission.timings, scope: "batch" as const },
+    };
+  }));
+  const unavailable = emissions.find((emission) =>
+    emission.status === "unavailable"
+  );
+  if (unavailable?.status === "unavailable") return unavailable;
+  const physicalEmissions = emissions as Extract<
+    GpuWasmEmissionResult,
+    { readonly status: "completed" }
+  >[];
+  const bytes = physicalEmissions.flatMap((emission) =>
+    emission.payloadByteOffsets.slice(1).map((end, index) =>
+      emission.bytes.slice(emission.payloadByteOffsets[index], end)
+    )
+  );
+  if (bytes.length !== plans.length) {
+    throw new Error(
+      `GPU Wasm batch emitted ${bytes.length} artifacts for ${plans.length} plans`,
+    );
+  }
+  return { status: "completed", bytes, physicalEmissions };
+}
+
 export async function emitWasmPlanOnGpu(
   plan: WasmBinaryPlan,
   options: {
@@ -495,8 +599,29 @@ async function emitWasmPlanWithGpu(
   plan: WasmBinaryPlan,
   scheduling: CompilerGpuSchedulingPolicy,
   lowWordLayout: GpuWasmLowWordLayout,
+  payloadEndAtomIndices: readonly number[] = [plan.atoms.length],
 ): Promise<GpuWasmEmissionResult> {
   const totalStart = performance.now();
+  if (payloadEndAtomIndices.length === 0) {
+    throw new TypeError("Wasm emission requires one terminal atom boundary");
+  }
+  let precedingAtomIndex = 0;
+  for (const [index, atomIndex] of payloadEndAtomIndices.entries()) {
+    if (
+      !Number.isSafeInteger(atomIndex) || atomIndex <= precedingAtomIndex ||
+      atomIndex > plan.atoms.length
+    ) {
+      throw new RangeError(
+        `Wasm payload boundary ${index} uses atom ${atomIndex} after ${precedingAtomIndex}; plan has ${plan.atoms.length} atoms`,
+      );
+    }
+    precedingAtomIndex = atomIndex;
+  }
+  if (precedingAtomIndex !== plan.atoms.length) {
+    throw new RangeError(
+      `Wasm final payload boundary ${precedingAtomIndex} does not cover ${plan.atoms.length} atoms`,
+    );
+  }
   const planAnalysisStart = performance.now();
   const job = prepareWasmGpuJob(plan, lowWordLayout);
   const planAnalysisAndColumnMilliseconds = performance.now() -
@@ -544,7 +669,9 @@ async function emitWasmPlanWithGpu(
     maximumEncodedByteLength / Uint32Array.BYTES_PER_ELEMENT,
   );
   const outputBytes = outputWordCount * Uint32Array.BYTES_PER_ELEMENT;
-  const readbackBytes = outputBytes + Uint32Array.BYTES_PER_ELEMENT;
+  const boundaryBytes = payloadEndAtomIndices.length *
+    Uint32Array.BYTES_PER_ELEMENT;
+  const readbackBytes = outputBytes + boundaryBytes;
   const capacityRequests = [
     ["atom kinds", kindBytes, "storage"],
     ["atom primary low words", primaryLowWordBytes, "storage"],
@@ -828,13 +955,15 @@ async function emitWasmPlanWithGpu(
       0,
       outputBytes,
     );
-    encoder.copyBufferToBuffer(
-      resolvedOffsets.offsets,
-      plan.atoms.length * Uint32Array.BYTES_PER_ELEMENT,
-      readback,
-      outputBytes,
-      Uint32Array.BYTES_PER_ELEMENT,
-    );
+    for (const [index, atomIndex] of payloadEndAtomIndices.entries()) {
+      encoder.copyBufferToBuffer(
+        resolvedOffsets.offsets,
+        atomIndex * Uint32Array.BYTES_PER_ELEMENT,
+        readback,
+        outputBytes + index * Uint32Array.BYTES_PER_ELEMENT,
+        Uint32Array.BYTES_PER_ELEMENT,
+      );
+    }
     const command = encoder.finish();
     const commandEncodingMilliseconds = performance.now() -
       commandEncodingStart;
@@ -860,7 +989,19 @@ async function emitWasmPlanWithGpu(
     readbackMapped = true;
     const mapped = readback.getMappedRange();
     const readbackCopyStart = performance.now();
-    const byteCount = new Uint32Array(mapped, outputBytes, 1)[0]!;
+    const payloadEnds = Array.from(
+      new Uint32Array(mapped, outputBytes, payloadEndAtomIndices.length),
+    );
+    let precedingEnd = 0;
+    for (const [index, end] of payloadEnds.entries()) {
+      if (end < precedingEnd || end > outputBytes) {
+        throw new RangeError(
+          `GPU Wasm payload boundary ${index} resolved ${end} after ${precedingEnd} into ${outputBytes} bytes of output capacity`,
+        );
+      }
+      precedingEnd = end;
+    }
+    const byteCount = payloadEnds.at(-1)!;
     if (byteCount > outputBytes) {
       throw new RangeError(
         `GPU Wasm layout resolved ${byteCount} bytes into ${outputBytes} bytes of output capacity`,
@@ -905,6 +1046,7 @@ async function emitWasmPlanWithGpu(
               wasmWorkgroupSize,
           0,
         ) + resolvedOffsets.scheduledInvocationCount,
+      payloadByteOffsets: [0, ...payloadEnds],
       submissionBatchSize: submission.submissionBatchSize,
       payloadBatchSize: 1,
       queueWaitMilliseconds: submission.queueWaitMilliseconds,
@@ -1166,6 +1308,8 @@ function acquireUploadedBuffer(
     },
     binding,
   );
-  if (words.byteLength > 0) device.queue.writeBuffer(lease.buffer, 0, words);
+  if (words.byteLength > 0) {
+    device.queue.writeBuffer(lease.buffer, 0, Uint32Array.from(words));
+  }
   return lease;
 }

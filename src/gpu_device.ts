@@ -67,7 +67,7 @@ const scheduledSubmissionFlushes = new WeakMap<
   GPUDevice,
   ReturnType<typeof setTimeout>
 >();
-const maximumThroughputSubmissionBatchSize = 16;
+export const maximumCompilerGpuPayloadBatchSize = 16;
 const maximumThroughputQueueDelayMilliseconds = 2;
 const bufferPools = new WeakMap<GPUDevice, CompilerGpuBufferPool>();
 
@@ -106,7 +106,7 @@ export function createCompilerGpuBatchQueue<Input, Output>(
       clearTimeout(scheduledFlush);
       scheduledFlush = undefined;
     }
-    const jobs = pending.splice(0, maximumThroughputSubmissionBatchSize);
+    const jobs = pending.splice(0, maximumCompilerGpuPayloadBatchSize);
     if (pending.length > 0) schedule();
     if (jobs.length === 0) return;
     const executionStart = performance.now();
@@ -137,7 +137,7 @@ export function createCompilerGpuBatchQueue<Input, Output>(
       job.scheduling === "latency"
     );
     if (
-      pending.length >= maximumThroughputSubmissionBatchSize ||
+      pending.length >= maximumCompilerGpuPayloadBatchSize ||
       requiresLatencyFlush
     ) {
       if (scheduledFlush !== undefined) clearTimeout(scheduledFlush);
@@ -317,7 +317,7 @@ function scheduleCompilerGpuSubmissionFlush(
   submissions: readonly CompilerGpuSubmission[],
 ): void {
   const scheduledFlush = scheduledSubmissionFlushes.get(device);
-  if (submissions.length >= maximumThroughputSubmissionBatchSize) {
+  if (submissions.length >= maximumCompilerGpuPayloadBatchSize) {
     if (scheduledFlush !== undefined) clearTimeout(scheduledFlush);
     const timeout = setTimeout(() => {
       scheduledSubmissionFlushes.delete(device);
@@ -342,7 +342,7 @@ async function flushCompilerGpuSubmissions(device: GPUDevice): Promise<void> {
     clearTimeout(scheduledFlush);
     scheduledSubmissionFlushes.delete(device);
   }
-  const submissions = pending.splice(0, maximumThroughputSubmissionBatchSize);
+  const submissions = pending.splice(0, maximumCompilerGpuPayloadBatchSize);
   if (pending.length === 0) {
     pendingSubmissions.delete(device);
   } else {

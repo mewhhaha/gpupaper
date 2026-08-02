@@ -1,16 +1,33 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@mewhhaha/baba@7.10.0": "7.10.0"
+    "jsr:@mewhhaha/baba@7.10.0": "7.10.0",
+    "jsr:@mewhhaha/gpufuck@0.9.0": "0.9.0",
+    "jsr:@std/internal@^1.0.14": "1.0.14",
+    "jsr:@std/path@1.1.6": "1.1.6"
   },
   "jsr": {
     "@mewhhaha/baba@7.10.0": {
       "integrity": "391e12da0db4bb28ef351f62261b752172a1148fe79c91b6bb287108882902df"
+    },
+    "@mewhhaha/gpufuck@0.9.0": {
+      "integrity": "9f5714ae3f5327f8622e49be469b5dc60b912c206164d23fbba7278f1f4b9742"
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    },
+    "@std/path@1.1.6": {
+      "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
     }
   },
   "workspace": {
     "dependencies": [
-      "jsr:@mewhhaha/baba@7.10.0"
+      "jsr:@mewhhaha/baba@7.10.0",
+      "jsr:@mewhhaha/gpufuck@0.9.0",
+      "jsr:@std/path@1.1.6"
     ]
   }
 }

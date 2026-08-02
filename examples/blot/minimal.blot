@@ -1,3 +1,0 @@
-open {} = (@import "blot:prelude") ();
-
-return 42;

@@ -29,6 +29,7 @@ import {
 } from "./ducklang_primitives.ts";
 import type { FcgFunction, FcgModule, FcgOperation } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
+import { ducklangStoreRuntimeImport } from "./ducklang_store.ts";
 import { flattenFcgModule } from "./flat_fcg.ts";
 import {
   emitWasmPlanOnCpu,
@@ -51,6 +52,15 @@ export type DucklangCoreWasmOptions = {
   readonly emission: "cpu" | "planOnly";
   readonly functions?: DucklangBackendFunctionCache;
   readonly target?: DucklangWasmTarget;
+  readonly exports?: readonly {
+    readonly name: string;
+    readonly functionId: CoreFunctionId;
+  }[];
+  readonly customSections?: readonly {
+    readonly name: string;
+    readonly contents: Uint8Array;
+  }[];
+  readonly blotAbiManifest?: Uint8Array;
 };
 
 export type DucklangWasmTarget = "wasm-scalar" | "wasm-simd128";
@@ -296,7 +306,31 @@ export function lowerDucklangCoreToFcgAndWasm(
   }
   if (wrapperIndices.length > 0) builder.addFunctionTable(wrapperIndices);
 
-  builder.exportFunction("main", functionIndices[core.entryFunction]);
+  if (options.blotAbiManifest !== undefined) {
+    addBlotAbiModuleShell(builder, options.blotAbiManifest);
+  }
+
+  const exports = options.exports ?? [{
+    name: "main",
+    functionId: core.entryFunction,
+  }];
+  const exportNames = new Set<string>();
+  for (const exported of exports) {
+    if (exportNames.has(exported.name)) {
+      throw new TypeError(`Core Wasm options repeat export ${exported.name}`);
+    }
+    exportNames.add(exported.name);
+    const functionIndex = functionIndices[exported.functionId];
+    if (functionIndex === undefined) {
+      throw new RangeError(
+        `Core Wasm export ${exported.name} uses function ${exported.functionId}; ${core.functions.length} functions are defined`,
+      );
+    }
+    builder.exportFunction(exported.name, functionIndex);
+  }
+  for (const section of options.customSections ?? []) {
+    builder.addCustomSection(section.name, section.contents);
+  }
   if (textLiterals.length > 0) {
     builder.addCustomSection(
       ducklangTextLiteralsSectionName,
@@ -332,6 +366,122 @@ export function lowerDucklangCoreToFcgAndWasm(
     wasm,
     textLiterals,
   };
+}
+
+export function addBlotAbiModuleShell(
+  builder: WasmModuleBuilder,
+  manifestBytes: Uint8Array,
+  heapStart = 8,
+  minimumMemoryPages = 1,
+): { readonly realloc: number; readonly heap: number } {
+  const memory = builder.addMemory(minimumMemoryPages);
+  const heap = builder.addI32Global(wasmType.i32, heapStart, true);
+  const major = builder.addI32Global(wasmType.i32, 1, false);
+  const minor = builder.addI32Global(wasmType.i32, 0, false);
+  const reallocType = builder.addFunctionType(
+    [wasmType.i32, wasmType.i32, wasmType.i32, wasmType.i32],
+    [wasmType.i32],
+  );
+  const newPointer = 4;
+  const endPointer = 5;
+  const requiredPages = 6;
+  const copyLength = 7;
+  const realloc = builder.addFunction(
+    reallocType,
+    [wasmType.i32, wasmType.i32, wasmType.i32, wasmType.i32],
+    [
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32GreaterThanOrEqualSigned,
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.i32Constant(8),
+      ...wasmInstruction.i32LessThanOrEqualSigned,
+      ...wasmInstruction.i32And,
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32Subtract,
+      ...wasmInstruction.i32And,
+      ...wasmInstruction.i32EqualZero,
+      ...wasmInstruction.i32And,
+      ...wasmInstruction.i32EqualZero,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(3),
+      ...wasmInstruction.i32EqualZero,
+      ...wasmInstruction.ifI32,
+      ...wasmInstruction.i32Constant(0),
+      ...wasmInstruction.else,
+      ...wasmInstruction.globalGet(heap),
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32Subtract,
+      ...wasmInstruction.i32Add,
+      ...wasmInstruction.localGet(2),
+      ...wasmInstruction.i32Constant(-1),
+      ...wasmInstruction.i32Multiply,
+      ...wasmInstruction.i32And,
+      ...wasmInstruction.localTee(newPointer),
+      ...wasmInstruction.localGet(3),
+      ...wasmInstruction.i32Add,
+      ...wasmInstruction.localTee(endPointer),
+      ...wasmInstruction.localGet(newPointer),
+      ...wasmInstruction.i32LessThanUnsigned,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(endPointer),
+      ...wasmInstruction.memorySize,
+      ...wasmInstruction.i32Constant(16),
+      ...wasmInstruction.i32ShiftLeft,
+      ...wasmInstruction.i32GreaterThanUnsigned,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.localGet(endPointer),
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32Subtract,
+      ...wasmInstruction.i32Constant(16),
+      ...wasmInstruction.i32ShiftRightUnsigned,
+      ...wasmInstruction.i32Constant(1),
+      ...wasmInstruction.i32Add,
+      ...wasmInstruction.localTee(requiredPages),
+      ...wasmInstruction.memorySize,
+      ...wasmInstruction.i32Subtract,
+      ...wasmInstruction.memoryGrow,
+      ...wasmInstruction.i32Constant(-1),
+      ...wasmInstruction.i32Equal,
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(0),
+      ...wasmInstruction.ifVoid,
+      ...wasmInstruction.localGet(1),
+      ...wasmInstruction.localGet(3),
+      ...wasmInstruction.i32LessThanUnsigned,
+      ...wasmInstruction.ifI32,
+      ...wasmInstruction.localGet(1),
+      ...wasmInstruction.else,
+      ...wasmInstruction.localGet(3),
+      ...wasmInstruction.end,
+      ...wasmInstruction.localSet(copyLength),
+      ...wasmInstruction.localGet(newPointer),
+      ...wasmInstruction.localGet(0),
+      ...wasmInstruction.localGet(copyLength),
+      ...wasmInstruction.memoryCopy,
+      ...wasmInstruction.end,
+      ...wasmInstruction.localGet(endPointer),
+      ...wasmInstruction.globalSet(heap),
+      ...wasmInstruction.localGet(newPointer),
+      ...wasmInstruction.end,
+    ],
+  );
+  builder.exportMemory("memory", memory);
+  builder.exportFunction("cabi_realloc", realloc);
+  builder.exportGlobal("blot:abi-major", major);
+  builder.exportGlobal("blot:abi-minor", minor);
+  builder.addCustomSection("blot:abi", manifestBytes);
+  return { realloc, heap };
 }
 
 function collectTextLiterals(core: DucklangCoreModule): readonly string[] {
@@ -556,6 +706,14 @@ function collectImportRequirements(
           requireManaged(
             managedSumPayloadImportName(wasmScalarName(result)),
             [wasmType.i32],
+            result,
+          );
+          continue;
+        }
+        if (operation.kind.startsWith("store.")) {
+          requireManaged(
+            aggregateImportName(operation, result),
+            operandTypes,
             result,
           );
           continue;
@@ -1047,6 +1205,7 @@ function emitOperation(
     operation.kind === "sum.make" ||
     operation.kind === "sum.tag" ||
     operation.kind === "sum.payload" ||
+    operation.kind.startsWith("store.") ||
     operation.kind === "host.call"
   ) {
     const parameters = operation.operands.map((operand) =>
@@ -1176,6 +1335,8 @@ function emitOperation(
     ]);
   }
   if (
+    operation.kind === "seal.wrap" ||
+    operation.kind === "seal.unwrap" ||
     operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
     operation.kind === "resource.freeze" ||
@@ -1747,6 +1908,24 @@ function aggregateImportName(
   if (operation.kind === "sum.payload") {
     return managedSumPayloadImportName(wasmScalarName(result));
   }
+  if (operation.kind === "store.empty") {
+    return ducklangStoreRuntimeImport.empty;
+  }
+  if (operation.kind === "store.new") return ducklangStoreRuntimeImport.new;
+  if (operation.kind === "store.length") {
+    return ducklangStoreRuntimeImport.length;
+  }
+  if (operation.kind === "store.read") return ducklangStoreRuntimeImport.read;
+  if (operation.kind === "store.write") {
+    return operation.update === "owned-reuse"
+      ? ducklangStoreRuntimeImport.writeOwned
+      : ducklangStoreRuntimeImport.writePersistent;
+  }
+  if (operation.kind === "store.grow") {
+    return operation.update === "owned-reuse"
+      ? ducklangStoreRuntimeImport.growOwned
+      : ducklangStoreRuntimeImport.growPersistent;
+  }
   if (operation.kind === "host.call") return operation.operationName;
   throw new Error(`Core operation ${operation.kind} has no aggregate import`);
 }
@@ -1784,6 +1963,8 @@ function isStackifiableOperation(
     operation.kind === "constant" ||
     operation.kind === "scalar.binary" ||
     operation.kind === "product.select" ||
+    operation.kind === "seal.wrap" ||
+    operation.kind === "seal.unwrap" ||
     operation.kind === "resource.move" ||
     operation.kind === "resource.borrow" ||
     operation.kind === "resource.freeze" ||

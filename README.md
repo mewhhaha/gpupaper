@@ -85,7 +85,7 @@ deno task benchmark:peers
 deno task experiments
 deno task run examples/all.hs
 deno task run examples/duck/06_functions_and_blocks.duck
-deno task run examples/blot/gpu_i64.blot
+cd ../blot && deno run --unstable-webgpu --allow-read --allow-write src/cli.ts build --target=gpupaper examples/minimal.blot
 ```
 
 The release gate runs formatting, linting, type checking, all CPU/GPU tests,
@@ -222,16 +222,15 @@ standalone Wasm runtime. Generated parser artifacts are checked in.
 
 Duck's contextual token guards are outside Baba's strict GPU grammar profile, so
 Duck is not admitted by the GPU-only language path. Its existing complete Wasm
-parser is a transitional payload-lowering reference, not a fallback. The copied
-Blot grammar is guard-free and exercises Baba's GPU lexer, delimiter validator,
-island parser, and compact syntax allocation with exact accepted-output parity.
-Its closed `I64` let/return fragment consumes Baba GPU syntax, lowers through a
-typed payload IR, and requires GPU Wasm emission. Production Blot lowering now
-consumes resident syntax directly with a proved scan-free `let*; return` path; a
-segmented scan is retained as a differential reference for binding ordinals. It
-is not yet a variable-cardinality payload emitter. The rest of Blot remains an
-explicit future boundary. Run `deno task benchmark:syntax`; CPU syntax exists
-only as a differential oracle outside the admitted production session.
+parser is a transitional payload-lowering reference, not a fallback. Blot owns
+its Baba frontend, checking, staging, specialization, and ownership analysis;
+gpupaper no longer carries a copied Blot grammar or reconstructs source
+semantics. The boundary is validated typed Runtime HIR. A multi-path Blot build
+packs at most 16 admitted Wasm plans into one rebased atom graph and performs
+one GPU sizing, scan, emission, and boundary readback per physical group. Run
+`deno task blot:verify` for semantic agreement,
+`deno task benchmark:blot-targets` for singleton and plan-level measurements,
+and `deno task benchmark:blot-batch` for the real 53-module target batch.
 
 ## Deliberate boundaries
 
@@ -245,10 +244,10 @@ only as a differential oracle outside the admitted production session.
 - Managed `Text`, `Bytes`, aggregates, and closures use opaque runtime handles.
   GPU kernels compile the payload; they do not execute its buffer operations.
 - Duck's semantic frontend, ownership/effect policy, type oracle, and host-ABI
-  policy run on the CPU. Admitted Blot syntax and its closed payload fragment
-  run on the GPU. Production GPU stages also handle flat-Core rewrite matching
-  and Wasm binary emission. Type equality and scalar bytecode retain direct GPU
-  conformance experiments outside ordinary compilation.
+  policy run on the CPU. Blot owns its separate source semantics and hands
+  gpupaper validated Runtime HIR. Production GPU stages handle flat-Core rewrite
+  matching and packed Wasm binary emission. Type equality and scalar bytecode
+  retain direct GPU conformance experiments outside ordinary compilation.
 - The separate Haskell-like frontend remains eager and rank-1. It is an
   experiment, not a GHC-compatible implementation.
 

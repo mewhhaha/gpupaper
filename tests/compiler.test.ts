@@ -63,6 +63,13 @@ Deno.test("CLI accepts optional GPU execution", () => {
   );
 });
 
+Deno.test("gpupaper refuses Blot source before parsing it", async () => {
+  await assertRejects(
+    () => compileModuleSource("program.blot", "return 42;"),
+    /Blot source must be checked and staged by \.\.\/blot/,
+  );
+});
+
 Deno.test("CLI cannot overwrite its Haskell input with Wasm", () => {
   assertThrows(
     () => parseCommandLine(["compile", "test.hs", "test.hs"]),

@@ -8,7 +8,11 @@ import {
   WasmModuleBuilder,
   wasmType,
 } from "../src/wasm.ts";
-import { emitWasmPlanOnGpu } from "../src/gpu_wasm.ts";
+import {
+  emitWasmPlanOnGpu,
+  emitWasmPlansOnGpu,
+  packWasmBinaryPlans,
+} from "../src/gpu_wasm.ts";
 
 /**
  * Binary sizes and offsets are calculated by count-scan-write.
@@ -52,6 +56,89 @@ Deno.test("Ducklang Wasm plans resolve nested lengths before writing", () => {
   // more than a single pass.
   assertEquals(plan.maximumDependencyLevel >= 1, true);
   assertEquals(plan.atoms.some((atom) => atom.kind === "length"), true);
+});
+
+Deno.test("packed Wasm plans rebase only local length dependencies", () => {
+  const plans = [buildModule(1).finishPlan(), buildModule(130).finishPlan()];
+  const packed = packWasmBinaryPlans(plans);
+  const firstAtomCount = plans[0].atoms.length;
+  const secondLengths = plans[1].atoms.filter((atom) => atom.kind === "length");
+  const packedSecondLengths = packed.plan.atoms.slice(firstAtomCount).filter(
+    (atom) => atom.kind === "length",
+  );
+
+  assertEquals(packed.endAtomIndices, [
+    firstAtomCount,
+    packed.plan.atoms.length,
+  ]);
+  assertEquals(
+    packedSecondLengths.map((atom) =>
+      atom.kind === "length" ? atom.rangeStart : -1
+    ),
+    secondLengths.map((atom) =>
+      atom.kind === "length" ? firstAtomCount + atom.rangeStart : -1
+    ),
+  );
+  assertEquals(
+    Array.from(emitWasmPlanOnCpu(packed.plan)),
+    plans.flatMap((plan) => Array.from(emitWasmPlanOnCpu(plan))),
+  );
+
+  const lengthIndex = plans[0].atoms.findIndex((atom) =>
+    atom.kind === "length" && atom.rangeCount > 0
+  );
+  const length = plans[0].atoms[lengthIndex];
+  if (length?.kind !== "length") throw new Error("test plan omitted a length");
+  const escaped = {
+    ...plans[0],
+    atoms: plans[0].atoms.with(lengthIndex, {
+      ...length,
+      rangeStart: plans[0].atoms.length,
+    }),
+  };
+  assertThrows(
+    () => packWasmBinaryPlans([escaped, plans[1]]),
+    /outside/,
+  );
+});
+
+Deno.test("packed GPU Wasm emission preserves ordinal bytes and isolation", async () => {
+  const plans = [1, 3, 130].map((count) => buildModule(count).finishPlan());
+  const emitted = await emitWasmPlansOnGpu(plans, { scheduling: "latency" });
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(emitted.physicalEmissions.length, 1);
+  assertEquals(emitted.physicalEmissions[0].payloadBatchSize, 3);
+  assertEquals(emitted.physicalEmissions[0].timings.scope, "batch");
+  assertEquals(emitted.physicalEmissions[0].payloadByteOffsets.length, 4);
+  for (const [index, bytes] of emitted.bytes.entries()) {
+    assertEquals(
+      Array.from(bytes),
+      Array.from(emitWasmPlanOnCpu(plans[index])),
+    );
+  }
+  assertEquals(emitted.bytes[0].buffer === emitted.bytes[1].buffer, false);
+});
+
+Deno.test("packed GPU Wasm emission partitions only at the physical cap", async () => {
+  const plans = Array.from(
+    { length: 17 },
+    (_, index) => buildModule(index + 1).finishPlan(),
+  );
+  const emitted = await emitWasmPlansOnGpu(plans, { scheduling: "latency" });
+  if (emitted.status === "unavailable") return;
+
+  assertEquals(
+    emitted.physicalEmissions.map((emission) => emission.payloadBatchSize),
+    [16, 1],
+  );
+  assertEquals(emitted.bytes.length, plans.length);
+  for (const [index, bytes] of emitted.bytes.entries()) {
+    assertEquals(
+      Array.from(bytes),
+      Array.from(emitWasmPlanOnCpu(plans[index])),
+    );
+  }
 });
 
 Deno.test("Ducklang Wasm modules with resolved lengths validate", () => {
