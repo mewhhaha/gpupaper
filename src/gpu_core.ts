@@ -22,6 +22,7 @@ import {
   requireCompilerGpuCapacity,
   submitCompilerGpuCommand,
 } from "./gpu_device.ts";
+export type { CompilerGpuSchedulingPolicy } from "./gpu_device.ts";
 
 export type GpuCoreResult =
   | {

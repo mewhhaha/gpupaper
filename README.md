@@ -22,6 +22,28 @@ module.
 Bundled and external frontends exercise the backend, but no source language
 defines gpupaper's architecture or public target boundary.
 
+## Install
+
+```sh
+deno add jsr:@mewhhaha/gpupaper@0.1.0
+```
+
+The default entrypoint contains Core, Core-to-Wasm lowering, TypeScript CPU
+emission, and Rust/WebAssembly emission. Advanced contracts are explicit
+subpaths:
+
+```ts
+import { emitWasmPlanOnGpu } from "@mewhhaha/gpupaper/gpu";
+import { rewriteFlatCore } from "@mewhhaha/gpupaper/rewrite";
+import { createRuntimeHeap } from "@mewhhaha/gpupaper/runtime";
+import { WasmModuleBuilder } from "@mewhhaha/gpupaper/wasm";
+```
+
+The TypeScript emitter requires no runtime permissions. The checked-in
+Rust/WebAssembly emitter is loaded from the package with Deno file access and
+therefore requires `--allow-read` when selected. WebGPU entrypoints require a
+WebGPU-capable host; Deno currently exposes them with `--unstable-webgpu`.
+
 ## What a frontend supplies
 
 The public target is `CoreModule` in [`src/core.ts`](src/core.ts): a
@@ -58,10 +80,12 @@ import type {
   CoreSignatureId,
   CoreTypeId,
   CoreValueId,
-} from "./src/core.ts";
-import { validateCore } from "./src/core.ts";
-import { lowerCoreToWasm } from "./src/core_wasm.ts";
-import { emitWasmPlanOnRustWasm } from "./src/rust_wasm_emitter.ts";
+} from "@mewhhaha/gpupaper";
+import {
+  emitWasmPlanOnRustWasm,
+  lowerCoreToWasm,
+  validateCore,
+} from "@mewhhaha/gpupaper";
 
 const i32 = 0 as CoreTypeId;
 const signature = 0 as CoreSignatureId;
@@ -228,7 +252,7 @@ the workload.
 ### TypeScript CPU
 
 ```ts
-import { emitWasmPlanOnCpu } from "./src/wasm.ts";
+import { emitWasmPlanOnCpu } from "@mewhhaha/gpupaper";
 
 const bytes = emitWasmPlanOnCpu(lowered.wasmPlan);
 ```
@@ -238,7 +262,7 @@ This is currently the fastest cold emitter for a single host-resident plan.
 ### Rust compiled to WebAssembly
 
 ```ts
-import { createRustWasmEmitter } from "./src/rust_wasm_emitter.ts";
+import { createRustWasmEmitter } from "@mewhhaha/gpupaper";
 
 const { emitter } = await createRustWasmEmitter();
 const resident = emitter.prepare(lowered.wasmPlan);
@@ -259,7 +283,7 @@ use independent instances for parallel CPU workers.
 ### WebGPU
 
 ```ts
-import { emitWasmPlanOnGpu } from "./src/gpu_wasm.ts";
+import { emitWasmPlanOnGpu } from "@mewhhaha/gpupaper/gpu";
 
 const result = await emitWasmPlanOnGpu(lowered.wasmPlan);
 if (result.status === "unavailable") throw new Error(result.reason);
@@ -275,7 +299,7 @@ For multiple plans, preserve their logical order and let gpupaper choose safe
 physical groups:
 
 ```ts
-import { emitWasmPlansOnGpu } from "./src/gpu_wasm.ts";
+import { emitWasmPlansOnGpu } from "@mewhhaha/gpupaper/gpu";
 
 const result = await emitWasmPlansOnGpu(plans, {
   scheduling: "throughput",
@@ -358,8 +382,7 @@ target options, effects, or ABI configuration can change the result.
 - Rust's `wasm32-unknown-unknown` target only when rebuilding the checked-in
   Rust emitter.
 
-The repository is currently consumed from a local checkout rather than a
-published package. Validate it before integration:
+Validate the source checkout before integration:
 
 ```sh
 deno task check
@@ -371,12 +394,6 @@ After changing the Rust source, rebuild and verify the checked-in module:
 ```sh
 deno task rust-wasm:build
 deno task rust-wasm:check
-```
-
-Before accepting authoritative GPU output on a deployment machine, run:
-
-```sh
-deno task release:gpu
 ```
 
 ## Performance guidance
@@ -396,8 +413,6 @@ Performance claims require an exact boundary. Current diagnostics show:
 Run the retained harnesses rather than timing an unverified CLI wall clock:
 
 ```sh
-deno task benchmark:wasm
-deno task benchmark:break-even
 deno task benchmark:branch-hints
 deno task benchmark:zero
 ```
@@ -414,8 +429,8 @@ See [`PERFORMANCE.md`](PERFORMANCE.md) for current measurements and
 ## Current limits
 
 - Core is monomorphic and each function has one result.
-- The general API is currently source-level TypeScript imported from the local
-  checkout.
+- The package publishes source TypeScript and a checked-in Rust/WebAssembly
+  emitter module; it does not publish a native binary.
 - Host calls are synchronous and memory32-based.
 - The managed JavaScript boundary cannot carry vector or mask values.
 - `wasm-scalar` rejects all vector and mask types.
@@ -437,6 +452,7 @@ properties, executable validation, measurements, and hypotheses.
 
 Principal consumer-facing files:
 
+- [`mod.ts`](mod.ts): default package entrypoint;
 - [`src/core.ts`](src/core.ts): general typed Core schema and validator;
 - [`src/core_wasm.ts`](src/core_wasm.ts): Core-to-FCG and Wasm plan lowering;
 - [`src/wasm.ts`](src/wasm.ts): deterministic plan model and TypeScript emitter;
@@ -444,3 +460,22 @@ Principal consumer-facing files:
   emitter and resident handles;
 - [`src/gpu_wasm.ts`](src/gpu_wasm.ts): GPU emission, batching, capacity, and
   residency.
+
+## Release preparation
+
+The package is configured as `@mewhhaha/gpupaper` in `deno.json`. Before
+publishing a new immutable version, update its SemVer version and run:
+
+```sh
+deno task check
+deno task test
+deno task publish:dry-run
+```
+
+The dry run checks the complete exported module graph, rejects slow public
+types, and reports the exact package contents without uploading them.
+
+For provenance-bearing releases, first create and link the package to
+`mewhhaha/gpupaper` in JSR, then publish a GitHub release whose tag matches the
+version in `deno.json`. The release workflow reruns every check and publishes
+through GitHub's short-lived OIDC identity; it stores no registry token.

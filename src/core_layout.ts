@@ -15,9 +15,7 @@ import type { CoreModule, CoreTypeId } from "./core.ts";
  * result depends only on the module's contents.
  */
 
-declare const layoutIdBrand: unique symbol;
-
-export type LayoutId = number & { readonly [layoutIdBrand]: true };
+export type LayoutId = number & { readonly __coreLayoutId: true };
 
 export type CoreLayout =
   | {

@@ -30,6 +30,9 @@ import {
 } from "./core_primitives.ts";
 import type { FcgFunction, FcgModule, FcgOperation } from "./fcg.ts";
 import type { FlatFcgPackage } from "./flat_fcg.ts";
+export type { FcgFunction, FcgModule, FcgOperation } from "./fcg.ts";
+export type { FlatFcgPackage } from "./flat_fcg.ts";
+export { flatFcgSchemaVersion } from "./flat_fcg.ts";
 import { storeRuntimeImport } from "./store_runtime.ts";
 import { flattenFcgModule } from "./flat_fcg.ts";
 import {

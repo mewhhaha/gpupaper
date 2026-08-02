@@ -274,17 +274,49 @@ accepted. An empty candidate frontier is an identity and submits no GPU work.
 
 ## 7. Public API
 
-The stable consumer surface is split by responsibility:
+The package is versioned under semantic versioning. Its stable consumer surface
+is the finite export map
 
-- `core.ts`: Core schema and structural validator;
-- `core_wasm.ts`: Core-to-Wasm planning and target validation;
-- `core_layout.ts`: semantic-type-to-layout planning;
-- `flat_core.ts`, `core_rewrite.ts`, `gpu_core.ts`: flat snapshots and rewrites;
-- `wasm.ts`: binary-plan construction and CPU emission;
-- `rust_wasm_emitter.ts`: Rust/WebAssembly emission;
-- `gpu_wasm.ts`: WebGPU emission;
-- `runtime.ts`: the optional managed-handle runtime used by Core aggregate,
-  buffer, and Store imports.
+```text
+E = { ., core, wasm, runtime, rewrite, gpu }.
+```
+
+Each entrypoint is split by responsibility:
+
+- `.`: Core schema, validation, Core-to-Wasm planning, CPU emission, and
+  Rust/WebAssembly emission;
+- `core`: the Core schema and validator without an emitter policy;
+- `wasm`: binary-plan construction and TypeScript CPU emission;
+- `runtime`: the optional managed-handle runtime used by Core aggregate, buffer,
+  and Store imports;
+- `rewrite`: layouts, flat snapshots, and deterministic CPU or WebGPU Core
+  rewrites; and
+- `gpu`: WebGPU Wasm emission, batching, capacity planning, and residency.
+
+The export map is a capability boundary and a versioning boundary. A source file
+not reachable through `E` remains an implementation detail even when it is
+present in the package archive. Removing or changing a symbol reachable through
+`E` requires the corresponding semantic-version change; moving an internal
+module without changing `E` does not.
+
+Publication uses a GitHub release boundary and JSR's short-lived OIDC identity.
+The release job repeats static checks, Rust/Wasm reproducibility checking, and
+the executable suite before upload. Thus the published tuple is
+
+```text
+(git commit, release tag, package version, provenance statement).
+```
+
+The workflow contains no long-lived registry secret. Creating the JSR package
+and linking it to the repository remain explicit owner operations rather than
+compiler-side defaults. The published source is licensed under MIT.
+
+The published dependency closure contains TypeScript sources plus the checked
+Rust/WebAssembly emitter. Its current uncompressed source-and-emitter payload is
+approximately `530 KiB`, including a `46,554`-byte Wasm module. The TypeScript
+CPU path performs no I/O. Selecting the Rust/WebAssembly path reads that package
+asset and therefore has an explicit Deno read-permission boundary. Selecting the
+GPU path requires WebGPU but no source-language capability.
 
 A consumer-specific ABI shell is supplied through `moduleShell(builder)` or
 custom sections. It is not part of gpupaper's semantic model.
@@ -344,3 +376,16 @@ layouts, flat snapshots, rewrites, and Wasm lowering now have backend-owned
 names. This is an architectural correction: the previous public aliases were
 generic while their implementation and proof document still depended on one
 frontend.
+
+### 2026-08-02: JSR package boundary
+
+The repository now declares `@mewhhaha/gpupaper` version `0.1.0` with six
+explicit entrypoints. JSR's dry-run analyzer found one slow public type: the
+large inferred `wasmInstruction` catalog. It now has an explicit structural
+type, preserving exact constructor signatures while allowing declaration
+generation without re-inferring the object literal. The repository owner
+selected MIT explicitly; the project license is separate from dependency
+notices. The completed JSR dry run accepts every public type and selects exactly
+`29` files totaling approximately `571 KB` uncompressed, of which `46,554` bytes
+are the checked Rust/WebAssembly emitter. This is an executable publication
+validation, not evidence about network transfer size or runtime performance.

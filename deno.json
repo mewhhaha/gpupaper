@@ -1,4 +1,29 @@
 {
+  "name": "@mewhhaha/gpupaper",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./core": "./src/core.ts",
+    "./gpu": "./gpu.ts",
+    "./rewrite": "./rewrite.ts",
+    "./runtime": "./src/runtime.ts",
+    "./wasm": "./src/wasm.ts"
+  },
+  "publish": {
+    "include": [
+      "mod.ts",
+      "gpu.ts",
+      "rewrite.ts",
+      "src/**/*.ts",
+      "src/generated/*.wasm",
+      "README.md",
+      "LICENSE",
+      "PAPER.md",
+      "PERFORMANCE.md",
+      "THIRD_PARTY_NOTICES.md"
+    ]
+  },
   "compilerOptions": {
     "lib": ["deno.window", "dom", "dom.iterable", "esnext"],
     "strict": true
@@ -8,13 +33,14 @@
     "exclude": ["jsr:@mewhhaha/baba"]
   },
   "tasks": {
-    "check": "deno fmt --check deno.json README.md PAPER.md PERFORMANCE.md TASKS.md src tests scripts examples grammar && deno lint src tests scripts examples/zero/compiler.ts && deno check --unstable-webgpu src/*.ts tests/*.test.ts scripts/*.ts examples/zero/compiler.ts && deno task rust-wasm:check",
+    "check": "deno fmt --check deno.json README.md PAPER.md PERFORMANCE.md TASKS.md mod.ts gpu.ts rewrite.ts src tests scripts examples grammar && deno lint mod.ts gpu.ts rewrite.ts src tests scripts examples/zero/compiler.ts && deno check --unstable-webgpu mod.ts gpu.ts rewrite.ts src/*.ts tests/*.test.ts scripts/*.ts examples/zero/compiler.ts && deno task rust-wasm:check",
     "test": "deno test --unstable-webgpu --allow-read --allow-write=/tmp tests",
     "benchmark:branch-hints": "deno run --allow-read --allow-run=git,ps scripts/benchmark_wasm_branch_hints.ts",
     "benchmark:zero": "deno run --allow-read --allow-write=/tmp --allow-run=git,ps,rustc scripts/benchmark_zero_runtime.ts",
     "rust-wasm:build": "deno run --allow-read --allow-write=src/generated --allow-run=cargo scripts/build_rust_wasm_emitter.ts",
     "rust-wasm:check": "cargo fmt --manifest-path rust-wasm-emitter/Cargo.toml -- --check && cargo clippy --manifest-path rust-wasm-emitter/Cargo.toml --target wasm32-unknown-unknown --release --locked -- -D warnings && deno run --allow-read --allow-run=cargo scripts/build_rust_wasm_emitter.ts --check",
     "benchmark:record": "deno run --allow-read --allow-write=measurements --allow-run=deno scripts/record_benchmark_processes.ts",
+    "publish:dry-run": "deno publish --dry-run --allow-dirty",
     "zero:grammar": "deno run --allow-read --allow-write scripts/generate_baba_parser.ts zero grammar/zero.baba grammar/zero.baba.json grammar/zero-generated"
   },
   "imports": {

@@ -1,18 +1,17 @@
 import { primitiveDescriptor, PrimitiveId } from "./core_primitives.ts";
+export {
+  coreRuntimeImportModule,
+  type PrimitiveDescriptor,
+  primitiveDescriptor,
+  PrimitiveId,
+  primitiveRuntimeImportName,
+} from "./core_primitives.ts";
 
-declare const coreTypeIdBrand: unique symbol;
-declare const coreSignatureIdBrand: unique symbol;
-declare const coreFunctionIdBrand: unique symbol;
-declare const coreBlockIdBrand: unique symbol;
-declare const coreValueIdBrand: unique symbol;
-
-export type CoreTypeId = number & { readonly [coreTypeIdBrand]: true };
-export type CoreSignatureId = number & {
-  readonly [coreSignatureIdBrand]: true;
-};
-export type CoreFunctionId = number & { readonly [coreFunctionIdBrand]: true };
-export type CoreBlockId = number & { readonly [coreBlockIdBrand]: true };
-export type CoreValueId = number & { readonly [coreValueIdBrand]: true };
+export type CoreTypeId = number & { readonly __coreTypeId: true };
+export type CoreSignatureId = number & { readonly __coreSignatureId: true };
+export type CoreFunctionId = number & { readonly __coreFunctionId: true };
+export type CoreBlockId = number & { readonly __coreBlockId: true };
+export type CoreValueId = number & { readonly __coreValueId: true };
 
 export type CoreSourceSpan = {
   readonly file: string;
@@ -79,7 +78,7 @@ export type CoreSignature = {
   readonly result: CoreTypeId;
 };
 
-type CoreOperationBase = {
+export type CoreOperationBase = {
   readonly result: CoreValueId;
   readonly type: CoreTypeId;
   readonly operands: readonly CoreValueId[];

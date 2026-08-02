@@ -5,10 +5,8 @@ import type {
   CoreSignatureId,
   CoreTypeId,
   CoreValueId,
-} from "../src/core.ts";
-import { validateCore } from "../src/core.ts";
-import { lowerCoreToWasm } from "../src/core_wasm.ts";
-import { emitWasmPlanOnCpu } from "../src/wasm.ts";
+} from "../mod.ts";
+import { emitWasmPlanOnCpu, lowerCoreToWasm, validateCore } from "../mod.ts";
 
 Deno.test("generic Core API emits an executable exported function", async () => {
   const i32 = 0 as CoreTypeId;

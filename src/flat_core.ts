@@ -112,7 +112,7 @@ export type FlatCore = {
   readonly typeLayoutIds: Uint32Array;
 };
 
-const trustedFlatCore = Symbol("trustedFlatCore");
+export const trustedFlatCore = Symbol("trustedFlatCore");
 
 export type TrustedFlatCore = {
   readonly package: FlatCore;

@@ -10,14 +10,14 @@ export type WasmAtom =
     readonly dependencyLevel: number;
   };
 
-type EncodedWasmInstruction = Exclude<
+export type EncodedWasmInstruction = Exclude<
   WasmAtom,
   { readonly kind: "length" }
 >;
 
 export type WasmBranchLikelihood = "likely" | "unlikely";
 
-type WasmBranchHint = {
+export type WasmBranchHint = {
   readonly kind: "branchHint";
   readonly likelihood: WasmBranchLikelihood;
 };
@@ -856,7 +856,168 @@ const simdInstruction = (opcode: number): readonly WasmInstruction[] => [
   unsigned(opcode),
 ];
 
-export const wasmInstruction = {
+export type WasmStaticInstructionName =
+  | "nop"
+  | "blockVoid"
+  | "loopVoid"
+  | "return"
+  | "drop"
+  | "select"
+  | "i32Add"
+  | "i32Subtract"
+  | "i32Multiply"
+  | "i32DivideSigned"
+  | "i32RemainderSigned"
+  | "i32Equal"
+  | "i32EqualZero"
+  | "i32NotEqual"
+  | "i32LessThanSigned"
+  | "i32LessThanUnsigned"
+  | "i32GreaterThanSigned"
+  | "i32GreaterThanUnsigned"
+  | "i32LessThanOrEqualSigned"
+  | "i32LessThanOrEqualUnsigned"
+  | "i32GreaterThanOrEqualSigned"
+  | "i32GreaterThanOrEqualUnsigned"
+  | "i32And"
+  | "i32Or"
+  | "i32Xor"
+  | "i32ShiftLeft"
+  | "i32ShiftRightSigned"
+  | "i32ShiftRightUnsigned"
+  | "memorySize"
+  | "memoryGrow"
+  | "memoryCopy"
+  | "i64Add"
+  | "i64Subtract"
+  | "i64Multiply"
+  | "i64DivideSigned"
+  | "i64RemainderSigned"
+  | "i64Equal"
+  | "i64NotEqual"
+  | "i64LessThanSigned"
+  | "i64GreaterThanSigned"
+  | "i64LessThanOrEqualSigned"
+  | "i64GreaterThanOrEqualSigned"
+  | "i64And"
+  | "i64Or"
+  | "i64Xor"
+  | "i64ShiftLeft"
+  | "i64ShiftRightUnsigned"
+  | "f32Equal"
+  | "f32NotEqual"
+  | "f32LessThan"
+  | "f32GreaterThan"
+  | "f32LessThanOrEqual"
+  | "f32GreaterThanOrEqual"
+  | "f64Equal"
+  | "f64NotEqual"
+  | "f64LessThan"
+  | "f64GreaterThan"
+  | "f64LessThanOrEqual"
+  | "f64GreaterThanOrEqual"
+  | "f32SquareRoot"
+  | "f32Negate"
+  | "f32Add"
+  | "f32Subtract"
+  | "f32Multiply"
+  | "f32Divide"
+  | "f64SquareRoot"
+  | "f64Negate"
+  | "f64Add"
+  | "f64Subtract"
+  | "f64Multiply"
+  | "f64Divide"
+  | "i32TruncateF32Signed"
+  | "i32TruncateF64Signed"
+  | "i32WrapI64"
+  | "i64ExtendI32Signed"
+  | "i64ExtendI32Unsigned"
+  | "f32ConvertI32Signed"
+  | "f64ConvertI32Signed"
+  | "i32ReinterpretF32"
+  | "f32ReinterpretI32"
+  | "f32x4Splat"
+  | "f32x4Add"
+  | "f32x4Subtract"
+  | "f32x4Multiply"
+  | "f32x4Divide"
+  | "f32x4Equal"
+  | "f32x4NotEqual"
+  | "f32x4LessThan"
+  | "f32x4GreaterThan"
+  | "f32x4LessThanOrEqual"
+  | "f32x4GreaterThanOrEqual"
+  | "v128BitSelect"
+  | "ifI32"
+  | "ifI64"
+  | "ifF32"
+  | "ifF64"
+  | "ifVoid"
+  | "else"
+  | "end"
+  | "unreachable";
+
+export type WasmInstructionCatalog =
+  & Readonly<
+    Record<WasmStaticInstructionName, readonly WasmInstruction[]>
+  >
+  & {
+    readonly branchHint: (
+      likelihood: WasmBranchLikelihood,
+    ) => readonly WasmInstruction[];
+    readonly localGet: (index: number) => readonly WasmInstruction[];
+    readonly localSet: (index: number) => readonly WasmInstruction[];
+    readonly localTee: (index: number) => readonly WasmInstruction[];
+    readonly globalGet: (index: number) => readonly WasmInstruction[];
+    readonly globalSet: (index: number) => readonly WasmInstruction[];
+    readonly call: (index: number) => readonly WasmInstruction[];
+    readonly callIndirect: (
+      typeIndex: number,
+      tableIndex?: number,
+    ) => readonly WasmInstruction[];
+    readonly branch: (depth: number) => readonly WasmInstruction[];
+    readonly branchIf: (depth: number) => readonly WasmInstruction[];
+    readonly i32Constant: (value: number) => readonly WasmInstruction[];
+    readonly i64Constant: (value: bigint) => readonly WasmInstruction[];
+    readonly f32Constant: (value: number) => readonly WasmInstruction[];
+    readonly f64Constant: (value: number) => readonly WasmInstruction[];
+    readonly i32Load: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly i64Load: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly i32Load8Unsigned: (
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly i32Store: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly i32Store8: (offset?: number) => readonly WasmInstruction[];
+    readonly i64Store: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly f32Store: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly f64Store: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly f32x4ExtractLane: (lane: number) => readonly WasmInstruction[];
+    readonly f32x4ReplaceLane: (lane: number) => readonly WasmInstruction[];
+    readonly i8x16Shuffle: (
+      lanes: readonly number[],
+    ) => readonly WasmInstruction[];
+  };
+
+export const wasmInstruction: WasmInstructionCatalog = {
   branchHint(likelihood: WasmBranchLikelihood): readonly WasmInstruction[] {
     if (likelihood !== "likely" && likelihood !== "unlikely") {
       throw new TypeError(
@@ -1064,7 +1225,7 @@ export const wasmInstruction = {
   else: instruction(0x05),
   end: instruction(0x0b),
   unreachable: instruction(0x00),
-} as const;
+};
 
 export function encodeUnsigned(value: number): number[] {
   if (!Number.isSafeInteger(value) || value < 0) {

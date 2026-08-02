@@ -11,6 +11,10 @@ import {
   requireCompilerGpuCapacity,
   submitCompilerGpuCommandWithReadback,
 } from "./gpu_device.ts";
+export type {
+  CompilerGpuLimits,
+  CompilerGpuSchedulingPolicy,
+} from "./gpu_device.ts";
 import {
   encodeGpuExclusiveScan,
   type GpuExclusiveScanEncoding,

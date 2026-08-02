@@ -1,0 +1,25 @@
+name: Publish to JSR
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Verify release tag
+        run: |
+          package_version=$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")
+          test "v${package_version}" = "${GITHUB_REF_NAME}"
+      - run: rustup target add wasm32-unknown-unknown
+      - run: deno task check
+      - run: deno task test
+      - run: deno publish
