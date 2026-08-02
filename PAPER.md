@@ -5499,6 +5499,62 @@ Jones [38] justify independent process-level analysis and explicit uncertainty;
 the project benchmark discipline in Section 7.10 supplies the robust summaries
 and evidence classification.
 
+#### 7.13.4 Certified single-body natural-loop structuring
+
+The first optimization target is not the repeat syntax. It is the following Core
+CFG certificate over four distinct blocks `(E,H,B,X)`:
+
+```text
+E(args_E)  -> H(args_0)
+H(params)  -> condition ? B(args_B) : X(args_X)
+B(params_B)-> H(args_1)
+X(params_X)-> return | trap
+```
+
+The condition arms may be exchanged. There are no other blocks or edges. Core
+validation has already proved exact edge arities and types, SSA dominance, and
+unique definitions. The edge `B -> H` is a natural-loop back-edge because `H`
+dominates `B`; `E -> H` is its unique external entry, and `H -> X` is its unique
+exit. This is the smallest reducible cyclic CFG and maps directly to nested Wasm
+`block`/`loop`/`if` regions.
+
+The lowering first evaluates `E`, performs the edge's parallel assignment into
+the header locals, and enters `block { loop { ... } }`. Each header iteration
+evaluates `H` once. The continuing arm performs the parallel assignment into
+`B`, evaluates `B`, performs the back-edge parallel assignment into `H`, and
+branches to the loop. The exiting arm performs the parallel assignment into `X`
+and branches out of the enclosing block; `X` then executes once. Parallel
+assignment means pushing all edge arguments before setting target locals in
+reverse order, so swaps and cycles observe the pre-edge environment.
+
+Let a Core state be `(q, sigma)` for current block `q` and value environment
+`sigma`. Relate it to a Wasm state at the corresponding region point whose
+locals agree with `sigma` on every live Core value. `E -> H`, `H -> B`,
+`B -> H`, and `H -> X` each preserve this relation by the parallel-assignment
+lemma. Block operations are unchanged. The Wasm condition selects the same
+nonzero arm as Core, and `br` changes only the structured program counter.
+Induction over the number of back-edges therefore gives the same return, trap,
+and divergence behavior. This is a local simulation argument under the Core
+validator's invariants, not a general CFG-structuring proof.
+
+For `r` loop iterations, the dispatcher lowering executes five state equality
+tests and five Wasm `if` headers per steady-state iteration in this four-block
+shape: two while selecting `H` and three while selecting `B`. It also writes the
+dispatch local twice. The structured form performs no state equality tests or
+dispatch writes; it retains the source condition and one back-edge branch. Both
+perform `Theta(r)` useful work and use `Theta(1)` memory, but the removed
+administrative work is `12r + O(1)` scalar/control operations for this block
+order. The certificate check is `Theta(1)` after Core validation because it
+examines four blocks and their terminators. Functions outside the exact shape
+retain the dispatcher, making refusal semantics-preserving.
+
+The exact certificate and lowering are implemented. A public-Core conformance
+test exchanges two loop-carried values on every back-edge, uses the condition's
+false arm as the continuation, and checks four iteration counts. Its
+less-than-160-byte module bound also rejects reintroduction of the larger
+dispatcher shape. The ordinary Zero differential suite remains the independent
+source-level oracle.
+
 ## 8. Soundness and compiler obligations
 
 The implementation must establish:
@@ -9641,6 +9697,25 @@ is the generic multi-block dispatch structure, but that attribution is an
 unverified hypothesis until instruction-level and engine-profile evidence
 separates it from local assignment, branch shape, and tiering. Zero's smaller
 artifact and faster measured instantiation do not discharge that runtime gap.
+
+### 2026-08-02: natural-loop structuring refutes the first bottleneck hypothesis
+
+The first theory/implementation iteration recognizes only the certified
+four-block natural loop in Section 7.13.4. It emits parallel edge assignments
+inside nested Wasm `block`/`loop`/`if` regions and omits the dispatch local for
+both structured diamonds and this loop. Reverse-arm and value-swap conformance
+tests pass, as do the seven Zero tests.
+
+`measurements/zero-natural-loop-diagnostic-2026-08-02.json` retains one 30-pair
+contended process. The Zero artifact fell from 299 to 240 bytes, a 19.7%
+reduction, while Rust remained 371 bytes. Zero measured 4.021 ns/iteration, Rust
+1.479 ns/iteration, and the within-process paired log-ratio was 2.658. The
+earlier Zero median was 4.045 ns/iteration in a different contended process, so
+their 0.6% difference is not an admissible speedup. The large static
+administrative-work removal without a corresponding observed runtime change
+refutes the hypothesis that dispatch alone explains most of the 2.7-fold gap. A
+non-inlined call and local-heavy callee are now the leading unverified
+explanation.
 
 ## References
 

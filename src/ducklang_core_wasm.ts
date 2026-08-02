@@ -785,7 +785,10 @@ function planFunctionValues(
     }
   }
   let dispatchLocal: number | undefined;
-  if (function_.blocks.length > 1) {
+  if (
+    function_.blocks.length > 1 && simpleDiamond(function_) === undefined &&
+    simpleNaturalLoop(function_) === undefined
+  ) {
     dispatchLocal = nextLocal;
     nextLocal += 1;
     locals.push(wasmType.i32);
@@ -910,6 +913,89 @@ function emitFunction(
       ...emitTerminator(diamond.join.terminator, function_, layout, 0),
     ];
   }
+  const naturalLoop = simpleNaturalLoop(function_);
+  if (naturalLoop !== undefined) {
+    const continuesOnTrue = naturalLoop.header.terminator.kind ===
+        "conditional_branch" &&
+      naturalLoop.header.terminator.trueTarget === naturalLoop.body.id;
+    const bodyArguments = naturalLoop.header.terminator.kind ===
+        "conditional_branch"
+      ? continuesOnTrue
+        ? naturalLoop.header.terminator.trueArguments
+        : naturalLoop.header.terminator.falseArguments
+      : [];
+    const exitArguments = naturalLoop.header.terminator.kind ===
+        "conditional_branch"
+      ? continuesOnTrue
+        ? naturalLoop.header.terminator.falseArguments
+        : naturalLoop.header.terminator.trueArguments
+      : [];
+    const condition = naturalLoop.header.terminator.kind ===
+        "conditional_branch"
+      ? naturalLoop.header.terminator.condition
+      : undefined;
+    if (
+      naturalLoop.entry.terminator.kind !== "branch" ||
+      naturalLoop.body.terminator.kind !== "branch" || condition === undefined
+    ) {
+      throw new Error(
+        `Core function ${function_.name} has an incomplete natural-loop certificate`,
+      );
+    }
+    return [
+      ...emitBlockOperations(naturalLoop.entry.id),
+      ...emitEdgeAssignment(
+        naturalLoop.entry.terminator.arguments,
+        naturalLoop.header,
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...wasmInstruction.blockVoid,
+      ...wasmInstruction.loopVoid,
+      ...emitBlockOperations(naturalLoop.header.id),
+      ...emitValue(condition),
+      ...(continuesOnTrue ? [] : wasmInstruction.i32EqualZero),
+      ...wasmInstruction.ifVoid,
+      ...emitEdgeAssignment(
+        bodyArguments,
+        naturalLoop.body,
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...emitBlockOperations(naturalLoop.body.id),
+      ...emitEdgeAssignment(
+        naturalLoop.body.terminator.arguments,
+        naturalLoop.header,
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...wasmInstruction.branch(1),
+      ...wasmInstruction.else,
+      ...emitEdgeAssignment(
+        exitArguments,
+        naturalLoop.exit,
+        function_,
+        layout,
+        emitValue,
+      ),
+      ...wasmInstruction.branch(2),
+      ...wasmInstruction.end,
+      ...wasmInstruction.unreachable,
+      ...wasmInstruction.end,
+      ...wasmInstruction.end,
+      ...emitBlockOperations(naturalLoop.exit.id),
+      ...emitTerminator(
+        naturalLoop.exit.terminator,
+        function_,
+        layout,
+        0,
+        emitValue,
+      ),
+    ];
+  }
   if (layout.dispatchLocal === undefined) {
     throw new Error(
       `Core function ${function_.name} has ${function_.blocks.length} blocks but no dispatch local`,
@@ -975,6 +1061,42 @@ function simpleDiamond(
     return undefined;
   }
   return { entry, trueBlock, falseBlock, join };
+}
+
+function simpleNaturalLoop(
+  function_: DucklangCoreFunction,
+): {
+  readonly entry: DucklangCoreFunction["blocks"][number];
+  readonly header: DucklangCoreFunction["blocks"][number];
+  readonly body: DucklangCoreFunction["blocks"][number];
+  readonly exit: DucklangCoreFunction["blocks"][number];
+} | undefined {
+  if (function_.blocks.length !== 4) return undefined;
+  const entry = function_.blocks[function_.entryBlock];
+  if (entry.terminator.kind !== "branch") return undefined;
+  const header = function_.blocks[entry.terminator.target];
+  if (header.terminator.kind !== "conditional_branch") return undefined;
+  const trueBlock = function_.blocks[header.terminator.trueTarget];
+  const falseBlock = function_.blocks[header.terminator.falseTarget];
+  const body = trueBlock.terminator.kind === "branch" &&
+      trueBlock.terminator.target === header.id
+    ? trueBlock
+    : falseBlock.terminator.kind === "branch" &&
+        falseBlock.terminator.target === header.id
+    ? falseBlock
+    : undefined;
+  if (body === undefined) return undefined;
+  const exit = body.id === trueBlock.id ? falseBlock : trueBlock;
+  if (exit.terminator.kind !== "return" && exit.terminator.kind !== "trap") {
+    return undefined;
+  }
+  if (
+    new Set([entry.id, header.id, body.id, exit.id]).size !== 4 ||
+    body.terminator.kind !== "branch"
+  ) {
+    return undefined;
+  }
+  return { entry, header, body, exit };
 }
 
 function emitStackValue(
@@ -1559,26 +1681,17 @@ function emitTerminator(
     arguments_: readonly CoreValueId[],
     depth: number,
   ): readonly WasmInstruction[] => {
-    const parameters = function_.blocks[target].parameters;
-    const instructions: WasmInstruction[] = [];
-    for (const argument of arguments_) {
-      instructions.push(
-        ...wasmInstruction.localGet(requiredLocal(layout, function_, argument)),
-      );
-    }
-    for (let index = parameters.length - 1; index >= 0; index -= 1) {
-      instructions.push(
-        ...wasmInstruction.localSet(
-          requiredLocal(layout, function_, parameters[index].value),
-        ),
-      );
-    }
-    instructions.push(
+    return [
+      ...emitEdgeAssignment(
+        arguments_,
+        function_.blocks[target],
+        function_,
+        layout,
+      ),
       ...wasmInstruction.i32Constant(target),
       ...wasmInstruction.localSet(layout.dispatchLocal!),
       ...wasmInstruction.branch(depth),
-    );
-    return instructions;
+    ];
   };
   if (terminator.kind === "branch") {
     return branch(
@@ -1605,6 +1718,30 @@ function emitTerminator(
     ),
     ...wasmInstruction.end,
   ];
+}
+
+function emitEdgeAssignment(
+  arguments_: readonly CoreValueId[],
+  target: DucklangCoreFunction["blocks"][number],
+  function_: DucklangCoreFunction,
+  layout: FunctionValueLayout,
+  getValue: (value: CoreValueId) => readonly WasmInstruction[] = (value) =>
+    wasmInstruction.localGet(requiredLocal(layout, function_, value)),
+): readonly WasmInstruction[] {
+  if (arguments_.length !== target.parameters.length) {
+    throw new Error(
+      `Core edge to block ${target.id} supplies ${arguments_.length} values for ${target.parameters.length} parameters`,
+    );
+  }
+  const instructions = arguments_.flatMap(getValue);
+  for (let index = target.parameters.length - 1; index >= 0; index -= 1) {
+    instructions.push(
+      ...wasmInstruction.localSet(
+        requiredLocal(layout, function_, target.parameters[index].value),
+      ),
+    );
+  }
+  return instructions;
 }
 
 function emitProductSelection(
