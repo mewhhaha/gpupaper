@@ -1,0 +1,19 @@
+private: dead00 value = @value 3 * 1 + ;
+private: dead01 value = @value 5 * 2 + ;
+private: dead02 value = @value 7 * 3 + ;
+private: dead03 value = @value 11 * 4 + ;
+private: dead04 value = @value 13 * 5 + ;
+private: dead05 value = @value 17 * 6 + ;
+private: dead06 value = @value 19 * 7 + ;
+private: dead07 value = @value 23 * 8 + ;
+private: dead08 value = @value 29 * 9 + ;
+private: dead09 value = @value 31 * 10 + ;
+private: dead10 value = @value 37 * 11 + ;
+private: dead11 value = @value 41 * 12 + ;
+private: dead12 value = @value 43 * 13 + ;
+private: dead13 value = @value 47 * 14 + ;
+private: dead14 value = @value 53 * 15 + ;
+private: dead15 value = @value 59 * 16 + ;
+private: step value = @value 1664525 * 1013904223 + ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

@@ -17,6 +17,7 @@ import {
   summarizePairedSamples,
   summarizeSamples,
 } from "./benchmark_statistics.ts";
+import { measureCoreStructure } from "./core_structure.ts";
 
 type OwnedBytes = Uint8Array<ArrayBuffer>;
 type LoadedWorkload = {
@@ -98,7 +99,7 @@ try {
     {
       status: validity.status === "refused" ? "refused" : "completed",
       validity,
-      schemaVersion: 2,
+      schemaVersion: 3,
       benchmark: "zero-complexity-ladder-versus-rust",
       runtime: runtimeIdentity(),
       repositories: { gpupaper: await repositoryIdentity(gpupaperDirectory) },
@@ -260,8 +261,7 @@ async function measureWorkload(
     roundsPerInvocation,
     samples,
   );
-  const functions = measurement.zeroCompilation.core.functions;
-  const blocks = functions.flatMap((function_) => function_.blocks);
+  const structure = measureCoreStructure(measurement.zeroCompilation.core);
 
   return {
     name: definition.name,
@@ -270,12 +270,7 @@ async function measureWorkload(
     structure: {
       zeroSourceBytes: textEncoder.encode(zeroSource).byteLength,
       rustSourceBytes: textEncoder.encode(rustSource).byteLength,
-      coreFunctions: functions.length,
-      coreBlocks: blocks.length,
-      coreOperations: blocks.reduce(
-        (sum, block) => sum + block.operations.length,
-        0,
-      ),
+      ...structure,
       wasmPlanAtoms: measurement.zeroCompilation.wasmPlan.atoms.length,
     },
     sourceHashes: {

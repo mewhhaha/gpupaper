@@ -57,6 +57,7 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["03-call-graph", 300],
     ["04-branch-forest", 300],
     ["05-nested-loop", 250],
+    ["08-wide-binding-frontier", 180],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -88,14 +89,26 @@ Deno.test("affine recurrence acceleration preserves a large dynamic count", asyn
   );
 });
 
-Deno.test("affine callee changes invalidate the cached caller", async () => {
+Deno.test("transitive affine callee changes invalidate the cached caller", async () => {
   const first = await compileZeroSource(
     "first-affine.zero",
-    "private: step value = @value 3 * 7 + ; export: run seed rounds = @rounds @seed repeat:step ;",
+    `
+      private: mix value = @value 3 * 7 + ;
+      private: left value = @value call:mix:1 1 + ;
+      private: right value = @value call:mix:1 2 + ;
+      private: step value = @value call:left:1 @value call:right:1 + ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
   );
   const second = await compileZeroSource(
     "second-affine.zero",
-    "private: step value = @value 5 * 7 + ; export: run seed rounds = @rounds @seed repeat:step ;",
+    `
+      private: mix value = @value 5 * 7 + ;
+      private: left value = @value call:mix:1 1 + ;
+      private: right value = @value call:mix:1 2 + ;
+      private: step value = @value call:left:1 @value call:right:1 + ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
   );
   const cache = createBackendFunctionCache();
   const firstPlan = lowerCoreToWasm(first.core, {
@@ -118,8 +131,8 @@ Deno.test("affine callee changes invalidate the cached caller", async () => {
     await instantiate(emitWasmPlanOnCpu(secondPlan.wasmPlan)),
     "run",
   );
-  assertEquals(firstRun(1, 1), 10);
-  assertEquals(secondRun(1, 1), 12);
+  assertEquals(firstRun(1, 1), 23);
+  assertEquals(secondRun(1, 1), 27);
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {

@@ -1,0 +1,4 @@
+private: step value =
+  @value 0 == 1 1000000000 @value / 17 + select! ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

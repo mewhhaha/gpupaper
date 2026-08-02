@@ -1,0 +1,8 @@
+private: step value =
+  @value 3 * 17 + let:a
+  @value 5 * 29 - let:b
+  @value 7 * 43 + let:c
+  @value 11 * 61 - let:d
+  @a @b + @c @d - * @a @d + + ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

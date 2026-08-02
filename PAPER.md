@@ -156,6 +156,18 @@ when its unique use is in the same scheduling region. Trapping, allocating,
 reading, host, aggregate, resource, and multiply-used operations receive locals
 or explicit runtime calls.
 
+The same rule applies inside an inlined scalar call tree. Function parameters
+and direct-call results remain explicit locals at the beta-reduction boundary;
+within each function, a total scalar definition with exactly one use in its
+defining block is emitted recursively at that use. The uniqueness premise means
+no operation is duplicated, and totality means moving it later within the same
+effect-free region cannot introduce a trap or reorder an observable effect.
+Computing use counts and use-block sets costs \(O(O+V)\) work and space. If a
+function contains \(V\) SSA values, the local count changes from \(V\) to at
+most \(P+M+C+Q\), where \(P\) is parameters, \(M\) multiply-used definitions,
+\(C\) cross-region definitions, and \(Q\) partial or otherwise non-stackifiable
+definitions.
+
 The key counterexample is sinking division across a branch: eager evaluation
 could introduce a trap on a path where the source operation was not evaluated.
 Therefore totality and region locality are both required.
@@ -394,15 +406,30 @@ exercise successful parsing and semantic preservation.
 
 Program difficulty is not a scalar. For workload \(w\), the benchmark records
 
-\[ C(w)=(S,F,B,O,A), \]
+\[ C(w)=(S,F,R,D,B,O,A,K,\mu,P,L), \]
 
-where \(S\) is source bytes, \(F\) Core functions, \(B\) Core blocks, \(O\) Core
-operations, and \(A\) binary-plan atoms. The suite is an ordered ladder of
-dominant structural challenges rather than a claim that every component of \(C\)
-increases at every step: affine arithmetic, a control-flow diamond, a
-multi-function call graph, a branch forest, a nested natural loop, and a broad
-call graph. This avoids collapsing incomparable programs into an invented single
-complexity score.
+where \(S\) is source bytes, \(F\) is total Core functions, \(R\) and \(D=F-R\)
+are reachable and dead functions, \(B\) is Core blocks, \(O\) is Core
+operations, \(A\) is binary-plan atoms, \(K\) is direct call sites, \(\mu\) is
+maximum direct-call multiplicity for one callee, \(P\) is partial scalar
+division and remainder operations, and \(L\) is maximum block-local SSA
+liveness. Reachability is the least fixed point starting at the benchmark entry
+and following direct-call and closure edges. Local liveness is computed
+backwards from terminator operands, killing each operation result and generating
+its operands. These measurements require \(O(F+B+O+E)\) work and \(O(F+V)\)
+temporary storage for call edges \(E\) and values \(V\).
+
+The suite is an ordered ladder of dominant structural challenges rather than a
+claim that every component of \(C\) increases at every step: affine arithmetic,
+a control-flow diamond, a unique call graph, a branch forest, a nested natural
+loop, a broad call graph, a shared-call DAG, a wide binding frontier, partial
+arithmetic under lazy control, and a mostly dead module. The final four isolate
+three optimization restrictions and one discard boundary: unique-reference
+inlining must not duplicate a shared callee; stackification should respond to
+actual liveness rather than total operations; partial arms must remain lazy; and
+binary emission should depend on \(R\), while frontend and reachability work
+still depend on \(F\). This avoids collapsing incomparable programs into an
+invented single complexity score.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
@@ -432,8 +459,8 @@ separate boundaries because an in-process initialized frontend and a fresh
 `rustc` process do not measure the same operation. With \(q\) workloads, \(p\)
 probes, \(m\) samples, and \(r\) rounds, validation work is \(O(qp)\),
 compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\), multiplied by
-each workload's inner recurrence cost. The default six-workload, 30-sample,
-eight-seed, 100,000-round run performs 144 million outer rounds per compiler,
+each workload's inner recurrence cost. The default ten-workload, 30-sample,
+eight-seed, 100,000-round run performs 240 million outer rounds per compiler,
 plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
@@ -622,20 +649,33 @@ wrapping operations and \(O(1)\) locals instead of \(O(n)\). The certificate
 requires a canonical two-parameter natural loop, header test `remaining > 0`,
 latch `remaining - 1`, and state latch equal to
 `state * constant_a + constant_b`. The affine expression may occur directly in
-the body or behind one direct unary call whose callee is a single block
-containing exactly the two constants, multiply, add, and return. Looking through
-that call is beta reduction of a pure total function, not speculative inlining;
-the exact operation catalog excludes effects, traps, recursion, and hidden
-state. The loop body may contain no operations beyond the certified recurrence
-and counter update. Negative and zero counts retain the initial state. The
-transformation is exact for all i32 inputs by induction over the bits of \(n\);
-it does not depend on division by \(a-1\), which need not be invertible modulo
-\(2^{32}\). Recognition constructs result maps for the caller and possible
-callee and therefore costs \(O(O_f+O_g)\) work and memory. Non-affine,
-effectful, multi-state, or noncanonical loops retain ordinary lowering. A cached
-caller's content identity includes the certified multiplier and offset, so
-changing a callee cannot reuse machine code specialized for stale affine
-coefficients.
+the body or behind a direct unary call whose result is certified by an affine
+abstract interpretation. For each value the abstract domain is \((a,b)\),
+denoting \(ax+b\). Constants map to \((0,c)\), the input maps to \((1,0)\),
+addition and subtraction act componentwise, and multiplication is admitted only
+when at least one operand has zero multiplier. A direct call with callee summary
+\((c,d)\) and argument summary \((a,b)\) maps to \((ca,cb+d)\). Thus an acyclic
+DAG of shared pure functions is summarized without cloning it. The interpreter
+accepts only unary i32, single-block functions containing constants, wrapping
+addition, subtraction, multiplication, and direct calls. It rejects recursion,
+nonlinearity such as \(x^2\), division and remainder, control flow, effects, and
+unused operations outside that total catalog. These restrictions make the
+summary a structural induction proof over SSA definitions rather than a
+speculative algebraic rewrite.
+
+The loop body may contain no operations beyond the certified recurrence and
+counter update. Negative and zero counts retain the initial state. The
+transformation is exact for all i32 inputs by induction over the SSA definitions
+and then over the bits of \(n\); it does not depend on division by \(a-1\),
+which need not be invertible modulo \(2^{32}\). One root summary uses
+\(O(O_r+E_r)\) work and memory for reachable operations and call edges. The
+current implementation rebuilds that memo table for each certificate query, so
+the whole backend has a conservative \(O(F(O+E))\) worst-case bound; a
+module-level immutable summary table would reduce this to \(O(F+O+E)\) if this
+analysis becomes measurable. Non-affine, effectful, multi-state, or noncanonical
+loops retain ordinary lowering. A cached caller's content identity includes the
+certified multiplier and offset, so changing any transitive callee cannot reuse
+machine code specialized for a stale summary.
 
 Affine acceleration also creates a measurement counterexample: dividing a
 near-clock-resolution batch by 800,000 source rounds produced an apparent
@@ -744,6 +784,72 @@ that an uncontended run is required before motivating another mechanism. The new
 differential, large-count, partial-arm laziness, emitter-equality, and
 payload-bound tests are executable validations; they do not prove equivalence
 outside the certified shapes.
+
+### 2026-08-02: shared calls, liveness, partiality, and discard boundaries
+
+Four paired workloads extended the ladder and benchmark schema 3 added
+reachability, call multiplicity, partial-operation, and block-liveness fields.
+Their measured structural vectors, in the Section 8.2 field order, are
+
+| workload                              | \(C(w)\)                            |
+| ------------------------------------- | ----------------------------------- |
+| shared-call DAG                       | \((276,5,5,0,8,22,230,5,2,0,3)\)    |
+| wide binding frontier                 | \((206,2,2,0,5,26,147,1,1,0,5)\)    |
+| partial arithmetic under lazy control | \((128,2,2,0,8,12,121,1,1,1,3)\)    |
+| mostly dead module                    | \((785,18,2,16,21,73,131,1,1,0,3)\) |
+
+Executable tests require the distinguishing values \(\mu=2\), \(L\ge5\),
+\(P=1\), and \((R,D)=(2,16)\), respectively. The existing differential suite
+checks every workload against an independent TypeScript recurrence and requires
+byte-identical Rust/Wasm and TypeScript plan emission. These are executable
+validations of the intended corpus boundaries, not proofs that the metrics are
+sufficient statistics for performance.
+
+The first five-sample diagnostic run exposed a counterexample in the shared DAG:
+Zero/Rust medians were 1.539/0.0279 nanoseconds per semantic round, a ratio of
+56.0. Unique-reference inlining correctly refused to clone the shared `mix`
+callee, but the affine recurrence certificate could see through only one exact
+callee. The affine abstract interpretation now composes summaries through the
+acyclic shared graph. A targeted seven-sample diagnostic run then measured
+0.000158/0.0277 nanoseconds, ratio 0.0058. Zero output grew from 201 to 245
+bytes because monoid exponentiation replaces the linear loop with logarithmic
+control and working locals. The per-round number is semantic throughput for
+100,000 source iterations, not sub-clock instruction latency. Transitive cache
+invalidation through the shared graph is an executable regression test.
+
+The initial wide-frontier disassembly contained 26 Wasm locals because scalar
+call-tree inlining allocated every intermediate even though ordinary structured
+lowering already sank total single-use definitions. Applying the Section 3.3
+rule inside that tree reduced the plan from 261 to 147 atoms and the payload
+from 263 to 147 bytes. Targeted 30-sample diagnostic medians changed from
+approximately 2.239/1.943 to 2.163/1.921 nanoseconds for Zero/Rust. The
+remaining roughly 12% loss coincides with Rust's algebraic strength reduction
+and two-way loop unrolling. That observation is a hypothesis, not a causal
+proof. Earlier unrolling counterexamples grew payloads 73--76% for only 3--6%
+runtime gains, so another unrolling mechanism is not justified by a contended
+12% gap. An uncontended paired experiment and a profitability model
+incorporating branch cost, straight-line body size, and residual payload growth
+are prerequisites.
+
+The final 30-sample run was diagnostic because compiler contention was present
+at both environment checks; every calibrated runtime batch nevertheless reached
+five milliseconds. Zero/Rust median nanoseconds per semantic round and paired
+median ratios across all ten workloads were: affine 0.000214/0.107 (0.0020),
+diamond 1.286/1.497 (0.858), unique call graph 1.590/1.723 (0.915), branch
+forest 6.255/5.167 (1.206), nested loop 5.312/6.014 (0.871), broad module
+2.612/4.515 (0.569), shared-call DAG 0.000168/0.0275 (0.0060), wide frontier
+2.188/1.935 (1.132), partial lazy arithmetic 2.316/2.381 (0.970), and dead
+module 0.000168/0.106 (0.0016). Contention visibly perturbed the branch-forest
+result relative to earlier runs, reinforcing its diagnostic status.
+
+Initialized Zero compilation medians ranged from 0.694 to 1.259 milliseconds;
+fresh `rustc` process medians ranged from 40.36 to 41.83 milliseconds, and those
+boundaries remain incomparable. Parser medians ranged from 0.149 to 0.269
+milliseconds. The dead module and affine case emitted identical 138-byte
+payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
+16 dead functions, empirically separating output work, which depends on \(R\),
+from reachability analysis, whose input still depends on \(F\). This is one
+finite measurement, not an asymptotic validation.
 
 ### 2026-08-02: Zero structural complexity ladder
 

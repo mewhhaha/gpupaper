@@ -198,6 +198,11 @@ type AffineNaturalLoop = {
   readonly offset: number;
 };
 
+type AffineMap = {
+  readonly multiplier: number;
+  readonly offset: number;
+};
+
 const maximumInlineDiamondOperations = 16;
 const maximumInlineLoopOperations = 24;
 const maximumInlineScalarTreeOperations = 32;
@@ -760,25 +765,12 @@ function planFunctionValues(
   const localByValue = new Map<CoreValueId, number>();
   const typeByValue = valueTypes(function_);
   const operationByResult = new Map<CoreValueId, CoreOperation>();
-  const useCounts = new Map<CoreValueId, number>();
-  const useBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
-  const returnedValues = new Set<CoreValueId>();
-  const countUse = (value: CoreValueId, block: CoreBlockId): void => {
-    useCounts.set(value, (useCounts.get(value) ?? 0) + 1);
-    const blocks = useBlocks.get(value) ?? new Set<CoreBlockId>();
-    blocks.add(block);
-    useBlocks.set(value, blocks);
-  };
+  const { useCounts, useBlocks, returnedValues } = analyzeFunctionValueUses(
+    function_,
+  );
   for (const block of function_.blocks) {
     for (const operation of block.operations) {
       operationByResult.set(operation.result, operation);
-      operation.operands.forEach((value) => countUse(value, block.id));
-    }
-    coreTerminatorValues(block.terminator).forEach((value) =>
-      countUse(value, block.id)
-    );
-    if (block.terminator.kind === "return") {
-      block.terminator.values.forEach((value) => returnedValues.add(value));
     }
   }
   const signature = core.signatures[function_.signature];
@@ -849,6 +841,8 @@ function planFunctionValues(
     shape: InlineScalarTreeShape,
   ): InlineScalarTreeLayout => {
     const inlineLocalByValue = new Map<CoreValueId, number>();
+    const inlineTypeByValue = valueTypes(shape.function);
+    const inlineUses = analyzeFunctionValueUses(shape.function);
     for (const block of shape.function.blocks) {
       for (const parameter of block.parameters) {
         inlineLocalByValue.set(parameter.value, nextLocal);
@@ -856,6 +850,19 @@ function planFunctionValues(
         locals.push(wasmValueType(core, parameter.type));
       }
       for (const operation of block.operations) {
+        if (
+          canSinkTotalScalarOperation(
+            core,
+            shape.function,
+            block,
+            operation,
+            inlineTypeByValue,
+            inlineUses.useCounts,
+            inlineUses.useBlocks,
+          )
+        ) {
+          continue;
+        }
         inlineLocalByValue.set(operation.result, nextLocal);
         nextLocal += 1;
         locals.push(wasmValueType(core, operation.type));
@@ -908,29 +915,7 @@ function planFunctionValues(
       if (inlineFunction === undefined) continue;
       const inlineLocalByValue = new Map<CoreValueId, number>();
       const inlineTypeByValue = valueTypes(inlineFunction);
-      const inlineUseCounts = new Map<CoreValueId, number>();
-      const inlineUseBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
-      for (const block of inlineFunction.blocks) {
-        for (const inlineOperation of block.operations) {
-          for (const operand of inlineOperation.operands) {
-            inlineUseCounts.set(
-              operand,
-              (inlineUseCounts.get(operand) ?? 0) + 1,
-            );
-            const blocks = inlineUseBlocks.get(operand) ??
-              new Set<CoreBlockId>();
-            blocks.add(block.id);
-            inlineUseBlocks.set(operand, blocks);
-          }
-        }
-        for (const value of coreTerminatorValues(block.terminator)) {
-          inlineUseCounts.set(value, (inlineUseCounts.get(value) ?? 0) + 1);
-          const blocks = inlineUseBlocks.get(value) ??
-            new Set<CoreBlockId>();
-          blocks.add(block.id);
-          inlineUseBlocks.set(value, blocks);
-        }
-      }
+      const inlineUses = analyzeFunctionValueUses(inlineFunction);
       for (const block of inlineFunction.blocks) {
         for (const parameter of block.parameters) {
           inlineLocalByValue.set(parameter.value, nextLocal);
@@ -945,8 +930,8 @@ function planFunctionValues(
               block,
               inlineOperation,
               inlineTypeByValue,
-              inlineUseCounts,
-              inlineUseBlocks,
+              inlineUses.useCounts,
+              inlineUses.useBlocks,
             )
           ) {
             continue;
@@ -1869,72 +1854,15 @@ function affineNaturalLoop(
     if (nextState.operands.length !== 1 || nextState.operands[0] !== state) {
       return undefined;
     }
-    const callee = core.functions[nextState.functionId];
-    if (
-      callee === undefined || callee.blocks.length !== 1 ||
-      callee.entryBlock !== 0
-    ) {
-      return undefined;
-    }
-    const block = callee.blocks[0];
-    if (
-      block.parameters.length !== 1 || block.terminator.kind !== "return" ||
-      block.terminator.values.length !== 1
-    ) {
-      return undefined;
-    }
-    const calleeOperations = new Map(
-      block.operations.map((operation) =>
-        [operation.result, operation] as const
-      ),
-    );
-    const add = calleeOperations.get(block.terminator.values[0]);
-    if (
-      add?.kind !== "scalar.binary" || add.operator !== "+" ||
-      add.operands.length !== 2
-    ) {
-      return undefined;
-    }
-    const multiply = add.operands.map((operand) =>
-      calleeOperations.get(operand)
-    )
-      .find((operation) =>
-        operation?.kind === "scalar.binary" && operation.operator === "*"
-      );
-    const offset = add.operands.map((operand) => calleeOperations.get(operand))
-      .find((operation) => operation?.kind === "constant");
-    if (
-      multiply?.kind !== "scalar.binary" || offset?.kind !== "constant" ||
-      typeof offset.value !== "number"
-    ) {
-      return undefined;
-    }
-    const multiplier = multiply.operands.map((operand) =>
-      calleeOperations.get(operand)
-    ).find((operation) => operation?.kind === "constant");
-    if (
-      multiplier?.kind !== "constant" ||
-      typeof multiplier.value !== "number" ||
-      !multiply.operands.includes(block.parameters[0].value)
-    ) {
-      return undefined;
-    }
-    const requiredCalleeResults = new Set([
-      add.result,
-      multiply.result,
-      multiplier.result,
-      offset.result,
-    ]);
+    const affine = affineUnaryFunction(core, nextState.functionId);
     const requiredBodyResults = new Set([
       nextCounter.result,
       nextState.result,
       one.result,
     ]);
     if (
-      block.operations.length !== requiredCalleeResults.size ||
-      block.operations.some((operation) =>
-        !requiredCalleeResults.has(operation.result)
-      ) || loop.body.operations.length !== requiredBodyResults.size ||
+      affine === undefined ||
+      loop.body.operations.length !== requiredBodyResults.size ||
       loop.body.operations.some((operation) =>
         !requiredBodyResults.has(operation.result)
       )
@@ -1945,8 +1873,8 @@ function affineNaturalLoop(
       loop,
       counter,
       state,
-      multiplier: multiplier.value | 0,
-      offset: offset.value | 0,
+      multiplier: affine.multiplier,
+      offset: affine.offset,
     };
   }
   if (nextState.kind !== "scalar.binary" || nextState.operator !== "+") {
@@ -1995,6 +1923,120 @@ function affineNaturalLoop(
     multiplier: multiplier.value | 0,
     offset: offset.value | 0,
   };
+}
+
+function affineUnaryFunction(
+  core: CoreModule,
+  rootFunctionId: CoreFunctionId,
+): AffineMap | undefined {
+  const summaries = new Map<CoreFunctionId, AffineMap | undefined>();
+  const summarize = (
+    functionId: CoreFunctionId,
+    ancestors: ReadonlySet<CoreFunctionId>,
+  ): AffineMap | undefined => {
+    if (ancestors.has(functionId)) return undefined;
+    if (summaries.has(functionId)) return summaries.get(functionId);
+
+    const function_ = core.functions[functionId];
+    const signature = function_ === undefined
+      ? undefined
+      : core.signatures[function_.signature];
+    const block = function_?.blocks[function_.entryBlock];
+    const parameterType = signature === undefined
+      ? undefined
+      : core.types[signature.parameters[0]];
+    const resultType = signature === undefined
+      ? undefined
+      : core.types[signature.result];
+    if (
+      function_ === undefined || signature === undefined ||
+      function_.blocks.length !== 1 || block === undefined ||
+      block.parameters.length !== 1 || signature.parameters.length !== 1 ||
+      parameterType?.kind !== "scalar" || parameterType.scalar !== "i32" ||
+      resultType?.kind !== "scalar" || resultType.scalar !== "i32" ||
+      block.terminator.kind !== "return" ||
+      block.terminator.values.length !== 1
+    ) {
+      summaries.set(functionId, undefined);
+      return undefined;
+    }
+
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(functionId);
+    const values = new Map<CoreValueId, AffineMap>([[
+      block.parameters[0].value,
+      { multiplier: 1, offset: 0 },
+    ]]);
+    for (const operation of block.operations) {
+      const operationType = core.types[operation.type];
+      if (
+        operationType?.kind !== "scalar" || operationType.scalar !== "i32"
+      ) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+
+      let summary: AffineMap | undefined;
+      if (
+        operation.kind === "constant" && typeof operation.value === "number"
+      ) {
+        summary = { multiplier: 0, offset: operation.value | 0 };
+      } else if (
+        operation.kind === "scalar.binary" &&
+        (operation.operator === "+" || operation.operator === "-" ||
+          operation.operator === "*")
+      ) {
+        const left = values.get(operation.operands[0]);
+        const right = values.get(operation.operands[1]);
+        if (left === undefined || right === undefined) {
+          summaries.set(functionId, undefined);
+          return undefined;
+        }
+        if (operation.operator === "+") {
+          summary = {
+            multiplier: (left.multiplier + right.multiplier) | 0,
+            offset: (left.offset + right.offset) | 0,
+          };
+        } else if (operation.operator === "-") {
+          summary = {
+            multiplier: (left.multiplier - right.multiplier) | 0,
+            offset: (left.offset - right.offset) | 0,
+          };
+        } else if (left.multiplier === 0 || right.multiplier === 0) {
+          summary = {
+            multiplier: (
+              Math.imul(left.multiplier, right.offset) +
+              Math.imul(right.multiplier, left.offset)
+            ) | 0,
+            offset: Math.imul(left.offset, right.offset),
+          };
+        }
+      } else if (
+        operation.kind === "call.direct" && operation.operands.length === 1
+      ) {
+        const argument = values.get(operation.operands[0]);
+        const callee = summarize(operation.functionId, nextAncestors);
+        if (argument !== undefined && callee !== undefined) {
+          summary = {
+            multiplier: Math.imul(callee.multiplier, argument.multiplier),
+            offset: (
+              Math.imul(callee.multiplier, argument.offset) + callee.offset
+            ) | 0,
+          };
+        }
+      }
+      if (summary === undefined) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+      values.set(operation.result, summary);
+    }
+
+    const result = values.get(block.terminator.values[0]);
+    summaries.set(functionId, result);
+    return result;
+  };
+  return summarize(rootFunctionId, new Set());
 }
 
 function emitAffineNaturalLoop(
@@ -2764,11 +2806,22 @@ function emitInlineScalarTree(
     inlineScalarTreeByCallResult: new Map(),
   };
   const getValue = (value: CoreValueId): readonly WasmInstruction[] =>
-    wasmInstruction.localGet(requiredLocal(layout, tree.function, value));
+    emitStackValue(
+      core,
+      tree.function,
+      value,
+      layout,
+      importedFunctions,
+      functionIndices,
+      closureTargets,
+      closureTypeIndices,
+      textHandles,
+    );
   const emitOperations = (
     block: CoreFunction["blocks"][number],
   ): readonly WasmInstruction[] =>
     block.operations.flatMap((operation) => {
+      if (!layout.localByValue.has(operation.result)) return [];
       if (operation.kind === "call.direct") {
         const child = tree.callsByResult.get(operation.result);
         if (child === undefined) {
@@ -3666,6 +3719,34 @@ function valueTypes(
     }
   }
   return types;
+}
+
+function analyzeFunctionValueUses(function_: CoreFunction): {
+  readonly useCounts: ReadonlyMap<CoreValueId, number>;
+  readonly useBlocks: ReadonlyMap<CoreValueId, ReadonlySet<CoreBlockId>>;
+  readonly returnedValues: ReadonlySet<CoreValueId>;
+} {
+  const useCounts = new Map<CoreValueId, number>();
+  const useBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
+  const returnedValues = new Set<CoreValueId>();
+  const countUse = (value: CoreValueId, block: CoreBlockId): void => {
+    useCounts.set(value, (useCounts.get(value) ?? 0) + 1);
+    const blocks = useBlocks.get(value) ?? new Set<CoreBlockId>();
+    blocks.add(block);
+    useBlocks.set(value, blocks);
+  };
+  for (const block of function_.blocks) {
+    for (const operation of block.operations) {
+      operation.operands.forEach((value) => countUse(value, block.id));
+    }
+    coreTerminatorValues(block.terminator).forEach((value) =>
+      countUse(value, block.id)
+    );
+    if (block.terminator.kind === "return") {
+      block.terminator.values.forEach((value) => returnedValues.add(value));
+    }
+  }
+  return { useCounts, useBlocks, returnedValues };
 }
 
 function operationNeedsLocal(

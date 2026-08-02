@@ -31,6 +31,26 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "broad and deep call graph",
     broadModuleReference,
   ),
+  workload(
+    "07-shared-call-dag",
+    "shared callee reached through two call paths",
+    sharedCallDagReference,
+  ),
+  workload(
+    "08-wide-binding-frontier",
+    "wide block-local live-value frontier",
+    wideBindingFrontierReference,
+  ),
+  workload(
+    "09-partial-lazy",
+    "partial arithmetic guarded by lazy control",
+    partialLazyReference,
+  ),
+  workload(
+    "10-dead-module",
+    "large unreachable function set",
+    deadModuleReference,
+  ),
 ];
 
 function workload(
@@ -116,4 +136,34 @@ function broadModuleReference(seed: number, rounds: number): number {
     const rotated = (Math.imul(classified, 9) + 7) | 0;
     return rotated % 11 === 0 ? (rotated + left) | 0 : (rotated - right) | 0;
   });
+}
+
+function sharedCallDagReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, (value) => {
+    const left = (Math.imul(affine(value), 3) + 17) | 0;
+    const right = (Math.imul(affine(value), 5) - 29) | 0;
+    return (left + right) | 0;
+  });
+}
+
+function wideBindingFrontierReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, (value) => {
+    const a = (Math.imul(value, 3) + 17) | 0;
+    const b = (Math.imul(value, 5) - 29) | 0;
+    const c = (Math.imul(value, 7) + 43) | 0;
+    const d = (Math.imul(value, 11) - 61) | 0;
+    return (Math.imul((a + b) | 0, (c - d) | 0) + ((a + d) | 0)) | 0;
+  });
+}
+
+function partialLazyReference(seed: number, rounds: number): number {
+  return repeat(
+    rounds,
+    seed,
+    (value) => value === 0 ? 1 : (Math.trunc(1_000_000_000 / value) + 17) | 0,
+  );
+}
+
+function deadModuleReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, affine);
 }
