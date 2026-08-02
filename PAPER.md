@@ -336,8 +336,61 @@ The implementation must maintain these executable invariants:
    with independently executed reference cases.
 
 Zero is the controlled end-to-end producer. Its grammar, parser, Core adapter,
-equivalent Rust workload, and benchmark live under `examples/zero`. It is test
+equivalent Rust workloads, and benchmark live under `examples/zero`. It is test
 scaffolding, not a privileged source language.
+
+### 8.1 Structural complexity ladder
+
+Program difficulty is not a scalar. For workload \(w\), the benchmark records
+
+\[ C(w)=(S,F,B,O,A), \]
+
+where \(S\) is source bytes, \(F\) Core functions, \(B\) Core blocks, \(O\) Core
+operations, and \(A\) binary-plan atoms. The suite is an ordered ladder of
+dominant structural challenges rather than a claim that every component of \(C\)
+increases at every step: affine arithmetic, a control-flow diamond, a
+multi-function call graph, a branch forest, a nested natural loop, and a broad
+call graph. This avoids collapsing incomparable programs into an invented single
+complexity score.
+
+Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
+and wrapping-i32 semantics. `repeat` is the bounded fold
+
+\[ \operatorname{repeat}(n,z,f)=f^{\max(n,0)}(z). \]
+
+For each workload, a Zero source, an independently written Rust source, and a
+TypeScript recurrence define three executable interpretations. Before timing,
+the harness requires
+
+\[ Z_w(s,r)=R_w(s,r)=J_w(s,r) \]
+
+on boundary probes and a deterministic pseudorandom probe set. This is
+executable differential evidence, not a proof over every input. CPU plan
+emission remains byte-identical to Rust/WebAssembly plan emission in the test
+suite.
+
+For fixed workload and seed set, hot execution is modeled as
+
+\[ T_c(w,r)=K_c(w)+r\,t_c(w)+\epsilon, \]
+
+so measurements report nanoseconds per outer round after warmup and alternate
+compiler order to reduce drift. A nested workload intentionally performs more
+work per outer round; runtime values are comparable between Zero and Rust for
+the same workload, not across different workloads. Compilation likewise reports
+separate boundaries because an in-process initialized frontend and a fresh
+`rustc` process do not measure the same operation. With \(q\) workloads, \(p\)
+probes, \(m\) samples, and \(r\) rounds, validation work is \(O(qp)\),
+compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\), multiplied by
+each workload's inner recurrence cost. The default six-workload, 30-sample,
+eight-seed, 100,000-round run performs 144 million outer rounds per compiler,
+plus validation and warmup.
+
+Threats remain explicit: `rustc -O3` may optimize a source-level structural
+feature away; JavaScript timer resolution and host scheduling contribute noise;
+the finite probe set cannot establish semantic equivalence; and the ladder
+samples only first-order scalar programs. The emitted structural vector, raw
+paired samples, source hashes, and output hashes make these limitations
+auditable.
 
 ## 9. Limitations
 
@@ -366,6 +419,24 @@ scaffolding, not a privileged source language.
 
 ## 11. Continuous implementation log
 
+### 2026-08-02: Zero structural complexity ladder
+
+The single affine-diamond workload was replaced by six paired Zero/Rust
+workloads covering the structural dimensions defined in Section 8.1. The
+benchmark now emits one report per workload with Core and binary-plan counts,
+hashes, boundary-separated compilation timings, and paired runtime samples. A
+three-sample diagnostic run at 10,000 outer rounds passed all 420 differential
+probes (70 per workload). Zero payloads ranged from 101 to 530 bytes and Rust
+payloads from 200 to 371 bytes. Observed Zero/Rust median nanoseconds per outer
+round were respectively: affine 0.85/0.12, diamond 1.25/1.99, call graph
+2.90/1.67, branch forest 10.12/4.57, nested loop 32.85/5.90, and broad module
+4.34/4.42. These are empirical diagnostic measurements, not admissible claims:
+three samples cannot estimate a p95, the run allowed contention, and the low
+affine Rust time suggests optimizer transformation makes source-level operation
+counts an unreliable runtime denominator. The result validates the harness and
+identifies the nested-loop and branch-forest rungs as useful optimization
+probes; an uncontended recorded run is still required for performance claims.
+
 ### 2026-08-02: source-language boundary removal
 
 The repository now owns only the general Core backend and the controlled Zero
@@ -389,3 +460,24 @@ notices. The completed JSR dry run accepts every public type and selects exactly
 `29` files totaling approximately `571 KB` uncompressed, of which `46,554` bytes
 are the checked Rust/WebAssembly emitter. This is an executable publication
 validation, not evidence about network transfer size or runtime performance.
+
+### 2026-08-02: resolver-owned emitter bytes
+
+Version `0.1.0` exposed a counterexample to treating a published package asset
+like a checkout file: a JSR module has an `https:` identity, while
+`Deno.readFile` accepts the emitter URL only when that identity is `file:`. The
+package therefore generated valid declarations but failed when an installed
+consumer first requested Rust/WebAssembly emission.
+
+Version `0.1.1` makes the emitter part of the TypeScript module graph. The Rust
+build remains authoritative and still produces a repository-checked `.wasm`
+artifact; the build script also generates a source module containing exactly
+those bytes. Its check mode rejects either representation when it differs from
+the release build. Only the generated source representation is published, so the
+package does not carry an unreachable duplicate asset. Emitter initialization
+reads the module-owned byte array, so installed consumers need neither a
+neighboring repository nor runtime filesystem or network access to find the
+compiler. Byte equality, permissionless initialization, and the existing
+CPU/Rust differential tests are executable validations of this packaging
+invariant; they do not prove compatibility with module resolvers outside Deno
+and JSR.

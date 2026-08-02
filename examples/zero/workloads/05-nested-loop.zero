@@ -1,0 +1,8 @@
+fn inner(seed) =
+  repeat 4 from seed as value {
+    let mixed = value * 1664525 + 1013904223 in
+    if mixed < 0 then mixed + 97 else mixed - 89
+  };
+
+export fn run(seed, rounds) =
+  repeat rounds from seed as value { inner(value) };

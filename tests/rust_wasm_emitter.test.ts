@@ -10,6 +10,27 @@ import {
   wasmType,
 } from "../src/wasm.ts";
 
+Deno.test({
+  name: "Rust/Wasm emitter initializes without runtime permissions",
+  permissions: {
+    read: false,
+    write: false,
+    net: false,
+    env: false,
+    run: false,
+    ffi: false,
+    sys: false,
+  },
+  async fn() {
+    const initialized = await createRustWasmEmitter();
+    if (initialized.moduleBytes === 0) {
+      throw new Error(
+        "embedded Rust/Wasm emitter must contain a non-empty module",
+      );
+    }
+  },
+});
+
 Deno.test("Rust/Wasm emission covers every scalar atom boundary", async () => {
   const { emitter } = await createRustWasmEmitter();
   const plan: WasmBinaryPlan = {

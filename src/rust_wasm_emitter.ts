@@ -1,8 +1,8 @@
 import type { WasmAtom, WasmBinaryPlan } from "./wasm.ts";
+import { rustWasmEmitterBytes } from "./generated/rust_wasm_emitter_bytes.ts";
 
 export type RustWasmEmitterInitializationTimings = {
   readonly totalMilliseconds: number;
-  readonly moduleReadMilliseconds: number;
   readonly moduleCompilationMilliseconds: number;
   readonly instantiationMilliseconds: number;
 };
@@ -55,10 +55,6 @@ const atomWordCount = 4;
 const atomRecordBytes = atomWordCount * Uint32Array.BYTES_PER_ELEMENT;
 const errorHandle = 0xffff_ffff;
 const hostIsLittleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
-const emitterModuleUrl = new URL(
-  "./generated/rust_wasm_emitter.wasm",
-  import.meta.url,
-);
 let sharedEmitterInitialization:
   | Promise<RustWasmEmitterInitialization>
   | undefined;
@@ -191,9 +187,7 @@ export async function createRustWasmEmitter(): Promise<
   RustWasmEmitterInitialization
 > {
   const totalStart = performance.now();
-  const readStart = performance.now();
-  const bytes = await Deno.readFile(emitterModuleUrl);
-  const moduleReadMilliseconds = performance.now() - readStart;
+  const bytes = rustWasmEmitterBytes;
   const compilationStart = performance.now();
   const module = await WebAssembly.compile(bytes as BufferSource);
   const moduleCompilationMilliseconds = performance.now() - compilationStart;
@@ -209,7 +203,6 @@ export async function createRustWasmEmitter(): Promise<
     emitter: new RustWasmEmitter(exports),
     timings: {
       totalMilliseconds: performance.now() - totalStart,
-      moduleReadMilliseconds,
       moduleCompilationMilliseconds,
       instantiationMilliseconds,
     },

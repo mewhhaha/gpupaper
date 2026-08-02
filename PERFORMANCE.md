@@ -18,9 +18,10 @@ Medians retain all raw samples; a p95 requires at least 20 observations.
 
 ## Controlled benchmarks
 
-`deno task benchmark:zero` compares the controlled producer and an equivalent
-Rust-to-Wasm workload. It differentially checks results before timing hot
-execution and reports compilation stages and output sizes independently.
+`deno task benchmark:zero` compares six increasingly difficult controlled
+producer workloads with equivalent Rust-to-Wasm programs. It differentially
+checks results before timing hot execution and reports Core structure,
+compilation stages, output sizes, hashes, and raw paired samples independently.
 
 `deno task benchmark:branch-hints` compares semantically identical Wasm modules
 with and without standardized branch-likelihood metadata.

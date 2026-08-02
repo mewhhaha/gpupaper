@@ -4,6 +4,10 @@ import {
   type ZeroCompilationTimings,
 } from "../examples/zero/compiler.ts";
 import {
+  type ZeroWorkload,
+  zeroWorkloads,
+} from "../examples/zero/workloads.ts";
+import {
   inspectBenchmarkEnvironment,
   repositoryIdentity,
   runtimeIdentity,
@@ -15,16 +19,37 @@ import {
 } from "./benchmark_statistics.ts";
 
 type OwnedBytes = Uint8Array<ArrayBuffer>;
+type LoadedWorkload = {
+  readonly definition: ZeroWorkload;
+  readonly zeroSource: string;
+  readonly rustSource: string;
+};
+type WorkloadMeasurements = {
+  readonly loaded: LoadedWorkload;
+  readonly coldZero: ZeroCompilation;
+  zeroCompilation: ZeroCompilation;
+  rustWasm: OwnedBytes;
+  readonly zeroCompilationSamples: ZeroCompilationTimings[];
+  readonly rustCompilationSamples: number[];
+};
 
 const sampleCount = requestedPositiveInteger(Deno.args, "samples", 30);
 const rounds = requestedPositiveInteger(Deno.args, "rounds", 100_000);
+const selectedWorkload = requestedString(Deno.args, "workload");
 const allowContended = Deno.args.includes("--allow-contended");
 const gpupaperDirectory = new URL("../", import.meta.url).pathname;
-const zeroSourceUrl = new URL("../examples/zero/kernel.zero", import.meta.url);
-const rustSourceUrl = new URL("../examples/zero/kernel.rs", import.meta.url);
-const zeroSource = await Deno.readTextFile(zeroSourceUrl);
-const rustSource = await Deno.readTextFile(rustSourceUrl);
 const textEncoder = new TextEncoder();
+const definitions = selectedWorkload === undefined
+  ? zeroWorkloads
+  : zeroWorkloads.filter((workload) => workload.name === selectedWorkload);
+if (definitions.length === 0) {
+  throw new TypeError(
+    `unknown Zero workload ${selectedWorkload}; expected one of ${
+      zeroWorkloads.map((workload) => workload.name).join(", ")
+    }`,
+  );
+}
+const loadedWorkloads = await Promise.all(definitions.map(loadWorkload));
 
 const environmentAtStart = await inspectBenchmarkEnvironment({
   gpuWork: "ignore",
@@ -40,84 +65,14 @@ if (environmentAtStart.status !== "clear" && !allowContended) {
 
 const temporaryDirectory = await Deno.makeTempDir({ prefix: "gpupaper-zero-" });
 try {
-  const coldZero = await compileZeroSource(zeroSourceUrl.pathname, zeroSource);
-  await compileRustBaseline(temporaryDirectory, rustSourceUrl.pathname);
-
-  const zeroCompilationSamples: ZeroCompilationTimings[] = [];
-  const rustCompilationSamples: number[] = [];
-  let zeroCompilation = coldZero;
-  let rustWasm = new Uint8Array();
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    if (sample % 2 === 0) {
-      zeroCompilation = await measureZeroCompilation(
-        zeroSourceUrl.pathname,
-        zeroSource,
-        zeroCompilationSamples,
-      );
-      rustWasm = await measureRustCompilation(
-        temporaryDirectory,
-        rustSourceUrl.pathname,
-        rustCompilationSamples,
-      );
-    } else {
-      rustWasm = await measureRustCompilation(
-        temporaryDirectory,
-        rustSourceUrl.pathname,
-        rustCompilationSamples,
-      );
-      zeroCompilation = await measureZeroCompilation(
-        zeroSourceUrl.pathname,
-        zeroSource,
-        zeroCompilationSamples,
-      );
-    }
-  }
-
-  const zeroBytes = Uint8Array.from(zeroCompilation.wasm);
-  requireEquivalentResults(zeroBytes, rustWasm);
-
-  const moduleMeasurements = measureModuleBoundaries(
-    zeroBytes,
-    rustWasm,
-    sampleCount,
+  const measurements = await initializeMeasurements(
+    temporaryDirectory,
+    loadedWorkloads,
   );
-  const zeroModule = new WebAssembly.Module(zeroBytes.buffer);
-  const rustModule = new WebAssembly.Module(rustWasm.buffer);
-  const zeroRun = exportedRun(new WebAssembly.Instance(zeroModule), "Zero");
-  const rustRun = exportedRun(new WebAssembly.Instance(rustModule), "Rust");
-  warmRuntime(zeroRun);
-  warmRuntime(rustRun);
-
-  const seeds = [
-    0,
-    1,
-    -1,
-    17,
-    -31,
-    0x12345678,
-    2_147_483_647,
-    -2_147_483_648,
-  ] as const;
-  const expectedChecksum = seeds.reduce<number>(
-    (sum, seed) => sum + referenceRun(seed, rounds),
-    0,
-  );
-  const zeroRuntimeSamples: number[] = [];
-  const rustRuntimeSamples: number[] = [];
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    const order = sample % 2 === 0
-      ? [[zeroRun, zeroRuntimeSamples], [rustRun, rustRuntimeSamples]] as const
-      : [[rustRun, rustRuntimeSamples], [zeroRun, zeroRuntimeSamples]] as const;
-    for (const [run, samples] of order) {
-      samples.push(
-        measureRuntimeNanosecondsPerIteration(
-          run,
-          seeds,
-          rounds,
-          expectedChecksum,
-        ),
-      );
-    }
+  await sampleCompilation(temporaryDirectory, measurements, sampleCount);
+  const reports = [];
+  for (const measurement of measurements) {
+    reports.push(await measureWorkload(measurement, sampleCount, rounds));
   }
 
   const environmentAtEnd = await inspectBenchmarkEnvironment({
@@ -141,49 +96,15 @@ try {
     {
       status: validity.status === "refused" ? "refused" : "completed",
       validity,
-      schemaVersion: 1,
-      benchmark: "zero-runtime-versus-rust",
+      schemaVersion: 2,
+      benchmark: "zero-complexity-ladder-versus-rust",
       runtime: runtimeIdentity(),
-      repositories: {
-        gpupaper: await repositoryIdentity(gpupaperDirectory),
-      },
+      repositories: { gpupaper: await repositoryIdentity(gpupaperDirectory) },
       environmentAtStart,
       environmentAtEnd,
-      workload: {
-        semanticModel: "wrapping-i32-bounded-fold",
-        sampleCount,
-        roundsPerInvocation: rounds,
-        invocationsPerSample: seeds.length,
-        iterationsPerSample: rounds * seeds.length,
-        zeroSourceBytes: textEncoder.encode(zeroSource).byteLength,
-        rustSourceBytes: textEncoder.encode(rustSource).byteLength,
-        zeroSourceSha256: await sha256(textEncoder.encode(zeroSource)),
-        rustSourceSha256: await sha256(textEncoder.encode(rustSource)),
-      },
-      output: {
-        zeroWasmBytes: zeroBytes.byteLength,
-        rustWasmBytes: rustWasm.byteLength,
-        zeroWasmSha256: await sha256(zeroBytes),
-        rustWasmSha256: await sha256(rustWasm),
-      },
-      compilationMilliseconds: {
-        boundariesComparable: false,
-        reason:
-          "Zero is an in-process incremental frontend plus Rust/Wasm plan emitter; Rust is a fresh rustc process",
-        zeroCold: coldZero.timings,
-        zeroWarm: summarizeZeroCompilation(zeroCompilationSamples),
-        rustcProcess: summarizeSamples(rustCompilationSamples),
-        rustcProcessRaw: rustCompilationSamples,
-      },
-      moduleConstructionMilliseconds: moduleMeasurements.construction,
-      instantiationMilliseconds: moduleMeasurements.instantiation,
-      runtimeNanosecondsPerIteration: {
-        zero: summarizeSamples(zeroRuntimeSamples),
-        rust: summarizeSamples(rustRuntimeSamples),
-        pair: summarizePairedSamples(zeroRuntimeSamples, rustRuntimeSamples),
-        zeroRaw: zeroRuntimeSamples,
-        rustRaw: rustRuntimeSamples,
-      },
+      sampleCount,
+      roundsPerInvocation: rounds,
+      workloads: reports,
     },
     null,
     2,
@@ -193,35 +114,90 @@ try {
   await Deno.remove(temporaryDirectory, { recursive: true });
 }
 
+async function loadWorkload(definition: ZeroWorkload): Promise<LoadedWorkload> {
+  return {
+    definition,
+    zeroSource: await Deno.readTextFile(definition.zeroSourceUrl),
+    rustSource: await Deno.readTextFile(definition.rustSourceUrl),
+  };
+}
+
+async function initializeMeasurements(
+  temporaryDirectory: string,
+  workloads: readonly LoadedWorkload[],
+): Promise<WorkloadMeasurements[]> {
+  const measurements: WorkloadMeasurements[] = [];
+  for (const loaded of workloads) {
+    const coldZero = await compileZeroSource(
+      loaded.definition.zeroSourceUrl.pathname,
+      loaded.zeroSource,
+    );
+    const rustWasm = await compileRustBaseline(
+      temporaryDirectory,
+      loaded.definition,
+    );
+    measurements.push({
+      loaded,
+      coldZero,
+      zeroCompilation: coldZero,
+      rustWasm,
+      zeroCompilationSamples: [],
+      rustCompilationSamples: [],
+    });
+  }
+  return measurements;
+}
+
+async function sampleCompilation(
+  temporaryDirectory: string,
+  measurements: WorkloadMeasurements[],
+  samples: number,
+): Promise<void> {
+  for (let sample = 0; sample < samples; sample += 1) {
+    const ordered = sample % 2 === 0 ? measurements : measurements.toReversed();
+    for (const measurement of ordered) {
+      if (sample % 2 === 0) {
+        await measureZeroCompilation(measurement);
+        await measureRustCompilation(temporaryDirectory, measurement);
+      } else {
+        await measureRustCompilation(temporaryDirectory, measurement);
+        await measureZeroCompilation(measurement);
+      }
+    }
+  }
+}
+
 async function measureZeroCompilation(
-  file: string,
-  source: string,
-  samples: ZeroCompilationTimings[],
-): Promise<ZeroCompilation> {
-  const compilation = await compileZeroSource(file, source);
-  samples.push(compilation.timings);
-  return compilation;
+  measurement: WorkloadMeasurements,
+): Promise<void> {
+  const { definition, zeroSource } = measurement.loaded;
+  measurement.zeroCompilation = await compileZeroSource(
+    definition.zeroSourceUrl.pathname,
+    zeroSource,
+  );
+  measurement.zeroCompilationSamples.push(measurement.zeroCompilation.timings);
 }
 
 async function measureRustCompilation(
   temporaryDirectory: string,
-  sourcePath: string,
-  samples: number[],
-): Promise<OwnedBytes> {
+  measurement: WorkloadMeasurements,
+): Promise<void> {
   const start = performance.now();
-  const wasm = await compileRustBaseline(temporaryDirectory, sourcePath);
-  samples.push(performance.now() - start);
-  return wasm;
+  measurement.rustWasm = await compileRustBaseline(
+    temporaryDirectory,
+    measurement.loaded.definition,
+  );
+  measurement.rustCompilationSamples.push(performance.now() - start);
 }
 
 async function compileRustBaseline(
   temporaryDirectory: string,
-  sourcePath: string,
+  workload: ZeroWorkload,
 ): Promise<OwnedBytes> {
-  const outputPath = `${temporaryDirectory}/kernel.wasm`;
+  const outputPath = `${temporaryDirectory}/${workload.name}.wasm`;
   const output = await new Deno.Command("rustc", {
     args: [
-      sourcePath,
+      workload.rustSourceUrl.pathname,
       "--target",
       "wasm32-unknown-unknown",
       "--crate-type=cdylib",
@@ -242,7 +218,7 @@ async function compileRustBaseline(
   }).output();
   if (!output.success) {
     throw new Error(
-      `rustc failed for ${sourcePath}: ${
+      `rustc failed for ${workload.rustSourceUrl.pathname}: ${
         new TextDecoder().decode(output.stderr).trim() || "no diagnostic"
       }`,
     );
@@ -250,7 +226,83 @@ async function compileRustBaseline(
   return Uint8Array.from(await Deno.readFile(outputPath));
 }
 
+async function measureWorkload(
+  measurement: WorkloadMeasurements,
+  samples: number,
+  roundsPerInvocation: number,
+): Promise<Record<string, unknown>> {
+  const { definition, zeroSource, rustSource } = measurement.loaded;
+  const zeroBytes = Uint8Array.from(measurement.zeroCompilation.wasm);
+  requireEquivalentResults(definition, zeroBytes, measurement.rustWasm);
+  const moduleMeasurements = measureModuleBoundaries(
+    zeroBytes,
+    measurement.rustWasm,
+    samples,
+  );
+  const zeroRun = exportedRun(
+    new WebAssembly.Instance(new WebAssembly.Module(zeroBytes.buffer)),
+    "Zero",
+  );
+  const rustRun = exportedRun(
+    new WebAssembly.Instance(
+      new WebAssembly.Module(measurement.rustWasm.buffer),
+    ),
+    "Rust",
+  );
+  warmRuntime(zeroRun);
+  warmRuntime(rustRun);
+  const runtimeMeasurements = measureRuntime(
+    definition,
+    zeroRun,
+    rustRun,
+    roundsPerInvocation,
+    samples,
+  );
+  const functions = measurement.zeroCompilation.core.functions;
+  const blocks = functions.flatMap((function_) => function_.blocks);
+
+  return {
+    name: definition.name,
+    challenge: definition.challenge,
+    semanticModel: "wrapping-i32-bounded-fold",
+    structure: {
+      zeroSourceBytes: textEncoder.encode(zeroSource).byteLength,
+      rustSourceBytes: textEncoder.encode(rustSource).byteLength,
+      coreFunctions: functions.length,
+      coreBlocks: blocks.length,
+      coreOperations: blocks.reduce(
+        (sum, block) => sum + block.operations.length,
+        0,
+      ),
+      wasmPlanAtoms: measurement.zeroCompilation.wasmPlan.atoms.length,
+    },
+    sourceHashes: {
+      zero: await sha256(textEncoder.encode(zeroSource)),
+      rust: await sha256(textEncoder.encode(rustSource)),
+    },
+    output: {
+      zeroWasmBytes: zeroBytes.byteLength,
+      rustWasmBytes: measurement.rustWasm.byteLength,
+      zeroWasmSha256: await sha256(zeroBytes),
+      rustWasmSha256: await sha256(measurement.rustWasm),
+    },
+    compilationMilliseconds: {
+      boundariesComparable: false,
+      reason:
+        "Zero is an initialized in-process frontend and emitter; Rust is a fresh rustc process",
+      zeroCold: measurement.coldZero.timings,
+      zeroWarm: summarizeZeroCompilation(measurement.zeroCompilationSamples),
+      rustcProcess: summarizeSamples(measurement.rustCompilationSamples),
+      rustcProcessRaw: measurement.rustCompilationSamples,
+    },
+    moduleConstructionMilliseconds: moduleMeasurements.construction,
+    instantiationMilliseconds: moduleMeasurements.instantiation,
+    runtimeNanosecondsPerOuterRound: runtimeMeasurements,
+  };
+}
+
 function requireEquivalentResults(
+  workload: ZeroWorkload,
   zeroWasm: OwnedBytes,
   rustWasm: OwnedBytes,
 ): void {
@@ -262,8 +314,21 @@ function requireEquivalentResults(
     new WebAssembly.Instance(new WebAssembly.Module(rustWasm.buffer)),
     "Rust",
   );
+  for (const [seed, rounds] of probes()) {
+    const expected = workload.reference(seed, rounds);
+    const zeroResult = zero(seed, rounds);
+    const rustResult = rust(seed, rounds);
+    if (zeroResult !== expected || rustResult !== expected) {
+      throw new Error(
+        `${workload.name} disagreement for seed ${seed}, rounds ${rounds}: Zero ${zeroResult}, Rust ${rustResult}, reference ${expected}`,
+      );
+    }
+  }
+}
+
+function probes(): readonly (readonly [number, number])[] {
   let state = 0x6d2b79f5;
-  const probes: [number, number][] = [
+  const values: [number, number][] = [
     [0, -1],
     [0, 0],
     [1, 1],
@@ -275,18 +340,71 @@ function requireEquivalentResults(
     state ^= state << 13;
     state ^= state >>> 17;
     state ^= state << 5;
-    probes.push([state | 0, probe * 17]);
+    values.push([state | 0, probe * 17]);
   }
-  for (const [seed, rounds] of probes) {
-    const expected = referenceRun(seed, rounds);
-    const zeroResult = zero(seed, rounds);
-    const rustResult = rust(seed, rounds);
-    if (zeroResult !== expected || rustResult !== expected) {
-      throw new Error(
-        `runtime disagreement for seed ${seed}, rounds ${rounds}: Zero ${zeroResult}, Rust ${rustResult}, reference ${expected}`,
+  return values;
+}
+
+function measureRuntime(
+  workload: ZeroWorkload,
+  zeroRun: (seed: number, rounds: number) => number,
+  rustRun: (seed: number, rounds: number) => number,
+  roundsPerInvocation: number,
+  samples: number,
+): Record<string, unknown> {
+  const seeds = [
+    0,
+    1,
+    -1,
+    17,
+    -31,
+    0x12345678,
+    2_147_483_647,
+    -2_147_483_648,
+  ] as const;
+  const expectedChecksum = seeds.reduce<number>(
+    (sum, seed) => sum + workload.reference(seed, roundsPerInvocation),
+    0,
+  );
+  const zeroSamples: number[] = [];
+  const rustSamples: number[] = [];
+  for (let sample = 0; sample < samples; sample += 1) {
+    const ordered = sample % 2 === 0
+      ? [[zeroRun, zeroSamples], [rustRun, rustSamples]] as const
+      : [[rustRun, rustSamples], [zeroRun, zeroSamples]] as const;
+    for (const [run, measurements] of ordered) {
+      measurements.push(
+        measureRuntimeSample(run, seeds, roundsPerInvocation, expectedChecksum),
       );
     }
   }
+  return {
+    invocationsPerSample: seeds.length,
+    outerRoundsPerSample: roundsPerInvocation * seeds.length,
+    zero: summarizeSamples(zeroSamples),
+    rust: summarizeSamples(rustSamples),
+    pair: summarizePairedSamples(zeroSamples, rustSamples),
+    zeroRaw: zeroSamples,
+    rustRaw: rustSamples,
+  };
+}
+
+function measureRuntimeSample(
+  run: (seed: number, rounds: number) => number,
+  seeds: readonly number[],
+  rounds: number,
+  expectedChecksum: number,
+): number {
+  let checksum = 0;
+  const start = performance.now();
+  for (const seed of seeds) checksum += run(seed, rounds);
+  const elapsed = performance.now() - start;
+  if (checksum !== expectedChecksum) {
+    throw new Error(
+      `runtime sample produced checksum ${checksum}; expected ${expectedChecksum}`,
+    );
+  }
+  return elapsed * 1_000_000 / (rounds * seeds.length);
 }
 
 function measureModuleBoundaries(
@@ -302,7 +420,7 @@ function measureModuleBoundaries(
   const zeroInstantiation: number[] = [];
   const rustInstantiation: number[] = [];
   for (let sample = 0; sample < samples; sample += 1) {
-    const order = sample % 2 === 0
+    const ordered = sample % 2 === 0
       ? [[zeroWasm, zeroConstruction, zeroInstantiation], [
         rustWasm,
         rustConstruction,
@@ -313,7 +431,7 @@ function measureModuleBoundaries(
         zeroConstruction,
         zeroInstantiation,
       ]] as const;
-    for (const [wasm, construction, instantiation] of order) {
+    for (const [wasm, construction, instantiation] of ordered) {
       const constructionStart = performance.now();
       const module = new WebAssembly.Module(wasm.buffer);
       construction.push(performance.now() - constructionStart);
@@ -344,29 +462,11 @@ function pairedMeasurement(
 function warmRuntime(run: (seed: number, rounds: number) => number): void {
   let checksum = 0;
   for (let iteration = 0; iteration < 16; iteration += 1) {
-    checksum += run(iteration, 25_000);
+    checksum += run(iteration, 10_000);
   }
   if (!Number.isFinite(checksum)) {
     throw new Error(`runtime warmup produced invalid checksum ${checksum}`);
   }
-}
-
-function measureRuntimeNanosecondsPerIteration(
-  run: (seed: number, rounds: number) => number,
-  seeds: readonly number[],
-  rounds: number,
-  expectedChecksum: number,
-): number {
-  let checksum = 0;
-  const start = performance.now();
-  for (const seed of seeds) checksum += run(seed, rounds);
-  const elapsed = performance.now() - start;
-  if (checksum !== expectedChecksum) {
-    throw new Error(
-      `runtime sample produced checksum ${checksum}; expected ${expectedChecksum}`,
-    );
-  }
-  return elapsed * 1_000_000 / (rounds * seeds.length);
 }
 
 function exportedRun(
@@ -378,15 +478,6 @@ function exportedRun(
     throw new Error(`${compiler} Wasm module has no run export`);
   }
   return run as (seed: number, rounds: number) => number;
-}
-
-function referenceRun(seed: number, rounds: number): number {
-  let state = seed | 0;
-  for (let remaining = rounds; remaining > 0; remaining -= 1) {
-    const mixed = (Math.imul(state, 1_664_525) + 1_013_904_223) | 0;
-    state = mixed < 0 ? (mixed + 12_345) | 0 : (mixed - 12_345) | 0;
-  }
-  return state;
 }
 
 function summarizeZeroCompilation(
@@ -401,13 +492,10 @@ function summarizeZeroCompilation(
     "wasmEmissionMilliseconds",
     "totalMilliseconds",
   ] as const;
-  return Object.fromEntries(fields.map((field) => [
-    field,
-    {
-      summary: summarizeSamples(samples.map((sample) => sample[field])),
-      raw: samples.map((sample) => sample[field]),
-    },
-  ]));
+  return Object.fromEntries(fields.map((field) => [field, {
+    summary: summarizeSamples(samples.map((sample) => sample[field])),
+    raw: samples.map((sample) => sample[field]),
+  }]));
 }
 
 function requestedPositiveInteger(
@@ -415,14 +503,23 @@ function requestedPositiveInteger(
   name: string,
   defaultValue: number,
 ): number {
-  const prefix = `--${name}=`;
-  const argument = arguments_.find((candidate) => candidate.startsWith(prefix));
-  if (argument === undefined) return defaultValue;
-  const value = Number(argument.slice(prefix.length));
-  if (!Number.isSafeInteger(value) || value <= 0) {
+  const value = requestedString(arguments_, name);
+  if (value === undefined) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new TypeError(
-      `--${name} must be a positive integer; received ${value}`,
+      `--${name} must be a positive integer; received ${parsed}`,
     );
   }
-  return value;
+  return parsed;
+}
+
+function requestedString(
+  arguments_: readonly string[],
+  name: string,
+): string | undefined {
+  const prefix = `--${name}=`;
+  return arguments_.find((candidate) => candidate.startsWith(prefix))?.slice(
+    prefix.length,
+  );
 }
