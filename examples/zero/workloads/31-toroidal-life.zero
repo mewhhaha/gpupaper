@@ -1,0 +1,42 @@
+private: bit board scale = @board @scale / 2 % ;
+
+private: next_cell board current northwest north northeast west east southwest south southeast =
+  @board @current call:bit:2 let:alive
+  @board @northwest call:bit:2
+  @board @north call:bit:2 +
+  @board @northeast call:bit:2 +
+  @board @west call:bit:2 +
+  @board @east call:bit:2 +
+  @board @southwest call:bit:2 +
+  @board @south call:bit:2 +
+  @board @southeast call:bit:2 + let:neighbors
+  @neighbors 3 == 1 @neighbors 2 == @alive 0 select! select! ;
+
+private: generation board =
+  @board 1 16777216 1048576 2097152 16 2 512 32 64 call:next_cell:10 1 *
+  @board 2 1048576 2097152 4194304 1 4 32 64 128 call:next_cell:10 2 * +
+  @board 4 2097152 4194304 8388608 2 8 64 128 256 call:next_cell:10 4 * +
+  @board 8 4194304 8388608 16777216 4 16 128 256 512 call:next_cell:10 8 * +
+  @board 16 8388608 16777216 1048576 8 1 256 512 32 call:next_cell:10 16 * +
+  @board 32 16 1 2 512 64 16384 1024 2048 call:next_cell:10 32 * +
+  @board 64 1 2 4 32 128 1024 2048 4096 call:next_cell:10 64 * +
+  @board 128 2 4 8 64 256 2048 4096 8192 call:next_cell:10 128 * +
+  @board 256 4 8 16 128 512 4096 8192 16384 call:next_cell:10 256 * +
+  @board 512 8 16 1 256 32 8192 16384 1024 call:next_cell:10 512 * +
+  @board 1024 512 32 64 16384 2048 524288 32768 65536 call:next_cell:10 1024 * +
+  @board 2048 32 64 128 1024 4096 32768 65536 131072 call:next_cell:10 2048 * +
+  @board 4096 64 128 256 2048 8192 65536 131072 262144 call:next_cell:10 4096 * +
+  @board 8192 128 256 512 4096 16384 131072 262144 524288 call:next_cell:10 8192 * +
+  @board 16384 256 512 32 8192 1024 262144 524288 32768 call:next_cell:10 16384 * +
+  @board 32768 16384 1024 2048 524288 65536 16777216 1048576 2097152 call:next_cell:10 32768 * +
+  @board 65536 1024 2048 4096 32768 131072 1048576 2097152 4194304 call:next_cell:10 65536 * +
+  @board 131072 2048 4096 8192 65536 262144 2097152 4194304 8388608 call:next_cell:10 131072 * +
+  @board 262144 4096 8192 16384 131072 524288 4194304 8388608 16777216 call:next_cell:10 262144 * +
+  @board 524288 8192 16384 1024 262144 32768 8388608 16777216 1048576 call:next_cell:10 524288 * +
+  @board 1048576 524288 32768 65536 16777216 2097152 16 1 2 call:next_cell:10 1048576 * +
+  @board 2097152 32768 65536 131072 1048576 4194304 1 2 4 call:next_cell:10 2097152 * +
+  @board 4194304 65536 131072 262144 2097152 8388608 2 4 8 call:next_cell:10 4194304 * +
+  @board 8388608 131072 262144 524288 4194304 16777216 4 8 16 call:next_cell:10 8388608 * +
+  @board 16777216 262144 524288 32768 8388608 1048576 8 16 1 call:next_cell:10 16777216 * + ;
+
+export: run board generations = @generations @board repeat:generation ;

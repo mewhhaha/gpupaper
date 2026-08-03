@@ -948,6 +948,83 @@ export type WasmStaticInstructionName =
   | "f32x4GreaterThan"
   | "f32x4LessThanOrEqual"
   | "f32x4GreaterThanOrEqual"
+  | "f32x4Absolute"
+  | "f32x4Negate"
+  | "f32x4SquareRoot"
+  | "f32x4Ceiling"
+  | "f32x4Floor"
+  | "f32x4Truncate"
+  | "f32x4Nearest"
+  | "f32x4Minimum"
+  | "f32x4Maximum"
+  | "f32x4PseudoMinimum"
+  | "f32x4PseudoMaximum"
+  | "f32x4ConvertI32x4Signed"
+  | "f32x4ConvertI32x4Unsigned"
+  | "i32x4Splat"
+  | "i32x4Add"
+  | "i32x4Subtract"
+  | "i32x4Multiply"
+  | "i32x4And"
+  | "i32x4Or"
+  | "i32x4Xor"
+  | "i32x4Not"
+  | "i32x4ShiftLeft"
+  | "i32x4ShiftRightSigned"
+  | "i32x4ShiftRightUnsigned"
+  | "i32x4Equal"
+  | "i32x4NotEqual"
+  | "i32x4LessThanSigned"
+  | "i32x4LessThanUnsigned"
+  | "i32x4GreaterThanSigned"
+  | "i32x4GreaterThanUnsigned"
+  | "i32x4LessThanOrEqualSigned"
+  | "i32x4LessThanOrEqualUnsigned"
+  | "i32x4GreaterThanOrEqualSigned"
+  | "i32x4GreaterThanOrEqualUnsigned"
+  | "i32x4MinimumSigned"
+  | "i32x4MinimumUnsigned"
+  | "i32x4MaximumSigned"
+  | "i32x4MaximumUnsigned"
+  | "i32x4AllTrue"
+  | "i32x4Bitmask"
+  | "i32x4TruncateSaturateF32x4Signed"
+  | "i32x4TruncateSaturateF32x4Unsigned"
+  | "i8x16Splat"
+  | "i8x16Add"
+  | "i8x16Subtract"
+  | "i8x16ShiftLeft"
+  | "i8x16ShiftRightSigned"
+  | "i8x16ShiftRightUnsigned"
+  | "i8x16Equal"
+  | "i8x16LessThanSigned"
+  | "i8x16LessThanUnsigned"
+  | "i8x16MinimumSigned"
+  | "i8x16MinimumUnsigned"
+  | "i8x16MaximumSigned"
+  | "i8x16MaximumUnsigned"
+  | "i8x16AllTrue"
+  | "i8x16Bitmask"
+  | "i16x8Splat"
+  | "i16x8Add"
+  | "i16x8Subtract"
+  | "i16x8Multiply"
+  | "i16x8ShiftLeft"
+  | "i16x8ShiftRightSigned"
+  | "i16x8ShiftRightUnsigned"
+  | "i16x8Equal"
+  | "i16x8LessThanSigned"
+  | "i16x8LessThanUnsigned"
+  | "i16x8MinimumSigned"
+  | "i16x8MinimumUnsigned"
+  | "i16x8MaximumSigned"
+  | "i16x8MaximumUnsigned"
+  | "i16x8AllTrue"
+  | "i16x8Bitmask"
+  | "v128Not"
+  | "v128Or"
+  | "v128Xor"
+  | "v128AnyTrue"
   | "v128BitSelect"
   | "ifI32"
   | "ifI64"
@@ -1010,8 +1087,18 @@ export type WasmInstructionCatalog =
       alignmentExponent?: number,
       offset?: number,
     ) => readonly WasmInstruction[];
+    readonly v128Load: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Store: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
     readonly f32x4ExtractLane: (lane: number) => readonly WasmInstruction[];
     readonly f32x4ReplaceLane: (lane: number) => readonly WasmInstruction[];
+    readonly i32x4ExtractLane: (lane: number) => readonly WasmInstruction[];
+    readonly i32x4ReplaceLane: (lane: number) => readonly WasmInstruction[];
     readonly i8x16Shuffle: (
       lanes: readonly number[],
     ) => readonly WasmInstruction[];
@@ -1131,6 +1218,22 @@ export const wasmInstruction: WasmInstructionCatalog = {
   f64Store(alignmentExponent = 3, offset = 0): readonly WasmInstruction[] {
     return [byte(0x39), unsigned(alignmentExponent), unsigned(offset)];
   },
+  v128Load(alignmentExponent = 4, offset = 0): readonly WasmInstruction[] {
+    return [
+      byte(0xfd),
+      unsigned(0),
+      unsigned(alignmentExponent),
+      unsigned(offset),
+    ];
+  },
+  v128Store(alignmentExponent = 4, offset = 0): readonly WasmInstruction[] {
+    return [
+      byte(0xfd),
+      unsigned(11),
+      unsigned(alignmentExponent),
+      unsigned(offset),
+    ];
+  },
   i64Add: instruction(0x7c),
   i64Subtract: instruction(0x7d),
   i64Multiply: instruction(0x7e),
@@ -1180,6 +1283,47 @@ export const wasmInstruction: WasmInstructionCatalog = {
   f64ConvertI32Signed: instruction(0xb7),
   i32ReinterpretF32: instruction(0xbc),
   f32ReinterpretI32: instruction(0xbe),
+  i32x4Splat: simdInstruction(17),
+  i32x4ExtractLane(lane: number): readonly WasmInstruction[] {
+    if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
+      throw new RangeError(`i32x4 lane must be in 0..3; received ${lane}`);
+    }
+    return [byte(0xfd), unsigned(27), byte(lane)];
+  },
+  i32x4ReplaceLane(lane: number): readonly WasmInstruction[] {
+    if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
+      throw new RangeError(`i32x4 lane must be in 0..3; received ${lane}`);
+    }
+    return [byte(0xfd), unsigned(28), byte(lane)];
+  },
+  i32x4Add: simdInstruction(174),
+  i32x4Subtract: simdInstruction(177),
+  i32x4Multiply: simdInstruction(181),
+  i32x4And: simdInstruction(78),
+  i32x4Or: simdInstruction(80),
+  i32x4Xor: simdInstruction(81),
+  i32x4Not: simdInstruction(77),
+  i32x4ShiftLeft: simdInstruction(171),
+  i32x4ShiftRightSigned: simdInstruction(172),
+  i32x4ShiftRightUnsigned: simdInstruction(173),
+  i32x4Equal: simdInstruction(55),
+  i32x4NotEqual: simdInstruction(56),
+  i32x4LessThanSigned: simdInstruction(57),
+  i32x4LessThanUnsigned: simdInstruction(58),
+  i32x4GreaterThanSigned: simdInstruction(59),
+  i32x4GreaterThanUnsigned: simdInstruction(60),
+  i32x4LessThanOrEqualSigned: simdInstruction(61),
+  i32x4LessThanOrEqualUnsigned: simdInstruction(62),
+  i32x4GreaterThanOrEqualSigned: simdInstruction(63),
+  i32x4GreaterThanOrEqualUnsigned: simdInstruction(64),
+  i32x4MinimumSigned: simdInstruction(182),
+  i32x4MinimumUnsigned: simdInstruction(183),
+  i32x4MaximumSigned: simdInstruction(184),
+  i32x4MaximumUnsigned: simdInstruction(185),
+  i32x4AllTrue: simdInstruction(163),
+  i32x4Bitmask: simdInstruction(164),
+  i32x4TruncateSaturateF32x4Signed: simdInstruction(248),
+  i32x4TruncateSaturateF32x4Unsigned: simdInstruction(249),
   f32x4Splat: simdInstruction(19),
   f32x4ExtractLane(lane: number): readonly WasmInstruction[] {
     if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
@@ -1203,6 +1347,54 @@ export const wasmInstruction: WasmInstructionCatalog = {
   f32x4GreaterThan: simdInstruction(68),
   f32x4LessThanOrEqual: simdInstruction(69),
   f32x4GreaterThanOrEqual: simdInstruction(70),
+  f32x4Absolute: simdInstruction(224),
+  f32x4Negate: simdInstruction(225),
+  f32x4SquareRoot: simdInstruction(227),
+  f32x4Ceiling: simdInstruction(103),
+  f32x4Floor: simdInstruction(104),
+  f32x4Truncate: simdInstruction(105),
+  f32x4Nearest: simdInstruction(106),
+  f32x4Minimum: simdInstruction(232),
+  f32x4Maximum: simdInstruction(233),
+  f32x4PseudoMinimum: simdInstruction(234),
+  f32x4PseudoMaximum: simdInstruction(235),
+  f32x4ConvertI32x4Signed: simdInstruction(250),
+  f32x4ConvertI32x4Unsigned: simdInstruction(251),
+  i8x16Splat: simdInstruction(15),
+  i8x16Add: simdInstruction(110),
+  i8x16Subtract: simdInstruction(113),
+  i8x16ShiftLeft: simdInstruction(107),
+  i8x16ShiftRightSigned: simdInstruction(108),
+  i8x16ShiftRightUnsigned: simdInstruction(109),
+  i8x16Equal: simdInstruction(35),
+  i8x16LessThanSigned: simdInstruction(37),
+  i8x16LessThanUnsigned: simdInstruction(38),
+  i8x16MinimumSigned: simdInstruction(118),
+  i8x16MinimumUnsigned: simdInstruction(119),
+  i8x16MaximumSigned: simdInstruction(120),
+  i8x16MaximumUnsigned: simdInstruction(121),
+  i8x16AllTrue: simdInstruction(99),
+  i8x16Bitmask: simdInstruction(100),
+  i16x8Splat: simdInstruction(16),
+  i16x8Add: simdInstruction(142),
+  i16x8Subtract: simdInstruction(145),
+  i16x8Multiply: simdInstruction(149),
+  i16x8ShiftLeft: simdInstruction(139),
+  i16x8ShiftRightSigned: simdInstruction(140),
+  i16x8ShiftRightUnsigned: simdInstruction(141),
+  i16x8Equal: simdInstruction(45),
+  i16x8LessThanSigned: simdInstruction(47),
+  i16x8LessThanUnsigned: simdInstruction(48),
+  i16x8MinimumSigned: simdInstruction(150),
+  i16x8MinimumUnsigned: simdInstruction(151),
+  i16x8MaximumSigned: simdInstruction(152),
+  i16x8MaximumUnsigned: simdInstruction(153),
+  i16x8AllTrue: simdInstruction(131),
+  i16x8Bitmask: simdInstruction(132),
+  v128Not: simdInstruction(77),
+  v128Or: simdInstruction(80),
+  v128Xor: simdInstruction(81),
+  v128AnyTrue: simdInstruction(83),
   v128BitSelect: simdInstruction(82),
   i8x16Shuffle(lanes: readonly number[]): readonly WasmInstruction[] {
     if (

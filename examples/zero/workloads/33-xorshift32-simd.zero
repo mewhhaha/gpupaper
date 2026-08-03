@@ -1,0 +1,12 @@
+private: step lanes[i32x4] =>
+  @lanes @lanes 13 i32x4.shl i32x4.xor let:shifted_left
+  @shifted_left @shifted_left 17 i32x4.shr_u i32x4.xor let:shifted_right
+  @shifted_right @shifted_right 5 i32x4.shl i32x4.xor ;
+
+export: run seed rounds =
+  @seed @seed 1 + @seed 2 + @seed 3 + i32x4.make let:streams
+  @rounds @streams repeat:step let:result
+  @result i32x4.extract_lane_0
+  @result i32x4.extract_lane_1 3 * +
+  @result i32x4.extract_lane_2 5 * +
+  @result i32x4.extract_lane_3 7 * + ;

@@ -38,6 +38,192 @@ Deno.test("Zero complexity workloads agree with their reference semantics", asyn
   }
 });
 
+Deno.test("Zero toroidal Life glider translates and returns after wrapping", async () => {
+  const workload = zeroWorkloads.find((candidate) =>
+    candidate.name === "31-toroidal-life"
+  );
+  if (workload === undefined) {
+    throw new Error("Zero workload 31-toroidal-life is missing");
+  }
+  const source = await Deno.readTextFile(workload.zeroSourceUrl);
+  const compiled = await compileZeroSource(
+    workload.zeroSourceUrl.pathname,
+    source,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  const glider = 7_298;
+  assertEquals(run(glider, 4), 467_072);
+  assertEquals(run(glider, 20), glider);
+});
+
+Deno.test("Zero i32x4 Life evolves four independent boards", async () => {
+  const workload = zeroWorkloads.find((candidate) =>
+    candidate.name === "32-toroidal-life-simd"
+  );
+  if (workload === undefined) {
+    throw new Error("Zero workload 32-toroidal-life-simd is missing");
+  }
+  const source = await Deno.readTextFile(workload.zeroSourceUrl);
+  const compiled = await compileZeroSource(
+    workload.zeroSourceUrl.pathname,
+    source,
+  );
+  const runBoards = exportedFunction(
+    await instantiate(compiled.wasm),
+    "run_boards",
+  );
+
+  assertEquals(runBoards(7_298, 6_336, 14_336, 33_554_431, 4), 557_760);
+  assertEquals(runBoards(7_298, 6_336, 14_336, 33_554_431, 20), 97_986);
+});
+
+Deno.test("Zero i32x4 xorshift advances four known streams", async () => {
+  const workload = zeroWorkloads.find((candidate) =>
+    candidate.name === "33-xorshift32-simd"
+  );
+  if (workload === undefined) {
+    throw new Error("Zero workload 33-xorshift32-simd is missing");
+  }
+  const source = await Deno.readTextFile(workload.zeroSourceUrl);
+  const compiled = await compileZeroSource(
+    workload.zeroSourceUrl.pathname,
+    source,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  assertEquals(run(1, 1), 13_518_450);
+  assertEquals(run(1, 10), 352_885_651);
+});
+
+Deno.test("Zero i32x4 modules require the SIMD target", async () => {
+  const workload = zeroWorkloads.find((candidate) =>
+    candidate.name === "32-toroidal-life-simd"
+  );
+  if (workload === undefined) {
+    throw new Error("Zero workload 32-toroidal-life-simd is missing");
+  }
+  const source = await Deno.readTextFile(workload.zeroSourceUrl);
+  const compiled = await compileZeroSource(
+    workload.zeroSourceUrl.pathname,
+    source,
+  );
+  await assertRejects(
+    () => {
+      lowerCoreToWasm(compiled.core, {
+        emission: "planOnly",
+        target: "wasm-scalar",
+      });
+    },
+    /target wasm-scalar cannot represent Core vector type/,
+  );
+});
+
+Deno.test("Zero i32x4 primitives reject scalar operands", async () => {
+  await assertRejects(
+    () =>
+      compileZeroSource(
+        "simd-type.zero",
+        `
+          private: broken lanes[i32x4] => @lanes 1 i32x4.add ;
+          export: run value = @value ;
+        `,
+      ),
+    /primitive i32x4\.add operand 1 is i32; expected i32x4/,
+  );
+});
+
+Deno.test("Zero i32x4 arithmetic preserves wrapping and masked shifts", async () => {
+  const compiled = await compileZeroSource(
+    "simd-wrapping.zero",
+    `
+      private: wrap lanes[i32x4] =>
+        @lanes 32 i32x4.shl 1 i32x4.splat i32x4.add let:next
+        @next 0 i32x4.splat i32x4.eq @lanes @next i32x4.select ;
+      export: run value =
+        @value @value @value @value i32x4.make call:wrap:1
+        i32x4.extract_lane_0 ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  assertEquals(run(-1), -1);
+  assertEquals(run(41), 42);
+});
+
+Deno.test("Zero supports complete lane-wise i32x4 arithmetic and mask reductions", async () => {
+  const compiled = await compileZeroSource(
+    "simd-i32-complete.zero",
+    `
+      private: compare left[i32x4] right[i32x4] =
+        @left @right i32x4.lt_u let:mask
+        @mask i32x4.mask_bitmask
+        @mask i32x4.mask_all_true 16 * +
+        @mask i32x4.mask_any_true 32 * + ;
+      export: run left right =
+        @left i32x4.splat @right i32x4.splat i32x4.xor let:mixed
+        @mixed 1 i32x4.shr_s 3 i32x4.splat i32x4.mul
+        9 i32x4.splat i32x4.max_s
+        0 i32x4.replace_lane_2 let:lanes
+        @lanes @lanes @lanes i32x4.shuffle:0,5,0,7 call:compare:2 ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  assertEquals(run(-16, 3), 36);
+});
+
+Deno.test("Zero converts between i32x4 and the complete f32x4 arithmetic surface", async () => {
+  const compiled = await compileZeroSource(
+    "simd-f32.zero",
+    `
+      private: roots lanes[i32x4] =>f32x4
+        @lanes f32x4.convert_i32x4_s f32x4.sqrt f32x4.floor ;
+      private: integers lanes[f32x4] =>i32x4
+        @lanes i32x4.trunc_sat_f32x4_s ;
+      export: run value =
+        @value 4 9 16 i32x4.make call:roots:1
+        1 4 9 16 i32x4.make f32x4.convert_i32x4_s f32x4.eq
+        f32x4.mask_any_true
+        @value 4 9 16 i32x4.make call:roots:1 call:integers:1
+        i32x4.extract_lane_3 + ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  assertEquals(run(1), 5);
+});
+
+Deno.test("Zero supports exact i8x16 and i16x8 packed arithmetic", async () => {
+  const compiled = await compileZeroSource(
+    "simd-narrow.zero",
+    `
+      private: bytes value =>i8x16
+        @value i8x16.splat 1 i8x16.splat i8x16.add 2 i8x16.shl ;
+      private: words value =>i16x8
+        @value i16x8.splat 3 i16x8.splat i16x8.mul ;
+      export: run value =
+        @value call:bytes:1 12 i8x16.splat i8x16.eq i8x16.mask_bitmask
+        @value call:words:1 6 i16x8.splat i16x8.eq i16x8.mask_bitmask + ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+  assertEquals(run(2), 65_790);
+  assertEquals(run(3), 0);
+});
+
+Deno.test("Zero i32x4 values stay behind scalar exports", async () => {
+  await assertRejects(
+    () =>
+      compileZeroSource(
+        "simd-export.zero",
+        "export: expose lanes[i32x4] => @lanes ;",
+      ),
+    /managed JavaScript ABI cannot carry Core vector type 1 through export expose/,
+  );
+});
+
 Deno.test("every Zero workload has byte-identical Rust/Wasm and CPU plan emission", async () => {
   for (const workload of zeroWorkloads) {
     const source = await Deno.readTextFile(workload.zeroSourceUrl);
@@ -545,7 +731,7 @@ function repeatForTest(rounds: number, seed: number): number {
 }
 
 async function assertRejects(
-  operation: () => Promise<unknown>,
+  operation: () => unknown | Promise<unknown>,
   expected: RegExp,
 ): Promise<void> {
   try {

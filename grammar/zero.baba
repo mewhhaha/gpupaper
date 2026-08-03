@@ -1,8 +1,9 @@
 token VISIBILITY = /export:|private:/ ;
-token IDENT = /[A-Za-z_][A-Za-z0-9_]*/ ;
-token INSTRUCTION = /@[A-Za-z_][A-Za-z0-9_]*|let:[A-Za-z_][A-Za-z0-9_]*|call:[A-Za-z_][A-Za-z0-9_]*:[0-9]+|repeat:[A-Za-z_][A-Za-z0-9_]*|select!|[0-9]+|==|!=|<=|>=|[+*\/%<>-]/ ;
+token ASSIGN = /=>i8x16|=>i16x8|=>i32x4|=>f32x4|=>|=/ ;
+token IDENT = /[A-Za-z_][A-Za-z0-9_]*(\[(i8x16|i16x8|i32x4|f32x4)])?/ ;
+token INSTRUCTION = /(i8x16|i16x8|i32x4|f32x4)\.[A-Za-z0-9_:,]+|@[A-Za-z_][A-Za-z0-9_]*|let:[A-Za-z_][A-Za-z0-9_]*|call:[A-Za-z_][A-Za-z0-9_]*:[0-9]+|repeat:[A-Za-z_][A-Za-z0-9_]*|select!|[0-9]+|==|!=|<=|>=|[+*\/%<>-]/ ;
 skip WS = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\n]*/ ;
 
 module = functions:function+ ;
-function = visibility:VISIBILITY name:IDENT parameters:IDENT* "=" body:INSTRUCTION+ ";" ;
+function = visibility:VISIBILITY name:IDENT parameters:IDENT* assignment:ASSIGN body:INSTRUCTION+ ";" ;

@@ -15,7 +15,11 @@ import type {
   CoreTypeId,
   CoreValueId,
 } from "../../src/core.ts";
-import { validateCore } from "../../src/core.ts";
+import {
+  primitiveDescriptor,
+  PrimitiveId,
+  validateCore,
+} from "../../src/core.ts";
 import { lowerCoreToWasm } from "../../src/core_wasm.ts";
 import { createRustWasmEmitter } from "../../src/rust_wasm_emitter.ts";
 import type { WasmBinaryPlan } from "../../src/wasm.ts";
@@ -43,6 +47,25 @@ const zeroBinaryOperators = new Set<ZeroBinaryOperator>([
   ">=",
 ]);
 const i32 = 0 as CoreTypeId;
+const i32x4 = 1 as CoreTypeId;
+const i32x4Mask = 2 as CoreTypeId;
+const f32x4 = 3 as CoreTypeId;
+const f32x4Mask = 4 as CoreTypeId;
+const i8x16 = 5 as CoreTypeId;
+const i8x16Mask = 6 as CoreTypeId;
+const i16x8 = 7 as CoreTypeId;
+const i16x8Mask = 8 as CoreTypeId;
+
+type ZeroType =
+  | "i32"
+  | "i32x4"
+  | "i32x4-mask"
+  | "f32x4"
+  | "f32x4-mask"
+  | "i8x16"
+  | "i8x16-mask"
+  | "i16x8"
+  | "i16x8-mask";
 
 type SourceSpan = {
   readonly file: string;
@@ -58,7 +81,9 @@ type ZeroProgram = {
 type ZeroFunction = {
   readonly exported: boolean;
   readonly name: string;
-  readonly parameters: readonly ZeroBinding[];
+  readonly parameters: readonly ZeroParameter[];
+  readonly resultType: ZeroType;
+  readonly usesSimd: boolean;
   readonly body: ZeroExpression;
   readonly span: SourceSpan;
 };
@@ -66,6 +91,10 @@ type ZeroFunction = {
 type ZeroBinding = {
   readonly name: string;
   readonly span: SourceSpan;
+};
+
+type ZeroParameter = ZeroBinding & {
+  readonly type: ZeroType;
 };
 
 type ZeroBinaryOperator =
@@ -80,6 +109,426 @@ type ZeroBinaryOperator =
   | "<="
   | ">"
   | ">=";
+
+type ZeroPrimitiveInstruction = {
+  readonly primitiveId: PrimitiveId;
+  readonly operandTypes: readonly ZeroType[];
+  readonly resultType: ZeroType;
+};
+
+function unaryPrimitive(
+  name: string,
+  primitiveId: PrimitiveId,
+  operandType: ZeroType,
+  resultType: ZeroType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [name, { primitiveId, operandTypes: [operandType], resultType }];
+}
+
+function binaryPrimitive(
+  name: string,
+  primitiveId: PrimitiveId,
+  operandType: ZeroType,
+  resultType: ZeroType = operandType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [
+    name,
+    { primitiveId, operandTypes: [operandType, operandType], resultType },
+  ];
+}
+
+function shiftPrimitive(
+  name: string,
+  primitiveId: PrimitiveId,
+  vectorType: ZeroType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [
+    name,
+    { primitiveId, operandTypes: [vectorType, "i32"], resultType: vectorType },
+  ];
+}
+
+function selectPrimitive(
+  name: string,
+  primitiveId: PrimitiveId,
+  maskType: ZeroType,
+  vectorType: ZeroType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [
+    name,
+    {
+      primitiveId,
+      operandTypes: [maskType, vectorType, vectorType],
+      resultType: vectorType,
+    },
+  ];
+}
+
+const zeroPrimitiveInstructions = new Map<string, ZeroPrimitiveInstruction>([
+  [
+    "i32x4.make",
+    {
+      primitiveId: PrimitiveId.i32x4Make,
+      operandTypes: ["i32", "i32", "i32", "i32"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.splat",
+    {
+      primitiveId: PrimitiveId.i32x4Splat,
+      operandTypes: ["i32"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.add",
+    {
+      primitiveId: PrimitiveId.i32x4Add,
+      operandTypes: ["i32x4", "i32x4"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.and",
+    {
+      primitiveId: PrimitiveId.i32x4And,
+      operandTypes: ["i32x4", "i32x4"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.shl",
+    {
+      primitiveId: PrimitiveId.i32x4ShiftLeft,
+      operandTypes: ["i32x4", "i32"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.shr_u",
+    {
+      primitiveId: PrimitiveId.i32x4ShiftRightUnsigned,
+      operandTypes: ["i32x4", "i32"],
+      resultType: "i32x4",
+    },
+  ],
+  [
+    "i32x4.eq",
+    {
+      primitiveId: PrimitiveId.i32x4Equal,
+      operandTypes: ["i32x4", "i32x4"],
+      resultType: "i32x4-mask",
+    },
+  ],
+  [
+    "i32x4.select",
+    {
+      primitiveId: PrimitiveId.i32x4Select,
+      operandTypes: ["i32x4-mask", "i32x4", "i32x4"],
+      resultType: "i32x4",
+    },
+  ],
+  ...[0, 1, 2, 3].map((lane) =>
+    [
+      `i32x4.extract_lane_${lane}`,
+      {
+        primitiveId: (PrimitiveId.i32x4ExtractLane0 + lane) as PrimitiveId,
+        operandTypes: ["i32x4"] as const,
+        resultType: "i32" as const,
+      },
+    ] as const
+  ),
+  ...[0, 1, 2, 3].map((lane) =>
+    [
+      `i32x4.replace_lane_${lane}`,
+      {
+        primitiveId: (PrimitiveId.i32x4ReplaceLane0 + lane) as PrimitiveId,
+        operandTypes: ["i32x4", "i32"] as const,
+        resultType: "i32x4" as const,
+      },
+    ] as const
+  ),
+  binaryPrimitive("i32x4.sub", PrimitiveId.i32x4Subtract, "i32x4"),
+  binaryPrimitive("i32x4.mul", PrimitiveId.i32x4Multiply, "i32x4"),
+  binaryPrimitive("i32x4.or", PrimitiveId.i32x4Or, "i32x4"),
+  binaryPrimitive("i32x4.xor", PrimitiveId.i32x4Xor, "i32x4"),
+  unaryPrimitive("i32x4.not", PrimitiveId.i32x4Not, "i32x4", "i32x4"),
+  shiftPrimitive("i32x4.shr_s", PrimitiveId.i32x4ShiftRightSigned, "i32x4"),
+  binaryPrimitive("i32x4.ne", PrimitiveId.i32x4NotEqual, "i32x4", "i32x4-mask"),
+  binaryPrimitive(
+    "i32x4.lt_s",
+    PrimitiveId.i32x4LessThanSigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.lt_u",
+    PrimitiveId.i32x4LessThanUnsigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.gt_s",
+    PrimitiveId.i32x4GreaterThanSigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.gt_u",
+    PrimitiveId.i32x4GreaterThanUnsigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.le_s",
+    PrimitiveId.i32x4LessThanOrEqualSigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.le_u",
+    PrimitiveId.i32x4LessThanOrEqualUnsigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.ge_s",
+    PrimitiveId.i32x4GreaterThanOrEqualSigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive(
+    "i32x4.ge_u",
+    PrimitiveId.i32x4GreaterThanOrEqualUnsigned,
+    "i32x4",
+    "i32x4-mask",
+  ),
+  binaryPrimitive("i32x4.min_s", PrimitiveId.i32x4MinimumSigned, "i32x4"),
+  binaryPrimitive("i32x4.min_u", PrimitiveId.i32x4MinimumUnsigned, "i32x4"),
+  binaryPrimitive("i32x4.max_s", PrimitiveId.i32x4MaximumSigned, "i32x4"),
+  binaryPrimitive("i32x4.max_u", PrimitiveId.i32x4MaximumUnsigned, "i32x4"),
+  unaryPrimitive(
+    "i32x4.mask_bitmask",
+    PrimitiveId.i32x4MaskBitmask,
+    "i32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i32x4.mask_all_true",
+    PrimitiveId.i32x4MaskAllTrue,
+    "i32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i32x4.mask_any_true",
+    PrimitiveId.i32x4MaskAnyTrue,
+    "i32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i32x4.trunc_sat_f32x4_s",
+    PrimitiveId.i32x4TruncateSaturateF32x4Signed,
+    "f32x4",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.trunc_sat_f32x4_u",
+    PrimitiveId.i32x4TruncateSaturateF32x4Unsigned,
+    "f32x4",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "f32x4.convert_i32x4_s",
+    PrimitiveId.f32x4ConvertI32x4Signed,
+    "i32x4",
+    "f32x4",
+  ),
+  unaryPrimitive(
+    "f32x4.convert_i32x4_u",
+    PrimitiveId.f32x4ConvertI32x4Unsigned,
+    "i32x4",
+    "f32x4",
+  ),
+  ...[
+    ["abs", PrimitiveId.f32x4Absolute],
+    ["neg", PrimitiveId.f32x4Negate],
+    ["sqrt", PrimitiveId.f32x4SquareRoot],
+    ["ceil", PrimitiveId.f32x4Ceiling],
+    ["floor", PrimitiveId.f32x4Floor],
+    ["trunc", PrimitiveId.f32x4Truncate],
+    ["nearest", PrimitiveId.f32x4Nearest],
+  ].map(([name, primitiveId]) =>
+    unaryPrimitive(
+      `f32x4.${name}`,
+      primitiveId as PrimitiveId,
+      "f32x4",
+      "f32x4",
+    )
+  ),
+  ...[
+    ["add", PrimitiveId.f32x4Add],
+    ["sub", PrimitiveId.f32x4Subtract],
+    ["mul", PrimitiveId.f32x4Multiply],
+    ["div", PrimitiveId.f32x4Divide],
+    ["min", PrimitiveId.f32x4Minimum],
+    ["max", PrimitiveId.f32x4Maximum],
+    ["pmin", PrimitiveId.f32x4PseudoMinimum],
+    ["pmax", PrimitiveId.f32x4PseudoMaximum],
+  ].map(([name, primitiveId]) =>
+    binaryPrimitive(`f32x4.${name}`, primitiveId as PrimitiveId, "f32x4")
+  ),
+  ...[
+    ["eq", PrimitiveId.f32x4Equal],
+    ["ne", PrimitiveId.f32x4NotEqual],
+    ["lt", PrimitiveId.f32x4LessThan],
+    ["le", PrimitiveId.f32x4LessThanOrEqual],
+    ["gt", PrimitiveId.f32x4GreaterThan],
+    ["ge", PrimitiveId.f32x4GreaterThanOrEqual],
+  ].map(([name, primitiveId]) =>
+    binaryPrimitive(
+      `f32x4.${name}`,
+      primitiveId as PrimitiveId,
+      "f32x4",
+      "f32x4-mask",
+    )
+  ),
+  selectPrimitive(
+    "f32x4.select",
+    PrimitiveId.f32x4Select,
+    "f32x4-mask",
+    "f32x4",
+  ),
+  unaryPrimitive(
+    "f32x4.mask_bitmask",
+    PrimitiveId.f32x4MaskBitmask,
+    "f32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "f32x4.mask_all_true",
+    PrimitiveId.f32x4MaskAllTrue,
+    "f32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "f32x4.mask_any_true",
+    PrimitiveId.f32x4MaskAnyTrue,
+    "f32x4-mask",
+    "i32",
+  ),
+  unaryPrimitive("i8x16.splat", PrimitiveId.i8x16Splat, "i32", "i8x16"),
+  ...[
+    ["add", PrimitiveId.i8x16Add],
+    ["sub", PrimitiveId.i8x16Subtract],
+    ["and", PrimitiveId.i8x16And],
+    ["or", PrimitiveId.i8x16Or],
+    ["xor", PrimitiveId.i8x16Xor],
+    ["min_s", PrimitiveId.i8x16MinimumSigned],
+    ["min_u", PrimitiveId.i8x16MinimumUnsigned],
+    ["max_s", PrimitiveId.i8x16MaximumSigned],
+    ["max_u", PrimitiveId.i8x16MaximumUnsigned],
+  ].map(([name, primitiveId]) =>
+    binaryPrimitive(`i8x16.${name}`, primitiveId as PrimitiveId, "i8x16")
+  ),
+  unaryPrimitive("i8x16.not", PrimitiveId.i8x16Not, "i8x16", "i8x16"),
+  shiftPrimitive("i8x16.shl", PrimitiveId.i8x16ShiftLeft, "i8x16"),
+  shiftPrimitive("i8x16.shr_s", PrimitiveId.i8x16ShiftRightSigned, "i8x16"),
+  shiftPrimitive("i8x16.shr_u", PrimitiveId.i8x16ShiftRightUnsigned, "i8x16"),
+  binaryPrimitive("i8x16.eq", PrimitiveId.i8x16Equal, "i8x16", "i8x16-mask"),
+  binaryPrimitive(
+    "i8x16.lt_s",
+    PrimitiveId.i8x16LessThanSigned,
+    "i8x16",
+    "i8x16-mask",
+  ),
+  binaryPrimitive(
+    "i8x16.lt_u",
+    PrimitiveId.i8x16LessThanUnsigned,
+    "i8x16",
+    "i8x16-mask",
+  ),
+  selectPrimitive(
+    "i8x16.select",
+    PrimitiveId.i8x16Select,
+    "i8x16-mask",
+    "i8x16",
+  ),
+  unaryPrimitive(
+    "i8x16.mask_bitmask",
+    PrimitiveId.i8x16MaskBitmask,
+    "i8x16-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i8x16.mask_all_true",
+    PrimitiveId.i8x16MaskAllTrue,
+    "i8x16-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i8x16.mask_any_true",
+    PrimitiveId.i8x16MaskAnyTrue,
+    "i8x16-mask",
+    "i32",
+  ),
+  unaryPrimitive("i16x8.splat", PrimitiveId.i16x8Splat, "i32", "i16x8"),
+  ...[
+    ["add", PrimitiveId.i16x8Add],
+    ["sub", PrimitiveId.i16x8Subtract],
+    ["mul", PrimitiveId.i16x8Multiply],
+    ["and", PrimitiveId.i16x8And],
+    ["or", PrimitiveId.i16x8Or],
+    ["xor", PrimitiveId.i16x8Xor],
+    ["min_s", PrimitiveId.i16x8MinimumSigned],
+    ["min_u", PrimitiveId.i16x8MinimumUnsigned],
+    ["max_s", PrimitiveId.i16x8MaximumSigned],
+    ["max_u", PrimitiveId.i16x8MaximumUnsigned],
+  ].map(([name, primitiveId]) =>
+    binaryPrimitive(`i16x8.${name}`, primitiveId as PrimitiveId, "i16x8")
+  ),
+  unaryPrimitive("i16x8.not", PrimitiveId.i16x8Not, "i16x8", "i16x8"),
+  shiftPrimitive("i16x8.shl", PrimitiveId.i16x8ShiftLeft, "i16x8"),
+  shiftPrimitive("i16x8.shr_s", PrimitiveId.i16x8ShiftRightSigned, "i16x8"),
+  shiftPrimitive("i16x8.shr_u", PrimitiveId.i16x8ShiftRightUnsigned, "i16x8"),
+  binaryPrimitive("i16x8.eq", PrimitiveId.i16x8Equal, "i16x8", "i16x8-mask"),
+  binaryPrimitive(
+    "i16x8.lt_s",
+    PrimitiveId.i16x8LessThanSigned,
+    "i16x8",
+    "i16x8-mask",
+  ),
+  binaryPrimitive(
+    "i16x8.lt_u",
+    PrimitiveId.i16x8LessThanUnsigned,
+    "i16x8",
+    "i16x8-mask",
+  ),
+  selectPrimitive(
+    "i16x8.select",
+    PrimitiveId.i16x8Select,
+    "i16x8-mask",
+    "i16x8",
+  ),
+  unaryPrimitive(
+    "i16x8.mask_bitmask",
+    PrimitiveId.i16x8MaskBitmask,
+    "i16x8-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i16x8.mask_all_true",
+    PrimitiveId.i16x8MaskAllTrue,
+    "i16x8-mask",
+    "i32",
+  ),
+  unaryPrimitive(
+    "i16x8.mask_any_true",
+    PrimitiveId.i16x8MaskAnyTrue,
+    "i16x8-mask",
+    "i32",
+  ),
+]);
 
 type ZeroExpression =
   | {
@@ -126,6 +575,20 @@ type ZeroExpression =
     readonly binding: ZeroBinding;
     readonly body: ZeroExpression;
     readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "primitive";
+    readonly primitiveId: PrimitiveId;
+    readonly operands: readonly ZeroExpression[];
+    readonly resultType: ZeroType;
+    readonly span: SourceSpan;
+  }
+  | {
+    readonly kind: "vector.shuffle";
+    readonly operands: readonly [ZeroExpression, ZeroExpression];
+    readonly lanes: readonly number[];
+    readonly resultType: "i8x16" | "i16x8" | "i32x4" | "f32x4";
+    readonly span: SourceSpan;
   };
 
 export type ZeroCompilationTimings = {
@@ -154,7 +617,8 @@ type ParsedZeroProgram = {
 type ZeroFunctionDescription = {
   readonly id: CoreFunctionId;
   readonly signature: CoreSignatureId;
-  readonly arity: number;
+  readonly parameterTypes: readonly ZeroType[];
+  readonly resultType: ZeroType;
 };
 
 type BuildingBlock = {
@@ -171,7 +635,10 @@ type BuildingBlock = {
 type LoweredExpression = {
   readonly block: BuildingBlock;
   readonly value: CoreValueId;
+  readonly type: ZeroType;
 };
+
+type LoweredBinding = Pick<LoweredExpression, "value" | "type">;
 
 type CoreOperationWithoutResult = CoreOperation extends infer Operation
   ? Operation extends CoreOperation ? Omit<Operation, "result"> : never
@@ -195,7 +662,11 @@ export async function compileZeroSource(
   const planningStart = performance.now();
   const lowered = lowerCoreToWasm(core, {
     emission: "planOnly",
-    target: "wasm-scalar",
+    target: core.types.some((type) =>
+        type.kind === "vector" || type.kind === "mask"
+      )
+      ? "wasm-simd128"
+      : "wasm-scalar",
     exports: parsed.program.functions.flatMap((function_, index) =>
       function_.exported
         ? [{
@@ -255,7 +726,8 @@ export function lowerZeroProgramToCore(program: ZeroProgram): CoreModule {
     descriptions.set(function_.name, {
       id: index as CoreFunctionId,
       signature: index as CoreSignatureId,
-      arity: function_.parameters.length,
+      parameterTypes: function_.parameters.map((parameter) => parameter.type),
+      resultType: function_.resultType,
     });
   }
 
@@ -274,10 +746,24 @@ export function lowerZeroProgramToCore(program: ZeroProgram): CoreModule {
   return {
     schemaVersion: 1,
     file: program.file,
-    types: [{ kind: "scalar", scalar: "i32" }],
+    types: program.functions.some((function_) => function_.usesSimd)
+      ? [
+        { kind: "scalar", scalar: "i32" },
+        { kind: "vector", lanes: 4, element: "i32" },
+        { kind: "mask", lanes: 4, element: "i32" },
+        { kind: "vector", lanes: 4, element: "f32" },
+        { kind: "mask", lanes: 4, element: "f32" },
+        { kind: "vector", lanes: 16, element: "i8" },
+        { kind: "mask", lanes: 16, element: "i8" },
+        { kind: "vector", lanes: 8, element: "i16" },
+        { kind: "mask", lanes: 8, element: "i16" },
+      ]
+      : [{ kind: "scalar", scalar: "i32" }],
     signatures: program.functions.map((function_) => ({
-      parameters: function_.parameters.map(() => i32),
-      result: i32,
+      parameters: function_.parameters.map((parameter) =>
+        coreType(parameter.type)
+      ),
+      result: coreType(function_.resultType),
     })),
     functions,
     entryFunction: entryFunction as CoreFunctionId,
@@ -315,16 +801,25 @@ class ZeroCoreFunctionBuilder {
           );
         }
         parameterNames.add(parameter.name);
-        return parameter.span;
+        return { span: parameter.span, type: parameter.type };
       }),
     );
     const environment = new Map(
       this.#function.parameters.map((parameter, index) => [
         parameter.name,
-        entry.parameters[index]!.value,
+        {
+          value: entry.parameters[index]!.value,
+          type: parameter.type,
+        },
       ]),
     );
     const body = this.#lowerExpression(this.#function.body, entry, environment);
+    if (body.type !== this.#function.resultType) {
+      throw semanticError(
+        this.#function.body.span,
+        `function ${this.#function.name} returns ${body.type}; declared ${this.#function.resultType}`,
+      );
+    }
     this.#terminate(body.block, {
       kind: "return",
       values: [body.value],
@@ -356,7 +851,7 @@ class ZeroCoreFunctionBuilder {
   #lowerExpression(
     expression: ZeroExpression,
     block: BuildingBlock,
-    environment: ReadonlyMap<string, CoreValueId>,
+    environment: ReadonlyMap<string, LoweredBinding>,
   ): LoweredExpression {
     switch (expression.kind) {
       case "integer":
@@ -369,6 +864,7 @@ class ZeroCoreFunctionBuilder {
             value: expression.value,
             span: expression.span,
           }),
+          type: "i32",
         };
       case "variable": {
         const value = environment.get(expression.name);
@@ -378,7 +874,7 @@ class ZeroCoreFunctionBuilder {
             `unbound variable ${expression.name}`,
           );
         }
-        return { block, value };
+        return { block, value: value.value, type: value.type };
       }
       case "binary": {
         const left = this.#lowerExpression(expression.left, block, environment);
@@ -387,6 +883,12 @@ class ZeroCoreFunctionBuilder {
           left.block,
           environment,
         );
+        if (left.type !== "i32" || right.type !== "i32") {
+          throw semanticError(
+            expression.span,
+            `operator ${expression.operator} requires i32 operands; received ${left.type} and ${right.type}`,
+          );
+        }
         return {
           block: right.block,
           value: this.#emit(right.block, {
@@ -396,6 +898,7 @@ class ZeroCoreFunctionBuilder {
             operator: expression.operator,
             span: expression.span,
           }),
+          type: "i32",
         };
       }
       case "let": {
@@ -405,7 +908,10 @@ class ZeroCoreFunctionBuilder {
           environment,
         );
         const bodyEnvironment = new Map(environment);
-        bodyEnvironment.set(expression.binding.name, value.value);
+        bodyEnvironment.set(expression.binding.name, {
+          value: value.value,
+          type: value.type,
+        });
         return this.#lowerExpression(
           expression.body,
           value.block,
@@ -420,20 +926,27 @@ class ZeroCoreFunctionBuilder {
             `unknown function ${expression.functionName}`,
           );
         }
-        if (expression.arguments.length !== target.arity) {
+        if (expression.arguments.length !== target.parameterTypes.length) {
           throw semanticError(
             expression.span,
-            `function ${expression.functionName} expects ${target.arity} arguments; received ${expression.arguments.length}`,
+            `function ${expression.functionName} expects ${target.parameterTypes.length} arguments; received ${expression.arguments.length}`,
           );
         }
         let currentBlock = block;
         const operands: CoreValueId[] = [];
-        for (const argument of expression.arguments) {
+        for (const [index, argument] of expression.arguments.entries()) {
           const lowered = this.#lowerExpression(
             argument,
             currentBlock,
             environment,
           );
+          const expectedType = target.parameterTypes[index]!;
+          if (lowered.type !== expectedType) {
+            throw semanticError(
+              argument.span,
+              `function ${expression.functionName} argument ${index} is ${lowered.type}; expected ${expectedType}`,
+            );
+          }
           currentBlock = lowered.block;
           operands.push(lowered.value);
         }
@@ -441,11 +954,85 @@ class ZeroCoreFunctionBuilder {
           block: currentBlock,
           value: this.#emit(currentBlock, {
             kind: "call.direct",
-            type: i32,
+            type: coreType(target.resultType),
             operands,
             functionId: target.id,
             span: expression.span,
           }),
+          type: target.resultType,
+        };
+      }
+      case "primitive": {
+        const instruction = [...zeroPrimitiveInstructions.values()].find(
+          (candidate) => candidate.primitiveId === expression.primitiveId,
+        );
+        if (instruction === undefined) {
+          throw new Error(
+            `${this.#function.span.file}: Zero lost primitive ${expression.primitiveId}`,
+          );
+        }
+        let currentBlock = block;
+        const operands: CoreValueId[] = [];
+        for (const [index, operand] of expression.operands.entries()) {
+          const lowered = this.#lowerExpression(
+            operand,
+            currentBlock,
+            environment,
+          );
+          const expectedType = instruction.operandTypes[index]!;
+          if (lowered.type !== expectedType) {
+            throw semanticError(
+              operand.span,
+              `primitive ${
+                primitiveDescriptor(expression.primitiveId).name
+              } operand ${index} is ${lowered.type}; expected ${expectedType}`,
+            );
+          }
+          currentBlock = lowered.block;
+          operands.push(lowered.value);
+        }
+        return {
+          block: currentBlock,
+          value: this.#emit(currentBlock, {
+            kind: "primitive",
+            primitiveId: expression.primitiveId,
+            type: coreType(expression.resultType),
+            operands,
+            span: expression.span,
+          }),
+          type: expression.resultType,
+        };
+      }
+      case "vector.shuffle": {
+        const left = this.#lowerExpression(
+          expression.operands[0],
+          block,
+          environment,
+        );
+        const right = this.#lowerExpression(
+          expression.operands[1],
+          left.block,
+          environment,
+        );
+        if (
+          left.type !== expression.resultType ||
+          right.type !== expression.resultType
+        ) {
+          throw semanticError(
+            expression.span,
+            `shuffle ${expression.resultType} requires two ${expression.resultType} operands; received ${left.type} and ${right.type}`,
+          );
+        }
+        return {
+          block: right.block,
+          value: this.#emit(right.block, {
+            kind: "vector.shuffle",
+            type: coreType(expression.resultType),
+            operands: [left.value, right.value],
+            lanes: expression.lanes,
+            span: expression.span,
+          }),
+          type: expression.resultType,
         };
       }
       case "if":
@@ -458,16 +1045,21 @@ class ZeroCoreFunctionBuilder {
   #lowerConditional(
     expression: Extract<ZeroExpression, { readonly kind: "if" }>,
     block: BuildingBlock,
-    environment: ReadonlyMap<string, CoreValueId>,
+    environment: ReadonlyMap<string, LoweredBinding>,
   ): LoweredExpression {
     const condition = this.#lowerExpression(
       expression.condition,
       block,
       environment,
     );
+    if (condition.type !== "i32") {
+      throw semanticError(
+        expression.condition.span,
+        `select! condition is ${condition.type}; expected i32`,
+      );
+    }
     const consequentBlock = this.#createBlock([]);
     const alternateBlock = this.#createBlock([]);
-    const joinBlock = this.#createBlock([expression.span]);
     this.#terminate(condition.block, {
       kind: "conditional_branch",
       condition: condition.value,
@@ -483,30 +1075,43 @@ class ZeroCoreFunctionBuilder {
       consequentBlock,
       environment,
     );
+    const alternate = this.#lowerExpression(
+      expression.alternate,
+      alternateBlock,
+      environment,
+    );
+    if (consequent.type !== alternate.type) {
+      throw semanticError(
+        expression.span,
+        `select! branches produce ${consequent.type} and ${alternate.type}`,
+      );
+    }
+    const joinBlock = this.#createBlock([
+      { span: expression.span, type: consequent.type },
+    ]);
     this.#terminate(consequent.block, {
       kind: "branch",
       target: joinBlock.id,
       arguments: [consequent.value],
       span: expression.consequent.span,
     });
-    const alternate = this.#lowerExpression(
-      expression.alternate,
-      alternateBlock,
-      environment,
-    );
     this.#terminate(alternate.block, {
       kind: "branch",
       target: joinBlock.id,
       arguments: [alternate.value],
       span: expression.alternate.span,
     });
-    return { block: joinBlock, value: joinBlock.parameters[0]!.value };
+    return {
+      block: joinBlock,
+      value: joinBlock.parameters[0]!.value,
+      type: consequent.type,
+    };
   }
 
   #lowerRepeat(
     expression: Extract<ZeroExpression, { readonly kind: "repeat" }>,
     block: BuildingBlock,
-    environment: ReadonlyMap<string, CoreValueId>,
+    environment: ReadonlyMap<string, LoweredBinding>,
   ): LoweredExpression {
     const count = this.#lowerExpression(expression.count, block, environment);
     const initial = this.#lowerExpression(
@@ -514,9 +1119,20 @@ class ZeroCoreFunctionBuilder {
       count.block,
       environment,
     );
-    const header = this.#createBlock([expression.count.span, expression.span]);
+    if (count.type !== "i32") {
+      throw semanticError(
+        expression.count.span,
+        `repeat count is ${count.type}; expected i32`,
+      );
+    }
+    const header = this.#createBlock([
+      { span: expression.count.span, type: "i32" },
+      { span: expression.span, type: initial.type },
+    ]);
     const bodyBlock = this.#createBlock([]);
-    const exit = this.#createBlock([expression.span]);
+    const exit = this.#createBlock([
+      { span: expression.span, type: initial.type },
+    ]);
     this.#terminate(initial.block, {
       kind: "branch",
       target: header.id,
@@ -550,12 +1166,21 @@ class ZeroCoreFunctionBuilder {
     });
 
     const bodyEnvironment = new Map(environment);
-    bodyEnvironment.set(expression.binding.name, state!.value);
+    bodyEnvironment.set(expression.binding.name, {
+      value: state!.value,
+      type: initial.type,
+    });
     const body = this.#lowerExpression(
       expression.body,
       bodyBlock,
       bodyEnvironment,
     );
+    if (body.type !== initial.type) {
+      throw semanticError(
+        expression.body.span,
+        `repeat step returns ${body.type}; state is ${initial.type}`,
+      );
+    }
     const one = this.#emit(body.block, {
       kind: "constant",
       type: i32,
@@ -576,15 +1201,24 @@ class ZeroCoreFunctionBuilder {
       arguments: [nextRemaining, body.value],
       span: expression.body.span,
     });
-    return { block: exit, value: exit.parameters[0]!.value };
+    return {
+      block: exit,
+      value: exit.parameters[0]!.value,
+      type: initial.type,
+    };
   }
 
-  #createBlock(parameterSpans: readonly SourceSpan[]): BuildingBlock {
+  #createBlock(
+    parameterDescriptions: readonly {
+      readonly span: SourceSpan;
+      readonly type: ZeroType;
+    }[],
+  ): BuildingBlock {
     const block: BuildingBlock = {
       id: this.#blocks.length as CoreBlockId,
-      parameters: parameterSpans.map((span) => ({
+      parameters: parameterDescriptions.map(({ span, type }) => ({
         value: this.#nextValue++ as CoreValueId,
-        type: i32,
+        type: coreType(type),
         span,
       })),
       operations: [],
@@ -655,15 +1289,39 @@ async function getZeroParser(): Promise<ZeroParser> {
 function parseZeroFunction(file: string, node: RuleCursor): ZeroFunction {
   const visibility = requiredToken(node, "visibility");
   const name = requiredToken(node, "name");
+  if (name.text.includes("[")) {
+    throw semanticError(
+      sourceSpan(file, name),
+      `function name ${name.text} cannot have a type annotation`,
+    );
+  }
   const parameters = tokenFieldArray(node, "parameters");
+  const assignment = requiredToken(node, "assignment");
   const instructions = tokenFieldArray(node, "body");
+  const parsedParameters = parameters.map((token): ZeroParameter => {
+    const match = /^(.*)\[(i8x16|i16x8|i32x4|f32x4)\]$/.exec(token.text);
+    return {
+      name: match?.[1] ?? token.text,
+      type: (match?.[2] as ZeroType | undefined) ?? "i32",
+      span: sourceSpan(file, token),
+    };
+  });
+  const resultType: ZeroType = assignment.text === "="
+    ? "i32"
+    : assignment.text === "=>"
+    ? "i32x4"
+    : assignment.text.slice(2) as ZeroType;
   return {
     exported: visibility.text === "export:",
     name: name.text,
-    parameters: parameters.map((token) => ({
-      name: token.text,
-      span: sourceSpan(file, token),
-    })),
+    parameters: parsedParameters,
+    resultType,
+    usesSimd: resultType !== "i32" ||
+      parsedParameters.some((parameter) => parameter.type !== "i32") ||
+      instructions.some((instruction) =>
+        zeroPrimitiveInstructions.has(instruction.text) ||
+        instruction.text.includes(".shuffle:")
+      ),
     body: parseZeroInstructions(file, instructions),
     span: sourceSpan(file, node),
   };
@@ -703,6 +1361,74 @@ function parseZeroInstructions(
         left,
         right,
         span: { file, start: left.span.start, end: span.end },
+      });
+      continue;
+    }
+    const shuffle = /^(i8x16|i16x8|i32x4|f32x4)\.shuffle:([0-9,]+)$/.exec(text);
+    if (shuffle !== null) {
+      if (stack.length < 2) {
+        throw semanticError(
+          span,
+          `shuffle ${
+            shuffle[1]
+          } requests 2 operands; stack contains ${stack.length}`,
+        );
+      }
+      const resultType = shuffle[1] as "i8x16" | "i16x8" | "i32x4" | "f32x4";
+      const laneCount = resultType === "i8x16"
+        ? 16
+        : resultType === "i16x8"
+        ? 8
+        : 4;
+      const lanes = shuffle[2]!.split(",").map(Number);
+      if (
+        lanes.length !== laneCount ||
+        lanes.some((lane) =>
+          !Number.isSafeInteger(lane) || lane < 0 || lane >= laneCount * 2
+        )
+      ) {
+        throw semanticError(
+          span,
+          `shuffle ${resultType} requires ${laneCount} lanes in 0..${
+            laneCount * 2 - 1
+          }; received [${lanes.join(", ")}]`,
+        );
+      }
+      const operands = stack.splice(stack.length - 2, 2) as [
+        ZeroExpression,
+        ZeroExpression,
+      ];
+      stack.push({
+        kind: "vector.shuffle",
+        operands,
+        lanes,
+        resultType,
+        span: { file, start: operands[0].span.start, end: span.end },
+      });
+      continue;
+    }
+    const primitive = zeroPrimitiveInstructions.get(text);
+    if (primitive !== undefined) {
+      if (primitive.operandTypes.length > stack.length) {
+        throw semanticError(
+          span,
+          `primitive ${text} requests ${primitive.operandTypes.length} operands; stack contains ${stack.length}`,
+        );
+      }
+      const operands = stack.splice(
+        stack.length - primitive.operandTypes.length,
+        primitive.operandTypes.length,
+      );
+      stack.push({
+        kind: "primitive",
+        primitiveId: primitive.primitiveId,
+        operands,
+        resultType: primitive.resultType,
+        span: {
+          file,
+          start: operands[0]?.span.start ?? span.start,
+          end: span.end,
+        },
       });
       continue;
     }
@@ -859,4 +1585,16 @@ function sourceSpan(
 
 function semanticError(span: SourceSpan, message: string): TypeError {
   return new TypeError(`${span.file}:${span.start}: ${message}`);
+}
+
+function coreType(type: ZeroType): CoreTypeId {
+  if (type === "i32") return i32;
+  if (type === "i32x4") return i32x4;
+  if (type === "i32x4-mask") return i32x4Mask;
+  if (type === "f32x4") return f32x4;
+  if (type === "f32x4-mask") return f32x4Mask;
+  if (type === "i8x16") return i8x16;
+  if (type === "i8x16-mask") return i8x16Mask;
+  if (type === "i16x8") return i16x8;
+  return i16x8Mask;
 }

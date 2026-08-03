@@ -118,6 +118,50 @@ explicit host calls, and resource/region evidence. `owned-reuse` is a frontend
 certificate: the backend may select a reuse-capable runtime operation, but it
 does not attempt to prove uniqueness.
 
+For integer width \(b\in\{8,16,32\}\), an integer vector is \(V_b=(\mathbb
+Z/2^b\mathbb Z)^{128/b}\). Addition, subtraction, multiplication where
+WebAssembly defines it, bitwise operations, signed or unsigned min/max, and
+comparisons act lane-wise. Shifts consume one scalar count reduced modulo \(b\)
+and apply it to every lane; a vector of per-lane shift counts is deliberately
+not admitted. `i8x16` has no multiplication because the portable WebAssembly
+SIMD instruction set has none. These counterexamples prevent an invented uniform
+numeric-vector interface.
+
+A mask \(M_b\) has the same physical width but a distinct Core type. Every lane
+is either zero or \(2^b-1\); comparisons produce this canonical form, selection
+consumes it, and no general vector-to-mask coercion exists. `mask_bitmask`
+returns \(\sum_k 2^k s_k\), where \(s_k\) is the lane's high bit;
+`mask_all_true` and `mask_any_true` implement universal and existential
+reduction. Canonical masks make those reductions Boolean. The validator rejects
+vector/mask confusion before relying on Wasm's single `v128` representation.
+
+`f32x4` follows the WebAssembly definitions for absolute value, negation, square
+root, rounding, arithmetic, minimum/maximum and pseudo-minimum/maximum,
+comparison, lane operations, selection, and shuffle [12]. Signed and unsigned
+`i32x4` conversion to `f32x4` is lane-wise. Conversion back uses WebAssembly's
+saturating operations, so NaN maps to zero and finite out-of-range inputs clamp
+instead of trapping. This is materially different from scalar truncation and is
+expressed in the primitive names.
+
+For a shape with \(L\) lanes, shuffle concatenates two vectors and selects
+exactly \(L\) indices from \([0,2L)\). Lowering expands each lane index to its
+contiguous byte indices for `i8x16.shuffle`. Every non-shuffle numeric operation
+is homomorphic to the corresponding WebAssembly SIMD instruction. Therefore lane
+projection commutes with every lane-wise operation, including conversion;
+induction over SSA and loop back-edges proves lane independence until a shuffle
+or scalar mask reduction is introduced. Shuffles have an explicit permutation
+model, while reductions have explicit scalar codomains, so neither is silently
+covered by the lane-independence claim.
+
+The low-level Wasm builder encodes aligned or unaligned `v128.load` and
+`v128.store` memory arguments exactly as specified by WebAssembly [12]. Core
+does not expose them: its current SSA semantics contain Stores and host-backed
+buffers, but no linear-memory state or effect token. Treating a write as a pure
+primitive would permit invalid reordering, while treating a Core Store element
+as four unrelated runtime cells would change length and atomicity. A future Core
+memory feature therefore requires an explicit state/effect model; the present
+implementation stops at the honest semantic boundary.
+
 Host operations remain ordered through SSA dependencies and control flow. Core
 does not contain an unordered effect set and does not reorder payload effects.
 
@@ -402,11 +446,13 @@ Zero's concrete syntax is a regular language chosen to lie inside Baba 8's Wasm
 parser class. A module is a nonempty sequence of semicolon-terminated function
 records. Each record has the form
 
-\[ v\;n\;p^*\;=\;i^+\;;, \]
+\[ v\;n\;p^*\;a\;i^+\;;, \]
 
 where \(v\) is `export:` or `private:`, \(n\) and each \(p\) are identifiers,
-and every \(i\) is one lexical instruction. Baba metadata declares the module as
-the root and the function as its sole repeated, terminated island under
+\(p\) may carry an `[i8x16]`, `[i16x8]`, `[i32x4]`, or `[f32x4]` suffix; \(a\)
+is scalar `=`, `=>` for `i32x4`, or a shape-specific vector result token; every
+\(i\) is one lexical instruction. Baba metadata declares the module as the root
+and the function as its sole repeated, terminated island under
 `throughput: "strict"`. Generation succeeds only when that island is a
 terminal-only transducer with at most seven states. Thus acceptance of the
 checked parser plan is an executable certificate that the concrete grammar
@@ -423,10 +469,13 @@ references push one expression; a binary instruction replaces \(x,y\) by
 call; and `select!` replaces \(p,t,f\) by the lazy expression
 `if p then t else f`. `repeat:f` replaces \(n,z\) by the bounded fold
 \(\operatorname{repeat}(n,z,f)\). `let:x` requires a singleton stack and binds
-that expression across the remaining suffix. A function is accepted by the
-adapter exactly when no transition underflows and the final stack has one
-expression. Function existence, call arity, lexical scope, and Core typing are
-then checked by the existing lowering and Core validators.
+that expression across the remaining suffix. SIMD instructions have fixed typed
+stack signatures; shuffle additionally carries a lexically bounded lane list.
+Masks cannot appear in parameter or result syntax and remain internal. A
+function is accepted by the adapter exactly when no transition underflows and
+the final stack has one expression of its declared result type. Function
+existence, call arity, lexical scope, operand types, and Core typing are then
+checked by the existing lowering and Core validators.
 
 For \(L\) UTF-16 source units and \(I\) instructions, Baba's deterministic lexer
 and bounded-state island transducer perform \(O(L+I)\) work for the certified
@@ -438,11 +487,9 @@ Baba 8 that integrated operation executes the generated Wasm lexer, the shared
 653-byte `simd128` validation transducer, and cursor materialization.
 
 With Baba 8.0.0, the checked Zero artifacts are 6,007 bytes of parser Wasm and
-16,148 bytes of plan, 22,155 bytes total. Baba 7.10.0 produced 17,983 and 68,015
+27,337 bytes of plan, 33,344 bytes total. Baba 7.10.0 produced 17,983 and 68,015
 bytes respectively, 85,998 total, so the checked frontend payload decreases by
-63,843 bytes or 74.24%. The v8 plan inspection reports 46 lexer states, two
-islands, one strict root-loop island, one parallel long-region island, and 3,488
-packed profile bytes. These are empirical artifact facts. Lexer-error and
+52,654 bytes or 61.23%. These are empirical artifact facts. Lexer-error and
 unexpected-token tests exercise the Wasm lexer and SIMD validator diagnostics;
 the existing cursor-to-Core, differential runtime, and emitter-equality tests
 exercise successful parsing and semantic preservation.
@@ -495,12 +542,95 @@ A final pathology quartet targets policy discontinuities rather than new
 semantics: shared-leaf fanout five, an expanded scalar chain beyond 64
 operations, a live frontier of 32 values, and a nested-loop body beyond the
 24-operation composition budget. This avoids collapsing incomparable programs
-into an invented single complexity score.
+into an invented single complexity score. Two application rungs evolve complete
+cellular automaton boards. They combine shared arithmetic, high-multiplicity
+calls, control, a broad expression, and a dynamic outer fold; the second also
+crosses the scalar-to-vector representation boundary. A final xorshift32 rung
+isolates a compact integer-vector recurrence.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
 
 \[ \operatorname{repeat}(n,z,f)=f^{\max(n,0)}(z). \]
+
+The application rung implements Conway's Life [11] on the torus \(\mathbb
+Z_5\times\mathbb Z_5\). A valid board is an integer \(B\in[0,2^{25})\), and cell
+\(i=5y+x\) is
+
+\[ b_i(B)=\left\lfloor B/2^i\right\rfloor\bmod 2. \]
+
+Let \(N_i\) be the eight Moore-neighborhood indices obtained by reducing both
+coordinates modulo five, and let \(n_i(B)=\sum_{j\in N_i}b_j(B)\). The next cell
+is one exactly when \(n_i=3\), retains \(b_i\) when \(n_i=2\), and is zero
+otherwise. The generation map is
+
+\[ G(B)=\sum_{i=0}^{24}2^i \begin{cases} 1 & n_i(B)=3,\\ b_i(B) & n_i(B)=2,\\ 0
+& \text{otherwise}. \end{cases} \]
+
+Every coefficient is a bit, so \(G(B)\in[0,2^{25})\); this proves closure for
+valid boards. The checked Zero program specializes the toroidal neighbor indices
+but shares cell extraction and the general next-cell calculation. Before
+optimization, one generation dynamically performs 225 extractions, hence 450
+signed divisions or remainders, 175 neighbor additions, 50 comparisons, 25
+weight multiplications, and 24 reconstruction additions: 724 scalar primitive
+operations, 250 direct function invocations, and constant runtime state. For an
+\(m\)-cell generalization, work and specialized source size are \(O(m)\), while
+runtime state remains one board word only while \(m\) fits that word.
+
+Vectorizing four cells within one packed board is not justified: their bit
+positions require distinct shift counts, while WebAssembly lane shifts consume
+one shared scalar count. The implemented alternative vectors across four
+independent boards. For offsets \(\delta=(0,1,65537,1048579)\), lane \(k\)
+starts at
+
+\[ V_{0,k}=((s+\delta_k)\bmod 2^{32})\mathbin{\&}(2^{25}-1). \]
+
+For vector state \(V\), cell extraction is
+\(E_i(V)=(V\mathbin{\mathrm{shr_u}}i)\mathbin{\&}\operatorname{splat}(1)\). All
+neighbor additions, rule comparisons, selections, and reconstruction then act
+lane-wise, defining \(\widehat G\) with \(\pi_k(\widehat G(V))=G(\pi_k(V))\).
+The exported result after \(r\) generations is the wrapping checksum
+
+\[ \pi_0(\widehat G^r(V_0)) + 3\pi_1(\widehat G^r(V_0)) + 5\pi_2(\widehat
+G^r(V_0)) + 7\pi_3(\widehat G^r(V_0)). \]
+
+One SIMD generation dynamically executes 675 vector extraction-related
+primitives, 175 vector neighbor additions, 200 vector rule primitives, and 49
+vector reconstruction primitives, 1,099 vector primitives total for four boards.
+Four copies of the scalar source model execute 2,896 scalar primitives. If one
+vector primitive costs \(\alpha\) scalar primitives on average and call/loop
+overheads are ignored, SIMD breaks even at \(1099\alpha<2896\), or
+\(\alpha<2.64\). This is only a structural cost threshold: the scalar version
+uses division and remainder while the vector version uses shifts and
+conjunction, and actual instruction latency, JIT lowering, splat hoisting, and
+call expansion can move the crossover. The workload therefore supports
+differential and structural claims before it supports a measured speedup claim.
+
+Vector parameters and results remain inside the module. Four lane extractions
+and scalar arithmetic produce the exported `i32`, preserving the managed
+JavaScript ABI restriction. Zero selects `wasm-simd128` exactly when its Core
+type table contains a vector or mask; explicitly selecting `wasm-scalar` then
+rejects the module before lowering.
+
+The xorshift rung carries four independent `i32x4` streams and applies
+
+\[ x\mathrel{\widehat=}(x\ll13);\quad
+x\mathrel{\widehat=}(x\mathbin{\mathrm{shr_u}}17);\quad
+x\mathrel{\widehat=}(x\ll5). \]
+
+Each round executes six vector operations. Four scalar streams execute the same
+twenty-four lane operations, retain the same 16 bytes of semantic state, and
+require no synchronization or loop memory traffic. With vector/scalar operation
+cost ratio \(\alpha\), construction by splat plus three replacements and four
+final extractions give the structural threshold
+
+\[ \alpha < \frac{24r}{6r+8}, \]
+
+which tends to four and is 3.995 at \(r=1000\). This calculation predicts only
+an instruction-work crossover; JIT scheduling, register pressure, and checksum
+overhead remain empirical variables. The scalar Rust and TypeScript references
+advance each stream independently, so differential agreement tests the lane
+projection theorem rather than copying the vector implementation.
 
 For each workload, a Zero source, an independently written Rust source, and a
 TypeScript recurrence define three executable interpretations. Before timing,
@@ -529,16 +659,15 @@ likewise reports separate boundaries because an in-process initialized frontend
 and a fresh `rustc` process do not measure the same operation. With \(q\)
 workloads, \(p\) probes, \(m\) samples, and \(r\) rounds, validation work is
 \(O(qp)\), compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\),
-multiplied by each workload's inner recurrence cost. The default 30-workload,
-30-sample, eight-seed, 100,000-round run performs 720 million outer rounds per
+multiplied by each workload's inner recurrence cost. The default 33-workload,
+30-sample, eight-seed, 100,000-round run performs 792 million outer rounds per
 compiler, plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
 feature away; JavaScript timer resolution and host scheduling contribute noise;
-the finite probe set cannot establish semantic equivalence; and the ladder
-samples only first-order scalar programs. The emitted structural vector, raw
-paired samples, source hashes, and output hashes make these limitations
-auditable.
+the finite probe set cannot establish semantic equivalence; and the ladder has
+only two integer-vector applications. The emitted structural vector, raw paired
+samples, source hashes, and output hashes make these limitations auditable.
 
 The final four examples are derived from finite resource policies. Let the
 shared-leaf multiplicity cap be \(M_s=4\), scalar-tree expansion cap be
@@ -1037,7 +1166,7 @@ Seven is the largest count assigned to direct linear lowering, eight is the
 first assigned to runtime monoid lowering, and sixteen and thirty-two increase
 the local arithmetic advantage of exponentiation without changing the call
 graph. The fixed-count workloads established the strategy discontinuity before
-implementation. After implementation, all thirty workload triples agree on
+implementation. After implementation, all thirty-two workload triples agree on
 boundary probes, both plan emitters remain byte-identical, and a separate test
 keeps an independently exported summarized loop callable. Residual reachability
 may omit a private direct callee only when its call result is the exact state
@@ -1123,6 +1252,10 @@ rather than silently trusted.
    inlining and loop unrolling.
 10. Baba 8.0.0 changelog, generated-Wasm runtime, and WebGPU frontend profile,
     `github.com/mewhhaha/baba` and `jsr:@mewhhaha/baba@8.0.0`.
+11. Martin Gardner, “Mathematical Games: The fantastic combinations of John
+    Conway's new solitaire game ‘Life’,” _Scientific American_ 223(4), 1970.
+12. WebAssembly Community Group, _WebAssembly Core Specification 3.0_, vector
+    instruction syntax, validation, execution, and binary encoding, 2026.
 
 ## 11. Continuous implementation log
 
@@ -1754,6 +1887,112 @@ justification for another mechanism. Initialized Zero compilation medians ranged
 from 0.645 to 1.064 milliseconds, parser medians from 0.132 to 0.263
 milliseconds, and fresh `rustc` process medians from 32.18 to 34.37
 milliseconds; the process boundaries remain incomparable.
+
+### 2026-08-03: application-scale toroidal Life
+
+The complexity ladder now ends with a complete 5x5 toroidal Life generation, not
+another isolated compiler shape. Its board-word model, closure invariant,
+lowering, and scalar cost are defined in Section 8.2. The Zero source shares
+cell extraction and next-cell evaluation while specializing all 25
+neighborhoods; the independent TypeScript interpretation instead walks row and
+column coordinates. A no-std Rust program supplies the third executable
+interpretation. The measured structural vector is
+
+\[ C(w)=(2674,4,4,0,13,354,1102,35,25,2,11,3,0), \]
+
+and the emitted Zero payload is 1,465 bytes. These are executable artifact
+facts, not performance measurements. Differential boundary probes cover the same
+signed-i32 domain as the other workloads. A separate known-answer test requires
+a glider to translate diagonally after four generations and return after twenty
+generations on the torus; emitter equality covers the large plan. This first
+application remains the one-board scalar baseline.
+
+### 2026-08-03: exact i32x4 Core and four-board Life
+
+Core now validates and lowers the exact `i32x4` subset derived in Sections 2.3
+and 8.2: construction, splat, extraction, wrapping addition, conjunction,
+shared-count shifts, equality masks, and mask selection. Each primitive maps to
+one WebAssembly SIMD instruction except four-lane construction, which lowers to
+splat plus three lane replacements. Scalar-target rejection and an invalid
+vector-as-mask counterexample exercise the feature and type boundaries.
+
+Zero parameters acquire an `i32x4` type only through the `[i32x4]` suffix, and
+`=>` declares a vector result. Vector bindings, direct calls, and bounded folds
+carry the type through Core block parameters; mask values remain internal to
+strict primitives. The grammar stays inside Baba's seven-state strict island
+class. Regeneration leaves parser Wasm at 6,007 bytes and grows the plan from
+16,148 to 27,553 bytes.
+
+The four-board application has structural vector
+
+\[ C(w)=(3045,5,5,0,8,385,1673,36,25,0,11,4,0), \]
+
+and emits 1,742 bytes. A coordinate-loop TypeScript oracle and scalar no-std
+Rust implementation agree with the SIMD payload on boundary and pseudorandom
+probes. Known-answer tests combine a glider, still life, oscillator, and full
+board. A primitive boundary test requires a shift count of 32 to act as zero,
+wrapping `-1 + 1` to produce zero, and its equality mask to select the original
+lane. CPU and Rust/WebAssembly plan emitters remain byte-identical.
+
+An admissible 30-sample focused run at 1,000 generations reached the
+five-millisecond calibration target for both implementations. Median Zero SIMD
+and scalar Rust times were 128.013 and 1,368.915 nanoseconds per four-board
+generation, with paired median ratio 0.0919; p95 values were 160.965 and
+1,682.373 nanoseconds. This is empirical evidence for these complete emitted
+programs, not an isolated SIMD speedup: the Rust baseline walks coordinates and
+uses scalar division, while Zero specializes neighborhoods and uses shifts. Warm
+Zero compilation had 2.614-millisecond median and 4.670-millisecond p95; fresh
+`rustc` processes had 44.527-millisecond median and 47.165-millisecond p95.
+Those compiler boundaries remain incomparable.
+
+### 2026-08-03: portable SIMD surface and xorshift32
+
+Core and Zero now cover all six selected SIMD directions at their justified
+boundaries. `i32x4` has complete lane-wise wrapping arithmetic, bitwise
+operations, shared-count shifts, signed and unsigned comparisons and min/max,
+lane replacement, typed selection, shuffle, and mask reductions. `f32x4` has the
+ordinary WebAssembly numeric and comparison surface plus signed/unsigned
+conversion to and saturating conversion from `i32x4`. `i8x16` and `i16x8` have
+typed splat, wrapping arithmetic available for their WebAssembly shape, bitwise
+operations, shifts, comparison, min/max, selection, shuffle, and mask
+reductions. Narrow shapes round-trip through flat Core. Unsupported per-lane
+shifts and `i8x16` multiplication remain rejected rather than synthesized.
+
+All primitive signatures are executable Core validation invariants. Zero's typed
+postfix adapter independently checks operand, call, binding, result, and
+shuffle-lane types. Comparison masks cannot escape as vectors or cross the
+managed JavaScript boundary. Conformance cases exercise wrapping integer work,
+unsigned comparison, lane replacement and integer shuffle, Boolean mask
+reduction, float conversion and arithmetic, and packed 8- and 16-bit work. CPU
+and Rust/WebAssembly plan emission remain byte-identical for every workload.
+
+The low-level Wasm catalog additionally encodes `v128.load` and `v128.store`. An
+executable module copies sixteen known bytes through linear memory, proving the
+opcodes, memory arguments, and runtime behavior. This is intentionally not a
+Core semantic claim: Section 2.3 records the absent linear-memory effect model
+and the invalid pure-primitive and Store-flattening alternatives.
+
+The new four-stream xorshift32 workload has structural vector
+
+\[ C(w)=(489,2,2,0,5,34,244,1,1,0,5,1,0), \]
+
+and emits 249 bytes; its independent scalar Rust payload is 285 bytes under the
+benchmark compiler settings. The six-versus-twenty-four operation cost and
+break-even derivation appear in Section 8.2. Boundary and pseudorandom
+differential probes cover the workload, with known reference values 13,518,450
+after one round from seed one and 352,885,651 after ten. A three-sample focused
+diagnostic reached the batching target and observed median Zero SIMD and scalar
+Rust times of 1.263 and 1.775 nanoseconds per four-stream round, paired ratio
+0.735. Competing compiler processes were active and three samples cannot
+estimate p95, so this is harness validation rather than an admissible
+performance claim; the structural break-even model remains an unverified
+explanation.
+
+The broader token alternatives remain inside Baba's checked strict-island class.
+Regeneration keeps parser Wasm at 6,007 bytes and changes the plan to 27,337
+bytes. The model still excludes `i64x2`, `f64x2`, narrow saturating and widening
+operations, swizzle, horizontal arithmetic reductions, relaxed SIMD, and
+Core-level vector memory.
 
 ### 2026-08-02: Zero structural complexity ladder
 

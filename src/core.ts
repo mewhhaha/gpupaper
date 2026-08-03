@@ -35,7 +35,7 @@ export type CoreBinaryOperator =
   | "||";
 
 export type CoreScalar = "i32" | "i64" | "f32" | "f64" | "unit";
-export type CoreVectorElement = "i32" | "i64" | "f32" | "f64";
+export type CoreVectorElement = "i8" | "i16" | "i32" | "i64" | "f32" | "f64";
 
 export type CoreType =
   | {
@@ -44,12 +44,12 @@ export type CoreType =
   }
   | {
     readonly kind: "vector";
-    readonly lanes: 2 | 4;
+    readonly lanes: 2 | 4 | 8 | 16;
     readonly element: CoreVectorElement;
   }
   | {
     readonly kind: "mask";
-    readonly lanes: 2 | 4;
+    readonly lanes: 2 | 4 | 8 | 16;
     readonly element: CoreVectorElement;
   }
   | {
@@ -245,7 +245,11 @@ export function validateCore(module: CoreModule): void {
       continue;
     }
     if (type.kind !== "vector" && type.kind !== "mask") continue;
-    const elementBits = type.element === "i64" || type.element === "f64"
+    const elementBits = type.element === "i8"
+      ? 8
+      : type.element === "i16"
+      ? 16
+      : type.element === "i64" || type.element === "f64"
       ? 64
       : 32;
     if (type.lanes * elementBits !== 128) {
@@ -687,25 +691,79 @@ function validateCoreSimdPrimitive(
   operation: Extract<CoreOperation, { readonly kind: "primitive" }>,
   valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): boolean {
-  const extractIds = [
+  const f32ExtractIds = [
     PrimitiveId.f32x4ExtractLane0,
     PrimitiveId.f32x4ExtractLane1,
     PrimitiveId.f32x4ExtractLane2,
     PrimitiveId.f32x4ExtractLane3,
   ] as const;
-  const replaceIds = [
+  const f32ReplaceIds = [
     PrimitiveId.f32x4ReplaceLane0,
     PrimitiveId.f32x4ReplaceLane1,
     PrimitiveId.f32x4ReplaceLane2,
     PrimitiveId.f32x4ReplaceLane3,
   ] as const;
-  const arithmeticIds = [
+  const i32ExtractIds = [
+    PrimitiveId.i32x4ExtractLane0,
+    PrimitiveId.i32x4ExtractLane1,
+    PrimitiveId.i32x4ExtractLane2,
+    PrimitiveId.i32x4ExtractLane3,
+  ] as const;
+  const i32ReplaceIds = [
+    PrimitiveId.i32x4ReplaceLane0,
+    PrimitiveId.i32x4ReplaceLane1,
+    PrimitiveId.i32x4ReplaceLane2,
+    PrimitiveId.i32x4ReplaceLane3,
+  ] as const;
+  const i32BinaryIds = [
+    PrimitiveId.i32x4Add,
+    PrimitiveId.i32x4Subtract,
+    PrimitiveId.i32x4Multiply,
+    PrimitiveId.i32x4And,
+    PrimitiveId.i32x4Or,
+    PrimitiveId.i32x4Xor,
+    PrimitiveId.i32x4MinimumSigned,
+    PrimitiveId.i32x4MinimumUnsigned,
+    PrimitiveId.i32x4MaximumSigned,
+    PrimitiveId.i32x4MaximumUnsigned,
+  ] as const;
+  const i32ShiftIds = [
+    PrimitiveId.i32x4ShiftLeft,
+    PrimitiveId.i32x4ShiftRightSigned,
+    PrimitiveId.i32x4ShiftRightUnsigned,
+  ] as const;
+  const i32ComparisonIds = [
+    PrimitiveId.i32x4Equal,
+    PrimitiveId.i32x4NotEqual,
+    PrimitiveId.i32x4LessThanSigned,
+    PrimitiveId.i32x4LessThanUnsigned,
+    PrimitiveId.i32x4GreaterThanSigned,
+    PrimitiveId.i32x4GreaterThanUnsigned,
+    PrimitiveId.i32x4LessThanOrEqualSigned,
+    PrimitiveId.i32x4LessThanOrEqualUnsigned,
+    PrimitiveId.i32x4GreaterThanOrEqualSigned,
+    PrimitiveId.i32x4GreaterThanOrEqualUnsigned,
+  ] as const;
+  const f32BinaryIds = [
     PrimitiveId.f32x4Add,
     PrimitiveId.f32x4Subtract,
     PrimitiveId.f32x4Multiply,
     PrimitiveId.f32x4Divide,
+    PrimitiveId.f32x4Minimum,
+    PrimitiveId.f32x4Maximum,
+    PrimitiveId.f32x4PseudoMinimum,
+    PrimitiveId.f32x4PseudoMaximum,
   ] as const;
-  const comparisonIds = [
+  const f32UnaryIds = [
+    PrimitiveId.f32x4Absolute,
+    PrimitiveId.f32x4Negate,
+    PrimitiveId.f32x4SquareRoot,
+    PrimitiveId.f32x4Ceiling,
+    PrimitiveId.f32x4Floor,
+    PrimitiveId.f32x4Truncate,
+    PrimitiveId.f32x4Nearest,
+  ] as const;
+  const f32ComparisonIds = [
     PrimitiveId.f32x4Equal,
     PrimitiveId.f32x4NotEqual,
     PrimitiveId.f32x4LessThan,
@@ -713,14 +771,95 @@ function validateCoreSimdPrimitive(
     PrimitiveId.f32x4GreaterThan,
     PrimitiveId.f32x4GreaterThanOrEqual,
   ] as const;
+  const i8BinaryIds = [
+    PrimitiveId.i8x16Add,
+    PrimitiveId.i8x16Subtract,
+    PrimitiveId.i8x16And,
+    PrimitiveId.i8x16Or,
+    PrimitiveId.i8x16Xor,
+    PrimitiveId.i8x16MinimumSigned,
+    PrimitiveId.i8x16MinimumUnsigned,
+    PrimitiveId.i8x16MaximumSigned,
+    PrimitiveId.i8x16MaximumUnsigned,
+  ] as const;
+  const i8ShiftIds = [
+    PrimitiveId.i8x16ShiftLeft,
+    PrimitiveId.i8x16ShiftRightSigned,
+    PrimitiveId.i8x16ShiftRightUnsigned,
+  ] as const;
+  const i8ComparisonIds = [
+    PrimitiveId.i8x16Equal,
+    PrimitiveId.i8x16LessThanSigned,
+    PrimitiveId.i8x16LessThanUnsigned,
+  ] as const;
+  const i16BinaryIds = [
+    PrimitiveId.i16x8Add,
+    PrimitiveId.i16x8Subtract,
+    PrimitiveId.i16x8Multiply,
+    PrimitiveId.i16x8And,
+    PrimitiveId.i16x8Or,
+    PrimitiveId.i16x8Xor,
+    PrimitiveId.i16x8MinimumSigned,
+    PrimitiveId.i16x8MinimumUnsigned,
+    PrimitiveId.i16x8MaximumSigned,
+    PrimitiveId.i16x8MaximumUnsigned,
+  ] as const;
+  const i16ShiftIds = [
+    PrimitiveId.i16x8ShiftLeft,
+    PrimitiveId.i16x8ShiftRightSigned,
+    PrimitiveId.i16x8ShiftRightUnsigned,
+  ] as const;
+  const i16ComparisonIds = [
+    PrimitiveId.i16x8Equal,
+    PrimitiveId.i16x8LessThanSigned,
+    PrimitiveId.i16x8LessThanUnsigned,
+  ] as const;
   const simdIds: readonly PrimitiveId[] = [
     PrimitiveId.f32x4Make,
     PrimitiveId.f32x4Splat,
-    ...arithmeticIds,
-    ...extractIds,
-    ...replaceIds,
-    ...comparisonIds,
+    ...f32BinaryIds,
+    ...f32UnaryIds,
+    ...f32ExtractIds,
+    ...f32ReplaceIds,
+    ...f32ComparisonIds,
     PrimitiveId.f32x4Select,
+    PrimitiveId.f32x4ConvertI32x4Signed,
+    PrimitiveId.f32x4ConvertI32x4Unsigned,
+    PrimitiveId.f32x4MaskBitmask,
+    PrimitiveId.f32x4MaskAllTrue,
+    PrimitiveId.f32x4MaskAnyTrue,
+    PrimitiveId.i32x4Make,
+    PrimitiveId.i32x4Splat,
+    ...i32BinaryIds,
+    ...i32ShiftIds,
+    ...i32ComparisonIds,
+    PrimitiveId.i32x4Not,
+    PrimitiveId.i32x4Select,
+    ...i32ExtractIds,
+    ...i32ReplaceIds,
+    PrimitiveId.i32x4MaskBitmask,
+    PrimitiveId.i32x4MaskAllTrue,
+    PrimitiveId.i32x4MaskAnyTrue,
+    PrimitiveId.i32x4TruncateSaturateF32x4Signed,
+    PrimitiveId.i32x4TruncateSaturateF32x4Unsigned,
+    PrimitiveId.i8x16Splat,
+    ...i8BinaryIds,
+    ...i8ShiftIds,
+    ...i8ComparisonIds,
+    PrimitiveId.i8x16Not,
+    PrimitiveId.i8x16Select,
+    PrimitiveId.i8x16MaskBitmask,
+    PrimitiveId.i8x16MaskAllTrue,
+    PrimitiveId.i8x16MaskAnyTrue,
+    PrimitiveId.i16x8Splat,
+    ...i16BinaryIds,
+    ...i16ShiftIds,
+    ...i16ComparisonIds,
+    PrimitiveId.i16x8Not,
+    PrimitiveId.i16x8Select,
+    PrimitiveId.i16x8MaskBitmask,
+    PrimitiveId.i16x8MaskAllTrue,
+    PrimitiveId.i16x8MaskAnyTrue,
   ];
   if (!simdIds.includes(operation.primitiveId)) return false;
 
@@ -734,26 +873,122 @@ function validateCoreSimdPrimitive(
     type.kind === "vector" && type.lanes === 4 && type.element === "f32";
   const isF32x4Mask = (type: CoreType): boolean =>
     type.kind === "mask" && type.lanes === 4 && type.element === "f32";
+  const isI32 = (type: CoreType): boolean =>
+    type.kind === "scalar" && type.scalar === "i32";
+  const isI32x4 = (type: CoreType): boolean =>
+    type.kind === "vector" && type.lanes === 4 && type.element === "i32";
+  const isI32x4Mask = (type: CoreType): boolean =>
+    type.kind === "mask" && type.lanes === 4 && type.element === "i32";
+  const isI8x16 = (type: CoreType): boolean =>
+    type.kind === "vector" && type.lanes === 16 && type.element === "i8";
+  const isI8x16Mask = (type: CoreType): boolean =>
+    type.kind === "mask" && type.lanes === 16 && type.element === "i8";
+  const isI16x8 = (type: CoreType): boolean =>
+    type.kind === "vector" && type.lanes === 8 && type.element === "i16";
+  const isI16x8Mask = (type: CoreType): boolean =>
+    type.kind === "mask" && type.lanes === 8 && type.element === "i16";
+  const unary = (
+    operand: (type: CoreType) => boolean,
+    result: (type: CoreType) => boolean,
+  ) =>
+    operandTypes.length === 1 && operand(operandTypes[0]) && result(resultType);
+  const binary = (
+    operand: (type: CoreType) => boolean,
+    result: (type: CoreType) => boolean,
+  ) =>
+    operandTypes.length === 2 && operandTypes.every(operand) &&
+    result(resultType);
+  const shift = (vector: (type: CoreType) => boolean) =>
+    operandTypes.length === 2 && vector(operandTypes[0]) &&
+    isI32(operandTypes[1]) && vector(resultType);
+  const select = (
+    vector: (type: CoreType) => boolean,
+    mask: (type: CoreType) => boolean,
+  ) =>
+    operandTypes.length === 3 && mask(operandTypes[0]) &&
+    vector(operandTypes[1]) && vector(operandTypes[2]) && vector(resultType);
 
   const valid = operation.primitiveId === PrimitiveId.f32x4Make
     ? operandTypes.length === 4 && operandTypes.every(isF32) &&
       isF32x4(resultType)
     : operation.primitiveId === PrimitiveId.f32x4Splat
     ? operandTypes.length === 1 && isF32(operandTypes[0]) && isF32x4(resultType)
-    : arithmeticIds.includes(operation.primitiveId as never)
-    ? operandTypes.length === 2 && operandTypes.every(isF32x4) &&
-      isF32x4(resultType)
-    : extractIds.includes(operation.primitiveId as never)
-    ? operandTypes.length === 1 && isF32x4(operandTypes[0]) && isF32(resultType)
-    : replaceIds.includes(operation.primitiveId as never)
+    : f32BinaryIds.includes(operation.primitiveId as never)
+    ? binary(isF32x4, isF32x4)
+    : f32UnaryIds.includes(operation.primitiveId as never)
+    ? unary(isF32x4, isF32x4)
+    : f32ExtractIds.includes(operation.primitiveId as never)
+    ? unary(isF32x4, isF32)
+    : f32ReplaceIds.includes(operation.primitiveId as never)
     ? operandTypes.length === 2 && isF32x4(operandTypes[0]) &&
       isF32(operandTypes[1]) && isF32x4(resultType)
-    : comparisonIds.includes(operation.primitiveId as never)
-    ? operandTypes.length === 2 && operandTypes.every(isF32x4) &&
-      isF32x4Mask(resultType)
-    : operandTypes.length === 3 && isF32x4Mask(operandTypes[0]) &&
-      isF32x4(operandTypes[1]) && isF32x4(operandTypes[2]) &&
-      isF32x4(resultType);
+    : f32ComparisonIds.includes(operation.primitiveId as never)
+    ? binary(isF32x4, isF32x4Mask)
+    : operation.primitiveId === PrimitiveId.f32x4Select
+    ? select(isF32x4, isF32x4Mask)
+    : operation.primitiveId === PrimitiveId.f32x4ConvertI32x4Signed ||
+        operation.primitiveId === PrimitiveId.f32x4ConvertI32x4Unsigned
+    ? unary(isI32x4, isF32x4)
+    : operation.primitiveId === PrimitiveId.f32x4MaskBitmask ||
+        operation.primitiveId === PrimitiveId.f32x4MaskAllTrue ||
+        operation.primitiveId === PrimitiveId.f32x4MaskAnyTrue
+    ? unary(isF32x4Mask, isI32)
+    : operation.primitiveId === PrimitiveId.i32x4Make
+    ? operandTypes.length === 4 && operandTypes.every(isI32) &&
+      isI32x4(resultType)
+    : operation.primitiveId === PrimitiveId.i32x4Splat
+    ? unary(isI32, isI32x4)
+    : i32BinaryIds.includes(operation.primitiveId as never)
+    ? binary(isI32x4, isI32x4)
+    : operation.primitiveId === PrimitiveId.i32x4Not
+    ? unary(isI32x4, isI32x4)
+    : i32ShiftIds.includes(operation.primitiveId as never)
+    ? shift(isI32x4)
+    : i32ComparisonIds.includes(operation.primitiveId as never)
+    ? binary(isI32x4, isI32x4Mask)
+    : operation.primitiveId === PrimitiveId.i32x4Select
+    ? select(isI32x4, isI32x4Mask)
+    : i32ExtractIds.includes(operation.primitiveId as never)
+    ? unary(isI32x4, isI32)
+    : i32ReplaceIds.includes(operation.primitiveId as never)
+    ? operandTypes.length === 2 && isI32x4(operandTypes[0]) &&
+      isI32(operandTypes[1]) && isI32x4(resultType)
+    : operation.primitiveId === PrimitiveId.i32x4MaskBitmask ||
+        operation.primitiveId === PrimitiveId.i32x4MaskAllTrue ||
+        operation.primitiveId === PrimitiveId.i32x4MaskAnyTrue
+    ? unary(isI32x4Mask, isI32)
+    : operation.primitiveId === PrimitiveId.i32x4TruncateSaturateF32x4Signed ||
+        operation.primitiveId === PrimitiveId.i32x4TruncateSaturateF32x4Unsigned
+    ? unary(isF32x4, isI32x4)
+    : operation.primitiveId === PrimitiveId.i8x16Splat
+    ? unary(isI32, isI8x16)
+    : i8BinaryIds.includes(operation.primitiveId as never)
+    ? binary(isI8x16, isI8x16)
+    : operation.primitiveId === PrimitiveId.i8x16Not
+    ? unary(isI8x16, isI8x16)
+    : i8ShiftIds.includes(operation.primitiveId as never)
+    ? shift(isI8x16)
+    : i8ComparisonIds.includes(operation.primitiveId as never)
+    ? binary(isI8x16, isI8x16Mask)
+    : operation.primitiveId === PrimitiveId.i8x16Select
+    ? select(isI8x16, isI8x16Mask)
+    : operation.primitiveId === PrimitiveId.i8x16MaskBitmask ||
+        operation.primitiveId === PrimitiveId.i8x16MaskAllTrue ||
+        operation.primitiveId === PrimitiveId.i8x16MaskAnyTrue
+    ? unary(isI8x16Mask, isI32)
+    : operation.primitiveId === PrimitiveId.i16x8Splat
+    ? unary(isI32, isI16x8)
+    : i16BinaryIds.includes(operation.primitiveId as never)
+    ? binary(isI16x8, isI16x8)
+    : operation.primitiveId === PrimitiveId.i16x8Not
+    ? unary(isI16x8, isI16x8)
+    : i16ShiftIds.includes(operation.primitiveId as never)
+    ? shift(isI16x8)
+    : i16ComparisonIds.includes(operation.primitiveId as never)
+    ? binary(isI16x8, isI16x8Mask)
+    : operation.primitiveId === PrimitiveId.i16x8Select
+    ? select(isI16x8, isI16x8Mask)
+    : unary(isI16x8Mask, isI32);
   if (!valid) {
     throw new TypeError(
       `Core SIMD primitive ${

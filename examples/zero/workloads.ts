@@ -163,6 +163,21 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "nonlinear scalar call tree seven operations above the expansion budget",
     callTreeThresholdReference(12),
   ),
+  workload(
+    "31-toroidal-life",
+    "complete 5x5 toroidal cellular automaton generation",
+    toroidalLifeReference,
+  ),
+  workload(
+    "32-toroidal-life-simd",
+    "four independent toroidal Life boards in i32x4 lanes",
+    toroidalLifeSimdReference,
+  ),
+  workload(
+    "33-xorshift32-simd",
+    "four independent xorshift32 streams in i32x4 lanes",
+    xorshift32SimdReference,
+  ),
 ];
 
 function workload(
@@ -377,4 +392,70 @@ function oversizedNestedStep(value: number): number {
   const joined = (left + right) | 0;
   const twisted = (Math.imul(joined, mixed) + 19) | 0;
   return (Math.imul(twisted, twisted) + joined + 23) | 0;
+}
+
+function toroidalLifeReference(board: number, generations: number): number {
+  return repeat(generations, board, (currentBoard) => {
+    let nextBoard = 0;
+    for (let row = 0; row < 5; row += 1) {
+      for (let column = 0; column < 5; column += 1) {
+        let liveNeighbors = 0;
+        for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+          for (
+            let columnOffset = -1;
+            columnOffset <= 1;
+            columnOffset += 1
+          ) {
+            if (rowOffset === 0 && columnOffset === 0) continue;
+            const neighborRow = (row + rowOffset + 5) % 5;
+            const neighborColumn = (column + columnOffset + 5) % 5;
+            const neighborScale = 2 ** (neighborRow * 5 + neighborColumn);
+            liveNeighbors += Math.trunc(currentBoard / neighborScale) % 2;
+          }
+        }
+        const cellScale = 2 ** (row * 5 + column);
+        const cell = Math.trunc(currentBoard / cellScale) % 2;
+        const nextCell = liveNeighbors === 3
+          ? 1
+          : liveNeighbors === 2
+          ? cell
+          : 0;
+        nextBoard = (nextBoard + Math.imul(nextCell, cellScale)) | 0;
+      }
+    }
+    return nextBoard;
+  });
+}
+
+function toroidalLifeSimdReference(seed: number, generations: number): number {
+  const boards = [
+    seed,
+    (seed + 1) | 0,
+    (seed + 65_537) | 0,
+    (seed + 1_048_579) | 0,
+  ].map((board) => board & 33_554_431);
+  const evolved = boards.map((board) =>
+    toroidalLifeReference(board, generations)
+  );
+  return (
+    evolved[0]! + Math.imul(evolved[1]!, 3) +
+    Math.imul(evolved[2]!, 5) + Math.imul(evolved[3]!, 7)
+  ) | 0;
+}
+
+function xorshift32SimdReference(seed: number, rounds: number): number {
+  const streams = [seed, (seed + 1) | 0, (seed + 2) | 0, (seed + 3) | 0];
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    for (let lane = 0; lane < streams.length; lane += 1) {
+      let state = streams[lane]!;
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      streams[lane] = state | 0;
+    }
+  }
+  return (
+    streams[0]! + Math.imul(streams[1]!, 3) +
+    Math.imul(streams[2]!, 5) + Math.imul(streams[3]!, 7)
+  ) | 0;
 }

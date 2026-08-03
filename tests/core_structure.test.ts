@@ -184,6 +184,62 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         );
         break;
       }
+      case "31-toroidal-life":
+        assertEquals(structure.coreFunctions, 4, "Life functions");
+        assertEquals(structure.coreOperations, 354, "Life operations");
+        assertEquals(structure.directCallSites, 35, "Life call sites");
+        assertEquals(
+          structure.maximumCalleeReferences,
+          25,
+          "Life cell-call multiplicity",
+        );
+        assertEquals(
+          structure.partialScalarOperations,
+          2,
+          "Life extraction operations",
+        );
+        assertEquals(structure.maximumBlockLiveValues, 11, "Life liveness");
+        assertEquals(structure.maximumCallDepth, 3, "Life call depth");
+        break;
+      case "32-toroidal-life-simd":
+        assertEquals(structure.coreFunctions, 5, "SIMD Life functions");
+        assertEquals(structure.coreBlocks, 8, "SIMD Life blocks");
+        assertEquals(structure.coreOperations, 385, "SIMD Life operations");
+        assertEquals(structure.directCallSites, 36, "SIMD Life call sites");
+        assertEquals(
+          structure.maximumCalleeReferences,
+          25,
+          "SIMD Life cell-call multiplicity",
+        );
+        assertEquals(
+          structure.partialScalarOperations,
+          0,
+          "SIMD Life partial operations",
+        );
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          11,
+          "SIMD Life liveness",
+        );
+        assertEquals(structure.maximumCallDepth, 4, "SIMD Life call depth");
+        break;
+      case "33-xorshift32-simd":
+        assertEquals(structure.coreFunctions, 2, "SIMD xorshift functions");
+        assertEquals(structure.coreBlocks, 5, "SIMD xorshift blocks");
+        assertEquals(structure.coreOperations, 34, "SIMD xorshift operations");
+        assertEquals(structure.directCallSites, 1, "SIMD xorshift calls");
+        assertEquals(
+          structure.partialScalarOperations,
+          0,
+          "SIMD xorshift partial operations",
+        );
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          5,
+          "SIMD xorshift liveness",
+        );
+        assertEquals(structure.maximumCallDepth, 1, "SIMD xorshift call depth");
+        break;
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }

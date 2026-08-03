@@ -256,12 +256,12 @@ export function lowerCoreToWasm(
 ): CoreWasmArtifact {
   validateCore(core);
   validateCoreWasmTarget(core, options.target ?? "wasm-simd128");
-  validateJavaScriptBoundary(core);
   const exports = options.exports ?? [{
     name: "main",
     functionId: core.entryFunction,
   }];
   validateCoreExports(core, exports);
+  validateJavaScriptBoundary(core, exports);
   const reachableFunctionIds = findReachableFunctions(core, exports);
   const reachableFunctions = core.functions.filter((function_) =>
     reachableFunctionIds.has(function_.id)
@@ -3068,18 +3068,20 @@ function emitOperation(
   }
   if (operation.kind === "vector.shuffle") {
     const type = core.types[operation.type];
-    if (
-      type.kind !== "vector" || type.lanes !== 4 || type.element !== "f32"
-    ) {
+    if (type.kind !== "vector") {
       throw new TypeError(
-        `${operation.span.file}:${operation.span.start}: Wasm backend supports shuffle only for f32x4`,
+        `${operation.span.file}:${operation.span.start}: Wasm backend requires a vector shuffle result`,
       );
     }
+    const laneBytes = 16 / type.lanes;
     return finish([
       ...getOperands(),
       ...wasmInstruction.i8x16Shuffle(
         operation.lanes.flatMap((lane) =>
-          [0, 1, 2, 3].map((byteOffset) => lane * 4 + byteOffset)
+          Array.from(
+            { length: laneBytes },
+            (_, byteOffset) => lane * laneBytes + byteOffset,
+          )
         ),
       ),
     ]);
@@ -3108,6 +3110,18 @@ function emitOperation(
         ...wasmInstruction.f32x4ReplaceLane(3),
       ]);
     }
+    if (operation.primitiveId === PrimitiveId.i32x4Make) {
+      return finish([
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.i32x4Splat,
+        ...getValue(operation.operands[1]),
+        ...wasmInstruction.i32x4ReplaceLane(1),
+        ...getValue(operation.operands[2]),
+        ...wasmInstruction.i32x4ReplaceLane(2),
+        ...getValue(operation.operands[3]),
+        ...wasmInstruction.i32x4ReplaceLane(3),
+      ]);
+    }
     if (
       operation.primitiveId >= PrimitiveId.f32x4ExtractLane0 &&
       operation.primitiveId <= PrimitiveId.f32x4ExtractLane3
@@ -3130,7 +3144,34 @@ function emitOperation(
         ),
       ]);
     }
-    if (operation.primitiveId === PrimitiveId.f32x4Select) {
+    if (
+      operation.primitiveId >= PrimitiveId.i32x4ExtractLane0 &&
+      operation.primitiveId <= PrimitiveId.i32x4ExtractLane3
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i32x4ExtractLane(
+          operation.primitiveId - PrimitiveId.i32x4ExtractLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i32x4ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.i32x4ReplaceLane3
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i32x4ReplaceLane(
+          operation.primitiveId - PrimitiveId.i32x4ReplaceLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId === PrimitiveId.f32x4Select ||
+      operation.primitiveId === PrimitiveId.i32x4Select ||
+      operation.primitiveId === PrimitiveId.i8x16Select ||
+      operation.primitiveId === PrimitiveId.i16x8Select
+    ) {
       return finish([
         ...getValue(operation.operands[1]),
         ...getValue(operation.operands[2]),
@@ -4445,6 +4486,138 @@ function emitDirectPrimitive(
       wasmInstruction.f32x4GreaterThanOrEqual,
     ],
     [PrimitiveId.f32x4Select, wasmInstruction.v128BitSelect],
+    [PrimitiveId.i32x4Splat, wasmInstruction.i32x4Splat],
+    [PrimitiveId.i32x4Add, wasmInstruction.i32x4Add],
+    [PrimitiveId.i32x4Subtract, wasmInstruction.i32x4Subtract],
+    [PrimitiveId.i32x4Multiply, wasmInstruction.i32x4Multiply],
+    [PrimitiveId.i32x4And, wasmInstruction.i32x4And],
+    [PrimitiveId.i32x4Or, wasmInstruction.i32x4Or],
+    [PrimitiveId.i32x4Xor, wasmInstruction.i32x4Xor],
+    [PrimitiveId.i32x4Not, wasmInstruction.i32x4Not],
+    [PrimitiveId.i32x4ShiftLeft, wasmInstruction.i32x4ShiftLeft],
+    [
+      PrimitiveId.i32x4ShiftRightSigned,
+      wasmInstruction.i32x4ShiftRightSigned,
+    ],
+    [
+      PrimitiveId.i32x4ShiftRightUnsigned,
+      wasmInstruction.i32x4ShiftRightUnsigned,
+    ],
+    [PrimitiveId.i32x4Equal, wasmInstruction.i32x4Equal],
+    [PrimitiveId.i32x4NotEqual, wasmInstruction.i32x4NotEqual],
+    [PrimitiveId.i32x4LessThanSigned, wasmInstruction.i32x4LessThanSigned],
+    [PrimitiveId.i32x4LessThanUnsigned, wasmInstruction.i32x4LessThanUnsigned],
+    [
+      PrimitiveId.i32x4GreaterThanSigned,
+      wasmInstruction.i32x4GreaterThanSigned,
+    ],
+    [
+      PrimitiveId.i32x4GreaterThanUnsigned,
+      wasmInstruction.i32x4GreaterThanUnsigned,
+    ],
+    [
+      PrimitiveId.i32x4LessThanOrEqualSigned,
+      wasmInstruction.i32x4LessThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i32x4LessThanOrEqualUnsigned,
+      wasmInstruction.i32x4LessThanOrEqualUnsigned,
+    ],
+    [
+      PrimitiveId.i32x4GreaterThanOrEqualSigned,
+      wasmInstruction.i32x4GreaterThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i32x4GreaterThanOrEqualUnsigned,
+      wasmInstruction.i32x4GreaterThanOrEqualUnsigned,
+    ],
+    [PrimitiveId.i32x4MinimumSigned, wasmInstruction.i32x4MinimumSigned],
+    [PrimitiveId.i32x4MinimumUnsigned, wasmInstruction.i32x4MinimumUnsigned],
+    [PrimitiveId.i32x4MaximumSigned, wasmInstruction.i32x4MaximumSigned],
+    [PrimitiveId.i32x4MaximumUnsigned, wasmInstruction.i32x4MaximumUnsigned],
+    [PrimitiveId.i32x4MaskBitmask, wasmInstruction.i32x4Bitmask],
+    [PrimitiveId.i32x4MaskAllTrue, wasmInstruction.i32x4AllTrue],
+    [PrimitiveId.i32x4MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [
+      PrimitiveId.i32x4TruncateSaturateF32x4Signed,
+      wasmInstruction.i32x4TruncateSaturateF32x4Signed,
+    ],
+    [
+      PrimitiveId.i32x4TruncateSaturateF32x4Unsigned,
+      wasmInstruction.i32x4TruncateSaturateF32x4Unsigned,
+    ],
+    [PrimitiveId.i32x4Select, wasmInstruction.v128BitSelect],
+    [
+      PrimitiveId.f32x4ConvertI32x4Signed,
+      wasmInstruction.f32x4ConvertI32x4Signed,
+    ],
+    [
+      PrimitiveId.f32x4ConvertI32x4Unsigned,
+      wasmInstruction.f32x4ConvertI32x4Unsigned,
+    ],
+    [PrimitiveId.f32x4Absolute, wasmInstruction.f32x4Absolute],
+    [PrimitiveId.f32x4Negate, wasmInstruction.f32x4Negate],
+    [PrimitiveId.f32x4SquareRoot, wasmInstruction.f32x4SquareRoot],
+    [PrimitiveId.f32x4Ceiling, wasmInstruction.f32x4Ceiling],
+    [PrimitiveId.f32x4Floor, wasmInstruction.f32x4Floor],
+    [PrimitiveId.f32x4Truncate, wasmInstruction.f32x4Truncate],
+    [PrimitiveId.f32x4Nearest, wasmInstruction.f32x4Nearest],
+    [PrimitiveId.f32x4Minimum, wasmInstruction.f32x4Minimum],
+    [PrimitiveId.f32x4Maximum, wasmInstruction.f32x4Maximum],
+    [PrimitiveId.f32x4PseudoMinimum, wasmInstruction.f32x4PseudoMinimum],
+    [PrimitiveId.f32x4PseudoMaximum, wasmInstruction.f32x4PseudoMaximum],
+    [PrimitiveId.f32x4MaskBitmask, wasmInstruction.i32x4Bitmask],
+    [PrimitiveId.f32x4MaskAllTrue, wasmInstruction.i32x4AllTrue],
+    [PrimitiveId.f32x4MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [PrimitiveId.i8x16Splat, wasmInstruction.i8x16Splat],
+    [PrimitiveId.i8x16Add, wasmInstruction.i8x16Add],
+    [PrimitiveId.i8x16Subtract, wasmInstruction.i8x16Subtract],
+    [PrimitiveId.i8x16And, wasmInstruction.i32x4And],
+    [PrimitiveId.i8x16Or, wasmInstruction.v128Or],
+    [PrimitiveId.i8x16Xor, wasmInstruction.v128Xor],
+    [PrimitiveId.i8x16Not, wasmInstruction.v128Not],
+    [PrimitiveId.i8x16ShiftLeft, wasmInstruction.i8x16ShiftLeft],
+    [PrimitiveId.i8x16ShiftRightSigned, wasmInstruction.i8x16ShiftRightSigned],
+    [
+      PrimitiveId.i8x16ShiftRightUnsigned,
+      wasmInstruction.i8x16ShiftRightUnsigned,
+    ],
+    [PrimitiveId.i8x16Equal, wasmInstruction.i8x16Equal],
+    [PrimitiveId.i8x16LessThanSigned, wasmInstruction.i8x16LessThanSigned],
+    [PrimitiveId.i8x16LessThanUnsigned, wasmInstruction.i8x16LessThanUnsigned],
+    [PrimitiveId.i8x16MinimumSigned, wasmInstruction.i8x16MinimumSigned],
+    [PrimitiveId.i8x16MinimumUnsigned, wasmInstruction.i8x16MinimumUnsigned],
+    [PrimitiveId.i8x16MaximumSigned, wasmInstruction.i8x16MaximumSigned],
+    [PrimitiveId.i8x16MaximumUnsigned, wasmInstruction.i8x16MaximumUnsigned],
+    [PrimitiveId.i8x16Select, wasmInstruction.v128BitSelect],
+    [PrimitiveId.i8x16MaskBitmask, wasmInstruction.i8x16Bitmask],
+    [PrimitiveId.i8x16MaskAllTrue, wasmInstruction.i8x16AllTrue],
+    [PrimitiveId.i8x16MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [PrimitiveId.i16x8Splat, wasmInstruction.i16x8Splat],
+    [PrimitiveId.i16x8Add, wasmInstruction.i16x8Add],
+    [PrimitiveId.i16x8Subtract, wasmInstruction.i16x8Subtract],
+    [PrimitiveId.i16x8Multiply, wasmInstruction.i16x8Multiply],
+    [PrimitiveId.i16x8And, wasmInstruction.i32x4And],
+    [PrimitiveId.i16x8Or, wasmInstruction.v128Or],
+    [PrimitiveId.i16x8Xor, wasmInstruction.v128Xor],
+    [PrimitiveId.i16x8Not, wasmInstruction.v128Not],
+    [PrimitiveId.i16x8ShiftLeft, wasmInstruction.i16x8ShiftLeft],
+    [PrimitiveId.i16x8ShiftRightSigned, wasmInstruction.i16x8ShiftRightSigned],
+    [
+      PrimitiveId.i16x8ShiftRightUnsigned,
+      wasmInstruction.i16x8ShiftRightUnsigned,
+    ],
+    [PrimitiveId.i16x8Equal, wasmInstruction.i16x8Equal],
+    [PrimitiveId.i16x8LessThanSigned, wasmInstruction.i16x8LessThanSigned],
+    [PrimitiveId.i16x8LessThanUnsigned, wasmInstruction.i16x8LessThanUnsigned],
+    [PrimitiveId.i16x8MinimumSigned, wasmInstruction.i16x8MinimumSigned],
+    [PrimitiveId.i16x8MinimumUnsigned, wasmInstruction.i16x8MinimumUnsigned],
+    [PrimitiveId.i16x8MaximumSigned, wasmInstruction.i16x8MaximumSigned],
+    [PrimitiveId.i16x8MaximumUnsigned, wasmInstruction.i16x8MaximumUnsigned],
+    [PrimitiveId.i16x8Select, wasmInstruction.v128BitSelect],
+    [PrimitiveId.i16x8MaskBitmask, wasmInstruction.i16x8Bitmask],
+    [PrimitiveId.i16x8MaskAllTrue, wasmInstruction.i16x8AllTrue],
+    [PrimitiveId.i16x8MaskAnyTrue, wasmInstruction.v128AnyTrue],
   ]).get(primitiveId);
   return instruction;
 }
@@ -4491,7 +4664,9 @@ function emitNegation(
 function isDirectPrimitive(primitiveId: PrimitiveIdType): boolean {
   return primitiveId <= PrimitiveId.f32x4Divide ||
     (primitiveId >= PrimitiveId.f32x4ExtractLane0 &&
-      primitiveId <= PrimitiveId.f32x4Select);
+      primitiveId <= PrimitiveId.f32x4Select) ||
+    (primitiveId >= PrimitiveId.i32x4Make &&
+      primitiveId <= PrimitiveId.i16x8MaskAnyTrue);
 }
 
 function aggregateImportName(
@@ -4658,7 +4833,8 @@ function isStackifiableOperation(
   }
   return operation.kind === "primitive" &&
     isDirectPrimitive(operation.primitiveId) &&
-    operation.primitiveId !== PrimitiveId.f32x4Make;
+    operation.primitiveId !== PrimitiveId.f32x4Make &&
+    operation.primitiveId !== PrimitiveId.i32x4Make;
 }
 
 function coreTerminatorValues(
@@ -4730,14 +4906,20 @@ export function validateCoreWasmTarget(
   }
 }
 
-function validateJavaScriptBoundary(core: CoreModule): void {
-  const entry = core.functions[core.entryFunction];
-  const resultTypeId = core.signatures[entry.signature].result;
-  const resultType = core.types[resultTypeId];
-  if (resultType.kind === "vector" || resultType.kind === "mask") {
-    throw new TypeError(
-      `${entry.span.file}:${entry.span.start}: managed JavaScript ABI cannot return Core ${resultType.kind} type ${resultTypeId} from ${entry.name}`,
-    );
+function validateJavaScriptBoundary(
+  core: CoreModule,
+  exports: readonly { readonly functionId: CoreFunctionId }[],
+): void {
+  for (const exported of exports) {
+    const function_ = core.functions[exported.functionId];
+    const signature = core.signatures[function_.signature];
+    for (const typeId of [...signature.parameters, signature.result]) {
+      const type = core.types[typeId];
+      if (type.kind !== "vector" && type.kind !== "mask") continue;
+      throw new TypeError(
+        `${function_.span.file}:${function_.span.start}: managed JavaScript ABI cannot carry Core ${type.kind} type ${typeId} through export ${function_.name}`,
+      );
+    }
   }
   for (const function_ of core.functions) {
     for (const block of function_.blocks) {

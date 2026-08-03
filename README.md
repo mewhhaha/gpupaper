@@ -25,7 +25,7 @@ defines gpupaper's architecture or public target boundary.
 ## Install
 
 ```sh
-deno add jsr:@mewhhaha/gpupaper@0.1.3
+deno add jsr:@mewhhaha/gpupaper@0.1.4
 ```
 
 The default entrypoint contains Core, Core-to-Wasm lowering, TypeScript CPU
@@ -158,11 +158,13 @@ Zero source
   -> payload .wasm
 ```
 
-Zero has one wrapping `i32` type and a regular, postfix concrete syntax chosen
-to fit Baba 8's strict island parser class. Its semantic adapter provides
-first-order functions, lexical bindings, direct calls, lazy conditionals, and a
-bounded fold. That is enough to exercise SSA values, multi-function calls, CFG
-joins, loops, validation, and executable output while keeping the source-to-Core
+Zero has wrapping `i32` scalars and exact internal `i8x16`, `i16x8`, `i32x4`,
+and `f32x4` operations in a regular, postfix concrete syntax chosen to fit Baba
+8's strict island parser class. Its semantic adapter provides first-order
+functions, lexical bindings, direct calls, lazy conditionals, typed vector and
+mask operations, shuffles, conversions, and a bounded fold. That is enough to
+exercise SSA values, multi-function calls, CFG joins, scalar and vector loop
+state, validation, and executable output while keeping the source-to-Core
 mapping auditable.
 
 ```sh
@@ -206,8 +208,11 @@ runtime consequences and rejects structural contradictions.
 ### Types and computation
 
 - `i32`, `i64`, `f32`, `f64`, and `unit` scalar storage;
-- explicit 128-bit vector and mask types, with the implemented `f32x4`
-  arithmetic, comparison, lane, select, and shuffle family;
+- explicit 128-bit vector and mask types, with exact `f32x4` numeric operations,
+  complete lane-wise `i32x4` arithmetic, bitwise operations, shared-count
+  shifts, signed and unsigned comparisons, min/max, lane operations, typed
+  selection, shuffles, mask reductions, saturating conversions, and useful
+  `i8x16`/`i16x8` packed arithmetic subsets;
 - products, sums, opaque text and byte buffers, persistent Stores, functions,
   closures, and typed indirect calls;
 - constants, scalar arithmetic/comparison/bitwise/conversion primitives,
@@ -437,8 +442,11 @@ See [`PERFORMANCE.md`](PERFORMANCE.md) for current measurements and
 - Host calls are synchronous and memory32-based.
 - The managed JavaScript boundary cannot carry vector or mask values.
 - `wasm-scalar` rejects all vector and mask types.
-- Explicit `f32x4` is the implemented portable SIMD family; unsupported Core
-  vector combinations are rejected.
+- Core does not yet model linear-memory effects, so `v128.load` and `v128.store`
+  are available in the low-level Wasm builder but not as Core or Zero
+  operations.
+- `i64x2`, `f64x2`, saturating and widening narrow-lane arithmetic, swizzles,
+  horizontal arithmetic reductions, and relaxed SIMD are not implemented.
 - GPU acceleration begins after a host-resident Wasm plan unless a consumer
   explicitly uses the resident-column API.
 - Gpupaper validates residual compiler IR; it does not prove a frontend's source

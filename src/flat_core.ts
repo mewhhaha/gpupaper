@@ -135,7 +135,7 @@ const typeKinds = [
   "function",
 ] as const;
 const scalarKinds = ["i32", "i64", "f32", "f64", "unit"] as const;
-const vectorElementKinds = ["i32", "i64", "f32", "f64"] as const;
+const vectorElementKinds = ["i8", "i16", "i32", "i64", "f32", "f64"] as const;
 const bufferKinds = ["text", "bytes"] as const;
 const operationKinds = [
   "constant",
@@ -1204,16 +1204,23 @@ function validVectorAuxiliary(auxiliary: number): boolean {
   const element = vectorElementKinds[auxiliary & 0xff];
   if (element === undefined) return false;
   const lanes = auxiliary >>> 8;
-  return lanes * (element === "i64" || element === "f64" ? 64 : 32) === 128;
+  const elementBits = element === "i8"
+    ? 8
+    : element === "i16"
+    ? 16
+    : element === "i64" || element === "f64"
+    ? 64
+    : 32;
+  return lanes * elementBits === 128;
 }
 
-function vectorLaneCount(auxiliary: number): 2 | 4 {
+function vectorLaneCount(auxiliary: number): 2 | 4 | 8 | 16 {
   if (!validVectorAuxiliary(auxiliary)) {
     throw new RangeError(
       `invalid flat Core vector auxiliary ${auxiliary}`,
     );
   }
-  return (auxiliary >>> 8) as 2 | 4;
+  return (auxiliary >>> 8) as 2 | 4 | 8 | 16;
 }
 
 function inflateValidatedFlatCore(

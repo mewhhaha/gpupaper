@@ -6,7 +6,7 @@ import type {
   CoreTypeId,
   CoreValueId,
 } from "../src/core.ts";
-import { validateCore } from "../src/core.ts";
+import { PrimitiveId, validateCore } from "../src/core.ts";
 import { planCoreLayouts } from "../src/core_layout.ts";
 import { rewriteFlatCore } from "../src/core_rewrite.ts";
 import {
@@ -49,6 +49,72 @@ Deno.test("Core validation rejects a value without a dominating definition", () 
   );
 });
 
+Deno.test("Core validation rejects an i32x4 select without a mask", () => {
+  const first = 0 as CoreValueId;
+  const second = 1 as CoreValueId;
+  const third = 2 as CoreValueId;
+  const fourth = 3 as CoreValueId;
+  const lanes = 4 as CoreValueId;
+  const selected = 5 as CoreValueId;
+  const result = 6 as CoreValueId;
+  const vector = 1 as CoreTypeId;
+  const malformed: CoreModule = {
+    schemaVersion: 1,
+    file: span.file,
+    types: [
+      { kind: "scalar", scalar: "i32" },
+      { kind: "vector", lanes: 4, element: "i32" },
+      { kind: "mask", lanes: 4, element: "i32" },
+    ],
+    signatures: [{ parameters: [i32, i32, i32, i32], result: i32 }],
+    functions: [{
+      id: main,
+      name: "malformed_select",
+      sourceIdentity: undefined,
+      signature,
+      entryBlock: entry,
+      blocks: [{
+        id: entry,
+        parameters: [first, second, third, fourth].map((value) => ({
+          value,
+          type: i32,
+          span,
+        })),
+        operations: [{
+          kind: "primitive",
+          result: lanes,
+          type: vector,
+          operands: [first, second, third, fourth],
+          primitiveId: PrimitiveId.i32x4Make,
+          span,
+        }, {
+          kind: "primitive",
+          result: selected,
+          type: vector,
+          operands: [lanes, lanes, lanes],
+          primitiveId: PrimitiveId.i32x4Select,
+          span,
+        }, {
+          kind: "primitive",
+          result,
+          type: i32,
+          operands: [selected],
+          primitiveId: PrimitiveId.i32x4ExtractLane0,
+          span,
+        }],
+        terminator: { kind: "return", values: [result], span },
+      }],
+      span,
+    }],
+    entryFunction: main,
+  };
+
+  assertThrows(
+    () => validateCore(malformed),
+    /Core SIMD primitive i32x4\.select malformed_select:5 has an invalid signature/,
+  );
+});
+
 Deno.test("Core layout interns equal scalar representations", () => {
   const module: CoreModule = {
     ...constantModule(),
@@ -73,6 +139,24 @@ Deno.test("Core layout interns equal scalar representations", () => {
 
 Deno.test("flat Core round-trips every column of a validated module", () => {
   const module = identityAdditionModule();
+  const flat = flattenCore(module);
+  validateFlatCore(flat);
+
+  assertEquals(inflateFlatCore(flat), module);
+});
+
+Deno.test("flat Core round-trips narrow 128-bit vector shapes", () => {
+  const module: CoreModule = {
+    ...constantModule(),
+    types: [
+      { kind: "scalar", scalar: "i32" },
+      { kind: "vector", lanes: 16, element: "i8" },
+      { kind: "mask", lanes: 16, element: "i8" },
+      { kind: "vector", lanes: 8, element: "i16" },
+      { kind: "mask", lanes: 8, element: "i16" },
+    ],
+  };
+  validateCore(module);
   const flat = flattenCore(module);
   validateFlatCore(flat);
 
