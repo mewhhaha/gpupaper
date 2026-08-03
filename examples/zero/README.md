@@ -57,9 +57,10 @@ records reachability, call multiplicity, call depth, recursion, partial
 operations, and SSA liveness so each workload's claimed challenge is
 independently checkable.
 
-The final four workloads intentionally sit just beyond backend resource budgets.
-They are counterexamples for future profitability work, not demonstrations that
-every call or loop should be inlined.
+Workloads 23--26 intentionally sit just beyond backend resource budgets. They
+are counterexamples for future profitability work, not demonstrations that every
+call or loop should be inlined. Workloads 27--30 then sweep the scalar call-tree
+budget on both sides of its exact boundary.
 
 Run one rung while developing with `--workload`:
 

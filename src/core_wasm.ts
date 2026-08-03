@@ -186,6 +186,7 @@ type InlineScalarTreeShape = {
 
 type InlineScalarTreeLayout = Omit<InlineScalarTreeShape, "callsByResult"> & {
   readonly localByValue: ReadonlyMap<CoreValueId, number>;
+  readonly stackParameter: CoreValueId | undefined;
   readonly callsByResult: ReadonlyMap<CoreValueId, InlineScalarTreeLayout>;
 };
 
@@ -887,14 +888,29 @@ function planFunctionValues(
     const inlineLocalByValue = new Map<CoreValueId, number>();
     const inlineTypeByValue = valueTypes(shape.function);
     const inlineUses = analyzeFunctionValueUses(shape.function);
+    const entry = shape.function.blocks[shape.function.entryBlock];
+    const stackParameter = shape.total && shape.structure === "single" &&
+        entry.parameters.length === 1 &&
+        inlineUses.useCounts.get(entry.parameters[0].value) === 1
+      ? entry.parameters[0].value
+      : undefined;
     for (const block of shape.function.blocks) {
       for (const parameter of block.parameters) {
+        if (parameter.value === stackParameter) continue;
         inlineLocalByValue.set(parameter.value, nextLocal);
         nextLocal += 1;
         locals.push(wasmValueType(core, parameter.type));
       }
       for (const operation of block.operations) {
+        const operationUseBlocks = inlineUses.useBlocks.get(operation.result);
+        const sinksInlineCall = shape.total && shape.structure === "single" &&
+          operation.kind === "call.direct" &&
+          shape.callsByResult.has(operation.result) &&
+          inlineUses.useCounts.get(operation.result) === 1 &&
+          operationUseBlocks?.size === 1 &&
+          operationUseBlocks.has(block.id);
         if (
+          sinksInlineCall ||
           canSinkTotalScalarOperation(
             core,
             shape.function,
@@ -915,6 +931,7 @@ function planFunctionValues(
     return {
       ...shape,
       localByValue: inlineLocalByValue,
+      stackParameter,
       callsByResult: new Map(
         [...shape.callsByResult].map(([result, child]) =>
           [result, allocateScalarTree(child)] as const
@@ -2685,16 +2702,24 @@ function emitStackValue(
   closureTargets: readonly ClosureTarget[],
   closureTypeIndices: ReadonlyMap<CoreSignatureId, number>,
   textHandles: ReadonlyMap<string, number>,
+  resolveStackParameter?: (
+    value: CoreValueId,
+  ) => readonly WasmInstruction[] | undefined,
 ): readonly WasmInstruction[] {
   const local = layout.localByValue.get(value);
   if (local !== undefined) return wasmInstruction.localGet(local);
+  const stackParameter = resolveStackParameter?.(value);
+  if (stackParameter !== undefined) return stackParameter;
   const operation = layout.operationByResult.get(value);
   if (operation === undefined) {
     throw new Error(
       `Core function ${function_.name} has no stack definition for value ${value}`,
     );
   }
-  if (!isStackifiableOperation(operation)) {
+  if (
+    !isStackifiableOperation(operation) &&
+    !layout.inlineScalarTreeByCallResult.has(operation.result)
+  ) {
     throw new Error(
       `${operation.span.file}:${operation.span.start}: Core ${operation.kind} cannot be stackified without a local`,
     );
@@ -2720,6 +2745,7 @@ function emitStackValue(
         closureTargets,
         closureTypeIndices,
         textHandles,
+        resolveStackParameter,
       ),
   );
 }
@@ -3131,6 +3157,15 @@ function emitInlineScalarTree(
   textHandles: ReadonlyMap<string, number>,
   getCallerValue: (value: CoreValueId) => readonly WasmInstruction[],
 ): readonly WasmInstruction[] {
+  const entry = tree.function.blocks[tree.function.entryBlock];
+  if (entry.parameters.length !== call.operands.length) {
+    throw new Error(
+      `Core inline tree ${tree.function.name} expects ${entry.parameters.length} operands; received ${call.operands.length}`,
+    );
+  }
+  const stackArgument = tree.stackParameter === undefined
+    ? undefined
+    : getCallerValue(call.operands[0]);
   const layout: FunctionValueLayout = {
     localByValue: tree.localByValue,
     typeByValue: valueTypes(tree.function),
@@ -3148,7 +3183,20 @@ function emitInlineScalarTree(
     affineOffsetLocal: undefined,
     inlineDiamondByCallResult: new Map(),
     inlineLoopByCallResult: new Map(),
-    inlineScalarTreeByCallResult: new Map(),
+    inlineScalarTreeByCallResult: tree.callsByResult,
+  };
+  const resolveStackParameter = (
+    value: CoreValueId,
+  ): readonly WasmInstruction[] | undefined => {
+    if (value === tree.stackParameter) {
+      if (stackArgument === undefined) {
+        throw new Error(
+          `Core inline tree ${tree.function.name} lost its stack argument`,
+        );
+      }
+      return stackArgument;
+    }
+    return undefined;
   };
   const getValue = (value: CoreValueId): readonly WasmInstruction[] =>
     emitStackValue(
@@ -3161,6 +3209,7 @@ function emitInlineScalarTree(
       closureTargets,
       closureTypeIndices,
       textHandles,
+      resolveStackParameter,
     );
   const emitOperations = (
     block: CoreFunction["blocks"][number],
@@ -3204,20 +3253,16 @@ function emitInlineScalarTree(
         getValue,
       );
     });
-  const entry = tree.function.blocks[tree.function.entryBlock];
-  if (entry.parameters.length !== call.operands.length) {
-    throw new Error(
-      `Core inline tree ${tree.function.name} expects ${entry.parameters.length} operands; received ${call.operands.length}`,
-    );
-  }
-  const binding = [
-    ...call.operands.flatMap(getCallerValue),
-    ...[...entry.parameters].reverse().flatMap((parameter) =>
-      wasmInstruction.localSet(
-        requiredLocal(layout, tree.function, parameter.value),
-      )
-    ),
-  ];
+  const binding = tree.stackParameter === undefined
+    ? [
+      ...call.operands.flatMap(getCallerValue),
+      ...[...entry.parameters].reverse().flatMap((parameter) =>
+        wasmInstruction.localSet(
+          requiredLocal(layout, tree.function, parameter.value),
+        )
+      ),
+    ]
+    : [];
   if (tree.structure === "single") {
     const returned = entry.terminator.kind === "return"
       ? entry.terminator.values[0]

@@ -1,6 +1,7 @@
 import { compileZeroSource } from "../examples/zero/compiler.ts";
 import { zeroWorkloads } from "../examples/zero/workloads.ts";
 import { measureCoreStructure } from "../scripts/core_structure.ts";
+import type { CoreModule } from "../src/core.ts";
 
 Deno.test("Core structure separates reachability sharing and partial operations", async () => {
   const compiled = await compileZeroSource(
@@ -132,17 +133,7 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         assertEquals(structure.coreOperations, 24, "fanout operations");
         break;
       case "24-over-budget-call-chain": {
-        const expandedOperations = compiled.core.functions
-          .filter((function_) => function_.name !== "run")
-          .reduce(
-            (count, function_) =>
-              count + function_.blocks.reduce(
-                (functionCount, block) =>
-                  functionCount + block.operations.length,
-                0,
-              ),
-            0,
-          );
+        const expandedOperations = countOperationsOutsideRun(compiled.core);
         assertEquals(expandedOperations, 91, "expanded scalar operations");
         assertEquals(structure.maximumCallDepth, 18, "over-budget call depth");
         break;
@@ -156,19 +147,41 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         assertEquals(structure.coreOperations, 165, "wide-frontier operations");
         break;
       case "26-oversized-nested-fold": {
-        const candidateOperations = compiled.core.functions
-          .filter((function_) => function_.name !== "run")
-          .reduce(
-            (count, function_) =>
-              count + function_.blocks.reduce(
-                (functionCount, block) =>
-                  functionCount + block.operations.length,
-                0,
-              ),
-            0,
-          );
+        const candidateOperations = countOperationsOutsideRun(compiled.core);
         assertEquals(candidateOperations, 27, "nested composition operations");
         assertEquals(structure.coreOperations, 32, "nested-fold operations");
+        break;
+      }
+      case "27-call-tree-fifty-six":
+      case "28-call-tree-sixty-one":
+      case "29-call-tree-sixty-six":
+      case "30-call-tree-seventy-one": {
+        const expected = new Map([
+          ["27-call-tree-fifty-six", { operations: 56, depth: 11 }],
+          ["28-call-tree-sixty-one", { operations: 61, depth: 12 }],
+          ["29-call-tree-sixty-six", { operations: 66, depth: 13 }],
+          ["30-call-tree-seventy-one", { operations: 71, depth: 14 }],
+        ]).get(workload.name)!;
+        assertEquals(
+          countOperationsOutsideRun(compiled.core),
+          expected.operations,
+          "threshold-tree operations",
+        );
+        assertEquals(
+          structure.maximumCallDepth,
+          expected.depth,
+          "threshold-tree call depth",
+        );
+        assertEquals(
+          structure.maximumCalleeReferences,
+          1,
+          "threshold-tree callee references",
+        );
+        assertEquals(
+          structure.partialScalarOperations,
+          0,
+          "threshold-tree partial operations",
+        );
         break;
       }
       default:
@@ -204,4 +217,17 @@ function assertEquals(
   if (actual !== expected) {
     throw new Error(`${label} was ${actual}; expected ${expected}`);
   }
+}
+
+function countOperationsOutsideRun(core: CoreModule): number {
+  return core.functions
+    .filter((function_) => function_.name !== "run")
+    .reduce(
+      (count, function_) =>
+        count + function_.blocks.reduce(
+          (functionCount, block) => functionCount + block.operations.length,
+          0,
+        ),
+      0,
+    );
 }

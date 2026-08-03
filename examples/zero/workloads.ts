@@ -143,6 +143,26 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "nested nonlinear fold beyond the composition budget",
     oversizedNestedFoldReference,
   ),
+  workload(
+    "27-call-tree-fifty-six",
+    "nonlinear scalar call tree eight operations below the expansion budget",
+    callTreeThresholdReference(9),
+  ),
+  workload(
+    "28-call-tree-sixty-one",
+    "nonlinear scalar call tree three operations below the expansion budget",
+    callTreeThresholdReference(10),
+  ),
+  workload(
+    "29-call-tree-sixty-six",
+    "nonlinear scalar call tree two operations above the expansion budget",
+    callTreeThresholdReference(11),
+  ),
+  workload(
+    "30-call-tree-seventy-one",
+    "nonlinear scalar call tree seven operations above the expansion budget",
+    callTreeThresholdReference(12),
+  ),
 ];
 
 function workload(
@@ -311,13 +331,20 @@ function sharedLeafFanoutFiveReference(seed: number, rounds: number): number {
 }
 
 function overBudgetCallChainReference(seed: number, rounds: number): number {
-  return repeat(rounds, seed, (value) => {
-    let state = polynomial(value);
-    for (let stage = 0; stage < 16; stage += 1) {
-      state = (Math.imul(state, 3) + 7) | 0;
-    }
-    return state;
-  });
+  return callTreeThresholdReference(16)(seed, rounds);
+}
+
+function callTreeThresholdReference(
+  stages: number,
+): (seed: number, rounds: number) => number {
+  return (seed, rounds) =>
+    repeat(rounds, seed, (value) => {
+      let state = polynomial(value);
+      for (let stage = 0; stage < stages; stage += 1) {
+        state = (Math.imul(state, 3) + 7) | 0;
+      }
+      return state;
+    });
 }
 
 function wideFrontierThirtyTwoReference(seed: number, rounds: number): number {

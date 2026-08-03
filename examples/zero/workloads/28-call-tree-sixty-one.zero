@@ -1,0 +1,16 @@
+private: stage0 value =
+  @value 78 + let:mixed
+  @mixed @mixed * 3 * @mixed 5 * + 17 + ;
+private: stage1 value = @value call:stage0:1 3 * 7 + ;
+private: stage2 value = @value call:stage1:1 3 * 7 + ;
+private: stage3 value = @value call:stage2:1 3 * 7 + ;
+private: stage4 value = @value call:stage3:1 3 * 7 + ;
+private: stage5 value = @value call:stage4:1 3 * 7 + ;
+private: stage6 value = @value call:stage5:1 3 * 7 + ;
+private: stage7 value = @value call:stage6:1 3 * 7 + ;
+private: stage8 value = @value call:stage7:1 3 * 7 + ;
+private: stage9 value = @value call:stage8:1 3 * 7 + ;
+private: stage10 value = @value call:stage9:1 3 * 7 + ;
+private: step value = @value call:stage10:1 ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

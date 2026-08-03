@@ -172,6 +172,25 @@ The key counterexample is sinking division across a branch: eager evaluation
 could introduce a trap on a path where the source operation was not evaluated.
 Therefore totality and region locality are both required.
 
+The scalar-tree threshold sweep isolates a second beta-reduction boundary.
+Materializing every formal parameter and direct-call result costs up to two
+locals per unary frame even when the complete inlined tree is pure and total.
+For a single-block unary frame whose parameter and child-call result each have
+exactly one use, capture-free substitution can instead keep both values on the
+operand stack. Call-by-value evaluation is preserved because the one argument is
+evaluated exactly once; moving it across only pure total operations cannot add,
+remove, or reorder an observable event. Restricting the rule to one parameter
+avoids reordering multiple argument evaluations. Restricting it to a fully total
+tree excludes the division and branch counterexamples.
+
+For depth \(d\), the present layout may allocate \(2d+O(1)\) frame-boundary
+locals and emit corresponding `local.set`/`local.get` traffic. Cross-frame stack
+sinking should reduce those boundary locals to zero while leaving locals for
+multiply-used definitions such as the polynomial's shared `mixed` value. The
+use-count and totality certificates already cost \(O(O+V)\); the representation
+needs only a bit per omitted parameter or call result. This is a semantic
+specialization, not a higher inlining budget: rejected trees remain rejected.
+
 ### 3.4 Determinism
 
 All externally observable order is derived from stable table order. Parallel
@@ -427,30 +446,30 @@ The suite is an ordered ladder of dominant structural challenges rather than a
 claim that every component of \(C\) increases at every step: affine arithmetic,
 a control-flow diamond, a unique call graph, a branch forest, a nested natural
 loop, a broad call graph, a shared-call DAG, a wide binding frontier, partial
-arithmetic under lazy control, and a mostly dead module. The final four isolate
-three optimization restrictions and one discard boundary: unique-reference
-inlining must not duplicate a shared callee; stackification should respond to
-actual liveness rather than total operations; partial arms must remain lazy; and
-binary emission should depend on \(R\), while frontend and reachability work
-still depend on \(F\). Four further cases hold nonlinear recurrence semantics
-constant while changing source organization from monolithic to a deep unique
-chain and a shared DAG, then vary the inner-fold trip count at runtime. The
-first triplet isolates representation sensitivity: if two modules denote the
-same recurrence but differ in \(H\) or \(\mu\), any runtime difference is
-compiler-generated rather than algorithmic. The dynamic fold tests whether a
-certificate derived for a constant inner count accidentally depends on that
-constant. Four fixed-affine-fold cases then hold the inner map and outer driver
-constant while selecting inner counts \(n\in\{7,8,16,32\}\). They straddle the
-current linear/exponentiation boundary and distinguish a local inner-loop cost
-from the cost after composition with its outer fold. Four affine-region cases
-then hold the eight-step body fixed while varying a pure affine pre-map \(g\),
-post-map \(h\), or both. They test whether loop summarization is compositional
-across the acyclic regions adjacent to the loop. A final pathology quartet
-targets policy discontinuities rather than new semantics: shared-leaf fanout
-five, an expanded scalar chain beyond 64 operations, a live frontier of 32
-values, and a nested-loop body beyond the 24-operation composition budget. This
-avoids collapsing incomparable programs into an invented single complexity
-score.
+arithmetic under lazy control, and a mostly dead module. The last four of this
+initial ten-case ladder isolate three optimization restrictions and one discard
+boundary: unique-reference inlining must not duplicate a shared callee;
+stackification should respond to actual liveness rather than total operations;
+partial arms must remain lazy; and binary emission should depend on \(R\), while
+frontend and reachability work still depend on \(F\). Four further cases hold
+nonlinear recurrence semantics constant while changing source organization from
+monolithic to a deep unique chain and a shared DAG, then vary the inner-fold
+trip count at runtime. The first triplet isolates representation sensitivity: if
+two modules denote the same recurrence but differ in \(H\) or \(\mu\), any
+runtime difference is compiler-generated rather than algorithmic. The dynamic
+fold tests whether a certificate derived for a constant inner count accidentally
+depends on that constant. Four fixed-affine-fold cases then hold the inner map
+and outer driver constant while selecting inner counts \(n\in\{7,8,16,32\}\).
+They straddle the current linear/exponentiation boundary and distinguish a local
+inner-loop cost from the cost after composition with its outer fold. Four
+affine-region cases then hold the eight-step body fixed while varying a pure
+affine pre-map \(g\), post-map \(h\), or both. They test whether loop
+summarization is compositional across the acyclic regions adjacent to the loop.
+A final pathology quartet targets policy discontinuities rather than new
+semantics: shared-leaf fanout five, an expanded scalar chain beyond 64
+operations, a live frontier of 32 values, and a nested-loop body beyond the
+24-operation composition budget. This avoids collapsing incomparable programs
+into an invented single complexity score.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
@@ -484,8 +503,8 @@ likewise reports separate boundaries because an in-process initialized frontend
 and a fresh `rustc` process do not measure the same operation. With \(q\)
 workloads, \(p\) probes, \(m\) samples, and \(r\) rounds, validation work is
 \(O(qp)\), compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\),
-multiplied by each workload's inner recurrence cost. The default 26-workload,
-30-sample, eight-seed, 100,000-round run performs 624 million outer rounds per
+multiplied by each workload's inner recurrence cost. The default 30-workload,
+30-sample, eight-seed, 100,000-round run performs 720 million outer rounds per
 compiler, plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
@@ -516,6 +535,38 @@ Executable structural tests must certify the intended dimension, differential
 execution must preserve semantics, and the paper must record when Rust removes
 the source pathology so runtime comparisons are not mistaken for equal residual
 programs.
+
+The structurally certified 91-operation chain identifies a gap but does not
+locate the discontinuity. That certificate includes the call in the enclosing
+loop body; the inliner counts the recursively expanded callee tree and therefore
+sees 90 operations. A controlled threshold sweep fixes the nonlinear leaf and
+gives each successive unary stage exactly one call, multiplication by three,
+addition of seven, and their two constants. If the leaf has 10 Core operations,
+depth \(d\) has inliner cost
+
+\[ I(d)=10+5d, \]
+
+while the independently measured region including its outer call has
+\(E(d)=I(d)+1\). Depths 9, 10, 11, and 12 produce \(I\in\{55,60,65,70\}\) and
+\(E\in\{56,61,66,71\}\), placing two points on each side of \(B_s=64\); the
+existing depth-16 case supplies \(I=90,E=91\). Function reference multiplicity,
+recursion, partiality, and source computation are held constant. Under the
+current policy, costs 55 and 60 should inline while 65, 70, and 90 should retain
+the chain. A genuine threshold cost should appear as a level change between 60
+and 65, whereas a smooth trend would falsify the hypothesis that the hard budget
+dominates. The experiment changes no inlining policy before measuring this
+baseline.
+
+A cap-only counterfactual can separate rejection overhead from residual
+beta-reduction cost. Raising the experimental bound to 128 admits inliner costs
+65, 70, and 90 without changing the semantic certificate. In this sweep every
+callee is private and uniquely referenced, so reachability removes the original
+function shells and no Core operation is duplicated. Analysis and emitted-local
+space remain \(O(I)\), now bounded by 128 rather than 64. If retained calls are
+the primary cause, admitted runtimes should exhibit a downward level change. If
+they merely continue the under-budget trend, the cap is not the primary gap and
+the experiment must be reverted rather than turning one counterexample into a
+global policy.
 
 ### 8.3 Zero/Rust counterexample analysis
 
@@ -814,7 +865,7 @@ Seven is the largest count assigned to direct linear lowering, eight is the
 first assigned to runtime monoid lowering, and sixteen and thirty-two increase
 the local arithmetic advantage of exponentiation without changing the call
 graph. The fixed-count workloads established the strategy discontinuity before
-implementation. After implementation, all twenty-six workload triples agree on
+implementation. After implementation, all thirty workload triples agree on
 boundary probes, both plan emitters remain byte-identical, and a separate test
 keeps an independently exported summarized loop callable. Residual reachability
 may omit a private direct callee only when its call result is the exact state
@@ -1032,6 +1083,69 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
 
+### 2026-08-03: scalar-tree threshold sweep
+
+Four paired workloads instantiate the derived inliner costs 55, 60, 65, and 70;
+their independently certified regions including the enclosing call contain 56,
+61, 66, and 71 operations. Maximum call depths are 11 through 14, every callee
+has one reference, and none of the programs is recursive or partial. This fixes
+the semantic computation while locating the hard budget between 60 and 65.
+
+A contended 30-sample baseline reached the five-millisecond calibration target
+for every path. Median Zero/Rust nanoseconds per outer round and paired ratios
+were 5.278/1.717 (3.018), 5.608/1.687 (3.284), 6.176/1.729 (3.563), and
+6.357/1.691 (3.753). Zero/Rust payload bytes were 297/327, 315/332, 436/332, and
+462/335. Initialized Zero compilation medians were 1.064, 1.188, 1.411, and
+1.301 milliseconds; fresh `rustc` process medians were 27.409, 27.287, 27.831,
+and 27.824 milliseconds. The payload discontinuity at 60/65 is 121 bytes, but
+the Zero runtime increase is only about 10.1%; admitted trees are already about
+three times slower than Rust. The hard cap is therefore real but not the primary
+runtime gap.
+
+A counterfactual raised the cap from 64 to 128 without changing the semantic
+certificate. At costs 65 and 70, Zero payloads fell from 436 to 333 bytes and
+from 462 to 351 bytes. Median runtimes changed only from 6.176 to 6.061
+nanoseconds and from 6.357 to 6.321 nanoseconds, approximately 1.9% and 0.6%.
+The admitted cost-90 case still measured 7.944/1.698 nanoseconds, a paired ratio
+of 4.717, with a 423/348-byte payload. These runs were diagnostic and not paired
+directly against one compiler binary in one invocation, so the percentages are
+hypothesis-strength evidence rather than admissible effect estimates.
+
+The cap-only experiment is reverted. It greatly reduces residual function-shell
+bytes for these private unique trees but does not remove the dominant runtime
+cost, while globally doubling the bounded analysis and exported-duplication
+resource exposure. The persistent loss on both sides of the cap instead supports
+the cross-frame stack-sinking experiment derived in Section 3.3.
+
+The implemented layout omits a single-block total unary frame's parameter when
+it has one use and omits an inlined child-call result when it has one use in the
+same block. Recursive expression emission carries an explicit substitution
+environment; it does not infer a missing local. At inliner costs 55 and 60,
+payloads fell from 297 to 171 bytes and from 315 to 177 bytes. Median Zero
+runtimes changed from 5.278 to 5.052 nanoseconds and from 5.608 to 5.358
+nanoseconds, approximately 4.3% and 4.5%. Paired Zero/Rust ratios remained 2.996
+and 3.219. Initialized compilation medians were 1.075 and 1.087 milliseconds,
+within the variation of the baselines. These 30-sample results reached the
+calibration target but remain diagnostic because compiler processes were active.
+
+The result validates the predicted local and byte removal but falsifies the
+claim that frame traffic is the dominant runtime gap. Disassembly provides an
+independent structural explanation. For cost 60, gpupaper emits the nonlinear
+leaf followed by ten literal multiply-add pairs. Rust composes that affine
+suffix into multiplication by \(3^{10}=59049\) and one offset addition, and also
+partially unrolls the outer loop by four. Affine-suffix composition and
+outer-loop unrolling are therefore separate future experiments; the present
+cycle keeps the 64-operation cap and changes only the proved stack-sinking rule.
+Differential execution over all workloads, byte identity between both plan
+emitters, a partial-argument trap test, and sub-200-byte bounds for the admitted
+sweep points are executable validations, not a proof of contextual equivalence.
+
+An existing deep-polynomial-chain regression probe measured 1.291/1.056
+nanoseconds after the change, paired ratio 1.217, with a 147/283-byte payload.
+This 30-sample run was also diagnostic. It agrees with the threshold sweep that
+cross-frame stack sinking is size-effective and does not expose a runtime
+regression, but it does not supersede the earlier admissible whole-suite result.
+
 ### 2026-08-03: resource-budget pathology cycle
 
 The examples-only cycle added four paired counterexamples without changing a
@@ -1047,7 +1161,7 @@ backend threshold or lowering rule. Their measured structural vectors are
 Additional executable certificates compute 91 expanded scalar operations for the
 unique call chain and 27 operations for the nested-loop composition candidate,
 strictly beyond the respective 64- and 24-operation policies. The fanout is
-exactly five and the measured live frontier is 33. All 26 workload triples agree
+exactly five and the measured live frontier is 33. All 30 workload triples agree
 on boundary probes, both plan emitters remain byte-identical, and the finite
 checks are validations rather than proofs.
 

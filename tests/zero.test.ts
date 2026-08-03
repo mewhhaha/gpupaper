@@ -69,6 +69,8 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["20-affine-reset", 150],
     ["21-affine-posttransform", 150],
     ["22-affine-sandwich", 150],
+    ["27-call-tree-fifty-six", 200],
+    ["28-call-tree-sixty-one", 200],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -286,6 +288,25 @@ Deno.test("non-affine entry remains outside affine summaries", async () => {
     run(2, 1),
     repeatForTest(8, 4),
   );
+});
+
+Deno.test("scalar-tree stack sinking preserves a trapping argument", async () => {
+  const compiled = await compileZeroSource(
+    "trapping-inline-argument.zero",
+    `
+      private: finish value = @value 3 * 7 + ;
+      private: step value = 100 @value / call:finish:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  try {
+    run(0, 1);
+  } catch (cause) {
+    if (cause instanceof WebAssembly.RuntimeError) return;
+    throw cause;
+  }
+  throw new Error("stack-sunk scalar tree discarded a trapping argument");
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {
