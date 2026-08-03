@@ -71,6 +71,26 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "value-dependent nested fold",
     dynamicNestedFoldReference,
   ),
+  workload(
+    "15-fixed-affine-seven",
+    "fixed affine fold at the linear-lowering boundary",
+    fixedAffineFoldReference(7),
+  ),
+  workload(
+    "16-fixed-affine-eight",
+    "fixed affine fold at the exponentiation boundary",
+    fixedAffineFoldReference(8),
+  ),
+  workload(
+    "17-fixed-affine-sixteen",
+    "fixed affine fold with moderate composition depth",
+    fixedAffineFoldReference(16),
+  ),
+  workload(
+    "18-fixed-affine-thirty-two",
+    "fixed affine fold with larger composition depth",
+    fixedAffineFoldReference(32),
+  ),
 ];
 
 function workload(
@@ -205,4 +225,11 @@ function dynamicNestedFoldReference(seed: number, rounds: number): number {
     seed,
     (value) => repeat(value % 7, value, affine),
   );
+}
+
+function fixedAffineFoldReference(
+  innerRounds: number,
+): (seed: number, rounds: number) => number {
+  return (seed, rounds) =>
+    repeat(rounds, seed, (value) => repeat(innerRounds, value, affine));
 }

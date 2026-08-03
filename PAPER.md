@@ -439,8 +439,11 @@ first triplet isolates representation sensitivity: if two modules denote the
 same recurrence but differ in \(H\) or \(\mu\), any runtime difference is
 compiler-generated rather than algorithmic. The dynamic fold tests whether a
 certificate derived for a constant inner count accidentally depends on that
-constant. This avoids collapsing incomparable programs into an invented single
-complexity score.
+constant. Four fixed-affine-fold cases then hold the inner map and outer driver
+constant while selecting inner counts \(n\in\{7,8,16,32\}\). They straddle the
+current linear/exponentiation boundary and distinguish a local inner-loop cost
+from the cost after composition with its outer fold. This avoids collapsing
+incomparable programs into an invented single complexity score.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
@@ -463,16 +466,20 @@ For fixed workload and seed set, hot execution is modeled as
 \[ T_c(w,r)=K_c(w)+r\,t_c(w)+\epsilon, \]
 
 so measurements report nanoseconds per outer round after warmup and alternate
-compiler order to reduce drift. A nested workload intentionally performs more
-work per outer round; runtime values are comparable between Zero and Rust for
-the same workload, not across different workloads. Compilation likewise reports
-separate boundaries because an in-process initialized frontend and a fresh
-`rustc` process do not measure the same operation. With \(q\) workloads, \(p\)
-probes, \(m\) samples, and \(r\) rounds, validation work is \(O(qp)\),
-compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\), multiplied by
-each workload's inner recurrence cost. The default fourteen-workload, 30-sample,
-eight-seed, 100,000-round run performs 336 million outer rounds per compiler,
-plus validation and warmup.
+compiler order to reduce drift. This linear model applies only when residual
+work is linear in \(r\). A certified affine fold instead follows
+\(T_c(w,r)=K_c(w)+c_c(w)\lceil\log_2(\max(r,0)+1)\rceil+\epsilon\); its reported
+quotient is a fixed-input throughput normalization, not a constant marginal cost
+per source round. A nested workload intentionally performs more work per outer
+round; runtime values are comparable between Zero and Rust for the same workload
+and same \(r\), not across different workloads or round counts. Compilation
+likewise reports separate boundaries because an in-process initialized frontend
+and a fresh `rustc` process do not measure the same operation. With \(q\)
+workloads, \(p\) probes, \(m\) samples, and \(r\) rounds, validation work is
+\(O(qp)\), compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\),
+multiplied by each workload's inner recurrence cost. The default
+eighteen-workload, 30-sample, eight-seed, 100,000-round run performs 432 million
+outer rounds per compiler, plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
 feature away; JavaScript timer resolution and host scheduling contribute noise;
@@ -711,25 +718,29 @@ denoting \(ax+b\). Constants map to \((0,c)\), the input maps to \((1,0)\),
 addition and subtraction act componentwise, and multiplication is admitted only
 when at least one operand has zero multiplier. A direct call with callee summary
 \((c,d)\) and argument summary \((a,b)\) maps to \((ca,cb+d)\). Thus an acyclic
-DAG of shared pure functions is summarized without cloning it. The interpreter
-accepts only unary i32, single-block functions containing constants, wrapping
-addition, subtraction, multiplication, and direct calls. It rejects recursion,
-nonlinearity such as \(x^2\), division and remainder, control flow, effects, and
-unused operations outside that total catalog. These restrictions make the
-summary a structural induction proof over SSA definitions rather than a
-speculative algebraic rewrite.
+DAG of shared pure functions is summarized without cloning it. The base
+interpreter accepts only unary i32, single-block functions containing constants,
+wrapping addition, subtraction, multiplication, and direct calls. One inductive
+extension accepts a certified affine natural loop with an exact i32 constant
+count and returns the body summary raised to \(\max(n,0)\). It rejects
+recursion, nonlinearity such as \(x^2\), division and remainder, other control
+flow, effects, variable trip counts, and unused operations outside that total
+catalog. These restrictions make the summary a structural induction proof over
+SSA definitions and certified fold iterations rather than a speculative
+algebraic rewrite.
 
 The loop body may contain no operations beyond the certified recurrence and
 counter update. Negative and zero counts retain the initial state. The
 transformation is exact for all i32 inputs by induction over the SSA definitions
 and then over the bits of \(n\); it does not depend on division by \(a-1\),
 which need not be invertible modulo \(2^{32}\). One root summary uses
-\(O(O_r+E_r)\) work and memory for reachable operations and call edges. The
-current implementation rebuilds that memo table for each certificate query, so
-the whole backend has a conservative \(O(F(O+E))\) worst-case bound; a
-module-level immutable summary table would reduce this to \(O(F+O+E)\) if this
-analysis becomes measurable. Non-affine, effectful, multi-state, or noncanonical
-loops retain ordinary lowering. A cached caller's content identity includes the
+\(O(O_r+E_r+\sum_i\log(n_i+1))\) work and \(O(O_r+E_r)\) memory for reachable
+operations, call edges, and exact nested-loop powers. The current implementation
+rebuilds that memo table for each certificate query, so the whole backend has a
+conservative \(O(F(O+E+\sum_i\log(n_i+1)))\) worst-case bound; a module-level
+immutable summary table would reduce this to \(O(F+O+E)\) if this analysis
+becomes measurable. Non-affine, effectful, multi-state, or noncanonical loops
+retain ordinary lowering. A cached caller's content identity includes the
 certified multiplier and offset, so changing any transitive callee cannot reuse
 machine code specialized for a stale summary.
 
@@ -746,6 +757,44 @@ trip count is at most seven. It recognizes a constant initial counter or signed
 remainder by a positive constant \(d\), whose positive result is at most
 \(d-1\). Unknown and larger ranges retain monoid exponentiation. This is a
 conservative local interval fact; no general range analysis is claimed.
+
+That local comparison is incomplete for a fixed affine loop used as the step of
+another affine fold. Let \(A\) denote the affine map and let the inner count
+\(n\ge0\) be a compile-time constant. Fold fusion gives
+
+\[ \operatorname{repeat}(r,z, x\mapsto\operatorname{repeat}(n,x,A)) =
+(A^n)^r(z)=A^{nr}(z). \]
+
+The first equality follows because the inner function denotes \(A^n\); the
+second follows from associativity of affine-map composition. Computing \(A^n\)
+in the compiler takes \(O(\log n)\) monoid operations and stores one pair of i32
+constants. The outer dynamic fold can then exponentiate that pair in \(O(\log
+r)\) runtime work. Without composition, the small-loop path costs \(O(nr)\),
+while the large-loop path costs \(O(r\log n)\) and retains a call boundary. The
+implemented certificate is deliberately narrower than general loop
+summarization: the inner loop must have the existing affine natural-loop
+certificate, its initial counter must be an exact i32 constant, and its initial
+state must be exactly the unary function parameter. Entry, header, and exit may
+contain only the canonical counter constant, comparison, zero constant, and
+identity return; otherwise summarization could erase work. Its summary is
+exactly the certified body map raised to \(\max(n,0)\). Variable counts,
+replacement initial states, extra operations, non-affine bodies, additional
+loop-carried state, effects, and recursion remain outside the domain.
+
+Seven is the largest count assigned to direct linear lowering, eight is the
+first assigned to runtime monoid lowering, and sixteen and thirty-two increase
+the local arithmetic advantage of exponentiation without changing the call
+graph. The fixed-count workloads established the strategy discontinuity before
+implementation. After implementation, all eighteen workload triples agree on
+boundary probes, both plan emitters remain byte-identical, and a separate test
+keeps an independently exported summarized loop callable. Residual reachability
+may omit a private direct callee only when its call result is the exact state
+update consumed by an accelerated affine certificate; exported functions remain
+roots. Payload bounds below 160 bytes for all four cases are executable
+regression evidence that composition and discard occur. Counterexample tests
+require a replacement initial state to retain its distinct value and an entry
+division by zero to keep trapping. These validations are not a proof of the
+algebraic law.
 
 Affine acceleration also creates a measurement counterexample: dividing a
 near-clock-resolution batch by 800,000 source rounds produced an apparent
@@ -922,6 +971,65 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 16 dead functions, empirically separating output work, which depends on \(R\),
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
+
+### 2026-08-03: fixed affine-fold composition cycle
+
+Four paired workloads hold source organization and the affine inner map constant
+while selecting fixed inner counts 7, 8, 16, and 32. Each compiles to the same
+structural dimensions \((F,R,D,B,O,K,\mu,P,L,H,\rho)=(3,3,0,9,15,2,1,0,3,2,0)\);
+only one i32 constant and the source byte count differ. This is executable
+structural evidence that the sweep isolates the lowering-policy boundary rather
+than increasing graph complexity.
+
+A contended ten-sample baseline was diagnostic, not admissible. Median Zero/Rust
+nanoseconds per outer round and paired ratios were 6.082/0.106 (57.01) at 7,
+3.769/0.104 (36.39) at 8, 3.424/0.103 (33.34) at 16, and 4.929/0.101 (48.74)
+at 32. Zero emitted 168 bytes for the linear 7-step case and 204 bytes for every
+runtime-exponentiated case; Rust emitted 227, 227, 227, and 225 bytes. Thus the
+7-to-8 local strategy switch reduces work, but both paths retain work per outer
+iteration. The result supports the nested-fold composition hypothesis and
+rejects merely increasing the linear threshold. It does not establish precise
+speedups because unrelated Node processes were active and ten samples cannot
+estimate p95.
+
+The implementation then separated two propositions that the previous function
+had conflated. `affineNaturalLoop` is now a semantic certificate for both small
+and large affine loops and records exact and maximum trip facts.
+`acceleratedAffineNaturalLoop` applies the local seven-iteration lowering
+policy. The unary affine abstract interpreter may recursively summarize the
+first form only when its trip count is exact, using compile-time binary
+exponentiation. This lets the outer loop consume the powered pair independently
+of how the inner loop would have been emitted in isolation. The analysis adds
+\(O(\log n)\) compiler arithmetic and two i32 summary values. It changes runtime
+work from \(O(nr)\) or \(O(r\log n)\) to \(O(\log r)\) for the admitted nested
+shape. Reachability discards the summarized private call target but continues to
+seed every public export.
+
+Self-review rejected a broader intermediate certificate. Summarizing every fixed
+affine loop as \(A^n\) is false when the initial state is a constant or another
+function of the parameter: the denotation is then \(A^n\circ g\). Likewise,
+erasing an otherwise unused entry division can remove a trap. The implementation
+therefore requires the initial state to be the input identity and exact
+canonical entry/header/exit operation sets. Generalizing to an affine
+initial-state summary \(g\) would be sound by composing \(A^n\circ g\), but it
+is not implemented because the current examples do not justify the larger
+certificate. This is a derived counterexample with executable rejection tests,
+not an empirical performance result.
+
+A final contended 30-sample diagnostic run reached the five-millisecond
+calibration target for every compiler and workload. Median Zero/Rust nanoseconds
+per outer round and paired ratios were 0.000161/0.110 (0.00149) at 7,
+0.000157/0.109 (0.00150) at 8, 0.000158/0.102 (0.00153) at 16, and
+0.000162/0.103 (0.00155) at 32. Zero payloads were respectively 149, 137, 137,
+and 136 bytes, versus Rust at 227, 227, 227, and 225 bytes. The near-constant
+Zero measurements and eliminated 7-to-8 discontinuity are empirical evidence for
+algebraic composition; the quotient is tied to 100,000 outer rounds because the
+accelerated runtime is logarithmic, not linear. Concurrent Node processes still
+make the run diagnostic rather than an admissible machine-performance claim. In
+a separate 30-sample diagnostic pass, initialized Zero compilation medians
+ranged from 0.746 to 0.798 milliseconds, including 0.225--0.256 milliseconds of
+Wasm planning; fresh `rustc` process medians ranged from 29.07 to 30.56
+milliseconds. These boundaries remain incomparable.
 
 ### 2026-08-03: nonlinear representation and dynamic-fold cycle
 

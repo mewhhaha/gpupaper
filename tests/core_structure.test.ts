@@ -92,6 +92,16 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         );
         assertEquals(structure.maximumCallDepth, 2, "nested-fold call depth");
         break;
+      case "15-fixed-affine-seven":
+      case "16-fixed-affine-eight":
+      case "17-fixed-affine-sixteen":
+      case "18-fixed-affine-thirty-two":
+        assertEquals(structure.coreFunctions, 3, "fixed-fold functions");
+        assertEquals(structure.coreBlocks, 9, "fixed-fold blocks");
+        assertEquals(structure.coreOperations, 15, "fixed-fold operations");
+        assertEquals(structure.directCallSites, 2, "fixed-fold calls");
+        assertEquals(structure.maximumCallDepth, 2, "fixed-fold call depth");
+        break;
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }

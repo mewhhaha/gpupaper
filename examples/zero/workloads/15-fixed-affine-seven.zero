@@ -1,0 +1,4 @@
+private: inner value = @value 1664525 * 1013904223 + ;
+private: step value = 7 @value repeat:inner ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

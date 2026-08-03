@@ -61,6 +61,10 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["12-deep-polynomial-chain", 320],
     ["13-shared-polynomial-dag", 200],
     ["14-dynamic-nested-fold", 190],
+    ["15-fixed-affine-seven", 160],
+    ["16-fixed-affine-eight", 160],
+    ["17-fixed-affine-sixteen", 160],
+    ["18-fixed-affine-thirty-two", 160],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -178,6 +182,67 @@ Deno.test("nested loop callee changes invalidate the cached caller", async () =>
   );
   assertEquals(firstRun(1, 1), 4);
   assertEquals(secondRun(1, 1), 6);
+});
+
+Deno.test("fixed affine summaries retain independently exported loops", async () => {
+  const compiled = await compileZeroSource(
+    "exported-affine-fold.zero",
+    `
+      private: inner value = @value 1664525 * 1013904223 + ;
+      export: step value = 8 @value repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const instance = await instantiate(compiled.wasm);
+  const step = exportedFunction(instance, "step");
+  const run = exportedFunction(instance, "run");
+  assertEquals(step(1), repeatForTest(8, 1));
+  assertEquals(run(1, 2), repeatForTest(16, 1));
+});
+
+Deno.test("zero-iteration affine summary is the identity", async () => {
+  const compiled = await compileZeroSource(
+    "empty-affine-fold.zero",
+    `
+      private: inner value = @value 1664525 * 1013904223 + ;
+      private: idle value = 0 @value repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:idle ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(-1, 2_147_483_647), -1);
+});
+
+Deno.test("fixed affine summaries reject a replacement initial state", async () => {
+  const compiled = await compileZeroSource(
+    "replacement-affine-state.zero",
+    `
+      private: inner value = @value 1664525 * 1013904223 + ;
+      private: reset value = 8 5 repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:reset ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(1, 1), repeatForTest(8, 5));
+});
+
+Deno.test("fixed affine summaries preserve trapping entry work", async () => {
+  const compiled = await compileZeroSource(
+    "trapping-affine-entry.zero",
+    `
+      private: inner value = @value 1664525 * 1013904223 + ;
+      private: step value = 1 0 / let:unused 8 @value repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  try {
+    run(1, 1);
+  } catch (cause) {
+    if (cause instanceof WebAssembly.RuntimeError) return;
+    throw cause;
+  }
+  throw new Error("trapping affine entry returned normally");
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {
@@ -310,6 +375,14 @@ function exportedFunction(
     throw new Error(`Zero module has no function export ${name}`);
   }
   return exported as (...arguments_: number[]) => number;
+}
+
+function repeatForTest(rounds: number, seed: number): number {
+  let state = seed;
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) | 0;
+  }
+  return state;
 }
 
 async function assertRejects(

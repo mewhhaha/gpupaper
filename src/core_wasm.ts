@@ -215,6 +215,9 @@ type AffineNaturalLoop = {
   readonly state: CoreValueId;
   readonly multiplier: number;
   readonly offset: number;
+  readonly exactIterations: number | undefined;
+  readonly maximumIterations: number | undefined;
+  readonly summarizedCallResult: CoreValueId | undefined;
 };
 
 type AffineMap = {
@@ -372,7 +375,7 @@ export function lowerCoreToWasm(
         fcg: publicFunction(core, function_, layout),
       };
     } else {
-      const affine = affineNaturalLoop(core, function_);
+      const affine = acceleratedAffineNaturalLoop(core, function_);
       const directDependencies = new Set<CoreFunctionId>();
       const pendingDependencies = [function_.id];
       while (pendingDependencies.length > 0) {
@@ -528,11 +531,13 @@ function findReachableFunctions(
   while (pending.length > 0) {
     const functionId = pending.pop()!;
     const function_ = core.functions[functionId];
+    const affine = acceleratedAffineNaturalLoop(core, function_);
     for (const block of function_.blocks) {
       for (const operation of block.operations) {
         const target = operation.kind === "closure.make"
           ? operation.functionId
           : operation.kind === "call.direct" &&
+              operation.result !== affine?.summarizedCallResult &&
               !isInlineableLoopCall(core, function_, block, operation)
           ? operation.functionId
           : undefined;
@@ -1079,7 +1084,7 @@ function planFunctionValues(
     nextLocal += 1;
     locals.push(wasmType.i32);
   }
-  const affineLoop = affineNaturalLoop(core, function_);
+  const affineLoop = acceleratedAffineNaturalLoop(core, function_);
   let affineMultiplierLocal: number | undefined;
   let affineOffsetLocal: number | undefined;
   if (affineLoop !== undefined) {
@@ -1203,7 +1208,7 @@ function emitFunction(
   }
   const naturalLoop = simpleNaturalLoop(function_);
   if (naturalLoop !== undefined) {
-    const affineLoop = affineNaturalLoop(core, function_);
+    const affineLoop = acceleratedAffineNaturalLoop(core, function_);
     if (affineLoop !== undefined) {
       return emitAffineNaturalLoop(
         function_,
@@ -1690,7 +1695,7 @@ function inlineableSimpleBodyLoopCall(
   const loop = target === undefined ? undefined : simpleNaturalLoop(target);
   if (
     target === undefined || loop === undefined ||
-    affineNaturalLoop(core, target) !== undefined ||
+    acceleratedAffineNaturalLoop(core, target) !== undefined ||
     countFunctionReferences(core, target.id) !== 1 ||
     loop.exit.terminator.kind !== "return" ||
     loop.exit.terminator.values.length !== 1
@@ -1901,6 +1906,9 @@ function simpleNaturalLoop(
 function affineNaturalLoop(
   core: CoreModule,
   function_: CoreFunction,
+  summarizeUnary: (functionId: CoreFunctionId) => AffineMap | undefined = (
+    functionId,
+  ) => affineUnaryFunction(core, functionId),
 ): AffineNaturalLoop | undefined {
   const loop = simpleNaturalLoop(function_);
   if (
@@ -1954,12 +1962,14 @@ function affineNaturalLoop(
 
   const initialCounter = loop.entry.terminator.arguments[counterIndex];
   const initialCounterOperation = operations.get(initialCounter);
+  let exactIterations: number | undefined;
   let maximumIterations: number | undefined;
   if (
     initialCounterOperation?.kind === "constant" &&
     typeof initialCounterOperation.value === "number"
   ) {
-    maximumIterations = Math.max(0, initialCounterOperation.value | 0);
+    exactIterations = Math.max(0, initialCounterOperation.value | 0);
+    maximumIterations = exactIterations;
   } else if (
     initialCounterOperation?.kind === "scalar.binary" &&
     initialCounterOperation.operator === "%"
@@ -1972,18 +1982,11 @@ function affineNaturalLoop(
       maximumIterations = (divisor.value | 0) - 1;
     }
   }
-  if (
-    maximumIterations !== undefined &&
-    maximumIterations <= maximumLinearAffineIterations
-  ) {
-    return undefined;
-  }
-
   if (nextState.kind === "call.direct") {
     if (nextState.operands.length !== 1 || nextState.operands[0] !== state) {
       return undefined;
     }
-    const affine = affineUnaryFunction(core, nextState.functionId);
+    const affine = summarizeUnary(nextState.functionId);
     const requiredBodyResults = new Set([
       nextCounter.result,
       nextState.result,
@@ -2004,6 +2007,9 @@ function affineNaturalLoop(
       state,
       multiplier: affine.multiplier,
       offset: affine.offset,
+      exactIterations,
+      maximumIterations,
+      summarizedCallResult: nextState.result,
     };
   }
   if (nextState.kind !== "scalar.binary" || nextState.operator !== "+") {
@@ -2051,7 +2057,21 @@ function affineNaturalLoop(
     state,
     multiplier: multiplier.value | 0,
     offset: offset.value | 0,
+    exactIterations,
+    maximumIterations,
+    summarizedCallResult: undefined,
   };
+}
+
+function acceleratedAffineNaturalLoop(
+  core: CoreModule,
+  function_: CoreFunction,
+): AffineNaturalLoop | undefined {
+  const affine = affineNaturalLoop(core, function_);
+  return affine?.maximumIterations !== undefined &&
+      affine.maximumIterations <= maximumLinearAffineIterations
+    ? undefined
+    : affine;
 }
 
 function affineUnaryFunction(
@@ -2070,7 +2090,6 @@ function affineUnaryFunction(
     const signature = function_ === undefined
       ? undefined
       : core.signatures[function_.signature];
-    const block = function_?.blocks[function_.entryBlock];
     const parameterType = signature === undefined
       ? undefined
       : core.types[signature.parameters[0]];
@@ -2079,12 +2098,9 @@ function affineUnaryFunction(
       : core.types[signature.result];
     if (
       function_ === undefined || signature === undefined ||
-      function_.blocks.length !== 1 || block === undefined ||
-      block.parameters.length !== 1 || signature.parameters.length !== 1 ||
+      signature.parameters.length !== 1 ||
       parameterType?.kind !== "scalar" || parameterType.scalar !== "i32" ||
-      resultType?.kind !== "scalar" || resultType.scalar !== "i32" ||
-      block.terminator.kind !== "return" ||
-      block.terminator.values.length !== 1
+      resultType?.kind !== "scalar" || resultType.scalar !== "i32"
     ) {
       summaries.set(functionId, undefined);
       return undefined;
@@ -2092,6 +2108,82 @@ function affineUnaryFunction(
 
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(functionId);
+    if (function_.blocks.length !== 1) {
+      const affineLoop = affineNaturalLoop(
+        core,
+        function_,
+        (calleeId) => summarize(calleeId, nextAncestors),
+      );
+      if (affineLoop?.exactIterations === undefined) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+      const loop = affineLoop.loop;
+      if (
+        loop.entry.terminator.kind !== "branch" ||
+        loop.header.terminator.kind !== "conditional_branch" ||
+        loop.exit.terminator.kind !== "return"
+      ) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+      const stateIndex = loop.header.parameters.findIndex((parameter) =>
+        parameter.value === affineLoop.state
+      );
+      const counterIndex = stateIndex === 0 ? 1 : 0;
+      const initialCounter = loop.entry.terminator.arguments[counterIndex];
+      const initialState = loop.entry.terminator.arguments[stateIndex];
+      const conditionValue = loop.header.terminator.condition;
+      const condition = loop.header.operations.find((operation) =>
+        operation.result === conditionValue
+      );
+      const headerResults = condition?.kind === "scalar.binary"
+        ? new Set([condition.result, condition.operands[1]])
+        : undefined;
+      if (
+        stateIndex < 0 || loop.entry.parameters.length !== 1 ||
+        initialState !== loop.entry.parameters[0].value ||
+        loop.entry.operations.length !== 1 ||
+        loop.entry.operations[0].kind !== "constant" ||
+        loop.entry.operations[0].result !== initialCounter ||
+        headerResults === undefined || loop.header.operations.length !== 2 ||
+        loop.header.operations.some((operation) =>
+          !headerResults.has(operation.result)
+        ) ||
+        loop.exit.operations.length !== 0 ||
+        loop.exit.parameters.length !== 1 ||
+        loop.exit.terminator.values.length !== 1 ||
+        loop.exit.terminator.values[0] !== loop.exit.parameters[0].value
+      ) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+      let result = { multiplier: 1, offset: 0 };
+      let power = {
+        multiplier: affineLoop.multiplier,
+        offset: affineLoop.offset,
+      };
+      let remaining = affineLoop.exactIterations;
+      while (remaining > 0) {
+        if ((remaining & 1) !== 0) {
+          result = composeAffineMaps(power, result);
+        }
+        power = composeAffineMaps(power, power);
+        remaining >>>= 1;
+      }
+      summaries.set(functionId, result);
+      return result;
+    }
+
+    const block = function_.blocks[function_.entryBlock];
+    if (
+      block === undefined || block.parameters.length !== 1 ||
+      block.terminator.kind !== "return" ||
+      block.terminator.values.length !== 1
+    ) {
+      summaries.set(functionId, undefined);
+      return undefined;
+    }
     const values = new Map<CoreValueId, AffineMap>([[
       block.parameters[0].value,
       { multiplier: 1, offset: 0 },
@@ -2146,12 +2238,7 @@ function affineUnaryFunction(
         const argument = values.get(operation.operands[0]);
         const callee = summarize(operation.functionId, nextAncestors);
         if (argument !== undefined && callee !== undefined) {
-          summary = {
-            multiplier: Math.imul(callee.multiplier, argument.multiplier),
-            offset: (
-              Math.imul(callee.multiplier, argument.offset) + callee.offset
-            ) | 0,
-          };
+          summary = composeAffineMaps(callee, argument);
         }
       }
       if (summary === undefined) {
@@ -2166,6 +2253,15 @@ function affineUnaryFunction(
     return result;
   };
   return summarize(rootFunctionId, new Set());
+}
+
+function composeAffineMaps(outer: AffineMap, inner: AffineMap): AffineMap {
+  return {
+    multiplier: Math.imul(outer.multiplier, inner.multiplier),
+    offset: (
+      Math.imul(outer.multiplier, inner.offset) + outer.offset
+    ) | 0,
+  };
 }
 
 function emitAffineNaturalLoop(
