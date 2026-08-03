@@ -731,6 +731,28 @@ coefficient wraparound, a trapping caller argument, and a cubic counterexample;
 the complexity-ladder size guards make application to the intended threshold
 cases executable evidence rather than an optimizer-presence assumption.
 
+Symbolic compression changes the scalar-tree budget model. The original
+64-operation limit bounded both analysis and copied emission, but a chain of
+affine wrappers ending in one certified quadratic leaf emits one Horner form
+regardless of source depth. Let (O) be recursively expanded operations and (d)
+wrapper depth. Recognition costs (O(O)) work, (O(d)) recursion, and at most (3O)
+i32 coefficient words while emitted arithmetic remains at most two
+multiplications and two additions. Charging this case to the 64-operation
+emission budget therefore creates a performance cliff without bounding emitted
+code.
+
+The implementation separates these budgets. Ordinary copied trees retain the
+64-operation cap. A symbolically compressed tree may contain at most 128
+analyzed operations and must recursively consist of exactly one quadratic leaf
+and single-child affine suffix nodes; all existing uniqueness, acyclicity,
+scalar, purity, and totality premises remain. The factor-two analysis cap is a
+conservative resource bound, not a measured break-even: it limits current
+recursive maps to at most 384 coefficient words while threshold experiments test
+whether removing the artificial cost-64 cliff changes output and runtime as
+predicted. Executable output-size guards cover both newly admitted threshold
+cases. Trees above 128, multi-child trees, non-affine wrappers, and cubic leaves
+still reject.
+
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
 choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
@@ -1199,6 +1221,24 @@ The two depths emit byte-distinct 117-byte modules because affine suffix
 coefficients differ, but have the same atom count and dynamic Horner shape. This
 supports the algebraic operation-count prediction across one independent suffix
 depth; it does not establish an engine-independent speedup.
+
+### 2026-08-03: symbolic analysis and emission budgets
+
+Separating the symbolic-analysis budget from copied emission removed the exact
+cliff found by the ladder. The cost-66 payload fell from 436 to 117 bytes and a
+diagnostic 30-sample runtime fell from the preceding 5.947 to 1.713 nanoseconds
+per outer round, approximately 71.2%. Rust measured 1.750 nanoseconds and the
+paired median ratio was 0.973. Warm planning measured 0.426 milliseconds and
+total initialized compilation 1.148 milliseconds.
+
+The cost-71 payload fell from 462 to 119 bytes and runtime from 6.606 to 1.716
+nanoseconds, approximately 74.0%. Rust measured 1.725 nanoseconds and the paired
+ratio was 0.981. Warm planning measured 0.445 milliseconds and total compilation
+1.209 milliseconds. Both runs calibrated past five milliseconds but are marked
+diagnostic because other compiler work appeared during their environment
+windows. The payload and differential-test results are deterministic evidence;
+the runtime magnitude should be repeated in a clear environment before being
+used as a release claim.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 

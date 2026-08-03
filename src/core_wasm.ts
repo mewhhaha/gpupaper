@@ -242,6 +242,7 @@ type QuadraticMap = {
 const maximumInlineDiamondOperations = 16;
 const maximumInlineLoopOperations = 24;
 const maximumInlineScalarTreeOperations = 64;
+const maximumAnalyzedScalarTreeOperations = 128;
 const maximumLinearAffineIterations = 7;
 
 type ClosureTarget = {
@@ -1869,7 +1870,7 @@ function inlineableScalarTreeCall(
         total = false;
       }
     }
-    if (operationCount > maximumInlineScalarTreeOperations) return undefined;
+    if (operationCount > maximumAnalyzedScalarTreeOperations) return undefined;
     return {
       function: function_,
       structure: single ? "single" : "diamond",
@@ -1878,7 +1879,23 @@ function inlineableScalarTreeCall(
       total,
     };
   };
-  return build(operation.functionId, new Set());
+  const shape = build(operation.functionId, new Set());
+  if (
+    shape === undefined ||
+    shape.operationCount <= maximumInlineScalarTreeOperations
+  ) {
+    return shape;
+  }
+  const isSymbolicallyCompressed = (
+    candidate: InlineScalarTreeShape,
+  ): boolean => {
+    if (quadraticScalarTreeResult(core, candidate) !== undefined) return true;
+    const suffix = affineScalarTreeSuffix(core, candidate);
+    if (suffix === undefined) return false;
+    const child = candidate.callsByResult.get(suffix.callResult);
+    return child !== undefined && isSymbolicallyCompressed(child);
+  };
+  return isSymbolicallyCompressed(shape) ? shape : undefined;
 }
 
 function affineScalarTreeSuffix(

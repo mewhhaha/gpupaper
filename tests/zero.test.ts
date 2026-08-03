@@ -71,6 +71,8 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["22-affine-sandwich", 150],
     ["27-call-tree-fifty-six", 120],
     ["28-call-tree-sixty-one", 120],
+    ["29-call-tree-sixty-six", 120],
+    ["30-call-tree-seventy-one", 120],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
