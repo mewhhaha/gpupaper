@@ -156,17 +156,17 @@ when its unique use is in the same scheduling region. Trapping, allocating,
 reading, host, aggregate, resource, and multiply-used operations receive locals
 or explicit runtime calls.
 
-The same rule applies inside an inlined scalar call tree. Function parameters
-and direct-call results remain explicit locals at the beta-reduction boundary;
-within each function, a total scalar definition with exactly one use in its
-defining block is emitted recursively at that use. The uniqueness premise means
-no operation is duplicated, and totality means moving it later within the same
-effect-free region cannot introduce a trap or reorder an observable effect.
-Computing use counts and use-block sets costs \(O(O+V)\) work and space. If a
-function contains \(V\) SSA values, the local count changes from \(V\) to at
-most \(P+M+C+Q\), where \(P\) is parameters, \(M\) multiply-used definitions,
-\(C\) cross-region definitions, and \(Q\) partial or otherwise non-stackifiable
-definitions.
+The same rule applies inside an inlined scalar call tree. Within each function,
+a total scalar definition with exactly one use in its defining block is emitted
+recursively at that use. Parameters and direct-call results use explicit locals
+unless the cross-frame rule below proves substitution safe. The uniqueness
+premise means no operation is duplicated, and totality means moving it later
+within the same effect-free region cannot introduce a trap or reorder an
+observable effect. Computing use counts and use-block sets costs \(O(O+V)\) work
+and space. If a function contains \(V\) SSA values, the local count changes from
+\(V\) to at most \(P+M+C+Q\), where \(P\) is parameters, \(M\) multiply-used
+definitions, \(C\) cross-region definitions, and \(Q\) partial or otherwise
+non-stackifiable definitions.
 
 The key counterexample is sinking division across a branch: eager evaluation
 could introduce a trap on a path where the source operation was not evaluated.
@@ -190,6 +190,32 @@ multiply-used definitions such as the polynomial's shared `mixed` value. The
 use-count and totality certificates already cost \(O(O+V)\); the representation
 needs only a bit per omitted parameter or call result. This is a semantic
 specialization, not a higher inlining budget: rejected trees remain rejected.
+
+The resulting stack expression exposes an algebraic suffix. Let \(q(x)\) be an
+otherwise opaque, pure, total i32 expression and let a wrapper return
+
+\[ A(q(x))=a q(x)+b\pmod{2^{32}}. \]
+
+If consecutive wrappers denote affine maps \(A_1,\ldots,A_d\), associativity of
+the affine monoid gives
+
+\[ A_d(\cdots A_1(q(x))\cdots)=(A_d\circ\cdots\circ A_1)(q(x)). \]
+
+The compiler may therefore emit the opaque base once followed by at most one
+multiplication and one addition. A wrapper is admitted only when it is a pure,
+total, single-block member of an already certified scalar tree, contains exactly
+one inlined child call, and abstract interpretation relative to that call result
+proves the returned value affine. Direct dependence on the wrapper parameter
+outside the child, a second child, partial arithmetic, control flow, effects, or
+non-i32 values rejects the rule. Treating the child result as an opaque variable
+is sound only because the surrounding scalar-tree certificate separately proves
+that the skipped call exists and is pure and total.
+
+For suffix depth \(d\), recognition takes \(O(O)\) work and one affine pair per
+candidate frame. Compile-time composition is \(O(d)\), while dynamic suffix work
+falls from \(2d\) scalar operations to at most two; emitted suffix size falls
+from \(O(d)\) to \(O(1)\). This does not simplify or duplicate the opaque base
+and does not raise the 64-operation tree-admission budget.
 
 ### 3.4 Determinism
 
@@ -1145,6 +1171,31 @@ nanoseconds after the change, paired ratio 1.217, with a 147/283-byte payload.
 This 30-sample run was also diagnostic. It agrees with the threshold sweep that
 cross-frame stack sinking is size-effective and does not expose a runtime
 regression, but it does not supersede the earlier admissible whole-suite result.
+
+The affine-suffix implementation reuses the i32 affine abstract interpreter but
+seeds it with the unique child-call result as an opaque identity variable. A
+pre-seeded operation result is skipped only after its i32 type is checked; the
+scalar-tree certificate independently proves that the skipped operation is the
+one pure, total child call. Emission accumulates wrapper maps while descending
+to the first non-affine tree and emits the composed map once after that base.
+
+On inliner costs 55 and 60, final payloads are both 125 bytes, down from the
+stack-sunk 171 and 177 bytes. Median Zero/Rust nanoseconds per outer round and
+paired ratios were 2.240/1.758 (1.269) and 2.215/1.748 (1.265). Relative to the
+immediately preceding diagnostic medians, Zero improved by approximately 55.7%
+and 58.7%. Initialized Zero compilation medians were 1.390 and 1.246
+milliseconds. Every calibrated path reached five milliseconds, but active
+compiler processes keep these 30-sample results diagnostic.
+
+This validates the predicted constant suffix size and large arithmetic-work
+reduction. It also leaves an approximately 26--27% gap consistent with the
+independent outer-loop-unrolling difference seen in Rust's disassembly. A direct
+wrapper-parameter counterexample prevents treating \(A(q(x),x)\) as
+one-dimensional affine composition, while the existing partial-argument test
+preserves the totality boundary. Sub-140-byte regression bounds make suffix
+collapse executable evidence rather than a paper-only claim. Post-change
+disassembly contains one suffix multiplication by 59049 and one addition of
+206668, exactly the composition of ten \(x\mapsto3x+7\) wrappers.
 
 ### 2026-08-03: resource-budget pathology cycle
 

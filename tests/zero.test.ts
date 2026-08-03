@@ -69,8 +69,8 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["20-affine-reset", 150],
     ["21-affine-posttransform", 150],
     ["22-affine-sandwich", 150],
-    ["27-call-tree-fifty-six", 200],
-    ["28-call-tree-sixty-one", 200],
+    ["27-call-tree-fifty-six", 140],
+    ["28-call-tree-sixty-one", 140],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -307,6 +307,21 @@ Deno.test("scalar-tree stack sinking preserves a trapping argument", async () =>
     throw cause;
   }
   throw new Error("stack-sunk scalar tree discarded a trapping argument");
+});
+
+Deno.test("affine suffixes preserve direct wrapper parameter dependence", async () => {
+  const compiled = await compileZeroSource(
+    "dependent-affine-suffix.zero",
+    `
+      private: base value = @value @value * 17 + ;
+      private: wrapper value = @value call:base:1 @value + ;
+      private: step value = @value call:wrapper:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(3, 1), 29);
+  assertEquals(run(-3, 1), 23);
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {

@@ -187,6 +187,12 @@ type InlineScalarTreeShape = {
 type InlineScalarTreeLayout = Omit<InlineScalarTreeShape, "callsByResult"> & {
   readonly localByValue: ReadonlyMap<CoreValueId, number>;
   readonly stackParameter: CoreValueId | undefined;
+  readonly affineSuffix:
+    | {
+      readonly callResult: CoreValueId;
+      readonly map: AffineMap;
+    }
+    | undefined;
   readonly callsByResult: ReadonlyMap<CoreValueId, InlineScalarTreeLayout>;
 };
 
@@ -932,6 +938,7 @@ function planFunctionValues(
       ...shape,
       localByValue: inlineLocalByValue,
       stackParameter,
+      affineSuffix: affineScalarTreeSuffix(core, shape),
       callsByResult: new Map(
         [...shape.callsByResult].map(([result, child]) =>
           [result, allocateScalarTree(child)] as const
@@ -1863,6 +1870,40 @@ function inlineableScalarTreeCall(
   return build(operation.functionId, new Set());
 }
 
+function affineScalarTreeSuffix(
+  core: CoreModule,
+  shape: InlineScalarTreeShape,
+):
+  | {
+    readonly callResult: CoreValueId;
+    readonly map: AffineMap;
+  }
+  | undefined {
+  if (
+    !shape.total || shape.structure !== "single" ||
+    shape.callsByResult.size !== 1
+  ) {
+    return undefined;
+  }
+  const block = shape.function.blocks[shape.function.entryBlock];
+  if (
+    block.terminator.kind !== "return" ||
+    block.terminator.values.length !== 1
+  ) {
+    return undefined;
+  }
+  const callResult = shape.callsByResult.keys().next().value;
+  if (callResult === undefined) return undefined;
+  const map = summarizeAffineBlock(
+    core,
+    block,
+    new Map([[callResult, { multiplier: 1, offset: 0 }]]),
+    block.terminator.values[0],
+    () => undefined,
+  );
+  return map === undefined ? undefined : { callResult, map };
+}
+
 function countFunctionReferences(
   core: CoreModule,
   functionId: CoreFunctionId,
@@ -2258,6 +2299,7 @@ function summarizeAffineBlock(
     if (operationType?.kind !== "scalar" || operationType.scalar !== "i32") {
       return undefined;
     }
+    if (values.has(operation.result)) continue;
 
     let summary: AffineMap | undefined;
     if (
@@ -3156,6 +3198,7 @@ function emitInlineScalarTree(
   closureTypeIndices: ReadonlyMap<CoreSignatureId, number>,
   textHandles: ReadonlyMap<string, number>,
   getCallerValue: (value: CoreValueId) => readonly WasmInstruction[],
+  resultSuffix: AffineMap = { multiplier: 1, offset: 0 },
 ): readonly WasmInstruction[] {
   const entry = tree.function.blocks[tree.function.entryBlock];
   if (entry.parameters.length !== call.operands.length) {
@@ -3263,6 +3306,42 @@ function emitInlineScalarTree(
       ),
     ]
     : [];
+  if (tree.affineSuffix !== undefined) {
+    const childCall = layout.operationByResult.get(
+      tree.affineSuffix.callResult,
+    );
+    const child = tree.callsByResult.get(tree.affineSuffix.callResult);
+    if (childCall?.kind !== "call.direct" || child === undefined) {
+      throw new Error(
+        `Core inline tree ${tree.function.name} lost its affine child ${tree.affineSuffix.callResult}`,
+      );
+    }
+    return [
+      ...binding,
+      ...emitInlineScalarTree(
+        core,
+        childCall,
+        child,
+        importedFunctions,
+        functionIndices,
+        closureTargets,
+        closureTypeIndices,
+        textHandles,
+        getValue,
+        composeAffineMaps(resultSuffix, tree.affineSuffix.map),
+      ),
+    ];
+  }
+  const suffixInstructions = [
+    ...(resultSuffix.multiplier === 1 ? [] : [
+      ...wasmInstruction.i32Constant(resultSuffix.multiplier),
+      ...wasmInstruction.i32Multiply,
+    ]),
+    ...(resultSuffix.offset === 0 ? [] : [
+      ...wasmInstruction.i32Constant(resultSuffix.offset),
+      ...wasmInstruction.i32Add,
+    ]),
+  ];
   if (tree.structure === "single") {
     const returned = entry.terminator.kind === "return"
       ? entry.terminator.values[0]
@@ -3270,7 +3349,12 @@ function emitInlineScalarTree(
     if (returned === undefined) {
       throw new Error(`Core inline tree ${tree.function.name} lost its return`);
     }
-    return [...binding, ...emitOperations(entry), ...getValue(returned)];
+    return [
+      ...binding,
+      ...emitOperations(entry),
+      ...getValue(returned),
+      ...suffixInstructions,
+    ];
   }
   const diamond = simpleDiamond(tree.function);
   if (
@@ -3304,7 +3388,12 @@ function emitInlineScalarTree(
       ...getValue(falseValue),
       ...wasmInstruction.end,
     ];
-  return [...binding, ...emitOperations(diamond.entry), ...selection];
+  return [
+    ...binding,
+    ...emitOperations(diamond.entry),
+    ...selection,
+    ...suffixInstructions,
+  ];
 }
 
 function emitInlineDiamond(
