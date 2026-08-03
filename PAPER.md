@@ -788,6 +788,23 @@ still produces one Horner expression and no call instructions. Differential
 tests for the existing deep chain and its output-size guard validate the
 composition direction independently of the affine-suffix cases.
 
+The closed form extends to polynomial callees without guessing. For certified
+(q(z)=q_2z^2+q_1z+q_0) and argument polynomial (p(x)), direct-call composition
+is (q(p)=q_2p^2+q_1p+q_0). Coefficient convolution computes (p^2) in (R[x]); the
+rule rejects when its cubic or quartic coefficients are nonzero, then scales and
+adds the remaining coefficients modulo (2^{32}). Consequently
+quadratic-after-affine is admitted, affine-after-quadratic remains admitted, and
+a general quadratic-after-quadratic rejects unless its higher coefficients
+cancel in the target ring.
+
+The implementation memoizes polynomial summaries by certified child function
+within one tree query, making a shared acyclic call DAG (O(V+E+O)) abstract work
+and (O(V+O)) stored coefficients for functions (V), calls (E), and operations
+(O). It does not change the reference-count admission rule, so memoization
+avoids repeated analysis without licensing arbitrary code duplication. Existing
+cubic differential tests remain the negative boundary; the shared-polynomial
+workload supplies the positive DAG boundary.
+
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
 choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
@@ -1309,6 +1326,16 @@ Zero median. The approximately 4.2% change is smaller than the observed run
 variation, and identical output means the monolithic and deep cases have the
 same executable behavior. The accepted result is therefore call-chain erasure
 and payload equality, not a claimed independent runtime speedup.
+
+General degree-two call composition reduced the shared polynomial DAG from 125
+to 107 bytes. A diagnostic 30-sample run measured 1.215/1.064 Zero/Rust
+nanoseconds with paired ratio 1.140, compared with the preceding diagnostic
+1.295-nanosecond Zero median; the approximate 6.2% change accompanies removal of
+the residual child-call schedules. Warm planning measured 0.282 milliseconds. An
+explicit quadratic-of-quadratic call test produces (x^4) and validates that the
+degree boundary rejects rather than truncates higher coefficients. This is
+executable evidence for both the shared-DAG positive case and quartic negative
+case, while the timing remains diagnostic.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 

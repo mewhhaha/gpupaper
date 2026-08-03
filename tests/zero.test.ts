@@ -60,7 +60,7 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["08-wide-binding-frontier", 180],
     ["11-polynomial", 110],
     ["12-deep-polynomial-chain", 110],
-    ["13-shared-polynomial-dag", 200],
+    ["13-shared-polynomial-dag", 110],
     ["14-dynamic-nested-fold", 190],
     ["15-fixed-affine-seven", 160],
     ["16-fixed-affine-eight", 160],
@@ -386,6 +386,21 @@ Deno.test("quadratic interpretation rejects a cubic product", async () => {
   const run = exportedFunction(await instantiate(compiled.wasm), "run");
   assertEquals(run(3, 1), 27);
   assertEquals(run(-3, 1), -27);
+});
+
+Deno.test("polynomial call composition rejects a quartic result", async () => {
+  const compiled = await compileZeroSource(
+    "quartic-call.zero",
+    `
+      private: square value = @value @value * ;
+      private: quartic value = @value call:square:1 call:square:1 ;
+      private: step value = @value call:quartic:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(2, 1), 16);
+  assertEquals(run(-3, 1), 81);
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {

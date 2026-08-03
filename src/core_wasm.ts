@@ -1956,6 +1956,17 @@ function quadraticScalarTreeResult(
   core: CoreModule,
   shape: InlineScalarTreeShape,
 ): QuadraticMap | undefined {
+  const result = polynomialScalarTreeResult(core, shape, new Map());
+  return result?.quadraticCoefficient === 0 ? undefined : result;
+}
+
+function polynomialScalarTreeResult(
+  core: CoreModule,
+  shape: InlineScalarTreeShape,
+  summaries: Map<CoreFunctionId, QuadraticMap>,
+): QuadraticMap | undefined {
+  const cached = summaries.get(shape.function.id);
+  if (cached !== undefined) return cached;
   if (!shape.total || shape.structure !== "single") {
     return undefined;
   }
@@ -2015,75 +2026,56 @@ function quadraticScalarTreeResult(
           ) | 0,
         };
       } else {
-        const cubicCoefficient = (
-          Math.imul(
-            left.linearCoefficient,
-            right.quadraticCoefficient,
-          ) +
-          Math.imul(
-            left.quadraticCoefficient,
-            right.linearCoefficient,
-          )
-        ) | 0;
-        const quarticCoefficient = Math.imul(
-          left.quadraticCoefficient,
-          right.quadraticCoefficient,
-        );
-        if (cubicCoefficient !== 0 || quarticCoefficient !== 0) {
-          return undefined;
-        }
-        result = {
-          quadraticCoefficient: (
-            Math.imul(
-              left.constantCoefficient,
-              right.quadraticCoefficient,
-            ) +
-            Math.imul(
-              left.linearCoefficient,
-              right.linearCoefficient,
-            ) +
-            Math.imul(
-              left.quadraticCoefficient,
-              right.constantCoefficient,
-            )
-          ) | 0,
-          linearCoefficient: (
-            Math.imul(
-              left.constantCoefficient,
-              right.linearCoefficient,
-            ) +
-            Math.imul(
-              left.linearCoefficient,
-              right.constantCoefficient,
-            )
-          ) | 0,
-          constantCoefficient: Math.imul(
-            left.constantCoefficient,
-            right.constantCoefficient,
-          ),
-        };
+        result = multiplyQuadraticMaps(left, right);
       }
     } else if (
       operation.kind === "call.direct" && operation.operands.length === 1 &&
       shape.callsByResult.has(operation.result)
     ) {
       const argument = values.get(operation.operands[0]);
-      const callee = affineUnaryFunction(core, operation.functionId);
+      const child = shape.callsByResult.get(operation.result);
+      const callee = child === undefined
+        ? undefined
+        : polynomialScalarTreeResult(core, child, summaries);
       if (argument === undefined || callee === undefined) return undefined;
+      const squaredArgument = callee.quadraticCoefficient === 0
+        ? undefined
+        : multiplyQuadraticMaps(argument, argument);
+      if (
+        callee.quadraticCoefficient !== 0 && squaredArgument === undefined
+      ) {
+        return undefined;
+      }
       result = {
-        quadraticCoefficient: Math.imul(
-          callee.multiplier,
-          argument.quadraticCoefficient,
-        ),
-        linearCoefficient: Math.imul(
-          callee.multiplier,
-          argument.linearCoefficient,
-        ),
+        quadraticCoefficient: (
+          Math.imul(
+            callee.quadraticCoefficient,
+            squaredArgument?.quadraticCoefficient ?? 0,
+          ) +
+          Math.imul(
+            callee.linearCoefficient,
+            argument.quadraticCoefficient,
+          )
+        ) | 0,
+        linearCoefficient: (
+          Math.imul(
+            callee.quadraticCoefficient,
+            squaredArgument?.linearCoefficient ?? 0,
+          ) +
+          Math.imul(
+            callee.linearCoefficient,
+            argument.linearCoefficient,
+          )
+        ) | 0,
         constantCoefficient: (
           Math.imul(
-            callee.multiplier,
+            callee.quadraticCoefficient,
+            squaredArgument?.constantCoefficient ?? 0,
+          ) +
+          Math.imul(
+            callee.linearCoefficient,
             argument.constantCoefficient,
-          ) + callee.offset
+          ) + callee.constantCoefficient
         ) | 0,
       };
     }
@@ -2091,7 +2083,38 @@ function quadraticScalarTreeResult(
     values.set(operation.result, result);
   }
   const result = values.get(block.terminator.values[0]);
-  return result?.quadraticCoefficient === 0 ? undefined : result;
+  if (result !== undefined) summaries.set(shape.function.id, result);
+  return result;
+}
+
+function multiplyQuadraticMaps(
+  left: QuadraticMap,
+  right: QuadraticMap,
+): QuadraticMap | undefined {
+  const cubicCoefficient = (
+    Math.imul(left.linearCoefficient, right.quadraticCoefficient) +
+    Math.imul(left.quadraticCoefficient, right.linearCoefficient)
+  ) | 0;
+  const quarticCoefficient = Math.imul(
+    left.quadraticCoefficient,
+    right.quadraticCoefficient,
+  );
+  if (cubicCoefficient !== 0 || quarticCoefficient !== 0) return undefined;
+  return {
+    quadraticCoefficient: (
+      Math.imul(left.constantCoefficient, right.quadraticCoefficient) +
+      Math.imul(left.linearCoefficient, right.linearCoefficient) +
+      Math.imul(left.quadraticCoefficient, right.constantCoefficient)
+    ) | 0,
+    linearCoefficient: (
+      Math.imul(left.constantCoefficient, right.linearCoefficient) +
+      Math.imul(left.linearCoefficient, right.constantCoefficient)
+    ) | 0,
+    constantCoefficient: Math.imul(
+      left.constantCoefficient,
+      right.constantCoefficient,
+    ),
+  };
 }
 
 function countFunctionReferences(
