@@ -70,6 +70,7 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["20-affine-reset", 150],
     ["21-affine-posttransform", 150],
     ["22-affine-sandwich", 150],
+    ["24-over-budget-call-chain", 115],
     ["25-wide-frontier-thirty-two", 115],
     ["27-call-tree-fifty-six", 115],
     ["28-call-tree-sixty-one", 115],

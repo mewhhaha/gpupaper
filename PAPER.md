@@ -1304,6 +1304,14 @@ compiler activity makes the timing evidence diagnostic; the 116-byte output
 guard and differential semantics are executable evidence that the structural
 exemption applies.
 
+The formerly over-budget 17-wrapper call chain is a second post-hoc boundary for
+the structural rule. Its payload fell from the recorded 566 bytes to 113 bytes.
+A diagnostic 30-sample run measured 1.672/1.770 Zero/Rust nanoseconds and paired
+ratio 0.957, replacing the earlier 8.014-nanosecond Zero result and 4.766 ratio.
+Warm planning measured 0.660 milliseconds. The source remains above the old
+copied-emission budget, so a 115-byte executable guard specifically prevents
+regression back to retained call shells; runtime evidence remains diagnostic.
+
 Propagating the rereadable-local certificate reduced the monolithic polynomial
 from 111 to 105 bytes, the wide frontier from 116 to 110, and the four affine
 suffix thresholds by six bytes each (to 111, 111, 111, and 113). A diagnostic
