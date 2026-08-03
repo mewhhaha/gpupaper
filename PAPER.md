@@ -755,6 +755,22 @@ guards cover the admitted threshold cases. Multi-child trees, non-affine
 wrappers, cubic leaves, cycles, and multiply referenced nontrivial leaves still
 reject.
 
+Horner form reads its input twice, but an extra argument local is not always
+required. Define a rereadable operand as a value already assigned a Wasm local
+in the caller layout, or a scalar-tree parameter whose own stack argument is
+recursively rereadable. Between the two reads, Horner emits only constants,
+local reads, and total i32 arithmetic; it cannot assign that local. Two
+`local.get` operations therefore denote the same value and preserve the source
+argument's earlier exactly-once evaluation. A sunk expression is not rereadable,
+because emitting its instruction sequence twice could duplicate work or a trap;
+it retains the fresh parameter binding.
+
+The propagated certificate removes one caller `local.get`, one callee
+`local.set`, and one declared i32 local from each eligible quadratic call site,
+while adding no analysis beyond local-map membership along the existing
+single-child path. Correctness follows from local stability during the emitted
+expression, not from source-level referential transparency alone.
+
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
 choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
@@ -1253,6 +1269,18 @@ compilation 1.098 milliseconds, both below the earlier diagnostic
 compiler activity makes the timing evidence diagnostic; the 116-byte output
 guard and differential semantics are executable evidence that the structural
 exemption applies.
+
+Propagating the rereadable-local certificate reduced the monolithic polynomial
+from 111 to 105 bytes, the wide frontier from 116 to 110, and the four affine
+suffix thresholds by six bytes each (to 111, 111, 111, and 113). A diagnostic
+30-sample wide-frontier run measured 1.633/1.437 Zero/Rust nanoseconds and a
+paired ratio of 1.139, statistically indistinguishable at this scale from the
+preceding 1.618-nanosecond Zero result. The monolithic polynomial similarly
+measured 1.273/1.122 nanoseconds and ratio 1.145, versus the preceding
+diagnostic 1.251-nanosecond Zero median. The result validates payload and
+local-count reduction but falsifies redundant argument binding as the runtime
+explanation; the implementation is retained for its deterministic representation
+win.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 

@@ -897,16 +897,25 @@ function planFunctionValues(
   >();
   const allocateScalarTree = (
     shape: InlineScalarTreeShape,
+    rereadableArgument = false,
   ): InlineScalarTreeLayout => {
     const inlineLocalByValue = new Map<CoreValueId, number>();
     const inlineTypeByValue = valueTypes(shape.function);
     const inlineUses = analyzeFunctionValueUses(shape.function);
+    const inlineOperationByResult = new Map(
+      shape.function.blocks.flatMap((block) =>
+        block.operations.map((operation) =>
+          [operation.result, operation] as const
+        )
+      ),
+    );
     const entry = shape.function.blocks[shape.function.entryBlock];
     const quadraticResult = quadraticScalarTreeResult(core, shape);
-    const stackParameter = quadraticResult === undefined && shape.total &&
-        shape.structure === "single" &&
+    const stackParameter = shape.total && shape.structure === "single" &&
         entry.parameters.length === 1 &&
-        inlineUses.useCounts.get(entry.parameters[0].value) === 1
+        (quadraticResult === undefined
+          ? inlineUses.useCounts.get(entry.parameters[0].value) === 1
+          : rereadableArgument)
       ? entry.parameters[0].value
       : undefined;
     for (const block of shape.function.blocks) {
@@ -951,9 +960,19 @@ function planFunctionValues(
       quadraticResult,
       affineSuffix: affineScalarTreeSuffix(core, shape),
       callsByResult: new Map(
-        [...shape.callsByResult].map(([result, child]) =>
-          [result, allocateScalarTree(child)] as const
-        ),
+        [...shape.callsByResult].map(([result, child]) => {
+          const childCall = inlineOperationByResult.get(result);
+          const childOperand = childCall?.kind === "call.direct"
+            ? childCall.operands[0]
+            : undefined;
+          const childArgumentIsRereadable = childOperand !== undefined &&
+            (inlineLocalByValue.has(childOperand) ||
+              (childOperand === stackParameter && rereadableArgument));
+          return [
+            result,
+            allocateScalarTree(child, childArgumentIsRereadable),
+          ] as const;
+        }),
       ),
     };
   };
@@ -996,7 +1015,10 @@ function planFunctionValues(
       if (inlineScalarTree !== undefined) {
         inlineScalarTreeByCallResult.set(
           operation.result,
-          allocateScalarTree(inlineScalarTree),
+          allocateScalarTree(
+            inlineScalarTree,
+            localByValue.has(operation.operands[0]),
+          ),
         );
         continue;
       }
@@ -1079,7 +1101,10 @@ function planFunctionValues(
             }
             scalarTreesByCallResult.set(
               candidate.result,
-              allocateScalarTree(shape),
+              allocateScalarTree(
+                shape,
+                inlineLocalByValue.has(candidate.operands[0]),
+              ),
             );
           }
         }
