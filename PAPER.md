@@ -734,24 +734,26 @@ cases executable evidence rather than an optimizer-presence assumption.
 Symbolic compression changes the scalar-tree budget model. The original
 64-operation limit bounded both analysis and copied emission, but a chain of
 affine wrappers ending in one certified quadratic leaf emits one Horner form
-regardless of source depth. Let (O) be recursively expanded operations and (d)
-wrapper depth. Recognition costs (O(O)) work, (O(d)) recursion, and at most (3O)
-i32 coefficient words while emitted arithmetic remains at most two
+regardless of source depth. Let \(O\) be recursively expanded operations and
+\(d\) wrapper depth. Recognition costs \(O(O)\) work, \(O(d)\) recursion, and at
+most \(3O\) i32 coefficient words while emitted arithmetic remains at most two
 multiplications and two additions. Charging this case to the 64-operation
 emission budget therefore creates a performance cliff without bounding emitted
 code.
 
 The implementation separates these budgets. Ordinary copied trees retain the
-64-operation cap. A symbolically compressed tree may contain at most 128
-analyzed operations and must recursively consist of exactly one quadratic leaf
-and single-child affine suffix nodes; all existing uniqueness, acyclicity,
-scalar, purity, and totality premises remain. The factor-two analysis cap is a
-conservative resource bound, not a measured break-even: it limits current
-recursive maps to at most 384 coefficient words while threshold experiments test
-whether removing the artificial cost-64 cliff changes output and runtime as
-predicted. Executable output-size guards cover both newly admitted threshold
-cases. Trees above 128, multi-child trees, non-affine wrappers, and cubic leaves
-still reject.
+64-operation cap. A symbolically compressed tree must recursively consist of
+exactly one quadratic leaf and single-child affine suffix nodes; all existing
+uniqueness, acyclicity, scalar, purity, and totality premises remain. Its
+analysis is bounded by that finite input subgraph, so an additional numeric
+operation cap would not improve the asymptotic bound and would recreate a cliff.
+The initial implementation used 128 analyzed operations, but the 160-operation
+wide-frontier leaf is a counterexample: its abstract state is only 480 i32 words
+(1,920 bytes), and every operation must already be visited by ordinary lowering.
+The cap was therefore removed rather than tuned upward. Executable output-size
+guards cover the admitted threshold cases. Multi-child trees, non-affine
+wrappers, cubic leaves, cycles, and multiply referenced nontrivial leaves still
+reject.
 
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
@@ -1239,6 +1241,18 @@ diagnostic because other compiler work appeared during their environment
 windows. The payload and differential-test results are deterministic evidence;
 the runtime magnitude should be repeated in a clear environment before being
 used as a release claim.
+
+The removed 128-operation cap was tested by the independent 160-operation
+wide-frontier leaf. Its payload fell from 400 to 116 bytes and a diagnostic
+30-sample runtime fell from the preceding 9.780 to 1.618 nanoseconds, an
+approximate 83.5% reduction. Rust measured 1.427 nanoseconds and the paired
+ratio was 1.141, leaving a smaller scheduling gap after the operation-count
+cliff was removed. Warm planning was 0.406 milliseconds and total initialized
+compilation 1.098 milliseconds, both below the earlier diagnostic
+0.634-millisecond planning median despite analyzing the whole polynomial. Other
+compiler activity makes the timing evidence diagnostic; the 116-byte output
+guard and differential semantics are executable evidence that the structural
+exemption applies.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 

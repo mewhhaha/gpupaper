@@ -242,7 +242,6 @@ type QuadraticMap = {
 const maximumInlineDiamondOperations = 16;
 const maximumInlineLoopOperations = 24;
 const maximumInlineScalarTreeOperations = 64;
-const maximumAnalyzedScalarTreeOperations = 128;
 const maximumLinearAffineIterations = 7;
 
 type ClosureTarget = {
@@ -1798,6 +1797,15 @@ function inlineableScalarTreeCall(
   operation: Extract<CoreOperation, { readonly kind: "call.direct" }>,
 ): InlineScalarTreeShape | undefined {
   if (simpleNaturalLoop(caller)?.body.id !== block.id) return undefined;
+  function isSymbolicallyCompressed(
+    candidate: InlineScalarTreeShape,
+  ): boolean {
+    if (quadraticScalarTreeResult(core, candidate) !== undefined) return true;
+    const suffix = affineScalarTreeSuffix(core, candidate);
+    if (suffix === undefined) return false;
+    const child = candidate.callsByResult.get(suffix.callResult);
+    return child !== undefined && isSymbolicallyCompressed(child);
+  }
   const build = (
     functionId: CoreFunctionId,
     ancestors: ReadonlySet<CoreFunctionId>,
@@ -1870,32 +1878,19 @@ function inlineableScalarTreeCall(
         total = false;
       }
     }
-    if (operationCount > maximumAnalyzedScalarTreeOperations) return undefined;
-    return {
+    const candidate: InlineScalarTreeShape = {
       function: function_,
       structure: single ? "single" : "diamond",
       callsByResult,
       operationCount,
       total,
     };
+    return operationCount <= maximumInlineScalarTreeOperations ||
+        isSymbolicallyCompressed(candidate)
+      ? candidate
+      : undefined;
   };
-  const shape = build(operation.functionId, new Set());
-  if (
-    shape === undefined ||
-    shape.operationCount <= maximumInlineScalarTreeOperations
-  ) {
-    return shape;
-  }
-  const isSymbolicallyCompressed = (
-    candidate: InlineScalarTreeShape,
-  ): boolean => {
-    if (quadraticScalarTreeResult(core, candidate) !== undefined) return true;
-    const suffix = affineScalarTreeSuffix(core, candidate);
-    if (suffix === undefined) return false;
-    const child = candidate.callsByResult.get(suffix.callResult);
-    return child !== undefined && isSymbolicallyCompressed(child);
-  };
-  return isSymbolicallyCompressed(shape) ? shape : undefined;
+  return build(operation.functionId, new Set());
 }
 
 function affineScalarTreeSuffix(
