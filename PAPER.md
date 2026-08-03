@@ -699,6 +699,46 @@ unroll-profit model. The implementation was removed; future unrolling requires a
 model that includes eliminated call boundaries or measured target-specific
 control cost.
 
+The affine-suffix result motivates a different, guarded dynamic unroll. For a
+canonical countdown loop with state transition \(f\) and remaining count \(n\),
+choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
+\(n\ge4\), otherwise one. If \(n=4q+r\), repeated groups and the final singles
+compute \(f^{4q+r}\) in source order. The invariant after \(k\) emitted
+transitions is `(state, remaining) = (f^k(seed), n-k)`; each branch decreases
+remaining by either four or one, so termination and the bounded-fold result
+follow by induction.
+
+The certificate requires the existing four-block simple loop, continuation on
+`remaining > 0`, a header counter parameter, latch update `remaining - 1`, and
+only pure total scalar body operations or fully total inlined scalar trees. The
+header must contain only zero and the comparison, because its condition is not
+recomputed between the four copied transitions. Partial arithmetic, effects,
+other counter updates, body parameters, non-i32 counters, and structured body
+control reject the rule. The straight-line requirement is recursive through
+every inlined scalar-tree child; a total if-converted diamond is still rejected
+because copying both arms has a different size model. Every tree function must
+also have one module reference, preventing four-way unrolling from multiplying
+the bounded shared-leaf duplication exception. A loop whose existing range
+certificate proves at most seven iterations is also rejected: it can execute at
+most one four-way group, so selector overhead cannot be amortized against the
+established linear-loop break-even. This is narrower than the rejected constant
+full unroll and never removes a dynamic bound check entirely.
+
+Let \(B\) be a conservative upper bound on one encoded iteration. Four-way
+unrolling adds at most \(3B+C\) bytes for fixed control overhead \(C\). The
+initial counterfactual admits only candidates with \(3B+C\le192\). Runtime
+header tests fall from \(n+1\) to \(q+r+1\), while \(q+r\) group-selection
+comparisons are added. Thus the mechanism is expected to help only when the
+residual body is hot enough that saved loop control exceeds the selection cost;
+measurements must still reject it if the target engine already optimizes the
+original loop.
+
+The counterfactual used \(C=12\), then added range, recursively straight-line,
+and unique-reference premises as older workload guards exposed missing costs.
+Even that narrowed experiment failed the runtime/size comparison and was
+removed. The derivation specifies the rejected design; it is not an
+implementation claim.
+
 The implemented inlining case therefore couples call elimination with the
 structured-loop certificate. A callee is eligible only when it is referenced by
 exactly one direct call, has no closure reference, contains only scalar
@@ -1108,6 +1148,35 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 16 dead functions, empirically separating output work, which depends on \(R\),
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
+
+### 2026-08-03: guarded dynamic-unroll counterexample
+
+The four-way candidate began with the canonical countdown proof above and an
+encoded-iteration growth estimate. Existing workload guards found three missing
+premises before the target measurement. The value-dependent inner fold has a
+certified maximum of six and grew to 292 bytes, so loops bounded by the existing
+seven-iteration linear break-even were excluded. The unique call-graph workload
+contains an if-converted diamond and grew to 394 bytes, so the straight-line
+requirement was propagated recursively. The shared-polynomial DAG then grew to
+320 bytes, so every inlined tree function was required to have one module
+reference. These are counterexamples to totality alone as an unroll
+profitability certificate; all three retained correct semantics.
+
+With those corrections and a 192-byte estimated-growth cap, the intended cost-55
+tree grew from 125 to 328 bytes, nearly identical to Rust's 327-byte payload.
+The actual 203-byte growth also falsified the candidate's \(C=12\) surrounding
+control estimate by at least 11 bytes. In a contended 30-sample diagnostic run,
+median Zero/Rust runtime was 2.134/1.721 nanoseconds with a paired ratio of
+1.242. Compared with the preceding 2.240-nanosecond Zero median, the approximate
+4.7% improvement costs 162% payload growth. Every calibrated path reached five
+milliseconds; initialized Zero compilation measured 1.256 milliseconds.
+
+The implementation is removed. Whole-plan delta prediction could repair the size
+estimate but cannot repair the measured trade: even a perfect predictor would
+choose between 203 bytes and roughly 0.106 nanoseconds per round. The result
+extends the earlier full-unroll rejection to a pure total affine-composed body
+and closes outer-loop unrolling as the explanation for the residual gap on this
+engine.
 
 ### 2026-08-03: scalar-tree threshold sweep
 
