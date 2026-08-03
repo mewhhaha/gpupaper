@@ -1395,6 +1395,32 @@ prologue and four-step main loop. The implementation was removed. This
 counterexample narrows any future unroll to genuine strip-mining with one group
 condition per four transitions and a separate remainder path.
 
+The strip-mined counterfactual emits a main loop that continues only while
+`remaining >= 4`, executes four source-ordered transitions, subtracting one in
+each certified transition, and then enters the unchanged scalar loop for the
+remaining zero through three iterations. Writing \(n=4q+r\), induction over the
+main loop establishes state \(f^{4q}(s)\) and counter \(r\); the scalar-loop
+proof then yields \(f^{4q+r}(s)\). Negative and zero initial counts skip both
+bodies. Header work is pure total comparison only, and the body certificate
+admits no operations beyond one compressed quadratic transition and the
+decrement, so no effect or trap is reordered or discarded.
+
+This layout emits five static transition copies: four in the group loop and one
+in the scalar tail. Relative to the single loop it adds approximately \(4T+6\)
+bytes, but for large \(n\) performs one loop comparison and branch per four
+transitions instead of per transition. It is accepted only if measured runtime
+improves enough to justify the actual payload; otherwise the engine-specific gap
+is recorded as outside the current size policy.
+
+The strip-mined implementation was also removed. It preserved every reference
+probe but grew the polynomial payload from 105 to 242 bytes. A diagnostic
+30-sample run measured 1.260/1.101 Zero/Rust nanoseconds and paired ratio 1.144,
+versus the preceding 1.273-nanosecond Zero median. The approximate 1% change is
+inside run variation and leaves the relative gap unchanged while increasing
+payload by 130%. Together with the guarded result, this closes four-way
+unrolling under the current size/runtime policy; reproducing Rust's larger
+module is not profitable evidence for gpupaper's compact target.
+
 ### 2026-08-03: scalar-tree threshold sweep
 
 Four paired workloads instantiate the derived inliner costs 55, 60, 65, and 70;
