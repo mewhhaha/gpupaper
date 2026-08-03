@@ -1366,6 +1366,35 @@ extends the earlier full-unroll rejection to a pure total affine-composed body
 and closes outer-loop unrolling as the explanation for the residual gap on this
 engine.
 
+That conclusion is representation-relative. After polynomial compression, the
+same outer transition emits at most two multiplies and two additions, and Rust's
+current output visibly groups four transitions. The revised candidate retains
+the canonical `remaining > 0` and `remaining - 1` proof but requires the loop
+body to contain exactly one symbolically compressed quadratic tree plus the
+counter decrement, with no other header or body operations. When
+`remaining >= 4`, it emits three additional transitions followed by the common
+transition; otherwise it emits only the common transition. The induction used by
+the rejected experiment still proves (f^{4q+r}), while the new premise changes
+cloned work from the expanded call tree to three compact Horner forms.
+
+If one compact transition encodes to (T) bytes, this adds approximately (3T+5)
+bytes and reduces loop-condition evaluations from (n+1) to (lfloor n/4
+floor+(n\bmod4)+1), while adding one group comparison per emitted loop
+iteration. Unlike the earlier fixed 192-byte estimate, the experiment measures
+the actual post-lowering payload and must again be removed if runtime does not
+justify its size. This is a new counterfactual over a changed IR, not a
+retroactive acceptance of the earlier expanded-body design.
+
+The compact-body guard was also rejected. On the monolithic polynomial it grew
+the payload from 105 to 205 bytes. A diagnostic 30-sample run measured
+1.307/1.125 Zero/Rust nanoseconds with paired ratio 1.170, versus the preceding
+1.273-nanosecond Zero result. Although each selected iteration executes four
+transitions, the loop still evaluates both `remaining > 0` and `remaining >= 4`
+once per group; that control schedule does not reproduce Rust's remainder
+prologue and four-step main loop. The implementation was removed. This
+counterexample narrows any future unroll to genuine strip-mining with one group
+condition per four transitions and a separate remainder path.
+
 ### 2026-08-03: scalar-tree threshold sweep
 
 Four paired workloads instantiate the derived inliner costs 55, 60, 65, and 70;
