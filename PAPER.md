@@ -406,17 +406,21 @@ exercise successful parsing and semantic preservation.
 
 Program difficulty is not a scalar. For workload \(w\), the benchmark records
 
-\[ C(w)=(S,F,R,D,B,O,A,K,\mu,P,L), \]
+\[ C(w)=(S,F,R,D,B,O,A,K,\mu,P,L,H,\rho), \]
 
 where \(S\) is source bytes, \(F\) is total Core functions, \(R\) and \(D=F-R\)
 are reachable and dead functions, \(B\) is Core blocks, \(O\) is Core
 operations, \(A\) is binary-plan atoms, \(K\) is direct call sites, \(\mu\) is
 maximum direct-call multiplicity for one callee, \(P\) is partial scalar
 division and remainder operations, and \(L\) is maximum block-local SSA
-liveness. Reachability is the least fixed point starting at the benchmark entry
-and following direct-call and closure edges. Local liveness is computed
-backwards from terminator operands, killing each operation result and generating
-its operands. These measurements require \(O(F+B+O+E)\) work and \(O(F+V)\)
+liveness. The direct-call graph contributes maximum path depth \(H\) when it is
+acyclic and the flag \(\rho\) when it contains a recursive cycle; \(H=\bot\) for
+a cyclic graph because longest simple path is not computed. Reachability is the
+least fixed point starting at the benchmark entry and following direct-call and
+closure edges. Local liveness is computed backwards from terminator operands,
+killing each operation result and generating its operands. A three-color
+depth-first traversal computes \((H,\rho)\) in \(O(F+K)\) work and \(O(F)\)
+memory. All measurements together require \(O(F+B+O+E)\) work and \(O(F+V)\)
 temporary storage for call edges \(E\) and values \(V\).
 
 The suite is an ordered ladder of dominant structural challenges rather than a
@@ -428,8 +432,15 @@ three optimization restrictions and one discard boundary: unique-reference
 inlining must not duplicate a shared callee; stackification should respond to
 actual liveness rather than total operations; partial arms must remain lazy; and
 binary emission should depend on \(R\), while frontend and reachability work
-still depend on \(F\). This avoids collapsing incomparable programs into an
-invented single complexity score.
+still depend on \(F\). Four further cases hold nonlinear recurrence semantics
+constant while changing source organization from monolithic to a deep unique
+chain and a shared DAG, then vary the inner-fold trip count at runtime. The
+first triplet isolates representation sensitivity: if two modules denote the
+same recurrence but differ in \(H\) or \(\mu\), any runtime difference is
+compiler-generated rather than algorithmic. The dynamic fold tests whether a
+certificate derived for a constant inner count accidentally depends on that
+constant. This avoids collapsing incomparable programs into an invented single
+complexity score.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
@@ -459,8 +470,8 @@ separate boundaries because an in-process initialized frontend and a fresh
 `rustc` process do not measure the same operation. With \(q\) workloads, \(p\)
 probes, \(m\) samples, and \(r\) rounds, validation work is \(O(qp)\),
 compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\), multiplied by
-each workload's inner recurrence cost. The default ten-workload, 30-sample,
-eight-seed, 100,000-round run performs 240 million outer rounds per compiler,
+each workload's inner recurrence cost. The default fourteen-workload, 30-sample,
+eight-seed, 100,000-round run performs 336 million outer rounds per compiler,
 plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
@@ -590,6 +601,33 @@ before removing the same callee operations and a call boundary. Recursive,
 effectful, aggregate, multiply referenced, and unstructured callees remain
 calls.
 
+Canonical simple loops compose under the same model. A simple-loop callee may be
+moved into the body of another canonical simple loop when it has one module
+reference, one returned value, and every direct call in its body has a complete
+scalar-tree inline certificate. The loop operations plus recursively expanded
+scalar-tree operations may total at most 24. The latter condition is required by
+residual reachability: skipping the moved callee is valid only when it has no
+residual call target that would disappear from the reachability traversal. Fresh
+locals bind the callee parameters and block parameters, the existing loop-region
+emitter preserves header tests and parallel edge copies, and nested scalar
+bodies retain their totality and lazy control rules. A callee selected for
+logarithmic affine lowering is excluded; only a bounded-small affine loop or a
+non-affine loop uses this path. With one reference, the transformation moves at
+most 24 operations and removes one call and function shell without duplicating
+dynamic work. Recursive, shared, effectful, partially residual, and noncanonical
+loops remain calls.
+
+Function caching must include code embedded by these transformations. A cached
+function identity therefore contains the stable-ID-ordered bodies of every
+transitive direct callee, in addition to the caller and any affine summary.
+Changing an inlined scalar leaf or nested loop necessarily invalidates the
+caller. This is conservative because a changed residual callee body also
+invalidates callers whose machine code depends only on its function index, but
+unrelated call-graph components still reuse their entries. Computing the closure
+per cached function costs \(O(F+K)\), for a module worst case \(O(F(F+K))\); a
+shared reverse-dependency index could reduce repeated work if cache analysis
+becomes measurable.
+
 The first inlining measurement refined the failed-unroll diagnosis. Structured
 inlining reduced the payload from 196 to 189 bytes but changed the contended
 median only from about 12.55 to 11.88 nanoseconds per outer round. The call was
@@ -614,20 +652,38 @@ nanoseconds per outer round, versus Rust at 5.91 in the paired diagnostic run.
 This is executable and empirical evidence under contention, not a universal
 claim that if-conversion is profitable for predictable branches.
 
-For a unique scalar call tree, beta reduction supplies a more general inlining
-model. Every function must be single-block or a certified scalar diamond; every
+For a scalar call tree, beta reduction supplies a more general inlining model.
+Every function must be single-block or a certified scalar diamond; every
 operation must be a scalar constant, scalar binary operation, or direct call;
-every callee must have exactly one module reference; the call graph must be
-acyclic; and the expanded tree may contain at most 32 operations. Fresh locals
-bind every formal parameter and SSA result, so argument evaluation occurs once
-in source order. Conditional arms remain lazy unless the recursively expanded
-arm trees are total, in which case the existing selection proof applies. With
-unique references, residualization normally removes every standalone callee, so
-the transformation changes \(k\) calls into \(k\) local bindings without
-duplicating operations; an independently exported callee remains, but the
-32-operation bound still limits duplication. The current repeated
-reference-count scans cost \(O(FO)\) in the worst case; emitted tree size is
-bounded by 32 Core operations.
+the call graph must be acyclic; and the expanded tree may contain at most 64
+operations. Internal callees normally require exactly one module reference. A
+multiply referenced exception is admitted only for a single-block leaf with at
+most four total scalar operations, at most four references, no calls, and at
+most eight extra copied operations \((m-1)O_g\). Fresh locals bind every formal
+parameter and SSA result, so each source call's argument and body evaluation
+still occur once in source order. The leaf catalog excludes effects and traps;
+copying its code therefore cannot duplicate an observable effect. Conditional
+arms remain lazy unless the recursively expanded arm trees are total, in which
+case the existing selection proof applies.
+
+With unique references, residualization normally removes every standalone
+callee, so the transformation changes \(k\) calls into \(k\) local bindings
+without duplicating operations. Bounded shared leaves duplicate code but not
+dynamic work relative to the distinct source calls. An independently exported
+callee remains, but the 64-operation tree bound and eight-operation shared-copy
+budget limit duplication. The current repeated reference-count scans cost
+\(O(FO)\) in the worst case; emitted tree size is bounded by 64 Core operations.
+These bounds are resource policies, not part of the semantic certificate:
+uniqueness proves that unexported internal operations are moved rather than
+copied, but the current predicate does not receive the export set and therefore
+cannot prove zero duplication for an independently exported callee. The
+deep-polynomial control case contains approximately 42 expanded operations and
+exposed a discontinuity at the former bound of 32. The smallest power-of-two
+bound containing that case is 64, which doubles worst-case analysis and possible
+exported duplication while retaining a constant cap. The shared-polynomial case
+adds exactly two copied operations under the bounded-leaf rule. These are
+empirical policy choices; an export-aware byte-cost comparison would be a more
+precise replacement.
 
 The call-tree hypothesis succeeded empirically: the call-graph workload changed
 from approximately 2.5--2.7 to 1.44 nanoseconds per round, versus Rust at 1.64,
@@ -676,6 +732,20 @@ analysis becomes measurable. Non-affine, effectful, multi-state, or noncanonical
 loops retain ordinary lowering. A cached caller's content identity includes the
 certified multiplier and offset, so changing any transitive callee cannot reuse
 machine code specialized for a stale summary.
+
+Logarithmic work is not automatically cheaper for a small bounded count. For a
+positive count \(n\), let \(k=\lfloor\log_2 n\rfloor+1\) and let \(p\) be its
+population count. Direct iteration of one affine step uses \(2n\) multiply/add
+operations. The emitted monoid loop uses \(3k+2p\): two multiplications and one
+addition to square the affine map per bit, plus one multiplication and one
+addition for each selected bit. This excludes bit tests, branches, and local
+traffic, so it favors exponentiation. Nevertheless, for \(n=6\) and \(n=7\) the
+counts are respectively 12 versus 13 and 14 versus 15 even before that overhead.
+A range certificate therefore retains direct iteration when the maximum positive
+trip count is at most seven. It recognizes a constant initial counter or signed
+remainder by a positive constant \(d\), whose positive result is at most
+\(d-1\). Unknown and larger ranges retain monoid exponentiation. This is a
+conservative local interval fact; no general range analysis is claimed.
 
 Affine acceleration also creates a measurement counterexample: dividing a
 near-clock-resolution batch by 800,000 source rounds produced an apparent
@@ -789,7 +859,9 @@ outside the certified shapes.
 
 Four paired workloads extended the ladder and benchmark schema 3 added
 reachability, call multiplicity, partial-operation, and block-liveness fields.
-Their measured structural vectors, in the Section 8.2 field order, are
+Their measured structural vectors contain the first eleven fields of the
+then-current Section 8.2 order; call depth and recursion were added later in
+schema 4.
 
 | workload                              | \(C(w)\)                            |
 | ------------------------------------- | ----------------------------------- |
@@ -850,6 +922,72 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 16 dead functions, empirically separating output work, which depends on \(R\),
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
+
+### 2026-08-03: nonlinear representation and dynamic-fold cycle
+
+Benchmark schema 4 added acyclic direct-call depth \(H\) and recursion flag
+\(\rho\). Four paired Zero/Rust workloads extended the ladder. The first three
+implement the same nonlinear recurrence as a monolithic function, a depth-13
+unique chain, and a shared DAG. The fourth uses an inner affine fold whose
+signed remainder count varies with the carried value. Their final structural
+vectors are
+
+| workload              | \(C(w)\)                                  |
+| --------------------- | ----------------------------------------- |
+| polynomial            | \((143,2,2,0,5,15,120,1,1,0,3,1,0)\)      |
+| deep polynomial chain | \((777,14,14,0,17,49,291,13,1,0,3,13,0)\) |
+| shared polynomial DAG | \((321,6,6,0,9,20,177,6,2,0,3,3,0)\)      |
+| dynamic nested fold   | \((165,3,3,0,9,16,168,2,1,1,3,2,0)\)      |
+
+Executable tests require depths 1, at least 13, and 2 where those boundaries
+matter, require multiplicity 2 for the shared polynomial, and classify a
+separate recursive module as \((H,\rho)=(\bot,1)\). All fourteen workload pairs
+agree with independent TypeScript recurrences on boundary and pseudorandom
+probes, both plan emitters remain byte-identical, and payload bounds protect the
+three newly optimized shapes. These are executable validations, not universal
+equivalence proofs.
+
+The initial ten-sample admissible baseline measured Zero/Rust nanoseconds per
+round and paired ratios of 1.285/1.084 (1.197) for the monolith, 1.739/1.068
+(1.630) for the deep chain, 1.435/1.055 (1.347) for the shared DAG, and
+1.789/0.780 (2.228) for the dynamic fold. Rust emitted the same 283-byte module
+for all three polynomial sources, demonstrating that its optimizer removed their
+organizational differences. Initial Zero payloads were 121, 396, 212, and 213
+bytes.
+
+Three derived mechanisms addressed distinct counterexamples. Raising the scalar
+tree resource cap from 32 to 64 admitted the approximately 42-operation unique
+chain, reducing it to 293 bytes. The bounded pure-leaf copy rule admitted the
+two-operation `shifted` function at multiplicity two, reducing the shared DAG to
+181 bytes. For the dynamic fold, the arithmetic cost comparison \(2n\) versus
+\(3k+2p\) rejected monoid exponentiation for its proven maximum count of six;
+compositional simple-loop inlining then moved both the inner loop and its scalar
+leaf into the outer loop, reducing the payload to 177 bytes. The mechanisms
+preserve separate soundness certificates and resource budgets; no rule depends
+on a workload name. A differential cache test changes the transitive scalar leaf
+behind the nested loop and requires independently cached callers to produce the
+two distinct results.
+
+The final 30-sample run was admissible: both environment inspections were clear
+and every calibrated batch reached five milliseconds. Zero/Rust median
+nanoseconds per semantic round and paired median ratios across all fourteen
+workloads were: affine 0.000163/0.105 (0.0016), diamond 1.260/1.513 (0.842),
+unique call graph 1.511/1.693 (0.893), branch forest 4.538/4.318 (1.044), nested
+loop 5.176/6.066 (0.846), broad module 2.147/4.600 (0.474), shared affine DAG
+0.000162/0.0270 (0.0060), wide frontier 2.169/2.000 (1.115), partial lazy
+arithmetic 2.400/2.412 (0.966), dead module 0.000161/0.105 (0.0015), polynomial
+1.319/1.088 (1.200), deep polynomial 1.443/1.129 (1.242), shared polynomial
+1.324/1.096 (1.210), and dynamic nested fold 0.901/0.848 (1.063).
+
+The three equivalent polynomial organizations now lie within 0.042 in paired
+ratio, compared with a 0.433 spread initially. Their residual 20--24% loss
+coincides with Rust's four-way loop unrolling and algebraic scheduling, but the
+earlier 73--76% code-growth counterexamples still reject unconditional
+unrolling. This remains an unverified profitability hypothesis rather than a
+justification for another mechanism. Initialized Zero compilation medians ranged
+from 0.645 to 1.064 milliseconds, parser medians from 0.132 to 0.263
+milliseconds, and fresh `rustc` process medians from 32.18 to 34.37
+milliseconds; the process boundaries remain incomparable.
 
 ### 2026-08-02: Zero structural complexity ladder
 

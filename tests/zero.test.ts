@@ -58,6 +58,9 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["04-branch-forest", 300],
     ["05-nested-loop", 250],
     ["08-wide-binding-frontier", 180],
+    ["12-deep-polynomial-chain", 320],
+    ["13-shared-polynomial-dag", 200],
+    ["14-dynamic-nested-fold", 190],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -133,6 +136,48 @@ Deno.test("transitive affine callee changes invalidate the cached caller", async
   );
   assertEquals(firstRun(1, 1), 23);
   assertEquals(secondRun(1, 1), 27);
+});
+
+Deno.test("nested loop callee changes invalidate the cached caller", async () => {
+  const first = await compileZeroSource(
+    "first-nested.zero",
+    `
+      private: inner value = @value 3 * 1 + ;
+      private: step value = @value 7 % @value repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const second = await compileZeroSource(
+    "second-nested.zero",
+    `
+      private: inner value = @value 5 * 1 + ;
+      private: step value = @value 7 % @value repeat:inner ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const cache = createBackendFunctionCache();
+  const firstPlan = lowerCoreToWasm(first.core, {
+    emission: "planOnly",
+    target: "wasm-scalar",
+    functions: cache,
+    exports: [{ name: "run", functionId: first.core.entryFunction }],
+  });
+  const secondPlan = lowerCoreToWasm(second.core, {
+    emission: "planOnly",
+    target: "wasm-scalar",
+    functions: cache,
+    exports: [{ name: "run", functionId: second.core.entryFunction }],
+  });
+  const firstRun = exportedFunction(
+    await instantiate(emitWasmPlanOnCpu(firstPlan.wasmPlan)),
+    "run",
+  );
+  const secondRun = exportedFunction(
+    await instantiate(emitWasmPlanOnCpu(secondPlan.wasmPlan)),
+    "run",
+  );
+  assertEquals(firstRun(1, 1), 4);
+  assertEquals(secondRun(1, 1), 6);
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {

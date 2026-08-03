@@ -10,6 +10,8 @@ export type CoreStructure = {
   readonly maximumCalleeReferences: number;
   readonly partialScalarOperations: number;
   readonly maximumBlockLiveValues: number;
+  readonly maximumCallDepth: number | null;
+  readonly recursiveCallGraph: boolean;
 };
 
 export function measureCoreStructure(core: CoreModule): CoreStructure {
@@ -41,6 +43,7 @@ export function measureCoreStructure(core: CoreModule): CoreStructure {
   let partialScalarOperations = 0;
   let maximumBlockLiveValues = 0;
   const calleeReferences = new Map<number, number>();
+  const directCallTargets = core.functions.map(() => [] as number[]);
   for (const function_ of core.functions) {
     coreBlocks += function_.blocks.length;
     for (const block of function_.blocks) {
@@ -79,6 +82,7 @@ export function measureCoreStructure(core: CoreModule): CoreStructure {
         );
         if (operation.kind === "call.direct") {
           directCallSites += 1;
+          directCallTargets[function_.id].push(operation.functionId);
           calleeReferences.set(
             operation.functionId,
             (calleeReferences.get(operation.functionId) ?? 0) + 1,
@@ -94,6 +98,37 @@ export function measureCoreStructure(core: CoreModule): CoreStructure {
     }
   }
 
+  const callStates = new Uint8Array(core.functions.length);
+  const callDepths = new Uint32Array(core.functions.length);
+  let recursiveCallGraph = false;
+  const measureCallDepth = (functionId: number): number => {
+    if (callStates[functionId] === 1) {
+      recursiveCallGraph = true;
+      return 0;
+    }
+    if (callStates[functionId] === 2) return callDepths[functionId];
+    callStates[functionId] = 1;
+    let depth = 0;
+    for (const target of directCallTargets[functionId]) {
+      if (core.functions[target] === undefined) {
+        throw new Error(
+          `Core call-depth analysis lost function ${target} called by ${functionId}`,
+        );
+      }
+      depth = Math.max(depth, 1 + measureCallDepth(target));
+    }
+    callStates[functionId] = 2;
+    callDepths[functionId] = depth;
+    return depth;
+  };
+  let maximumCallDepth = 0;
+  for (const function_ of core.functions) {
+    maximumCallDepth = Math.max(
+      maximumCallDepth,
+      measureCallDepth(function_.id),
+    );
+  }
+
   return {
     coreFunctions: core.functions.length,
     reachableCoreFunctions: reachableFunctions.size,
@@ -104,5 +139,7 @@ export function measureCoreStructure(core: CoreModule): CoreStructure {
     maximumCalleeReferences: Math.max(0, ...calleeReferences.values()),
     partialScalarOperations,
     maximumBlockLiveValues,
+    maximumCallDepth: recursiveCallGraph ? null : maximumCallDepth,
+    recursiveCallGraph,
   };
 }

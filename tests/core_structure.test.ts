@@ -20,6 +20,10 @@ Deno.test("Core structure separates reachability sharing and partial operations"
   assertEquals(structure.directCallSites, 4, "direct calls");
   assertEquals(structure.maximumCalleeReferences, 2, "callee multiplicity");
   assertEquals(structure.partialScalarOperations, 1, "partial operations");
+  assertEquals(structure.maximumCallDepth, 2, "call depth");
+  if (structure.recursiveCallGraph) {
+    throw new Error("acyclic structure was classified as recursive");
+  }
   if (structure.maximumBlockLiveValues < 2) {
     throw new Error(
       `maximum live values was ${structure.maximumBlockLiveValues}; expected at least 2`,
@@ -61,13 +65,63 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         assertEquals(structure.reachableCoreFunctions, 2, "live functions");
         assertEquals(structure.deadCoreFunctions, 16, "dead functions");
         break;
+      case "11-polynomial":
+        assertEquals(structure.maximumCallDepth, 1, "monolithic call depth");
+        break;
+      case "12-deep-polynomial-chain":
+        if (
+          structure.maximumCallDepth === null || structure.maximumCallDepth < 13
+        ) {
+          throw new Error(
+            `deep chain had call depth ${structure.maximumCallDepth}; expected at least 13`,
+          );
+        }
+        break;
+      case "13-shared-polynomial-dag":
+        assertEquals(
+          structure.maximumCalleeReferences,
+          2,
+          "polynomial callee multiplicity",
+        );
+        break;
+      case "14-dynamic-nested-fold":
+        assertEquals(
+          structure.partialScalarOperations,
+          1,
+          "dynamic-fold partial operations",
+        );
+        assertEquals(structure.maximumCallDepth, 2, "nested-fold call depth");
+        break;
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }
   }
 });
 
-function assertEquals(actual: number, expected: number, label: string): void {
+Deno.test("recursive call graphs have no finite DAG depth", async () => {
+  const compiled = await compileZeroSource(
+    "recursive.zero",
+    `
+      private: recurse value = @value call:recurse:1 ;
+      export: run seed rounds = @seed call:recurse:1 ;
+    `,
+  );
+  const structure = measureCoreStructure(compiled.core);
+  if (!structure.recursiveCallGraph) {
+    throw new Error("recursive call graph was classified as acyclic");
+  }
+  if (structure.maximumCallDepth !== null) {
+    throw new Error(
+      `recursive call depth was ${structure.maximumCallDepth}; expected null`,
+    );
+  }
+});
+
+function assertEquals(
+  actual: number | null,
+  expected: number,
+  label: string,
+): void {
   if (actual !== expected) {
     throw new Error(`${label} was ${actual}; expected ${expected}`);
   }

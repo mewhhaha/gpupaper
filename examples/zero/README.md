@@ -47,12 +47,13 @@ deno task benchmark:zero
 The [`workloads`](workloads) directory contains paired Zero and Rust programs
 that form a structural complexity ladder: arithmetic, control flow, call graphs,
 nested loops, shared callees, wide live-value frontiers, guarded partial
-operations, and unreachable functions. The benchmark compiles every pair through
-its respective pipeline and checks both against an independent recurrence before
-measuring compilation boundaries, module construction, instantiation, and hot
-execution. It also records reachability, call multiplicity, partial operations,
-and SSA liveness so each workload's claimed challenge is independently
-checkable.
+operations, unreachable functions, equivalent nonlinear programs with different
+call-graph shapes, and a value-dependent nested fold. The benchmark compiles
+every pair through its respective pipeline and checks both against an
+independent recurrence before measuring compilation boundaries, module
+construction, instantiation, and hot execution. It also records reachability,
+call multiplicity, call depth, recursion, partial operations, and SSA liveness
+so each workload's claimed challenge is independently checkable.
 
 Run one rung while developing with `--workload`:
 

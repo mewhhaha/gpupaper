@@ -99,7 +99,7 @@ try {
     {
       status: validity.status === "refused" ? "refused" : "completed",
       validity,
-      schemaVersion: 3,
+      schemaVersion: 4,
       benchmark: "zero-complexity-ladder-versus-rust",
       runtime: runtimeIdentity(),
       repositories: { gpupaper: await repositoryIdentity(gpupaperDirectory) },

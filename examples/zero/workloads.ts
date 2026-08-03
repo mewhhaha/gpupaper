@@ -51,6 +51,26 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "large unreachable function set",
     deadModuleReference,
   ),
+  workload(
+    "11-polynomial",
+    "monolithic nonlinear recurrence",
+    polynomialReference,
+  ),
+  workload(
+    "12-deep-polynomial-chain",
+    "nonlinear recurrence behind a deep unique call chain",
+    polynomialReference,
+  ),
+  workload(
+    "13-shared-polynomial-dag",
+    "nonlinear recurrence behind a shared call DAG",
+    polynomialReference,
+  ),
+  workload(
+    "14-dynamic-nested-fold",
+    "value-dependent nested fold",
+    dynamicNestedFoldReference,
+  ),
 ];
 
 function workload(
@@ -166,4 +186,23 @@ function partialLazyReference(seed: number, rounds: number): number {
 
 function deadModuleReference(seed: number, rounds: number): number {
   return repeat(rounds, seed, affine);
+}
+
+function polynomial(value: number): number {
+  const mixed = (value + 78) | 0;
+  return (
+    Math.imul(Math.imul(mixed, mixed), 3) + Math.imul(mixed, 5) + 17
+  ) | 0;
+}
+
+function polynomialReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, polynomial);
+}
+
+function dynamicNestedFoldReference(seed: number, rounds: number): number {
+  return repeat(
+    rounds,
+    seed,
+    (value) => repeat(value % 7, value, affine),
+  );
 }

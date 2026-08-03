@@ -1,0 +1,17 @@
+private: shift01 value = @value 1 + ;
+private: shift02 value = @value call:shift01:1 2 + ;
+private: shift03 value = @value call:shift02:1 3 + ;
+private: shift04 value = @value call:shift03:1 4 + ;
+private: shift05 value = @value call:shift04:1 5 + ;
+private: shift06 value = @value call:shift05:1 6 + ;
+private: shift07 value = @value call:shift06:1 7 + ;
+private: shift08 value = @value call:shift07:1 8 + ;
+private: shift09 value = @value call:shift08:1 9 + ;
+private: shift10 value = @value call:shift09:1 10 + ;
+private: shift11 value = @value call:shift10:1 11 + ;
+private: shift12 value = @value call:shift11:1 12 + ;
+private: step value =
+  @value call:shift12:1 let:mixed
+  @mixed @mixed * 3 * @mixed 5 * + 17 + ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

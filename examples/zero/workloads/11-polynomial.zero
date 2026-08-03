@@ -1,0 +1,5 @@
+private: step value =
+  @value 78 + let:mixed
+  @mixed @mixed * 3 * @mixed 5 * + 17 + ;
+
+export: run seed rounds = @rounds @seed repeat:step ;
