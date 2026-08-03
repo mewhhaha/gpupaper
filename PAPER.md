@@ -1345,6 +1345,28 @@ degree boundary rejects rather than truncates higher coefficients. This is
 executable evidence for both the shared-DAG positive case and quartic negative
 case, while the timing remains diagnostic.
 
+### 2026-08-03: post-compression ladder audit
+
+A final 30-sample full-ladder run was diagnostic because competing compiler work
+appeared, but every runtime path met the five-millisecond calibration rule. For
+non-constant workloads, the largest paired Zero/Rust ratios were 1.142 for the
+three polynomial representations, 1.130 for the 32-value wide frontier, and
+1.120 for shared-leaf fanout. Dynamic nested fold and branch forest measured
+1.073 and 1.070; the oversized nonlinear nested fold measured 1.011. The ratio
+2.865 for affine reset compares 0.000164 with 0.000058 nanoseconds after both
+engines eliminate essentially all dynamic work and is below a meaningful timer
+resolution; it is not treated as a performance cliff.
+
+The formerly discontinuous call-tree costs 56, 61, 66, and 71 emitted 111, 111,
+111, and 113 bytes with ratios 0.978, 0.965, 0.963, and 0.972. The older
+17-wrapper over-budget chain emitted 113 bytes at ratio 0.976. Warm Wasm
+planning for all five ranged from 0.283 to 0.419 milliseconds. Thus call depth
+and the old operation threshold no longer predict either payload or runtime; the
+remaining 10--14% losses cluster by arithmetic schedule, while measured unroll
+variants failed the size/runtime policy. This audit supplies a stopping
+criterion: no repeated structural loss above 1.15 remains in the present
+30-workload corpus.
+
 ### 2026-08-03: guarded dynamic-unroll counterexample
 
 The four-way candidate began with the canonical countdown proof above and an
