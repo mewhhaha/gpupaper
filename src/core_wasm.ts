@@ -2108,11 +2108,13 @@ function affineUnaryFunction(
 
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(functionId);
+    const summarizeNested = (calleeId: CoreFunctionId): AffineMap | undefined =>
+      summarize(calleeId, nextAncestors);
     if (function_.blocks.length !== 1) {
       const affineLoop = affineNaturalLoop(
         core,
         function_,
-        (calleeId) => summarize(calleeId, nextAncestors),
+        summarizeNested,
       );
       if (affineLoop?.exactIterations === undefined) {
         summaries.set(functionId, undefined);
@@ -2133,6 +2135,9 @@ function affineUnaryFunction(
       const counterIndex = stateIndex === 0 ? 1 : 0;
       const initialCounter = loop.entry.terminator.arguments[counterIndex];
       const initialState = loop.entry.terminator.arguments[stateIndex];
+      const initialCounterOperation = loop.entry.operations.find((operation) =>
+        operation.result === initialCounter
+      );
       const conditionValue = loop.header.terminator.condition;
       const condition = loop.header.operations.find((operation) =>
         operation.result === conditionValue
@@ -2142,19 +2147,38 @@ function affineUnaryFunction(
         : undefined;
       if (
         stateIndex < 0 || loop.entry.parameters.length !== 1 ||
-        initialState !== loop.entry.parameters[0].value ||
-        loop.entry.operations.length !== 1 ||
-        loop.entry.operations[0].kind !== "constant" ||
-        loop.entry.operations[0].result !== initialCounter ||
+        initialCounterOperation?.kind !== "constant" ||
         headerResults === undefined || loop.header.operations.length !== 2 ||
         loop.header.operations.some((operation) =>
           !headerResults.has(operation.result)
         ) ||
-        loop.exit.operations.length !== 0 ||
         loop.exit.parameters.length !== 1 ||
-        loop.exit.terminator.values.length !== 1 ||
-        loop.exit.terminator.values[0] !== loop.exit.parameters[0].value
+        loop.exit.terminator.values.length !== 1
       ) {
+        summaries.set(functionId, undefined);
+        return undefined;
+      }
+      const prepared = summarizeAffineBlock(
+        core,
+        loop.entry,
+        new Map([[
+          loop.entry.parameters[0].value,
+          { multiplier: 1, offset: 0 },
+        ]]),
+        initialState,
+        summarizeNested,
+      );
+      const finished = summarizeAffineBlock(
+        core,
+        loop.exit,
+        new Map([[
+          loop.exit.parameters[0].value,
+          { multiplier: 1, offset: 0 },
+        ]]),
+        loop.exit.terminator.values[0],
+        summarizeNested,
+      );
+      if (prepared === undefined || finished === undefined) {
         summaries.set(functionId, undefined);
         return undefined;
       }
@@ -2171,6 +2195,10 @@ function affineUnaryFunction(
         power = composeAffineMaps(power, power);
         remaining >>>= 1;
       }
+      result = composeAffineMaps(
+        finished,
+        composeAffineMaps(result, prepared),
+      );
       summaries.set(functionId, result);
       return result;
     }
@@ -2184,75 +2212,81 @@ function affineUnaryFunction(
       summaries.set(functionId, undefined);
       return undefined;
     }
-    const values = new Map<CoreValueId, AffineMap>([[
-      block.parameters[0].value,
-      { multiplier: 1, offset: 0 },
-    ]]);
-    for (const operation of block.operations) {
-      const operationType = core.types[operation.type];
-      if (
-        operationType?.kind !== "scalar" || operationType.scalar !== "i32"
-      ) {
-        summaries.set(functionId, undefined);
-        return undefined;
-      }
-
-      let summary: AffineMap | undefined;
-      if (
-        operation.kind === "constant" && typeof operation.value === "number"
-      ) {
-        summary = { multiplier: 0, offset: operation.value | 0 };
-      } else if (
-        operation.kind === "scalar.binary" &&
-        (operation.operator === "+" || operation.operator === "-" ||
-          operation.operator === "*")
-      ) {
-        const left = values.get(operation.operands[0]);
-        const right = values.get(operation.operands[1]);
-        if (left === undefined || right === undefined) {
-          summaries.set(functionId, undefined);
-          return undefined;
-        }
-        if (operation.operator === "+") {
-          summary = {
-            multiplier: (left.multiplier + right.multiplier) | 0,
-            offset: (left.offset + right.offset) | 0,
-          };
-        } else if (operation.operator === "-") {
-          summary = {
-            multiplier: (left.multiplier - right.multiplier) | 0,
-            offset: (left.offset - right.offset) | 0,
-          };
-        } else if (left.multiplier === 0 || right.multiplier === 0) {
-          summary = {
-            multiplier: (
-              Math.imul(left.multiplier, right.offset) +
-              Math.imul(right.multiplier, left.offset)
-            ) | 0,
-            offset: Math.imul(left.offset, right.offset),
-          };
-        }
-      } else if (
-        operation.kind === "call.direct" && operation.operands.length === 1
-      ) {
-        const argument = values.get(operation.operands[0]);
-        const callee = summarize(operation.functionId, nextAncestors);
-        if (argument !== undefined && callee !== undefined) {
-          summary = composeAffineMaps(callee, argument);
-        }
-      }
-      if (summary === undefined) {
-        summaries.set(functionId, undefined);
-        return undefined;
-      }
-      values.set(operation.result, summary);
-    }
-
-    const result = values.get(block.terminator.values[0]);
+    const result = summarizeAffineBlock(
+      core,
+      block,
+      new Map([[
+        block.parameters[0].value,
+        { multiplier: 1, offset: 0 },
+      ]]),
+      block.terminator.values[0],
+      summarizeNested,
+    );
     summaries.set(functionId, result);
     return result;
   };
   return summarize(rootFunctionId, new Set());
+}
+
+function summarizeAffineBlock(
+  core: CoreModule,
+  block: CoreFunction["blocks"][number],
+  parameterMaps: ReadonlyMap<CoreValueId, AffineMap>,
+  resultValue: CoreValueId,
+  summarizeUnary: (functionId: CoreFunctionId) => AffineMap | undefined,
+): AffineMap | undefined {
+  const values = new Map(parameterMaps);
+  for (const operation of block.operations) {
+    const operationType = core.types[operation.type];
+    if (operationType?.kind !== "scalar" || operationType.scalar !== "i32") {
+      return undefined;
+    }
+
+    let summary: AffineMap | undefined;
+    if (
+      operation.kind === "constant" && typeof operation.value === "number"
+    ) {
+      summary = { multiplier: 0, offset: operation.value | 0 };
+    } else if (
+      operation.kind === "scalar.binary" &&
+      (operation.operator === "+" || operation.operator === "-" ||
+        operation.operator === "*")
+    ) {
+      const left = values.get(operation.operands[0]);
+      const right = values.get(operation.operands[1]);
+      if (left === undefined || right === undefined) return undefined;
+      if (operation.operator === "+") {
+        summary = {
+          multiplier: (left.multiplier + right.multiplier) | 0,
+          offset: (left.offset + right.offset) | 0,
+        };
+      } else if (operation.operator === "-") {
+        summary = {
+          multiplier: (left.multiplier - right.multiplier) | 0,
+          offset: (left.offset - right.offset) | 0,
+        };
+      } else if (left.multiplier === 0 || right.multiplier === 0) {
+        summary = {
+          multiplier: (
+            Math.imul(left.multiplier, right.offset) +
+            Math.imul(right.multiplier, left.offset)
+          ) | 0,
+          offset: Math.imul(left.offset, right.offset),
+        };
+      }
+    } else if (
+      operation.kind === "call.direct" && operation.operands.length === 1
+    ) {
+      const argument = values.get(operation.operands[0]);
+      const callee = summarizeUnary(operation.functionId);
+      if (argument !== undefined && callee !== undefined) {
+        summary = composeAffineMaps(callee, argument);
+      }
+    }
+    if (summary === undefined) return undefined;
+    values.set(operation.result, summary);
+  }
+  return values.get(resultValue);
 }
 
 function composeAffineMaps(outer: AffineMap, inner: AffineMap): AffineMap {

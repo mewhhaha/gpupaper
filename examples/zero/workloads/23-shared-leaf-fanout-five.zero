@@ -1,0 +1,11 @@
+private: shifted value = @value 78 + ;
+
+private: step value =
+  @value call:shifted:1 let:a
+  @value 1 + call:shifted:1 let:b
+  @value 2 + call:shifted:1 let:c
+  @value 3 + call:shifted:1 let:d
+  @value 4 + call:shifted:1 let:e
+  @a @b * @c @d * + @e + ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

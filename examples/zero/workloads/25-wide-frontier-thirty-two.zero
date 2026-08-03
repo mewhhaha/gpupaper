@@ -1,0 +1,40 @@
+private: step value =
+  @value 2 * 1 + let:v0
+  @value 3 * 3 + let:v1
+  @value 4 * 5 + let:v2
+  @value 5 * 7 + let:v3
+  @value 6 * 9 + let:v4
+  @value 7 * 11 + let:v5
+  @value 8 * 13 + let:v6
+  @value 9 * 15 + let:v7
+  @value 10 * 17 + let:v8
+  @value 11 * 19 + let:v9
+  @value 12 * 21 + let:v10
+  @value 13 * 23 + let:v11
+  @value 14 * 25 + let:v12
+  @value 15 * 27 + let:v13
+  @value 16 * 29 + let:v14
+  @value 17 * 31 + let:v15
+  @value 18 * 33 + let:v16
+  @value 19 * 35 + let:v17
+  @value 20 * 37 + let:v18
+  @value 21 * 39 + let:v19
+  @value 22 * 41 + let:v20
+  @value 23 * 43 + let:v21
+  @value 24 * 45 + let:v22
+  @value 25 * 47 + let:v23
+  @value 26 * 49 + let:v24
+  @value 27 * 51 + let:v25
+  @value 28 * 53 + let:v26
+  @value 29 * 55 + let:v27
+  @value 30 * 57 + let:v28
+  @value 31 * 59 + let:v29
+  @value 32 * 61 + let:v30
+  @value 33 * 63 + let:v31
+  @v0 @v1 + @v2 + @v3 + @v4 + @v5 + @v6 + @v7 +
+  @v8 + @v9 + @v10 + @v11 + @v12 + @v13 + @v14 + @v15 +
+  @v16 + @v17 + @v18 + @v19 + @v20 + @v21 + @v22 + @v23 +
+  @v24 + @v25 + @v26 + @v27 + @v28 + @v29 + @v30 + @v31 + let:sum
+  @sum @sum * ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

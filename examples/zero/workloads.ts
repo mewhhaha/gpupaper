@@ -91,6 +91,58 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "fixed affine fold with larger composition depth",
     fixedAffineFoldReference(32),
   ),
+  workload(
+    "19-affine-pretransform",
+    "fixed affine fold after affine state preparation",
+    affineRegionReference(
+      (value) => (Math.imul(value, 3) + 5) | 0,
+      (value) => value,
+    ),
+  ),
+  workload(
+    "20-affine-reset",
+    "fixed affine fold from a constant replacement state",
+    affineRegionReference(
+      () => 5,
+      (value) => value,
+    ),
+  ),
+  workload(
+    "21-affine-posttransform",
+    "fixed affine fold before affine result finishing",
+    affineRegionReference(
+      (value) => value,
+      (value) => (Math.imul(value, 3) + 5) | 0,
+    ),
+  ),
+  workload(
+    "22-affine-sandwich",
+    "fixed affine fold between affine preparation and finishing",
+    affineRegionReference(
+      (value) => (Math.imul(value, 3) + 5) | 0,
+      (value) => (Math.imul(value, 7) - 11) | 0,
+    ),
+  ),
+  workload(
+    "23-shared-leaf-fanout-five",
+    "shared pure leaf one reference beyond the copy cap",
+    sharedLeafFanoutFiveReference,
+  ),
+  workload(
+    "24-over-budget-call-chain",
+    "nonlinear scalar call chain beyond the expansion budget",
+    overBudgetCallChainReference,
+  ),
+  workload(
+    "25-wide-frontier-thirty-two",
+    "thirty-two simultaneously live scalar bindings",
+    wideFrontierThirtyTwoReference,
+  ),
+  workload(
+    "26-oversized-nested-fold",
+    "nested nonlinear fold beyond the composition budget",
+    oversizedNestedFoldReference,
+  ),
 ];
 
 function workload(
@@ -232,4 +284,70 @@ function fixedAffineFoldReference(
 ): (seed: number, rounds: number) => number {
   return (seed, rounds) =>
     repeat(rounds, seed, (value) => repeat(innerRounds, value, affine));
+}
+
+function affineRegionReference(
+  prepare: (value: number) => number,
+  finish: (value: number) => number,
+): (seed: number, rounds: number) => number {
+  return (seed, rounds) =>
+    repeat(
+      rounds,
+      seed,
+      (value) => finish(repeat(8, prepare(value), affine)),
+    );
+}
+
+function sharedLeafFanoutFiveReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, (value) => {
+    const shifted = (input: number) => (input + 78) | 0;
+    const left = Math.imul(shifted(value), shifted((value + 1) | 0));
+    const right = Math.imul(
+      shifted((value + 2) | 0),
+      shifted((value + 3) | 0),
+    );
+    return (left + right + shifted((value + 4) | 0)) | 0;
+  });
+}
+
+function overBudgetCallChainReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, (value) => {
+    let state = polynomial(value);
+    for (let stage = 0; stage < 16; stage += 1) {
+      state = (Math.imul(state, 3) + 7) | 0;
+    }
+    return state;
+  });
+}
+
+function wideFrontierThirtyTwoReference(seed: number, rounds: number): number {
+  return repeat(rounds, seed, (value) => {
+    let sum = 0;
+    for (let index = 0; index < 32; index += 1) {
+      const term = (
+        Math.imul(value, index + 2) + (index * 2 + 1)
+      ) | 0;
+      sum = (sum + term) | 0;
+    }
+    return Math.imul(sum, sum);
+  });
+}
+
+function oversizedNestedFoldReference(seed: number, rounds: number): number {
+  return repeat(
+    rounds,
+    seed,
+    (value) => repeat(8, value, oversizedNestedStep),
+  );
+}
+
+function oversizedNestedStep(value: number): number {
+  const mixed = (value + 78) | 0;
+  const square = Math.imul(mixed, mixed);
+  const cube = Math.imul(square, mixed);
+  const left = (Math.imul(cube, 3) + Math.imul(square, 5)) | 0;
+  const right = (Math.imul(mixed, 7) + 11) | 0;
+  const joined = (left + right) | 0;
+  const twisted = (Math.imul(joined, mixed) + 19) | 0;
+  return (Math.imul(twisted, twisted) + joined + 23) | 0;
 }

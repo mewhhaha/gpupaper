@@ -1,0 +1,12 @@
+private: inner_step value =
+  @value 78 + let:mixed
+  @mixed @mixed * let:square
+  @square @mixed * let:cube
+  @cube 3 * @square 5 * + let:left
+  @mixed 7 * 11 + let:right
+  @left @right + let:joined
+  @joined @mixed * 19 + let:twisted
+  @twisted @twisted * @joined + 23 + ;
+
+private: step value = 8 @value repeat:inner_step ;
+export: run seed rounds = @rounds @seed repeat:step ;

@@ -49,12 +49,17 @@ that form a structural complexity ladder: arithmetic, control flow, call graphs,
 nested loops, shared callees, wide live-value frontiers, guarded partial
 operations, unreachable functions, equivalent nonlinear programs with different
 call-graph shapes, a value-dependent nested fold, and fixed affine folds around
-the linear/exponentiation boundary. The benchmark compiles every pair through
-its respective pipeline and checks both against an independent recurrence before
-measuring compilation boundaries, module construction, instantiation, and hot
-execution. It also records reachability, call multiplicity, call depth,
-recursion, partial operations, and SSA liveness so each workload's claimed
-challenge is independently checkable.
+the linear/exponentiation boundary, including affine preparation and finishing
+regions. The benchmark compiles every pair through its respective pipeline and
+checks both against an independent recurrence before measuring compilation
+boundaries, module construction, instantiation, and hot execution. It also
+records reachability, call multiplicity, call depth, recursion, partial
+operations, and SSA liveness so each workload's claimed challenge is
+independently checkable.
+
+The final four workloads intentionally sit just beyond backend resource budgets.
+They are counterexamples for future profitability work, not demonstrations that
+every call or loop should be inlined.
 
 Run one rung while developing with `--workload`:
 

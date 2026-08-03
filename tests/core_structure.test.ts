@@ -102,6 +102,75 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         assertEquals(structure.directCallSites, 2, "fixed-fold calls");
         assertEquals(structure.maximumCallDepth, 2, "fixed-fold call depth");
         break;
+      case "19-affine-pretransform":
+      case "20-affine-reset":
+      case "21-affine-posttransform":
+      case "22-affine-sandwich": {
+        const expectedOperations = new Map([
+          ["19-affine-pretransform", 19],
+          ["20-affine-reset", 16],
+          ["21-affine-posttransform", 19],
+          ["22-affine-sandwich", 23],
+        ]).get(workload.name)!;
+        assertEquals(structure.coreFunctions, 3, "affine-region functions");
+        assertEquals(structure.coreBlocks, 9, "affine-region blocks");
+        assertEquals(
+          structure.coreOperations,
+          expectedOperations,
+          "affine-region operations",
+        );
+        assertEquals(structure.directCallSites, 2, "affine-region calls");
+        assertEquals(structure.maximumCallDepth, 2, "affine-region call depth");
+        break;
+      }
+      case "23-shared-leaf-fanout-five":
+        assertEquals(
+          structure.maximumCalleeReferences,
+          5,
+          "pathological leaf fanout",
+        );
+        assertEquals(structure.coreOperations, 24, "fanout operations");
+        break;
+      case "24-over-budget-call-chain": {
+        const expandedOperations = compiled.core.functions
+          .filter((function_) => function_.name !== "run")
+          .reduce(
+            (count, function_) =>
+              count + function_.blocks.reduce(
+                (functionCount, block) =>
+                  functionCount + block.operations.length,
+                0,
+              ),
+            0,
+          );
+        assertEquals(expandedOperations, 91, "expanded scalar operations");
+        assertEquals(structure.maximumCallDepth, 18, "over-budget call depth");
+        break;
+      }
+      case "25-wide-frontier-thirty-two":
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          33,
+          "pathological live frontier",
+        );
+        assertEquals(structure.coreOperations, 165, "wide-frontier operations");
+        break;
+      case "26-oversized-nested-fold": {
+        const candidateOperations = compiled.core.functions
+          .filter((function_) => function_.name !== "run")
+          .reduce(
+            (count, function_) =>
+              count + function_.blocks.reduce(
+                (functionCount, block) =>
+                  functionCount + block.operations.length,
+                0,
+              ),
+            0,
+          );
+        assertEquals(candidateOperations, 27, "nested composition operations");
+        assertEquals(structure.coreOperations, 32, "nested-fold operations");
+        break;
+      }
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }

@@ -1,0 +1,6 @@
+private: inner value = @value 1664525 * 1013904223 + ;
+private: step value =
+  @value 3 * 5 + let:prepared
+  8 @prepared repeat:inner ;
+
+export: run seed rounds = @rounds @seed repeat:step ;

@@ -442,8 +442,15 @@ certificate derived for a constant inner count accidentally depends on that
 constant. Four fixed-affine-fold cases then hold the inner map and outer driver
 constant while selecting inner counts \(n\in\{7,8,16,32\}\). They straddle the
 current linear/exponentiation boundary and distinguish a local inner-loop cost
-from the cost after composition with its outer fold. This avoids collapsing
-incomparable programs into an invented single complexity score.
+from the cost after composition with its outer fold. Four affine-region cases
+then hold the eight-step body fixed while varying a pure affine pre-map \(g\),
+post-map \(h\), or both. They test whether loop summarization is compositional
+across the acyclic regions adjacent to the loop. A final pathology quartet
+targets policy discontinuities rather than new semantics: shared-leaf fanout
+five, an expanded scalar chain beyond 64 operations, a live frontier of 32
+values, and a nested-loop body beyond the 24-operation composition budget. This
+avoids collapsing incomparable programs into an invented single complexity
+score.
 
 Every workload has the same public function `run(seed: i32, rounds: i32) -> i32`
 and wrapping-i32 semantics. `repeat` is the bounded fold
@@ -477,9 +484,9 @@ likewise reports separate boundaries because an in-process initialized frontend
 and a fresh `rustc` process do not measure the same operation. With \(q\)
 workloads, \(p\) probes, \(m\) samples, and \(r\) rounds, validation work is
 \(O(qp)\), compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\),
-multiplied by each workload's inner recurrence cost. The default
-eighteen-workload, 30-sample, eight-seed, 100,000-round run performs 432 million
-outer rounds per compiler, plus validation and warmup.
+multiplied by each workload's inner recurrence cost. The default 26-workload,
+30-sample, eight-seed, 100,000-round run performs 624 million outer rounds per
+compiler, plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
 feature away; JavaScript timer resolution and host scheduling contribute noise;
@@ -487,6 +494,28 @@ the finite probe set cannot establish semantic equivalence; and the ladder
 samples only first-order scalar programs. The emitted structural vector, raw
 paired samples, source hashes, and output hashes make these limitations
 auditable.
+
+The final four examples are derived from finite resource policies. Let the
+shared-leaf multiplicity cap be \(M_s=4\), scalar-tree expansion cap be
+\(B_s=64\), loop-composition cap be \(B_l=24\), and block-local live frontier be
+\(L\). These constants do not affect denotation, but each induces a compiler
+phase boundary: increasing a program measure by one can retain a call graph or
+nested loop that the neighboring case removes. Raising every cap is not a
+solution. Shared duplication can grow as \((\mu-1)O_g\), expanded trees can add
+\(O(B_s)\) bytes per admitted root, and composed loop regions can multiply hot
+body size by enclosing contexts. A live frontier requires at least \(4L\) bytes
+of i32 local storage per active invocation before engine-specific register
+allocation and can cross local-index encoding boundaries.
+
+The examples therefore choose \(\mu=M_s+1=5\), an acyclic nonlinear scalar tree
+strictly larger than \(B_s\), \(L\ge32\), and a nonlinear nested-loop candidate
+strictly larger than \(B_l\). Their purpose is falsification: measure the
+residual costs and preserve them as counterexamples for a future continuous
+profitability model. This cycle changes no backend threshold or lowering rule.
+Executable structural tests must certify the intended dimension, differential
+execution must preserve semantics, and the paper must record when Rust removes
+the source pathology so runtime comparisons are not mistaken for equal residual
+programs.
 
 ### 8.3 Zero/Rust counterexample analysis
 
@@ -785,7 +814,7 @@ Seven is the largest count assigned to direct linear lowering, eight is the
 first assigned to runtime monoid lowering, and sixteen and thirty-two increase
 the local arithmetic advantage of exponentiation without changing the call
 graph. The fixed-count workloads established the strategy discontinuity before
-implementation. After implementation, all eighteen workload triples agree on
+implementation. After implementation, all twenty-six workload triples agree on
 boundary probes, both plan emitters remain byte-identical, and a separate test
 keeps an independently exported summarized loop callable. Residual reachability
 may omit a private direct callee only when its call result is the exact state
@@ -795,6 +824,37 @@ regression evidence that composition and discard occur. Counterexample tests
 require a replacement initial state to retain its distinct value and an entry
 division by zero to keep trapping. These validations are not a proof of the
 algebraic law.
+
+The next controlled extension gives affine loop boundaries an explicit model.
+Let the loop entry compute a total affine initial-state map \(g\) from the unary
+parameter and let the loop exit compute a total affine result map \(h\) from the
+final state. A fixed-count affine region denotes
+
+\[ S = h\circ A^{\max(n,0)}\circ g. \]
+
+This follows by substitution into the bounded-fold definition; associativity of
+composition permits the compiler to calculate the three maps separately and
+compose them. The abstract interpreter already proves unary acyclic affine
+blocks. Reusing it for the entry and exit is sound only if every erased
+operation belongs to its pure, total catalog and the counter remains an exact
+i32 constant. Header and body restrictions remain unchanged. Division,
+remainder, host calls, other loop-carried state, variable counts, and non-affine
+operations still reject the summary. One region adds linear work in the entry
+and exit operations plus \(O(\log(n+1))\) compile-time composition, and stores
+only the resulting pair. The runtime benefit remains the replacement of
+\(O(r\log n)\) nested work by \(O(\log r)\) outer exponentiation.
+
+Pre-transform, constant-reset, post-transform, and pre/post sandwich workloads
+established the predicted residual call cost before implementation. The block
+abstract interpreter is now reused three ways: whole single-block functions,
+loop entries relative to the function parameter, and loop exits relative to the
+exit parameter. It processes every operation in each erased block, so a partial,
+effectful, nonlinear, or otherwise unsupported operation rejects the whole
+summary. Executable tests preserve entry and exit traps, reject a nonlinear
+entry, keep independently exported functions, and require all four optimized
+payloads to remain below 150 bytes. Differential tests and the two
+byte-identical emitters validate the admitted cases; they do not prove the
+composition law.
 
 Affine acceleration also creates a measurement counterexample: dividing a
 near-clock-resolution batch by 800,000 source rounds produced an apparent
@@ -971,6 +1031,97 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 16 dead functions, empirically separating output work, which depends on \(R\),
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
+
+### 2026-08-03: resource-budget pathology cycle
+
+The examples-only cycle added four paired counterexamples without changing a
+backend threshold or lowering rule. Their measured structural vectors are
+
+| workload               | \(C(w)\)                                   |
+| ---------------------- | ------------------------------------------ |
+| shared fanout five     | \((310,3,3,0,6,24,183,6,5,0,6,2,0)\)       |
+| over-budget call chain | \((1084,19,19,0,22,96,564,18,1,0,3,18,0)\) |
+| frontier thirty-two    | \((1162,2,2,0,5,165,398,1,1,0,33,1,0)\)    |
+| oversized nested fold  | \((381,3,3,0,9,32,227,2,1,0,4,2,0)\)       |
+
+Additional executable certificates compute 91 expanded scalar operations for the
+unique call chain and 27 operations for the nested-loop composition candidate,
+strictly beyond the respective 64- and 24-operation policies. The fanout is
+exactly five and the measured live frontier is 33. All 26 workload triples agree
+on boundary probes, both plan emitters remain byte-identical, and the finite
+checks are validations rather than proofs.
+
+A contended 30-sample diagnostic run reached the five-millisecond calibration
+target for every compiler and workload. Median Zero/Rust nanoseconds per outer
+round and paired ratios were 1.494/1.339 (1.109) for fanout five, 8.418/1.761
+(4.759) for the call chain, 10.965/1.476 (7.388) for the wide frontier, and
+31.094/30.703 (1.015) for the nested fold. Payload sizes were respectively
+185/277, 566/348, 400/266, and 230/491 bytes. Initialized Zero compilation
+medians were 1.365, 2.663, 2.714, and 1.785 milliseconds; fresh `rustc` process
+medians were 49.73, 53.84, 53.15, and 60.53 milliseconds. The compilation
+boundaries are incomparable, and concurrent Node processes make every runtime
+number diagnostic despite sufficient batching and 30 samples.
+
+The observations reject two broad changes. Allowing the fifth shared-leaf copy
+would target only an 11% median gap while the residual Zero module is already 92
+bytes smaller; this does not justify weakening the duplication bound. Raising
+the loop-composition budget admits a candidate already at runtime parity and
+would trade a 230-byte Zero payload against Rust's 491 bytes; the present cap is
+conservative in the useful direction. The 91-operation call chain is the strong
+remaining counterexample: retained calls coincide with a 4.76-times gap and a
+larger payload, so a byte-aware continuous inlining model is a justified future
+hypothesis. The wide-frontier result does not isolate register pressure because
+Rust receives a source loop and algebraically collapses the affine terms before
+the final square. It motivates an affine aggregation or common-subexpression
+experiment, not a claim that 33 live values alone cause the 7.39-times gap.
+
+These conclusions are empirical at four finite programs. They preserve the
+pathologies rather than tuning thresholds to the suite, which is the intended
+outcome of this examples-only cycle.
+
+### 2026-08-03: affine-region composition cycle
+
+Four paired workloads fix the inner count at eight and vary only affine entry
+and exit maps. Their common structure is three functions, three reachable
+functions, nine blocks, two direct calls, maximum call depth two, maximum
+liveness three, and no partial operation. Core operation counts are 19 for the
+pre-transform, 16 for the constant reset, 19 for the post-transform, and 23 for
+the sandwich. These are executable structural certificates that boundary
+arithmetic, not graph topology, is the independent variable.
+
+A contended ten-sample baseline was diagnostic. Median Zero/Rust nanoseconds per
+outer round and paired ratios were 5.508/0.108 (50.73) for the pre-transform,
+5.650/0.000101 (54,796) for the constant reset, 5.671/0.108 (50.25) for the
+post-transform, and 5.372/0.109 (48.89) for the sandwich. Zero payloads were
+210, 204, 210, and 216 bytes; Rust payloads were 227, 118, 227, and 227 bytes.
+Every calibrated batch reached five milliseconds. The reset quotient is a
+fixed-input normalization after Rust reduced the recurrence to a constant, not a
+literal operation-speed ratio. These measurements support affine-region
+composition and reject adjusting the local linear/exponentiation threshold. They
+remain non-admissible because unrelated Node processes were active and ten
+samples cannot estimate p95.
+
+The implementation replaced the single-block-only interpreter body with one
+affine block certificate parameterized by input maps and a requested result. For
+a certified fixed loop it computes \(g\) from the entry, \(A^n\) by binary
+exponentiation, \(h\) from the exit, and stores \(h\circ A^n\circ g\). The same
+interpreter remains the base case for acyclic unary callees. Every entry and
+exit operation is visited once, so the added work is \(O(O_e+O_x+\log(n+1))\)
+per summarized region and does not change the existing constant-size abstract
+state.
+
+A final contended 30-sample diagnostic run reached the calibration target for
+every path. Median Zero/Rust nanoseconds per outer round and paired ratios were
+0.000214/0.106 (0.00199) for the pre-transform, 0.000236/0.0000947 (2.49) for
+the constant reset, 0.000218/0.109 (0.00198) for the post-transform, and
+0.000246/0.108 (0.00228) for the sandwich. Zero payloads were 137, 133, 137, and
+137 bytes, all with 129 plan atoms; Rust payloads remained 227, 118, 227, and
+227 bytes. The reset compares two constant-time residual programs and therefore
+does not support a general 2.49-times claim. Initialized Zero compilation
+medians ranged from 1.12 to 1.41 milliseconds and fresh `rustc` process medians
+from 53.19 to 59.23 milliseconds under unusually heavy contention; these
+boundaries are incomparable. The runtime collapse and uniform payloads are
+empirical evidence for the derived composition, but the run remains diagnostic.
 
 ### 2026-08-03: fixed affine-fold composition cycle
 
