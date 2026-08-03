@@ -69,8 +69,8 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["20-affine-reset", 150],
     ["21-affine-posttransform", 150],
     ["22-affine-sandwich", 150],
-    ["27-call-tree-fifty-six", 140],
-    ["28-call-tree-sixty-one", 140],
+    ["27-call-tree-fifty-six", 120],
+    ["28-call-tree-sixty-one", 120],
   ]);
   for (const workload of zeroWorkloads) {
     const limit = maximumBytes.get(workload.name);
@@ -322,6 +322,66 @@ Deno.test("affine suffixes preserve direct wrapper parameter dependence", async 
   const run = exportedFunction(await instantiate(compiled.wasm), "run");
   assertEquals(run(3, 1), 29);
   assertEquals(run(-3, 1), 23);
+});
+
+Deno.test("quadratic composition preserves wrapping coefficients", async () => {
+  const compiled = await compileZeroSource(
+    "quadratic-wrapping.zero",
+    `
+      private: base value = @value @value * 3 * @value 5 * + 17 + ;
+      private: wrapper value = @value call:base:1 1664525 * 1013904223 + ;
+      private: step value = @value call:wrapper:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  for (const seed of [0, 1, -1, 2_147_483_647, -2_147_483_648]) {
+    let expected = seed;
+    for (let round = 0; round < 3; round += 1) {
+      const quadratic = (
+        Math.imul(Math.imul(expected, expected), 3) +
+        Math.imul(expected, 5) + 17
+      ) | 0;
+      expected = (
+        Math.imul(quadratic, 1_664_525) + 1_013_904_223
+      ) | 0;
+    }
+    assertEquals(run(seed, 3), expected);
+  }
+});
+
+Deno.test("quadratic composition preserves a trapping argument", async () => {
+  const compiled = await compileZeroSource(
+    "trapping-quadratic-argument.zero",
+    `
+      private: base value = @value @value * 3 * @value 5 * + 17 + ;
+      private: step value = 100 @value / call:base:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(4, 1), 2017);
+  try {
+    run(0, 1);
+  } catch (cause) {
+    if (cause instanceof WebAssembly.RuntimeError) return;
+    throw cause;
+  }
+  throw new Error("quadratic composition discarded a trapping argument");
+});
+
+Deno.test("quadratic interpretation rejects a cubic product", async () => {
+  const compiled = await compileZeroSource(
+    "cubic.zero",
+    `
+      private: cube value = @value @value * @value * ;
+      private: step value = @value call:cube:1 ;
+      export: run seed rounds = @rounds @seed repeat:step ;
+    `,
+  );
+  const run = exportedFunction(await instantiate(compiled.wasm), "run");
+  assertEquals(run(3, 1), 27);
+  assertEquals(run(-3, 1), -27);
 });
 
 Deno.test("Zero rejects duplicate function parameters", async () => {

@@ -187,6 +187,7 @@ type InlineScalarTreeShape = {
 type InlineScalarTreeLayout = Omit<InlineScalarTreeShape, "callsByResult"> & {
   readonly localByValue: ReadonlyMap<CoreValueId, number>;
   readonly stackParameter: CoreValueId | undefined;
+  readonly quadraticResult: QuadraticMap | undefined;
   readonly affineSuffix:
     | {
       readonly callResult: CoreValueId;
@@ -230,6 +231,12 @@ type AffineNaturalLoop = {
 type AffineMap = {
   readonly multiplier: number;
   readonly offset: number;
+};
+
+type QuadraticMap = {
+  readonly quadraticCoefficient: number;
+  readonly linearCoefficient: number;
+  readonly constantCoefficient: number;
 };
 
 const maximumInlineDiamondOperations = 16;
@@ -895,7 +902,9 @@ function planFunctionValues(
     const inlineTypeByValue = valueTypes(shape.function);
     const inlineUses = analyzeFunctionValueUses(shape.function);
     const entry = shape.function.blocks[shape.function.entryBlock];
-    const stackParameter = shape.total && shape.structure === "single" &&
+    const quadraticResult = quadraticScalarTreeResult(core, shape);
+    const stackParameter = quadraticResult === undefined && shape.total &&
+        shape.structure === "single" &&
         entry.parameters.length === 1 &&
         inlineUses.useCounts.get(entry.parameters[0].value) === 1
       ? entry.parameters[0].value
@@ -908,6 +917,7 @@ function planFunctionValues(
         locals.push(wasmValueType(core, parameter.type));
       }
       for (const operation of block.operations) {
+        if (quadraticResult !== undefined) continue;
         const operationUseBlocks = inlineUses.useBlocks.get(operation.result);
         const sinksInlineCall = shape.total && shape.structure === "single" &&
           operation.kind === "call.direct" &&
@@ -938,6 +948,7 @@ function planFunctionValues(
       ...shape,
       localByValue: inlineLocalByValue,
       stackParameter,
+      quadraticResult,
       affineSuffix: affineScalarTreeSuffix(core, shape),
       callsByResult: new Map(
         [...shape.callsByResult].map(([result, child]) =>
@@ -1902,6 +1913,128 @@ function affineScalarTreeSuffix(
     () => undefined,
   );
   return map === undefined ? undefined : { callResult, map };
+}
+
+function quadraticScalarTreeResult(
+  core: CoreModule,
+  shape: InlineScalarTreeShape,
+): QuadraticMap | undefined {
+  if (
+    !shape.total || shape.structure !== "single" ||
+    shape.callsByResult.size !== 0
+  ) {
+    return undefined;
+  }
+  const block = shape.function.blocks[shape.function.entryBlock];
+  const parameterType = block.parameters.length === 1
+    ? core.types[block.parameters[0].type]
+    : undefined;
+  if (
+    block.parameters.length !== 1 || block.terminator.kind !== "return" ||
+    block.terminator.values.length !== 1 ||
+    parameterType?.kind !== "scalar" || parameterType.scalar !== "i32"
+  ) {
+    return undefined;
+  }
+  const values = new Map<CoreValueId, QuadraticMap>([[
+    block.parameters[0].value,
+    {
+      quadraticCoefficient: 0,
+      linearCoefficient: 1,
+      constantCoefficient: 0,
+    },
+  ]]);
+  for (const operation of block.operations) {
+    const operationType = core.types[operation.type];
+    if (operationType?.kind !== "scalar" || operationType.scalar !== "i32") {
+      return undefined;
+    }
+    let result: QuadraticMap | undefined;
+    if (
+      operation.kind === "constant" && typeof operation.value === "number"
+    ) {
+      result = {
+        quadraticCoefficient: 0,
+        linearCoefficient: 0,
+        constantCoefficient: operation.value | 0,
+      };
+    } else if (
+      operation.kind === "scalar.binary" &&
+      (operation.operator === "+" || operation.operator === "-" ||
+        operation.operator === "*")
+    ) {
+      const left = values.get(operation.operands[0]);
+      const right = values.get(operation.operands[1]);
+      if (left === undefined || right === undefined) return undefined;
+      if (operation.operator === "+" || operation.operator === "-") {
+        const direction = operation.operator === "+" ? 1 : -1;
+        result = {
+          quadraticCoefficient: (
+            left.quadraticCoefficient +
+            direction * right.quadraticCoefficient
+          ) | 0,
+          linearCoefficient: (
+            left.linearCoefficient + direction * right.linearCoefficient
+          ) | 0,
+          constantCoefficient: (
+            left.constantCoefficient + direction * right.constantCoefficient
+          ) | 0,
+        };
+      } else {
+        const cubicCoefficient = (
+          Math.imul(
+            left.linearCoefficient,
+            right.quadraticCoefficient,
+          ) +
+          Math.imul(
+            left.quadraticCoefficient,
+            right.linearCoefficient,
+          )
+        ) | 0;
+        const quarticCoefficient = Math.imul(
+          left.quadraticCoefficient,
+          right.quadraticCoefficient,
+        );
+        if (cubicCoefficient !== 0 || quarticCoefficient !== 0) {
+          return undefined;
+        }
+        result = {
+          quadraticCoefficient: (
+            Math.imul(
+              left.constantCoefficient,
+              right.quadraticCoefficient,
+            ) +
+            Math.imul(
+              left.linearCoefficient,
+              right.linearCoefficient,
+            ) +
+            Math.imul(
+              left.quadraticCoefficient,
+              right.constantCoefficient,
+            )
+          ) | 0,
+          linearCoefficient: (
+            Math.imul(
+              left.constantCoefficient,
+              right.linearCoefficient,
+            ) +
+            Math.imul(
+              left.linearCoefficient,
+              right.constantCoefficient,
+            )
+          ) | 0,
+          constantCoefficient: Math.imul(
+            left.constantCoefficient,
+            right.constantCoefficient,
+          ),
+        };
+      }
+    }
+    if (result === undefined) return undefined;
+    values.set(operation.result, result);
+  }
+  const result = values.get(block.terminator.values[0]);
+  return result?.quadraticCoefficient === 0 ? undefined : result;
 }
 
 function countFunctionReferences(
@@ -3331,6 +3464,61 @@ function emitInlineScalarTree(
         composeAffineMaps(resultSuffix, tree.affineSuffix.map),
       ),
     ];
+  }
+  if (tree.quadraticResult !== undefined) {
+    const parameter = entry.parameters[0];
+    if (parameter === undefined) {
+      throw new Error(
+        `Core inline tree ${tree.function.name} lost its quadratic parameter`,
+      );
+    }
+    const quadraticCoefficient = Math.imul(
+      resultSuffix.multiplier,
+      tree.quadraticResult.quadraticCoefficient,
+    );
+    const linearCoefficient = Math.imul(
+      resultSuffix.multiplier,
+      tree.quadraticResult.linearCoefficient,
+    );
+    const constantCoefficient = (
+      Math.imul(
+        resultSuffix.multiplier,
+        tree.quadraticResult.constantCoefficient,
+      ) + resultSuffix.offset
+    ) | 0;
+    const parameterValue = (): readonly WasmInstruction[] =>
+      getValue(parameter.value);
+    const instructions: WasmInstruction[] = [];
+    if (quadraticCoefficient !== 0) {
+      instructions.push(
+        ...(quadraticCoefficient === 1 ? parameterValue() : [
+          ...wasmInstruction.i32Constant(quadraticCoefficient),
+          ...parameterValue(),
+          ...wasmInstruction.i32Multiply,
+        ]),
+        ...(linearCoefficient === 0 ? [] : [
+          ...wasmInstruction.i32Constant(linearCoefficient),
+          ...wasmInstruction.i32Add,
+        ]),
+        ...parameterValue(),
+        ...wasmInstruction.i32Multiply,
+      );
+    } else if (linearCoefficient !== 0) {
+      instructions.push(
+        ...(linearCoefficient === 1 ? parameterValue() : [
+          ...wasmInstruction.i32Constant(linearCoefficient),
+          ...parameterValue(),
+          ...wasmInstruction.i32Multiply,
+        ]),
+      );
+    }
+    if (constantCoefficient !== 0 || instructions.length === 0) {
+      instructions.push(
+        ...wasmInstruction.i32Constant(constantCoefficient),
+        ...(instructions.length === 0 ? [] : wasmInstruction.i32Add),
+      );
+    }
+    return [...binding, ...instructions];
   }
   const suffixInstructions = [
     ...(resultSuffix.multiplier === 1 ? [] : [

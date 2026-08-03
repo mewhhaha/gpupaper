@@ -699,6 +699,38 @@ unroll-profit model. The implementation was removed; future unrolling requires a
 model that includes eliminated call boundaries or measured target-specific
 control cost.
 
+The next arithmetic candidate is bounded polynomial interpretation over the Wasm
+i32 ring (R=\mathbb Z/2^{32}\mathbb Z). For one-parameter, single-block, pure
+total scalar code, associate each SSA value with a polynomial in (R[x]).
+Constants map to degree zero, the parameter maps to (x), addition and
+subtraction act coefficientwise, and multiplication uses convolution. The
+certificate rejects a product whose degree exceeds two; it therefore represents
+exactly (q(x)=q_2x^2+q_1x+q_0), including all i32 wraparound, rather than an
+integer approximation. An affine suffix (a y+b) composes exactly as ((a
+q_2)x^2+(a q_1)x+(a q_0+b)).
+
+Emission uses Horner form ((q_2x+q_1)x+q_0). It needs at most two
+multiplications and two additions, omitting operations whose coefficients are
+the corresponding identities. The existing expanded cost-61 tree computes its
+quadratic base and then its affine suffix with four multiplications and three
+additions, so the hypothesis predicts two fewer multiplications and one fewer
+addition per outer iteration. The source argument must first be bound to a
+local: Horner reads it twice, and duplicating an arbitrary caller expression
+would violate eager exactly-once evaluation even though the interpreted body is
+pure. Analysis is (O(O)) work and (O(V)) coefficient storage for (O) operations
+and (V) values; each value stores three i32 coefficients.
+
+The certificate excludes calls in the polynomial base, structured control,
+partial operations, effects, multiple parameters, and degree above two. It also
+requires a nonzero quadratic coefficient, leaving affine expressions to the
+existing affine domain. It may discard dead pure total arithmetic because such
+arithmetic is observationally irrelevant. The implementation performs this
+interpretation only at the call-tree leaf, composes the already-certified affine
+suffix, binds the argument once, and emits Horner form. Differential tests cover
+coefficient wraparound, a trapping caller argument, and a cubic counterexample;
+the complexity-ladder size guards make application to the intended threshold
+cases executable evidence rather than an optimizer-presence assumption.
+
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
 choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
@@ -1148,6 +1180,25 @@ payloads and 131-atom plans. Planning rose from 0.187 to 0.266 milliseconds for
 16 dead functions, empirically separating output work, which depends on \(R\),
 from reachability analysis, whose input still depends on \(F\). This is one
 finite measurement, not an asymptotic validation.
+
+### 2026-08-03: quadratic interpretation and Horner emission
+
+The degree-two ring interpretation reduced both expanded call-tree payloads from
+125 to 117 bytes. For cost 56, an admissible clear-environment 30-sample run
+measured Zero/Rust medians of 1.657/1.709 nanoseconds per outer round and a
+paired median ratio of 0.971. The preceding affine-suffix measurement was 2.240
+nanoseconds, so the approximate within-host improvement is 26.0%; Zero is 2.9%
+faster than the Rust baseline by the paired statistic. Initialized Zero
+compilation had a 1.049-millisecond median, of which planning was 0.375
+milliseconds. Every runtime calibration exceeded five milliseconds.
+
+For cost 61, a second admissible clear-environment 30-sample run measured
+Zero/Rust medians of 1.654/1.689 nanoseconds and a paired median ratio of 0.975.
+The preceding Zero median was 2.215 nanoseconds, an approximate 25.3% reduction.
+The two depths emit byte-distinct 117-byte modules because affine suffix
+coefficients differ, but have the same atom count and dynamic Horner shape. This
+supports the algebraic operation-count prediction across one independent suffix
+depth; it does not establish an engine-independent speedup.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 
