@@ -59,7 +59,7 @@ Deno.test("structured Zero workloads avoid dispatch-size expansion", async () =>
     ["05-nested-loop", 250],
     ["08-wide-binding-frontier", 180],
     ["11-polynomial", 110],
-    ["12-deep-polynomial-chain", 320],
+    ["12-deep-polynomial-chain", 110],
     ["13-shared-polynomial-dag", 200],
     ["14-dynamic-nested-fold", 190],
     ["15-fixed-affine-seven", 160],

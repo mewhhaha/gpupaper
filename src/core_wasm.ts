@@ -1956,10 +1956,7 @@ function quadraticScalarTreeResult(
   core: CoreModule,
   shape: InlineScalarTreeShape,
 ): QuadraticMap | undefined {
-  if (
-    !shape.total || shape.structure !== "single" ||
-    shape.callsByResult.size !== 0
-  ) {
+  if (!shape.total || shape.structure !== "single") {
     return undefined;
   }
   const block = shape.function.blocks[shape.function.entryBlock];
@@ -2066,6 +2063,29 @@ function quadraticScalarTreeResult(
           ),
         };
       }
+    } else if (
+      operation.kind === "call.direct" && operation.operands.length === 1 &&
+      shape.callsByResult.has(operation.result)
+    ) {
+      const argument = values.get(operation.operands[0]);
+      const callee = affineUnaryFunction(core, operation.functionId);
+      if (argument === undefined || callee === undefined) return undefined;
+      result = {
+        quadraticCoefficient: Math.imul(
+          callee.multiplier,
+          argument.quadraticCoefficient,
+        ),
+        linearCoefficient: Math.imul(
+          callee.multiplier,
+          argument.linearCoefficient,
+        ),
+        constantCoefficient: (
+          Math.imul(
+            callee.multiplier,
+            argument.constantCoefficient,
+          ) + callee.offset
+        ) | 0,
+      };
     }
     if (result === undefined) return undefined;
     values.set(operation.result, result);

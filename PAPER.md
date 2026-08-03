@@ -771,6 +771,23 @@ while adding no analysis beyond local-map membership along the existing
 single-child path. Correctness follows from local stability during the emitted
 expression, not from source-level referential transparency alone.
 
+Affine composition is closed on the input side as well. If a direct unary call
+has certified affine callee (A(z)=az+b) and its argument has polynomial summary
+(p(x)=p_2x^2+p_1x+p_0), then the call result is ((ap_2)x^2+(ap_1)x+(ap_0+b)) in
+the same i32 ring. The scalar-tree polynomial interpreter therefore admits a
+direct call only when its corresponding child is present in the inline
+certificate and the existing transitive affine analysis succeeds. Totality and
+purity still come from the complete tree certificate. Quadratic or otherwise
+nonlinear callees are not admitted by this extension, because substituting a
+quadratic argument could raise the degree to four.
+
+This rule performs one affine analysis per encountered call in the current
+implementation. For the unique linear chain used here, its memoized transitive
+analysis remains bounded by the reachable call subgraph; the resulting emitter
+still produces one Horner expression and no call instructions. Differential
+tests for the existing deep chain and its output-size guard validate the
+composition direction independently of the affine-suffix cases.
+
 The affine-suffix result motivates a different, guarded dynamic unroll. For a
 canonical countdown loop with state transition \(f\) and remaining count \(n\),
 choose \(u=4\). After proving \(n>0\), execute four consecutive transitions when
@@ -1281,6 +1298,17 @@ diagnostic 1.251-nanosecond Zero median. The result validates payload and
 local-count reduction but falsifies redundant argument binding as the runtime
 explanation; the implementation is retained for its deterministic representation
 win.
+
+Input-side affine composition reduced the deep pretransform chain from 118 to
+105 bytes. Its bytes and hash are now exactly equal to the monolithic polynomial
+module, while the source still contains twelve affine call levels; this is
+deterministic evidence that the entire chain was summarized rather than merely
+inlined. A diagnostic 30-sample run measured 1.300/1.077 Zero/Rust nanoseconds
+and a paired ratio of 1.191, versus the preceding diagnostic 1.357-nanosecond
+Zero median. The approximately 4.2% change is smaller than the observed run
+variation, and identical output means the monolithic and deep cases have the
+same executable behavior. The accepted result is therefore call-chain erasure
+and payload equality, not a claimed independent runtime speedup.
 
 ### 2026-08-03: guarded dynamic-unroll counterexample
 
