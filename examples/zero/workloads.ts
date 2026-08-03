@@ -178,6 +178,21 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "four independent xorshift32 streams in i32x4 lanes",
     xorshift32SimdReference,
   ),
+  workload(
+    "34-newton-sqrt-simd",
+    "four f32 Newton square-root estimates",
+    newtonSquareRootSimdReference,
+  ),
+  workload(
+    "35-packed-threshold-simd",
+    "sixteen packed bytes classified by an unsigned threshold",
+    packedThresholdSimdReference,
+  ),
+  workload(
+    "36-packed-recurrence-simd",
+    "eight packed i16 affine recurrences",
+    packedRecurrenceSimdReference,
+  ),
 ];
 
 function workload(
@@ -458,4 +473,62 @@ function xorshift32SimdReference(seed: number, rounds: number): number {
     streams[0]! + Math.imul(streams[1]!, 3) +
     Math.imul(streams[2]!, 5) + Math.imul(streams[3]!, 7)
   ) | 0;
+}
+
+function newtonSquareRootSimdReference(seed: number, rounds: number): number {
+  const targets = [2, 3, 5, 7];
+  const guesses = targets.map((_, lane) =>
+    Math.fround(Math.max(Math.abs(Math.fround((seed + lane) | 0)), 1))
+  );
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    for (let lane = 0; lane < guesses.length; lane += 1) {
+      const quotient = Math.fround(targets[lane]! / guesses[lane]!);
+      const sum = Math.fround(guesses[lane]! + quotient);
+      guesses[lane] = Math.fround(sum / 2);
+    }
+  }
+  const roots = guesses.map(saturatingI32FromF32);
+  return (
+    roots[0]! + Math.imul(roots[1]!, 3) +
+    Math.imul(roots[2]!, 5) + Math.imul(roots[3]!, 7)
+  ) | 0;
+}
+
+function saturatingI32FromF32(value: number): number {
+  if (Number.isNaN(value)) return 0;
+  if (value <= -2_147_483_648) return -2_147_483_648;
+  if (value >= 2_147_483_647) return 2_147_483_647;
+  return Math.trunc(value) | 0;
+}
+
+function packedThresholdSimdReference(seed: number, rounds: number): number {
+  const bytes = Array.from(
+    { length: 16 },
+    (_, lane) => (seed + lane % 4) & 0xff,
+  );
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    for (let lane = 0; lane < bytes.length; lane += 1) {
+      bytes[lane] = (bytes[lane]! + 17) & 0xff;
+    }
+  }
+  return bytes.reduce(
+    (mask, value, lane) => mask | (value < 128 ? 1 << lane : 0),
+    0,
+  );
+}
+
+function packedRecurrenceSimdReference(seed: number, rounds: number): number {
+  const words = Array.from(
+    { length: 8 },
+    (_, lane) => ((seed + lane % 4) << 16) >> 16,
+  );
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    for (let lane = 0; lane < words.length; lane += 1) {
+      words[lane] = (Math.imul(words[lane]!, 3) + 7 << 16) >> 16;
+    }
+  }
+  return words.reduce(
+    (mask, value, lane) => mask | (value < 0 ? 1 << lane : 0),
+    0,
+  );
 }

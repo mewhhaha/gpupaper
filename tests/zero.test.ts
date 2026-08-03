@@ -96,6 +96,28 @@ Deno.test("Zero i32x4 xorshift advances four known streams", async () => {
   assertEquals(run(1, 10), 352_885_651);
 });
 
+Deno.test("Zero SIMD application workloads preserve known packed results", async () => {
+  const cases = [
+    ["34-newton-sqrt-simd", 1, 10, 28],
+    ["35-packed-threshold-simd", 1, 10, 0],
+    ["36-packed-recurrence-simd", 1, 10, 238],
+  ] as const;
+  for (const [name, seed, rounds, expected] of cases) {
+    const workload = zeroWorkloads.find((candidate) => candidate.name === name);
+    if (workload === undefined) {
+      throw new Error(`Zero workload ${name} is missing`);
+    }
+    const source = await Deno.readTextFile(workload.zeroSourceUrl);
+    const compiled = await compileZeroSource(
+      workload.zeroSourceUrl.pathname,
+      source,
+    );
+    const run = exportedFunction(await instantiate(compiled.wasm), "run");
+
+    assertEquals(run(seed, rounds), expected);
+  }
+});
+
 Deno.test("Zero i32x4 modules require the SIMD target", async () => {
   const workload = zeroWorkloads.find((candidate) =>
     candidate.name === "32-toroidal-life-simd"

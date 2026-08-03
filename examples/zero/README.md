@@ -76,6 +76,10 @@ four independent packed boards in parallel, then extracts the lanes into a
 scalar checksum that can cross the JavaScript Wasm boundary. Workload 33 uses
 the completed lane-wise integer operations for a six-instruction vector
 xorshift32 step, with an independent four-stream scalar Rust implementation.
+Workload 34 applies Newton iteration to four `f32` square-root estimates and
+exposes loop-invariant vector construction as an optimization probe. Workloads
+35 and 36 compose splats and shuffles into nonuniform `i8x16` and `i16x8`
+states, then run packed threshold and recurrence kernels.
 
 Run one rung while developing with `--workload`:
 

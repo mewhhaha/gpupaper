@@ -1,0 +1,16 @@
+private: step guesses[f32x4] =>f32x4
+  @guesses
+  2 3 5 7 i32x4.make f32x4.convert_i32x4_s
+  @guesses f32x4.div f32x4.add
+  2 i32x4.splat f32x4.convert_i32x4_s f32x4.div ;
+
+export: run seed rounds =
+  @seed @seed 1 + @seed 2 + @seed 3 + i32x4.make
+  f32x4.convert_i32x4_s f32x4.abs
+  1 i32x4.splat f32x4.convert_i32x4_s f32x4.max let:initial
+  @rounds @initial repeat:step
+  i32x4.trunc_sat_f32x4_s let:roots
+  @roots i32x4.extract_lane_0
+  @roots i32x4.extract_lane_1 3 * +
+  @roots i32x4.extract_lane_2 5 * +
+  @roots i32x4.extract_lane_3 7 * + ;

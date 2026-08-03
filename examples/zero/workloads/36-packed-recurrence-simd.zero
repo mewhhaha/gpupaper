@@ -1,0 +1,11 @@
+private: step words[i16x8] =>i16x8
+  @words 3 i16x8.splat i16x8.mul 7 i16x8.splat i16x8.add ;
+
+export: run seed rounds =
+  @seed i16x8.splat @seed 1 + i16x8.splat
+  i16x8.shuffle:0,8,0,8,0,8,0,8
+  @seed 2 + i16x8.splat @seed 3 + i16x8.splat
+  i16x8.shuffle:0,8,0,8,0,8,0,8
+  i16x8.shuffle:0,1,8,9,4,5,12,13 let:initial
+  @rounds @initial repeat:step
+  0 i16x8.splat i16x8.lt_s i16x8.mask_bitmask ;

@@ -1,0 +1,11 @@
+private: step bytes[i8x16] =>i8x16
+  @bytes 17 i8x16.splat i8x16.add ;
+
+export: run seed rounds =
+  @seed i8x16.splat @seed 1 + i8x16.splat
+  i8x16.shuffle:0,16,0,16,0,16,0,16,0,16,0,16,0,16,0,16
+  @seed 2 + i8x16.splat @seed 3 + i8x16.splat
+  i8x16.shuffle:0,16,0,16,0,16,0,16,0,16,0,16,0,16,0,16
+  i8x16.shuffle:0,1,16,17,4,5,20,21,8,9,24,25,12,13,28,29 let:initial
+  @rounds @initial repeat:step
+  128 i8x16.splat i8x16.lt_u i8x16.mask_bitmask ;

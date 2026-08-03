@@ -632,6 +632,39 @@ overhead remain empirical variables. The scalar Rust and TypeScript references
 advance each stream independently, so differential agreement tests the lane
 projection theorem rather than copying the vector implementation.
 
+Three further application rungs separate floating-point, byte, and half-word
+behavior. The Newton rung estimates the square roots of \((2,3,5,7)\) in four
+`f32x4` lanes. Its initial guesses are the absolute, at-least-one conversions of
+\((s,s+1,s+2,s+3)\), and one step is
+
+\[ x_{k+1}=\operatorname{f32}\left(
+\operatorname{f32}(x_k+\operatorname{f32}(a/x_k))/2\right). \]
+
+Explicit `f32` rounding in the TypeScript reference and scalar `f32` operations
+in the Rust reference match WebAssembly's lane semantics. The Zero loop
+reconstructs the target and divisor vectors, so one round lowers to ten vector
+instructions while four scalar lanes require twelve floating operations. Its
+per-round structural break-even is only \(\alpha<1.2\). This is a deliberate
+counterexample: loop-invariant vector construction must be hoisted before the
+usual four-lane work ratio is a credible prediction.
+
+The packed-byte rung constructs the repeating lane pattern
+\((s,s+1,s+2,s+3)^4\bmod2^8\) from four splats and three shuffles. Each round
+adds 17 modulo \(2^8\), then unsigned comparison with 128 and `mask_bitmask`
+return a sixteen-bit classification. Setup and final reduction cost ten vector
+instructions, and each round costs two versus sixteen scalar byte additions, so
+
+\[ \alpha < \frac{16r}{2r+10}, \]
+
+tending to eight. The packed-half-word rung constructs
+\((s,s+1,s+2,s+3)^2\bmod2^{16}\), applies \(x\mapsto3x+7\) per lane, and returns
+the sign mask. Its setup and reduction also cost ten vector instructions; each
+round costs four vector instructions versus sixteen scalar arithmetic
+operations, giving \(\alpha<16r/(4r+10)\), tending to four. Each kernel retains
+16 bytes of loop state, performs no loop memory traffic or synchronization, and
+introduces cross-lane dependence only in setup shuffles; its recurrence remains
+lane-independent.
+
 For each workload, a Zero source, an independently written Rust source, and a
 TypeScript recurrence define three executable interpretations. Before timing,
 the harness requires
@@ -659,14 +692,14 @@ likewise reports separate boundaries because an in-process initialized frontend
 and a fresh `rustc` process do not measure the same operation. With \(q\)
 workloads, \(p\) probes, \(m\) samples, and \(r\) rounds, validation work is
 \(O(qp)\), compilation sampling is \(O(qm)\), and runtime work is \(O(qmr)\),
-multiplied by each workload's inner recurrence cost. The default 33-workload,
-30-sample, eight-seed, 100,000-round run performs 792 million outer rounds per
+multiplied by each workload's inner recurrence cost. The default 36-workload,
+30-sample, eight-seed, 100,000-round run performs 864 million outer rounds per
 compiler, plus validation and warmup.
 
 Threats remain explicit: `rustc -O3` may optimize a source-level structural
 feature away; JavaScript timer resolution and host scheduling contribute noise;
 the finite probe set cannot establish semantic equivalence; and the ladder has
-only two integer-vector applications. The emitted structural vector, raw paired
+only five vector applications. The emitted structural vector, raw paired
 samples, source hashes, and output hashes make these limitations auditable.
 
 The final four examples are derived from finite resource policies. Let the
@@ -1993,6 +2026,33 @@ Regeneration keeps parser Wasm at 6,007 bytes and changes the plan to 27,337
 bytes. The model still excludes `i64x2`, `f64x2`, narrow saturating and widening
 operations, swizzle, horizontal arithmetic reductions, relaxed SIMD, and
 Core-level vector memory.
+
+### 2026-08-03: floating and packed-lane SIMD applications
+
+Three paired workloads now exercise the non-`i32x4` families as complete
+recurrences rather than isolated primitives. Their executable structural vectors
+and payload sizes are
+
+| workload           | \(C(w)\)                             | Zero/Rust bytes |
+| ------------------ | ------------------------------------ | --------------- |
+| Newton `f32x4`     | \((549,2,2,0,5,44,311,1,1,0,5,1,0)\) | 323/301         |
+| threshold `i8x16`  | \((449,2,2,0,5,25,261,1,1,0,5,1,0)\) | 264/388         |
+| recurrence `i16x8` | \((398,2,2,0,5,28,279,1,1,0,5,1,0)\) | 284/353         |
+
+The TypeScript references use explicit `Math.fround`, modulo-256 bytes, and
+sign-extended modulo-65536 words; the Rust sources use scalar `f32`, `u8`, and
+`i16`. Both agree with emitted Zero Wasm on boundary and pseudorandom probes.
+Known-answer execution from seed one after ten rounds yields respectively 28, 0,
+and 238. Structural tests fix the intended two-function, five-block loop shape,
+and both plan emitters remain byte-identical across all 36 workloads.
+
+One-sample contended diagnostics exercised Rust compilation and calibrated hot
+execution, observing Zero/Rust nanoseconds per round of 3.534/3.691 for Newton,
+0.243/0.332 for thresholding, and 0.835/1.028 for the half-word recurrence. One
+sample estimates neither a distribution nor a stable median, so these numbers
+are path validation only and are not performance evidence. The cost models and
+loop-invariant-construction counterexample in Section 8.2 remain the current
+hypotheses.
 
 ### 2026-08-02: Zero structural complexity ladder
 

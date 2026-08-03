@@ -240,6 +240,58 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
         );
         assertEquals(structure.maximumCallDepth, 1, "SIMD xorshift call depth");
         break;
+      case "34-newton-sqrt-simd":
+        assertEquals(structure.coreFunctions, 2, "SIMD Newton functions");
+        assertEquals(structure.coreBlocks, 5, "SIMD Newton blocks");
+        assertEquals(structure.coreOperations, 44, "SIMD Newton operations");
+        assertEquals(structure.directCallSites, 1, "SIMD Newton calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          5,
+          "SIMD Newton liveness",
+        );
+        assertEquals(structure.maximumCallDepth, 1, "SIMD Newton call depth");
+        break;
+      case "35-packed-threshold-simd":
+        assertEquals(structure.coreFunctions, 2, "packed threshold functions");
+        assertEquals(structure.coreBlocks, 5, "packed threshold blocks");
+        assertEquals(
+          structure.coreOperations,
+          25,
+          "packed threshold operations",
+        );
+        assertEquals(structure.directCallSites, 1, "packed threshold calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          5,
+          "packed threshold liveness",
+        );
+        assertEquals(
+          structure.maximumCallDepth,
+          1,
+          "packed threshold call depth",
+        );
+        break;
+      case "36-packed-recurrence-simd":
+        assertEquals(structure.coreFunctions, 2, "packed recurrence functions");
+        assertEquals(structure.coreBlocks, 5, "packed recurrence blocks");
+        assertEquals(
+          structure.coreOperations,
+          28,
+          "packed recurrence operations",
+        );
+        assertEquals(structure.directCallSites, 1, "packed recurrence calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          5,
+          "packed recurrence liveness",
+        );
+        assertEquals(
+          structure.maximumCallDepth,
+          1,
+          "packed recurrence call depth",
+        );
+        break;
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }
