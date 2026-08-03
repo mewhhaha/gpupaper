@@ -118,7 +118,7 @@ explicit host calls, and resource/region evidence. `owned-reuse` is a frontend
 certificate: the backend may select a reuse-capable runtime operation, but it
 does not attempt to prove uniqueness.
 
-For integer width \(b\in\{8,16,32\}\), an integer vector is \(V_b=(\mathbb
+For integer width \(b\in\{8,16,32,64\}\), an integer vector is \(V_b=(\mathbb
 Z/2^b\mathbb Z)^{128/b}\). Addition, subtraction, multiplication where
 WebAssembly defines it, bitwise operations, signed or unsigned min/max, and
 comparisons act lane-wise. Shifts consume one scalar count reduced modulo \(b\)
@@ -126,6 +126,22 @@ and apply it to every lane; a vector of per-lane shift counts is deliberately
 not admitted. `i8x16` has no multiplication because the portable WebAssembly
 SIMD instruction set has none. These counterexamples prevent an invented uniform
 numeric-vector interface.
+
+Operations that change lane width are typed maps rather than members of a
+fictional uniform arithmetic interface. `extend_{low,high}` sign- or
+zero-extends one half of a vector; `extmul_{low,high}` extends corresponding
+halves before multiplying; `narrow` saturates two input vectors and concatenates
+their results; and `extadd_pairwise` widens and sums adjacent lanes. The signed
+`i32x4.dot_i16x8_s` result lane \(k\) is
+
+\[ a_{2k}b_{2k}+a_{2k+1}b_{2k+1}. \]
+
+These definitions fix lane order and signedness before lowering. `popcnt`,
+unsigned rounded average, signed saturating Q15 multiplication, absolute value,
+and negation use the WebAssembly definitions [12]. Boundary tests cover
+saturation, signed extension, pair grouping, and the Q15 exceptional endpoint;
+this is executable conformance evidence rather than an independent proof of the
+WebAssembly specification.
 
 A mask \(M_b\) has the same physical width but a distinct Core type. Every lane
 is either zero or \(2^b-1\); comparisons produce this canonical form, selection
@@ -135,13 +151,14 @@ returns \(\sum_k 2^k s_k\), where \(s_k\) is the lane's high bit;
 reduction. Canonical masks make those reductions Boolean. The validator rejects
 vector/mask confusion before relying on Wasm's single `v128` representation.
 
-`f32x4` follows the WebAssembly definitions for absolute value, negation, square
-root, rounding, arithmetic, minimum/maximum and pseudo-minimum/maximum,
-comparison, lane operations, selection, and shuffle [12]. Signed and unsigned
-`i32x4` conversion to `f32x4` is lane-wise. Conversion back uses WebAssembly's
-saturating operations, so NaN maps to zero and finite out-of-range inputs clamp
-instead of trapping. This is materially different from scalar truncation and is
-expressed in the primitive names.
+`f32x4` and `f64x2` follow the WebAssembly definitions for absolute value,
+negation, square root, rounding, arithmetic, minimum/maximum and
+pseudo-minimum/maximum, comparison, lane operations, selection, and shuffle
+[12]. Signed and unsigned integer conversion is lane-wise. Conversion back uses
+WebAssembly's saturating operations, so NaN maps to zero and finite out-of-range
+inputs clamp instead of trapping. Demotion fills the unused high `f32x4` lanes
+with zero; promotion and `f64x2` integer conversion consume only the low lanes.
+These distinctions are expressed in the primitive names.
 
 For a shape with \(L\) lanes, shuffle concatenates two vectors and selects
 exactly \(L\) indices from \([0,2L)\). Lowering expands each lane index to its
@@ -153,14 +170,65 @@ or scalar mask reduction is introduced. Shuffles have an explicit permutation
 model, while reductions have explicit scalar codomains, so neither is silently
 covered by the lane-independence claim.
 
-The low-level Wasm builder encodes aligned or unaligned `v128.load` and
-`v128.store` memory arguments exactly as specified by WebAssembly [12]. Core
-does not expose them: its current SSA semantics contain Stores and host-backed
-buffers, but no linear-memory state or effect token. Treating a write as a pure
-primitive would permit invalid reordering, while treating a Core Store element
-as four unrelated runtime cells would change length and atomicity. A future Core
-memory feature therefore requires an explicit state/effect model; the present
-implementation stops at the honest semantic boundary.
+Core admits at most one declared WebAssembly linear memory. A block is an
+ordered sequence of transitions over machine state \((\sigma,\mu)\), where
+\(\sigma\) maps SSA values to immutable values and \(\mu\) is the current byte
+memory. A vector load reads from \(\mu[a+o,\ldots]\), may trap before defining
+its result, and leaves \(\mu\) unchanged. A vector store may trap or replaces
+the addressed bytes and defines `unit`. Loads are therefore effectful
+observations, not pure primitives. Neither loads nor stores may move across
+another ordered effect. This uses the ordering already required by Core Store
+and host-call operations; an additional SSA memory token would duplicate that
+order without making another execution legal.
+
+The admitted modes are full 128-bit load/store, sign- and zero-extending loads,
+scalar splat and zero loads, and 8-, 16-, 32-, or 64-bit lane loads/stores.
+Validation requires an `i32` address, a 32-bit unsigned offset, alignment no
+greater than the mode's natural exponent, an in-range lane, and a result shape
+implied by the mode. Full loads may acquire any vector shape because Core's
+shape is a static interpretation of the same 128 bits; 32- and 64-bit splat and
+zero loads admit either the integer or floating shape of that lane width. Memory
+limits are integers in (0\ldots65536) 64-KiB pages, with the maximum no smaller
+than the minimum. Stores return `unit`, so unused-result elimination cannot
+erase the write. Flat Core preserves the memory declaration and all mode
+attributes. Lowering creates memory zero and emits the corresponding WebAssembly
+instruction [12]. Treating a write as a pure primitive remains a counterexample
+because it permits invalid reordering; representing memory as a persistent Core
+Store remains invalid because it changes trapping, aliasing, byte addressing,
+and update cost.
+
+Memory traffic does not decrease merely because an access is vectorized: a full
+load still transfers 16 bytes. It replaces four scalar 32-bit loads or sixteen
+scalar byte loads with one memory instruction. If a vector memory instruction
+costs \(\alpha\) scalar load instructions after equal address work, the
+instruction-count break-even is \(\alpha<4\) for 32-bit lanes and \(\alpha<16\)
+for bytes. Widening loads transfer eight bytes and replace eight, four, or two
+scalar loads for 8-, 16-, or 32-bit sources. Lane accesses transfer exactly 1,
+2, 4, or 8 bytes and have no instruction-count advantage in isolation. There is
+no synchronization operation in this model; alignment affects code quality, not
+observable semantics.
+
+Deterministic SIMD primitives denote functions. A relaxed primitive \(r\)
+instead denotes the nonempty admissible-result relation
+
+\[ \mathcal A_r(x)=\{y\mid (x,y)\text{ is permitted by WebAssembly 3.0}\}. \]
+
+Correct lowering requires only \(\operatorname{wasm}_r(x)\in\mathcal A_r(x)\),
+not equality with a single reference value. The exact `wasm-simd128` target
+rejects every relaxed primitive; `wasm-relaxed-simd128` admits them explicitly.
+Core preserves distinct relaxed operation names through validation, flat
+snapshots, and lowering. Canonical Core masks collapse the alternatives of
+relaxed lane selection, while in-range swizzle indices, in-range truncations,
+non-NaN minima/maxima, Q15 inputs outside the exceptional pair, and `i7` dot
+operands can similarly make the permitted set a singleton. Tests use those
+domains for differential equality and separately validate every relaxed opcode.
+Fused versus unfused multiply-add remains observably implementation-dependent.
+The current differential example uses exactly representable operands, for which
+the permitted results coincide; non-singleton cases require an assertion against
+the full permitted result set [12, 13]. A relaxed multiply-add replaces an exact
+multiply plus add with one vector instruction; its structural break-even is
+therefore a relaxed-instruction cost below two exact vector instructions. No
+empirical speedup is claimed.
 
 Host operations remain ordered through SSA dependencies and control flow. Core
 does not contain an unordered effect set and does not reorder payload effects.
@@ -449,14 +517,15 @@ records. Each record has the form
 \[ v\;n\;p^*\;a\;i^+\;;, \]
 
 where \(v\) is `export:` or `private:`, \(n\) and each \(p\) are identifiers,
-\(p\) may carry an `[i8x16]`, `[i16x8]`, `[i32x4]`, or `[f32x4]` suffix; \(a\)
-is scalar `=`, `=>` for `i32x4`, or a shape-specific vector result token; every
-\(i\) is one lexical instruction. Baba metadata declares the module as the root
-and the function as its sole repeated, terminated island under
-`throughput: "strict"`. Generation succeeds only when that island is a
-terminal-only transducer with at most seven states. Thus acceptance of the
-checked parser plan is an executable certificate that the concrete grammar
-satisfies Baba's restriction; it is not a proof for an arbitrary future grammar.
+\(p\) may carry a scalar or `[i8x16]`, `[i16x8]`, `[i32x4]`, `[i64x2]`,
+`[f32x4]`, or `[f64x2]` suffix; \(a\) is scalar `=`, `=>` for `i32x4`, or an
+explicit scalar- or vector-result token; every \(i\) is one lexical instruction.
+Baba metadata declares the module as the root and the function as its sole
+repeated, terminated island under `throughput: "strict"`. Generation succeeds
+only when that island is a terminal-only transducer with at most seven states.
+Thus acceptance of the checked parser plan is an executable certificate that the
+concrete grammar satisfies Baba's restriction; it is not a proof for an
+arbitrary future grammar.
 
 The old infix grammar contained recursive `expr` references inside a function
 island. Baba 8 rejected it because replacing declared nested islands could not
@@ -487,9 +556,9 @@ Baba 8 that integrated operation executes the generated Wasm lexer, the shared
 653-byte `simd128` validation transducer, and cursor materialization.
 
 With Baba 8.0.0, the checked Zero artifacts are 6,007 bytes of parser Wasm and
-27,337 bytes of plan, 33,344 bytes total. Baba 7.10.0 produced 17,983 and 68,015
+30,337 bytes of plan, 36,344 bytes total. Baba 7.10.0 produced 17,983 and 68,015
 bytes respectively, 85,998 total, so the checked frontend payload decreases by
-52,654 bytes or 61.23%. These are empirical artifact facts. Lexer-error and
+49,654 bytes or 57.74%. These are empirical artifact facts. Lexer-error and
 unexpected-token tests exercise the Wasm lexer and SIMD validator diagnostics;
 the existing cursor-to-Core, differential runtime, and emitter-equality tests
 exercise successful parsing and semantic preservation.
@@ -1289,6 +1358,9 @@ rather than silently trusted.
     Conway's new solitaire game ‘Life’,” _Scientific American_ 223(4), 1970.
 12. WebAssembly Community Group, _WebAssembly Core Specification 3.0_, vector
     instruction syntax, validation, execution, and binary encoding, 2026.
+13. WebAssembly Community Group, _Relaxed SIMD proposal_, admissible-result
+    semantics and conformance tests, `github.com/WebAssembly/relaxed-simd`,
+    incorporated into WebAssembly 3.0.
 
 ## 11. Continuous implementation log
 
@@ -2022,10 +2094,11 @@ performance claim; the structural break-even model remains an unverified
 explanation.
 
 The broader token alternatives remain inside Baba's checked strict-island class.
-Regeneration keeps parser Wasm at 6,007 bytes and changes the plan to 27,337
-bytes. The model still excludes `i64x2`, `f64x2`, narrow saturating and widening
-operations, swizzle, horizontal arithmetic reductions, relaxed SIMD, and
-Core-level vector memory.
+At this checkpoint, regeneration kept parser Wasm at 6,007 bytes and changed the
+plan to 27,337 bytes; the then-current model still excluded `i64x2`, `f64x2`,
+narrow saturation and widening, swizzle, horizontal arithmetic, relaxed SIMD,
+and Core vector memory. The later complete-surface entry below supersedes those
+implementation limits while retaining this historical boundary.
 
 ### 2026-08-03: floating and packed-lane SIMD applications
 
@@ -2053,6 +2126,68 @@ sample estimates neither a distribution nor a stable median, so these numbers
 are path validation only and are not performance evidence. The cost models and
 loop-invariant-construction counterexample in Section 8.2 remain the current
 hypotheses.
+
+### 2026-08-03: complete WebAssembly 3.0 SIMD surface
+
+The low-level instruction catalog now covers every deterministic WebAssembly 3.0
+SIMD family and all relaxed opcodes from `0x100` through `0x113`. Core and Zero
+expose narrow constructors and lane access, complete comparisons, saturating
+arithmetic, population count, averages, widening, narrowing, extended
+multiplication and pairwise addition, signed dot products, Q15 multiplication,
+dynamic swizzle, `i64x2`, `f64x2`, cross-width conversions, and all relaxed
+operations. Exact targets reject relaxed primitives; Zero selects the relaxed
+target only when its Core operations require it. This is an
+implementation-status claim backed by type checking and opcode-validation tests,
+not a claim that every host implements WebAssembly 3.0.
+
+Core linear memory is now an optional single-memory declaration with ordered
+`vector.load` and `vector.store` operations. All full, widening, splat, zero,
+and lane modes validate their address, shape, alignment, offset, and lane
+invariants before lowering. An executable Core module stores sixteen bytes,
+loads them back, and observes the write; a separate module validates every
+portable memory encoding. Flat Core schema 5 round-trips the declaration and
+operation attributes. The rejected pure-primitive and persistent-Store models
+remain the counterexamples recorded in Section 2.3. Multi-memory and memory64
+are not modeled, so this is complete SIMD memory support only for Core's stated
+single 32-bit-address memory model.
+
+Packed boundary execution checks unsigned saturation at 255, signed extension of
+-1, adjacent dot pairing, the Q15 `-32768 * -32768` saturation endpoint, and
+signed narrowing to 127. A combined module validates representative operations
+from every deterministic and relaxed family. Relaxed differential examples use
+singleton admissible domains: canonical masks, in-range swizzles and
+truncations, exactly representable multiply-add inputs, and valid `i7` dot
+operands. Consequently their scalar references may assert equality. Inputs for
+which fused rounding, NaN choice, out-of-range conversion, swizzle high bits, or
+the Q15 endpoint admit multiple results remain set-valued and are not assigned a
+fabricated unique reference.
+
+Three new Zero/Rust pairs compose the new mechanisms:
+
+| workload              | \(C(w)\)                              | Zero/Rust Wasm bytes |
+| --------------------- | ------------------------------------- | -------------------- |
+| byte mixer            | \((337,2,2,0,5,47,327,1,1,0,18,1,0)\) | 329/234              |
+| widening dot          | \((451,2,2,0,2,42,282,1,1,0,16,1,0)\) | 290/179              |
+| singleton relaxed set | \((574,1,1,0,1,61,388,0,0,0,18,0,0)\) | 398/117              |
+
+The byte mixer performs one saturating add, one dynamic swizzle, and one
+population count across sixteen lanes per round. Counting the analogous scalar
+lane operations as sixteen of each gives 48 scalar operations versus three
+vector operations and the structural threshold \(\alpha<16\); this ignores the
+different hardware costs of saturation, table lookup, and population count. The
+deterministic dot instruction performs eight signed 16-bit products and four
+additions, so its arithmetic-work threshold is \(\alpha<12\) before conversion
+and extraction overhead. Each loop retains 16 bytes, performs no loop memory
+traffic or synchronization, and has no measured performance claim.
+
+The Rust sizes use the benchmark protocol's `rustc` settings: optimization level
+3, one code-generation unit, aborting panics, and stripped symbols. Regeneration
+retains the 6,007-byte parser Wasm and expands the checked plan to 30,337 bytes.
+All 39 workloads pass boundary and pseudorandom differential probes, and CPU and
+Rust/WebAssembly plan emitters remain byte-identical. These are executable
+validation results. The remaining SIMD limitations are multi-memory, memory64, a
+vector-valued public JavaScript ABI, and performance evidence for the newly
+admitted operations; none is silently generalized.
 
 ### 2026-08-02: Zero structural complexity ladder
 

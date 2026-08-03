@@ -856,6 +856,30 @@ const simdInstruction = (opcode: number): readonly WasmInstruction[] => [
   unsigned(opcode),
 ];
 
+function simdMemoryInstruction(
+  opcode: number,
+  alignmentExponent: number,
+  offset: number,
+): readonly WasmInstruction[] {
+  return [
+    byte(0xfd),
+    unsigned(opcode),
+    unsigned(alignmentExponent),
+    unsigned(offset),
+  ];
+}
+
+function requireSimdLane(
+  lane: number,
+  laneCount: number,
+  operation: string,
+): void {
+  if (Number.isSafeInteger(lane) && lane >= 0 && lane < laneCount) return;
+  throw new RangeError(
+    `${operation} lane must be in 0..${laneCount - 1}; received ${lane}`,
+  );
+}
+
 export type WasmStaticInstructionName =
   | "nop"
   | "blockVoid"
@@ -937,6 +961,137 @@ export type WasmStaticInstructionName =
   | "f64ConvertI32Signed"
   | "i32ReinterpretF32"
   | "f32ReinterpretI32"
+  | "i8x16Swizzle"
+  | "i8x16NotEqual"
+  | "i8x16GreaterThanSigned"
+  | "i8x16GreaterThanUnsigned"
+  | "i8x16LessThanOrEqualSigned"
+  | "i8x16LessThanOrEqualUnsigned"
+  | "i8x16GreaterThanOrEqualSigned"
+  | "i8x16GreaterThanOrEqualUnsigned"
+  | "i8x16Absolute"
+  | "i8x16Negate"
+  | "i8x16PopulationCount"
+  | "i8x16NarrowI16x8Signed"
+  | "i8x16NarrowI16x8Unsigned"
+  | "i8x16AddSaturateSigned"
+  | "i8x16AddSaturateUnsigned"
+  | "i8x16SubtractSaturateSigned"
+  | "i8x16SubtractSaturateUnsigned"
+  | "i8x16AverageUnsigned"
+  | "i16x8NotEqual"
+  | "i16x8GreaterThanSigned"
+  | "i16x8GreaterThanUnsigned"
+  | "i16x8LessThanOrEqualSigned"
+  | "i16x8LessThanOrEqualUnsigned"
+  | "i16x8GreaterThanOrEqualSigned"
+  | "i16x8GreaterThanOrEqualUnsigned"
+  | "i16x8Absolute"
+  | "i16x8Negate"
+  | "i16x8Q15MultiplyRoundSaturateSigned"
+  | "i16x8NarrowI32x4Signed"
+  | "i16x8NarrowI32x4Unsigned"
+  | "i16x8ExtendLowI8x16Signed"
+  | "i16x8ExtendHighI8x16Signed"
+  | "i16x8ExtendLowI8x16Unsigned"
+  | "i16x8ExtendHighI8x16Unsigned"
+  | "i16x8AddSaturateSigned"
+  | "i16x8AddSaturateUnsigned"
+  | "i16x8SubtractSaturateSigned"
+  | "i16x8SubtractSaturateUnsigned"
+  | "i16x8AverageUnsigned"
+  | "i16x8ExtendedMultiplyLowI8x16Signed"
+  | "i16x8ExtendedMultiplyHighI8x16Signed"
+  | "i16x8ExtendedMultiplyLowI8x16Unsigned"
+  | "i16x8ExtendedMultiplyHighI8x16Unsigned"
+  | "i16x8ExtendedAddPairwiseI8x16Signed"
+  | "i16x8ExtendedAddPairwiseI8x16Unsigned"
+  | "i32x4Absolute"
+  | "i32x4Negate"
+  | "i32x4ExtendLowI16x8Signed"
+  | "i32x4ExtendHighI16x8Signed"
+  | "i32x4ExtendLowI16x8Unsigned"
+  | "i32x4ExtendHighI16x8Unsigned"
+  | "i32x4DotI16x8Signed"
+  | "i32x4ExtendedMultiplyLowI16x8Signed"
+  | "i32x4ExtendedMultiplyHighI16x8Signed"
+  | "i32x4ExtendedMultiplyLowI16x8Unsigned"
+  | "i32x4ExtendedMultiplyHighI16x8Unsigned"
+  | "i32x4ExtendedAddPairwiseI16x8Signed"
+  | "i32x4ExtendedAddPairwiseI16x8Unsigned"
+  | "i64x2Splat"
+  | "i64x2Absolute"
+  | "i64x2Negate"
+  | "i64x2AllTrue"
+  | "i64x2Bitmask"
+  | "i64x2ExtendLowI32x4Signed"
+  | "i64x2ExtendHighI32x4Signed"
+  | "i64x2ExtendLowI32x4Unsigned"
+  | "i64x2ExtendHighI32x4Unsigned"
+  | "i64x2ShiftLeft"
+  | "i64x2ShiftRightSigned"
+  | "i64x2ShiftRightUnsigned"
+  | "i64x2Add"
+  | "i64x2Subtract"
+  | "i64x2Multiply"
+  | "i64x2Equal"
+  | "i64x2NotEqual"
+  | "i64x2LessThanSigned"
+  | "i64x2GreaterThanSigned"
+  | "i64x2LessThanOrEqualSigned"
+  | "i64x2GreaterThanOrEqualSigned"
+  | "i64x2ExtendedMultiplyLowI32x4Signed"
+  | "i64x2ExtendedMultiplyHighI32x4Signed"
+  | "i64x2ExtendedMultiplyLowI32x4Unsigned"
+  | "i64x2ExtendedMultiplyHighI32x4Unsigned"
+  | "f32x4DemoteF64x2Zero"
+  | "f64x2PromoteLowF32x4"
+  | "f64x2Splat"
+  | "f64x2Add"
+  | "f64x2Subtract"
+  | "f64x2Multiply"
+  | "f64x2Divide"
+  | "f64x2Equal"
+  | "f64x2NotEqual"
+  | "f64x2LessThan"
+  | "f64x2GreaterThan"
+  | "f64x2LessThanOrEqual"
+  | "f64x2GreaterThanOrEqual"
+  | "f64x2Absolute"
+  | "f64x2Negate"
+  | "f64x2SquareRoot"
+  | "f64x2Ceiling"
+  | "f64x2Floor"
+  | "f64x2Truncate"
+  | "f64x2Nearest"
+  | "f64x2Minimum"
+  | "f64x2Maximum"
+  | "f64x2PseudoMinimum"
+  | "f64x2PseudoMaximum"
+  | "i32x4TruncateSaturateF64x2SignedZero"
+  | "i32x4TruncateSaturateF64x2UnsignedZero"
+  | "f64x2ConvertLowI32x4Signed"
+  | "f64x2ConvertLowI32x4Unsigned"
+  | "i8x16RelaxedSwizzle"
+  | "i32x4RelaxedTruncateF32x4Signed"
+  | "i32x4RelaxedTruncateF32x4Unsigned"
+  | "i32x4RelaxedTruncateF64x2SignedZero"
+  | "i32x4RelaxedTruncateF64x2UnsignedZero"
+  | "f32x4RelaxedMultiplyAdd"
+  | "f32x4RelaxedNegativeMultiplyAdd"
+  | "f64x2RelaxedMultiplyAdd"
+  | "f64x2RelaxedNegativeMultiplyAdd"
+  | "i8x16RelaxedLaneSelect"
+  | "i16x8RelaxedLaneSelect"
+  | "i32x4RelaxedLaneSelect"
+  | "i64x2RelaxedLaneSelect"
+  | "f32x4RelaxedMinimum"
+  | "f32x4RelaxedMaximum"
+  | "f64x2RelaxedMinimum"
+  | "f64x2RelaxedMaximum"
+  | "i16x8RelaxedQ15MultiplyRoundSigned"
+  | "i16x8RelaxedDotI8x16I7x16Signed"
+  | "i32x4RelaxedDotI8x16I7x16AddSigned"
   | "f32x4Splat"
   | "f32x4Add"
   | "f32x4Subtract"
@@ -1022,6 +1177,8 @@ export type WasmStaticInstructionName =
   | "i16x8AllTrue"
   | "i16x8Bitmask"
   | "v128Not"
+  | "v128And"
+  | "v128AndNot"
   | "v128Or"
   | "v128Xor"
   | "v128AnyTrue"
@@ -1095,10 +1252,91 @@ export type WasmInstructionCatalog =
       alignmentExponent?: number,
       offset?: number,
     ) => readonly WasmInstruction[];
+    readonly v128Load8x8Signed: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load8x8Unsigned: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load16x4Signed: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load16x4Unsigned: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load32x2Signed: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load32x2Unsigned: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load8Splat: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load16Splat: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load32Splat: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load64Splat: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load32Zero: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Load64Zero: (
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128LoadLane: (
+      laneBits: 8 | 16 | 32 | 64,
+      lane: number,
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128StoreLane: (
+      laneBits: 8 | 16 | 32 | 64,
+      lane: number,
+      alignmentExponent?: number,
+      offset?: number,
+    ) => readonly WasmInstruction[];
+    readonly v128Constant: (
+      bytes: readonly number[],
+    ) => readonly WasmInstruction[];
+    readonly i8x16ExtractLaneSigned: (
+      lane: number,
+    ) => readonly WasmInstruction[];
+    readonly i8x16ExtractLaneUnsigned: (
+      lane: number,
+    ) => readonly WasmInstruction[];
+    readonly i8x16ReplaceLane: (lane: number) => readonly WasmInstruction[];
+    readonly i16x8ExtractLaneSigned: (
+      lane: number,
+    ) => readonly WasmInstruction[];
+    readonly i16x8ExtractLaneUnsigned: (
+      lane: number,
+    ) => readonly WasmInstruction[];
+    readonly i16x8ReplaceLane: (lane: number) => readonly WasmInstruction[];
     readonly f32x4ExtractLane: (lane: number) => readonly WasmInstruction[];
     readonly f32x4ReplaceLane: (lane: number) => readonly WasmInstruction[];
     readonly i32x4ExtractLane: (lane: number) => readonly WasmInstruction[];
     readonly i32x4ReplaceLane: (lane: number) => readonly WasmInstruction[];
+    readonly i64x2ExtractLane: (lane: number) => readonly WasmInstruction[];
+    readonly i64x2ReplaceLane: (lane: number) => readonly WasmInstruction[];
+    readonly f64x2ExtractLane: (lane: number) => readonly WasmInstruction[];
+    readonly f64x2ReplaceLane: (lane: number) => readonly WasmInstruction[];
     readonly i8x16Shuffle: (
       lanes: readonly number[],
     ) => readonly WasmInstruction[];
@@ -1219,20 +1457,125 @@ export const wasmInstruction: WasmInstructionCatalog = {
     return [byte(0x39), unsigned(alignmentExponent), unsigned(offset)];
   },
   v128Load(alignmentExponent = 4, offset = 0): readonly WasmInstruction[] {
-    return [
-      byte(0xfd),
-      unsigned(0),
-      unsigned(alignmentExponent),
-      unsigned(offset),
-    ];
+    return simdMemoryInstruction(0, alignmentExponent, offset);
+  },
+  v128Load8x8Signed(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(1, alignmentExponent, offset);
+  },
+  v128Load8x8Unsigned(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(2, alignmentExponent, offset);
+  },
+  v128Load16x4Signed(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(3, alignmentExponent, offset);
+  },
+  v128Load16x4Unsigned(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(4, alignmentExponent, offset);
+  },
+  v128Load32x2Signed(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(5, alignmentExponent, offset);
+  },
+  v128Load32x2Unsigned(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(6, alignmentExponent, offset);
+  },
+  v128Load8Splat(
+    alignmentExponent = 0,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(7, alignmentExponent, offset);
+  },
+  v128Load16Splat(
+    alignmentExponent = 1,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(8, alignmentExponent, offset);
+  },
+  v128Load32Splat(
+    alignmentExponent = 2,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(9, alignmentExponent, offset);
+  },
+  v128Load64Splat(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(10, alignmentExponent, offset);
   },
   v128Store(alignmentExponent = 4, offset = 0): readonly WasmInstruction[] {
+    return simdMemoryInstruction(11, alignmentExponent, offset);
+  },
+  v128Load32Zero(
+    alignmentExponent = 2,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(92, alignmentExponent, offset);
+  },
+  v128Load64Zero(
+    alignmentExponent = 3,
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    return simdMemoryInstruction(93, alignmentExponent, offset);
+  },
+  v128LoadLane(
+    laneBits: 8 | 16 | 32 | 64,
+    lane: number,
+    alignmentExponent = Math.log2(laneBits / 8),
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    const laneCount = 128 / laneBits;
+    requireSimdLane(lane, laneCount, `v128.load${laneBits}_lane`);
+    const opcode = 84 + Math.log2(laneBits / 8);
     return [
-      byte(0xfd),
-      unsigned(11),
-      unsigned(alignmentExponent),
-      unsigned(offset),
+      ...simdMemoryInstruction(opcode, alignmentExponent, offset),
+      byte(lane),
     ];
+  },
+  v128StoreLane(
+    laneBits: 8 | 16 | 32 | 64,
+    lane: number,
+    alignmentExponent = Math.log2(laneBits / 8),
+    offset = 0,
+  ): readonly WasmInstruction[] {
+    const laneCount = 128 / laneBits;
+    requireSimdLane(lane, laneCount, `v128.store${laneBits}_lane`);
+    const opcode = 88 + Math.log2(laneBits / 8);
+    return [
+      ...simdMemoryInstruction(opcode, alignmentExponent, offset),
+      byte(lane),
+    ];
+  },
+  v128Constant(bytes: readonly number[]): readonly WasmInstruction[] {
+    if (
+      bytes.length !== 16 ||
+      bytes.some((value) =>
+        !Number.isInteger(value) || value < 0 || value > 255
+      )
+    ) {
+      throw new RangeError(
+        `v128 constant requires 16 bytes in 0..255; received [${
+          bytes.join(", ")
+        }]`,
+      );
+    }
+    return [byte(0xfd), unsigned(12), ...bytes.map(byte)];
   },
   i64Add: instruction(0x7c),
   i64Subtract: instruction(0x7d),
@@ -1283,6 +1626,31 @@ export const wasmInstruction: WasmInstructionCatalog = {
   f64ConvertI32Signed: instruction(0xb7),
   i32ReinterpretF32: instruction(0xbc),
   f32ReinterpretI32: instruction(0xbe),
+  i8x16Swizzle: simdInstruction(14),
+  i8x16ExtractLaneSigned(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 16, "i8x16.extract_lane_s");
+    return [byte(0xfd), unsigned(21), byte(lane)];
+  },
+  i8x16ExtractLaneUnsigned(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 16, "i8x16.extract_lane_u");
+    return [byte(0xfd), unsigned(22), byte(lane)];
+  },
+  i8x16ReplaceLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 16, "i8x16.replace_lane");
+    return [byte(0xfd), unsigned(23), byte(lane)];
+  },
+  i16x8ExtractLaneSigned(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 8, "i16x8.extract_lane_s");
+    return [byte(0xfd), unsigned(24), byte(lane)];
+  },
+  i16x8ExtractLaneUnsigned(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 8, "i16x8.extract_lane_u");
+    return [byte(0xfd), unsigned(25), byte(lane)];
+  },
+  i16x8ReplaceLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 8, "i16x8.replace_lane");
+    return [byte(0xfd), unsigned(26), byte(lane)];
+  },
   i32x4Splat: simdInstruction(17),
   i32x4ExtractLane(lane: number): readonly WasmInstruction[] {
     if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
@@ -1320,6 +1688,19 @@ export const wasmInstruction: WasmInstructionCatalog = {
   i32x4MinimumUnsigned: simdInstruction(183),
   i32x4MaximumSigned: simdInstruction(184),
   i32x4MaximumUnsigned: simdInstruction(185),
+  i32x4Absolute: simdInstruction(160),
+  i32x4Negate: simdInstruction(161),
+  i32x4ExtendLowI16x8Signed: simdInstruction(167),
+  i32x4ExtendHighI16x8Signed: simdInstruction(168),
+  i32x4ExtendLowI16x8Unsigned: simdInstruction(169),
+  i32x4ExtendHighI16x8Unsigned: simdInstruction(170),
+  i32x4DotI16x8Signed: simdInstruction(186),
+  i32x4ExtendedMultiplyLowI16x8Signed: simdInstruction(188),
+  i32x4ExtendedMultiplyHighI16x8Signed: simdInstruction(189),
+  i32x4ExtendedMultiplyLowI16x8Unsigned: simdInstruction(190),
+  i32x4ExtendedMultiplyHighI16x8Unsigned: simdInstruction(191),
+  i32x4ExtendedAddPairwiseI16x8Signed: simdInstruction(126),
+  i32x4ExtendedAddPairwiseI16x8Unsigned: simdInstruction(127),
   i32x4AllTrue: simdInstruction(163),
   i32x4Bitmask: simdInstruction(164),
   i32x4TruncateSaturateF32x4Signed: simdInstruction(248),
@@ -1360,6 +1741,7 @@ export const wasmInstruction: WasmInstructionCatalog = {
   f32x4PseudoMaximum: simdInstruction(235),
   f32x4ConvertI32x4Signed: simdInstruction(250),
   f32x4ConvertI32x4Unsigned: simdInstruction(251),
+  f32x4DemoteF64x2Zero: simdInstruction(94),
   i8x16Splat: simdInstruction(15),
   i8x16Add: simdInstruction(110),
   i8x16Subtract: simdInstruction(113),
@@ -1367,12 +1749,29 @@ export const wasmInstruction: WasmInstructionCatalog = {
   i8x16ShiftRightSigned: simdInstruction(108),
   i8x16ShiftRightUnsigned: simdInstruction(109),
   i8x16Equal: simdInstruction(35),
+  i8x16NotEqual: simdInstruction(36),
   i8x16LessThanSigned: simdInstruction(37),
   i8x16LessThanUnsigned: simdInstruction(38),
+  i8x16GreaterThanSigned: simdInstruction(39),
+  i8x16GreaterThanUnsigned: simdInstruction(40),
+  i8x16LessThanOrEqualSigned: simdInstruction(41),
+  i8x16LessThanOrEqualUnsigned: simdInstruction(42),
+  i8x16GreaterThanOrEqualSigned: simdInstruction(43),
+  i8x16GreaterThanOrEqualUnsigned: simdInstruction(44),
+  i8x16Absolute: simdInstruction(96),
+  i8x16Negate: simdInstruction(97),
+  i8x16PopulationCount: simdInstruction(98),
+  i8x16NarrowI16x8Signed: simdInstruction(101),
+  i8x16NarrowI16x8Unsigned: simdInstruction(102),
+  i8x16AddSaturateSigned: simdInstruction(111),
+  i8x16AddSaturateUnsigned: simdInstruction(112),
+  i8x16SubtractSaturateSigned: simdInstruction(114),
+  i8x16SubtractSaturateUnsigned: simdInstruction(115),
   i8x16MinimumSigned: simdInstruction(118),
   i8x16MinimumUnsigned: simdInstruction(119),
   i8x16MaximumSigned: simdInstruction(120),
   i8x16MaximumUnsigned: simdInstruction(121),
+  i8x16AverageUnsigned: simdInstruction(123),
   i8x16AllTrue: simdInstruction(99),
   i8x16Bitmask: simdInstruction(100),
   i16x8Splat: simdInstruction(16),
@@ -1383,15 +1782,132 @@ export const wasmInstruction: WasmInstructionCatalog = {
   i16x8ShiftRightSigned: simdInstruction(140),
   i16x8ShiftRightUnsigned: simdInstruction(141),
   i16x8Equal: simdInstruction(45),
+  i16x8NotEqual: simdInstruction(46),
   i16x8LessThanSigned: simdInstruction(47),
   i16x8LessThanUnsigned: simdInstruction(48),
+  i16x8GreaterThanSigned: simdInstruction(49),
+  i16x8GreaterThanUnsigned: simdInstruction(50),
+  i16x8LessThanOrEqualSigned: simdInstruction(51),
+  i16x8LessThanOrEqualUnsigned: simdInstruction(52),
+  i16x8GreaterThanOrEqualSigned: simdInstruction(53),
+  i16x8GreaterThanOrEqualUnsigned: simdInstruction(54),
+  i16x8Absolute: simdInstruction(128),
+  i16x8Negate: simdInstruction(129),
+  i16x8Q15MultiplyRoundSaturateSigned: simdInstruction(130),
+  i16x8NarrowI32x4Signed: simdInstruction(133),
+  i16x8NarrowI32x4Unsigned: simdInstruction(134),
+  i16x8ExtendLowI8x16Signed: simdInstruction(135),
+  i16x8ExtendHighI8x16Signed: simdInstruction(136),
+  i16x8ExtendLowI8x16Unsigned: simdInstruction(137),
+  i16x8ExtendHighI8x16Unsigned: simdInstruction(138),
+  i16x8AddSaturateSigned: simdInstruction(143),
+  i16x8AddSaturateUnsigned: simdInstruction(144),
+  i16x8SubtractSaturateSigned: simdInstruction(146),
+  i16x8SubtractSaturateUnsigned: simdInstruction(147),
   i16x8MinimumSigned: simdInstruction(150),
   i16x8MinimumUnsigned: simdInstruction(151),
   i16x8MaximumSigned: simdInstruction(152),
   i16x8MaximumUnsigned: simdInstruction(153),
+  i16x8AverageUnsigned: simdInstruction(155),
+  i16x8ExtendedMultiplyLowI8x16Signed: simdInstruction(156),
+  i16x8ExtendedMultiplyHighI8x16Signed: simdInstruction(157),
+  i16x8ExtendedMultiplyLowI8x16Unsigned: simdInstruction(158),
+  i16x8ExtendedMultiplyHighI8x16Unsigned: simdInstruction(159),
+  i16x8ExtendedAddPairwiseI8x16Signed: simdInstruction(124),
+  i16x8ExtendedAddPairwiseI8x16Unsigned: simdInstruction(125),
   i16x8AllTrue: simdInstruction(131),
   i16x8Bitmask: simdInstruction(132),
+  i64x2Splat: simdInstruction(18),
+  i64x2ExtractLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 2, "i64x2.extract_lane");
+    return [byte(0xfd), unsigned(29), byte(lane)];
+  },
+  i64x2ReplaceLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 2, "i64x2.replace_lane");
+    return [byte(0xfd), unsigned(30), byte(lane)];
+  },
+  i64x2Absolute: simdInstruction(192),
+  i64x2Negate: simdInstruction(193),
+  i64x2AllTrue: simdInstruction(195),
+  i64x2Bitmask: simdInstruction(196),
+  i64x2ExtendLowI32x4Signed: simdInstruction(199),
+  i64x2ExtendHighI32x4Signed: simdInstruction(200),
+  i64x2ExtendLowI32x4Unsigned: simdInstruction(201),
+  i64x2ExtendHighI32x4Unsigned: simdInstruction(202),
+  i64x2ShiftLeft: simdInstruction(203),
+  i64x2ShiftRightSigned: simdInstruction(204),
+  i64x2ShiftRightUnsigned: simdInstruction(205),
+  i64x2Add: simdInstruction(206),
+  i64x2Subtract: simdInstruction(209),
+  i64x2Multiply: simdInstruction(213),
+  i64x2Equal: simdInstruction(214),
+  i64x2NotEqual: simdInstruction(215),
+  i64x2LessThanSigned: simdInstruction(216),
+  i64x2GreaterThanSigned: simdInstruction(217),
+  i64x2LessThanOrEqualSigned: simdInstruction(218),
+  i64x2GreaterThanOrEqualSigned: simdInstruction(219),
+  i64x2ExtendedMultiplyLowI32x4Signed: simdInstruction(220),
+  i64x2ExtendedMultiplyHighI32x4Signed: simdInstruction(221),
+  i64x2ExtendedMultiplyLowI32x4Unsigned: simdInstruction(222),
+  i64x2ExtendedMultiplyHighI32x4Unsigned: simdInstruction(223),
+  f64x2Splat: simdInstruction(20),
+  f64x2ExtractLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 2, "f64x2.extract_lane");
+    return [byte(0xfd), unsigned(33), byte(lane)];
+  },
+  f64x2ReplaceLane(lane: number): readonly WasmInstruction[] {
+    requireSimdLane(lane, 2, "f64x2.replace_lane");
+    return [byte(0xfd), unsigned(34), byte(lane)];
+  },
+  f64x2Equal: simdInstruction(71),
+  f64x2NotEqual: simdInstruction(72),
+  f64x2LessThan: simdInstruction(73),
+  f64x2GreaterThan: simdInstruction(74),
+  f64x2LessThanOrEqual: simdInstruction(75),
+  f64x2GreaterThanOrEqual: simdInstruction(76),
+  f64x2Ceiling: simdInstruction(116),
+  f64x2Floor: simdInstruction(117),
+  f64x2Truncate: simdInstruction(122),
+  f64x2Nearest: simdInstruction(148),
+  f64x2Absolute: simdInstruction(236),
+  f64x2Negate: simdInstruction(237),
+  f64x2SquareRoot: simdInstruction(239),
+  f64x2Add: simdInstruction(240),
+  f64x2Subtract: simdInstruction(241),
+  f64x2Multiply: simdInstruction(242),
+  f64x2Divide: simdInstruction(243),
+  f64x2Minimum: simdInstruction(244),
+  f64x2Maximum: simdInstruction(245),
+  f64x2PseudoMinimum: simdInstruction(246),
+  f64x2PseudoMaximum: simdInstruction(247),
+  f64x2PromoteLowF32x4: simdInstruction(95),
+  i32x4TruncateSaturateF64x2SignedZero: simdInstruction(252),
+  i32x4TruncateSaturateF64x2UnsignedZero: simdInstruction(253),
+  f64x2ConvertLowI32x4Signed: simdInstruction(254),
+  f64x2ConvertLowI32x4Unsigned: simdInstruction(255),
+  i8x16RelaxedSwizzle: simdInstruction(256),
+  i32x4RelaxedTruncateF32x4Signed: simdInstruction(257),
+  i32x4RelaxedTruncateF32x4Unsigned: simdInstruction(258),
+  i32x4RelaxedTruncateF64x2SignedZero: simdInstruction(259),
+  i32x4RelaxedTruncateF64x2UnsignedZero: simdInstruction(260),
+  f32x4RelaxedMultiplyAdd: simdInstruction(261),
+  f32x4RelaxedNegativeMultiplyAdd: simdInstruction(262),
+  f64x2RelaxedMultiplyAdd: simdInstruction(263),
+  f64x2RelaxedNegativeMultiplyAdd: simdInstruction(264),
+  i8x16RelaxedLaneSelect: simdInstruction(265),
+  i16x8RelaxedLaneSelect: simdInstruction(266),
+  i32x4RelaxedLaneSelect: simdInstruction(267),
+  i64x2RelaxedLaneSelect: simdInstruction(268),
+  f32x4RelaxedMinimum: simdInstruction(269),
+  f32x4RelaxedMaximum: simdInstruction(270),
+  f64x2RelaxedMinimum: simdInstruction(271),
+  f64x2RelaxedMaximum: simdInstruction(272),
+  i16x8RelaxedQ15MultiplyRoundSigned: simdInstruction(273),
+  i16x8RelaxedDotI8x16I7x16Signed: simdInstruction(274),
+  i32x4RelaxedDotI8x16I7x16AddSigned: simdInstruction(275),
   v128Not: simdInstruction(77),
+  v128And: simdInstruction(78),
+  v128AndNot: simdInstruction(79),
   v128Or: simdInstruction(80),
   v128Xor: simdInstruction(81),
   v128AnyTrue: simdInstruction(83),

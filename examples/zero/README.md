@@ -1,10 +1,11 @@
 # Zero
 
 Zero is gpupaper's controlled end-to-end example language. It is intentionally
-small: scalar values are wrapping WebAssembly `i32`, exact 128-bit SIMD subsets
-support internal packed work, functions are first-order, and postfix instruction
-streams provide lexical bindings, direct calls, arithmetic, comparisons,
-selection, shuffles, conversions, and a bounded fold.
+small: scalar values use WebAssembly numeric types, the complete WebAssembly 3.0
+128-bit register SIMD surface supports internal packed work, functions are
+first-order, and postfix instruction streams provide lexical bindings, direct
+calls, arithmetic, comparisons, selection, shuffles, conversions, and a bounded
+fold.
 
 ```zero
 private: step value = @value 1664525 * 1013904223 + ;
@@ -16,10 +17,12 @@ export: run seed rounds = @rounds @seed repeat:step ;
 `call:name:arity` consumes its arguments, `select!` consumes a condition and two
 lazy expression trees, and `repeat:name` consumes a count and initial value and
 calls the named unary step. Every function body must leave exactly one value.
-Scalar parameters and results remain implicit. Parameter suffixes select
-`[i8x16]`, `[i16x8]`, `[i32x4]`, or `[f32x4]`. Results use `=>i8x16`, `=>i16x8`,
-`=>i32x4`, or `=>f32x4`; bare `=>` remains shorthand for `=>i32x4`, while `=`
-declares `i32`. SIMD instructions are named after their WebAssembly operations.
+`i32` parameters and results remain implicit. Parameter suffixes select scalar
+`i32`, `i64`, `f32`, or `f64`, or vector `i8x16`, `i16x8`, `i32x4`, `i64x2`,
+`f32x4`, or `f64x2`. Results use the corresponding `=>type` token; bare `=>`
+remains shorthand for `=>i32x4`, while `=` declares `i32`. SIMD instructions are
+named after their WebAssembly operations. Relaxed instructions retain the
+`relaxed_` name and make the compiler select `wasm-relaxed-simd128` explicitly.
 Comparisons produce internal mask values consumed by typed `select` or
 `mask_bitmask`, `mask_all_true`, and `mask_any_true`. `shape.shuffle:l...` takes
 two vectors and an exact lane-index immediate. This regular concrete syntax is
@@ -79,7 +82,12 @@ xorshift32 step, with an independent four-stream scalar Rust implementation.
 Workload 34 applies Newton iteration to four `f32` square-root estimates and
 exposes loop-invariant vector construction as an optimization probe. Workloads
 35 and 36 compose splats and shuffles into nonuniform `i8x16` and `i16x8`
-states, then run packed threshold and recurrence kernels.
+states, then run packed threshold and recurrence kernels. Workload 37 combines
+unsigned saturation, dynamic swizzle, and population count. Workload 38 widens
+signed bytes into a dot product consumed through `i64x2` and `f64x2`. Workload
+39 constrains relaxed lane selection, swizzle, dot product, multiply-add, and
+truncation to singleton admissible-result domains so its Rust reference remains
+exact.
 
 Run one rung while developing with `--workload`:
 

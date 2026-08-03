@@ -153,19 +153,20 @@ source semantics part of gpupaper:
 Zero source
   -> Baba 8 CPU-Wasm lexer and strict SIMD parser/validator
   -> cursor-to-Core frontend adapter
-  -> validated Core and deterministic Wasm plan
+  -> validated Core and exact or explicitly relaxed Wasm plan
   -> Rust compiled to WebAssembly plan emitter
   -> payload .wasm
 ```
 
-Zero has wrapping `i32` scalars and exact internal `i8x16`, `i16x8`, `i32x4`,
-and `f32x4` operations in a regular, postfix concrete syntax chosen to fit Baba
-8's strict island parser class. Its semantic adapter provides first-order
-functions, lexical bindings, direct calls, lazy conditionals, typed vector and
-mask operations, shuffles, conversions, and a bounded fold. That is enough to
-exercise SSA values, multi-function calls, CFG joins, scalar and vector loop
-state, validation, and executable output while keeping the source-to-Core
-mapping auditable.
+Zero has `i32`, `i64`, `f32`, and `f64` scalars plus the complete WebAssembly
+3.0 `i8x16`, `i16x8`, `i32x4`, `i64x2`, `f32x4`, and `f64x2` register SIMD
+surface, including explicitly selected relaxed operations, in a regular postfix
+syntax chosen to fit Baba 8's strict island parser class. Its semantic adapter
+provides first-order functions, lexical bindings, direct calls, lazy
+conditionals, typed vector and mask operations, shuffles, conversions, and a
+bounded fold. That is enough to exercise SSA values, multi-function calls, CFG
+joins, scalar and vector loop state, validation, and executable output while
+keeping the source-to-Core mapping auditable.
 
 ```sh
 deno task zero:grammar
@@ -192,6 +193,7 @@ samples separately.
 | Direct function call        | `call.direct`                                                 |
 | First-class function        | `closure.make` and `call.indirect` with an explicit signature |
 | Persistent collection       | `store.*` operations                                          |
+| Ordered linear-memory SIMD  | `vector.load` and `vector.store` modes                        |
 | Proved unique update        | `store.write` or `store.grow` with `owned-reuse`              |
 | Text or bytes               | Buffer types and canonical buffer/text primitives             |
 | Host effect                 | `host.call` with explicit capability and operation names      |
@@ -208,11 +210,12 @@ runtime consequences and rejects structural contradictions.
 ### Types and computation
 
 - `i32`, `i64`, `f32`, `f64`, and `unit` scalar storage;
-- explicit 128-bit vector and mask types, with exact `f32x4` numeric operations,
-  complete lane-wise `i32x4` arithmetic, bitwise operations, shared-count
-  shifts, signed and unsigned comparisons, min/max, lane operations, typed
-  selection, shuffles, mask reductions, saturating conversions, and useful
-  `i8x16`/`i16x8` packed arithmetic subsets;
+- explicit 128-bit vector and mask types covering the WebAssembly 3.0 register
+  SIMD surface: all six lane shapes, lane operations, comparisons, arithmetic,
+  saturation, widening/narrowing, pairwise and dot products, swizzles,
+  conversions, reductions, and explicitly typed relaxed operations;
+- ordered single-memory vector loads and stores, including widening, splat,
+  zero, and lane forms;
 - products, sums, opaque text and byte buffers, persistent Stores, functions,
   closures, and typed indirect calls;
 - constants, scalar arithmetic/comparison/bitwise/conversion primitives,
@@ -442,11 +445,11 @@ See [`PERFORMANCE.md`](PERFORMANCE.md) for current measurements and
 - Host calls are synchronous and memory32-based.
 - The managed JavaScript boundary cannot carry vector or mask values.
 - `wasm-scalar` rejects all vector and mask types.
-- Core does not yet model linear-memory effects, so `v128.load` and `v128.store`
-  are available in the low-level Wasm builder but not as Core or Zero
-  operations.
-- `i64x2`, `f64x2`, saturating and widening narrow-lane arithmetic, swizzles,
-  horizontal arithmetic reductions, and relaxed SIMD are not implemented.
+- Core SIMD memory currently models one memory32 memory; multi-memory and
+  memory64 are outside that model, and Zero has no surface syntax for memory
+  effects.
+- Relaxed SIMD results are implementation-dependent within WebAssembly's
+  admissible result set; exact targets reject relaxed primitives.
 - GPU acceleration begins after a host-resident Wasm plan unless a consumer
   explicitly uses the resident-column API.
 - Gpupaper validates residual compiler IR; it does not prove a frontend's source

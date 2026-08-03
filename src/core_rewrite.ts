@@ -430,6 +430,9 @@ function rebuildTrustedFlatCore(
     schemaVersion: snapshot.schemaVersion,
     entryFunctionId: snapshot.entryFunctionId,
     moduleFileId: snapshot.moduleFileId,
+    memoryMinimumPages: snapshot.memoryMinimumPages,
+    memoryMaximumPages: snapshot.memoryMaximumPages,
+    memoryExportNameId: snapshot.memoryExportNameId,
 
     stringBytes: snapshot.stringBytes.slice(),
     stringStarts: snapshot.stringStarts.slice(),

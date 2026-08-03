@@ -85,6 +85,32 @@ export type CoreOperationBase = {
   readonly span: CoreSourceSpan;
 };
 
+export type CoreVectorLoadMode =
+  | "128"
+  | "8x8_s"
+  | "8x8_u"
+  | "16x4_s"
+  | "16x4_u"
+  | "32x2_s"
+  | "32x2_u"
+  | "8_splat"
+  | "16_splat"
+  | "32_splat"
+  | "64_splat"
+  | "32_zero"
+  | "64_zero"
+  | "8_lane"
+  | "16_lane"
+  | "32_lane"
+  | "64_lane";
+
+export type CoreVectorStoreMode =
+  | "128"
+  | "8_lane"
+  | "16_lane"
+  | "32_lane"
+  | "64_lane";
+
 export type CoreOperation =
   | (CoreOperationBase & {
     readonly kind: "constant";
@@ -101,6 +127,20 @@ export type CoreOperation =
   | (CoreOperationBase & {
     readonly kind: "vector.shuffle";
     readonly lanes: readonly number[];
+  })
+  | (CoreOperationBase & {
+    readonly kind: "vector.load";
+    readonly mode: CoreVectorLoadMode;
+    readonly alignmentExponent: number;
+    readonly offset: number;
+    readonly lane?: number;
+  })
+  | (CoreOperationBase & {
+    readonly kind: "vector.store";
+    readonly mode: CoreVectorStoreMode;
+    readonly alignmentExponent: number;
+    readonly offset: number;
+    readonly lane?: number;
   })
   | (CoreOperationBase & {
     readonly kind: "product.make";
@@ -228,9 +268,37 @@ export type CoreModule = {
   readonly signatures: readonly CoreSignature[];
   readonly functions: readonly CoreFunction[];
   readonly entryFunction: CoreFunctionId;
+  readonly memory?: {
+    readonly minimumPages: number;
+    readonly maximumPages?: number;
+    readonly exportName?: string;
+  };
 };
 
 export function validateCore(module: CoreModule): void {
+  if (module.memory !== undefined) {
+    const { minimumPages, maximumPages, exportName } = module.memory;
+    if (
+      !Number.isSafeInteger(minimumPages) || minimumPages < 0 ||
+      minimumPages > 65_536
+    ) {
+      throw new RangeError(
+        `Core memory minimum must be in 0..65536 pages; received ${minimumPages}`,
+      );
+    }
+    if (
+      maximumPages !== undefined &&
+      (!Number.isSafeInteger(maximumPages) || maximumPages < minimumPages ||
+        maximumPages > 65_536)
+    ) {
+      throw new RangeError(
+        `Core memory maximum must be in ${minimumPages}..65536 pages; received ${maximumPages}`,
+      );
+    }
+    if (exportName !== undefined && exportName.length === 0) {
+      throw new TypeError("Core memory export name cannot be empty");
+    }
+  }
   for (const [typeId, type] of module.types.entries()) {
     if (type.kind === "store") {
       requireIndex(type.element, module.types.length, "store element type");
@@ -371,6 +439,10 @@ function validateCoreCallOperation(
   operation: CoreOperation,
   valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): void {
+  if (operation.kind === "vector.load" || operation.kind === "vector.store") {
+    validateCoreVectorMemoryOperation(module, function_, operation, valueTypes);
+    return;
+  }
   if (
     operation.kind === "store.empty" || operation.kind === "store.new" ||
     operation.kind === "store.length" || operation.kind === "store.read" ||
@@ -576,6 +648,140 @@ function validateCoreCallOperation(
   }
 }
 
+function validateCoreVectorMemoryOperation(
+  module: CoreModule,
+  function_: CoreFunction,
+  operation: Extract<
+    CoreOperation,
+    { readonly kind: "vector.load" | "vector.store" }
+  >,
+  valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
+): void {
+  if (module.memory === undefined) {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} requires a declared linear memory`,
+    );
+  }
+  if (
+    !Number.isSafeInteger(operation.offset) || operation.offset < 0 ||
+    operation.offset > 0xffff_ffff
+  ) {
+    throw new RangeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} has invalid offset ${operation.offset}`,
+    );
+  }
+  const laneBits = operation.mode.endsWith("_lane")
+    ? Number(operation.mode.slice(0, operation.mode.indexOf("_")))
+    : undefined;
+  const naturalAlignmentExponent = operation.mode === "128"
+    ? 4
+    : operation.mode.startsWith("8x8") ||
+        operation.mode.startsWith("16x4") ||
+        operation.mode.startsWith("32x2")
+    ? 3
+    : operation.mode.startsWith("8")
+    ? 0
+    : operation.mode.startsWith("16")
+    ? 1
+    : operation.mode.startsWith("32")
+    ? 2
+    : 3;
+  if (
+    !Number.isSafeInteger(operation.alignmentExponent) ||
+    operation.alignmentExponent < 0 ||
+    operation.alignmentExponent > naturalAlignmentExponent
+  ) {
+    throw new RangeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} alignment ${operation.alignmentExponent} exceeds natural exponent ${naturalAlignmentExponent}`,
+    );
+  }
+  const expectedOperands = laneBits === undefined
+    ? operation.kind === "vector.load" ? 1 : 2
+    : 2;
+  requireCoreOperationOperands(function_, operation, expectedOperands);
+  const addressType = module.types[
+    requiredCoreValueType(valueTypes, function_, operation.operands[0])
+  ];
+  if (addressType.kind !== "scalar" || addressType.scalar !== "i32") {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} has a non-i32 address`,
+    );
+  }
+  const vectorTypeId = operation.kind === "vector.load"
+    ? operation.type
+    : requiredCoreValueType(valueTypes, function_, operation.operands[1]);
+  const vectorType = module.types[vectorTypeId];
+  if (vectorType.kind !== "vector") {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} has non-vector type ${vectorTypeId}`,
+    );
+  }
+  if (operation.kind === "vector.store") {
+    requireCoreUnitType(module, operation.type, operation.kind);
+  } else if (laneBits !== undefined) {
+    const sourceType = requiredCoreValueType(
+      valueTypes,
+      function_,
+      operation.operands[1],
+    );
+    if (sourceType !== operation.type) {
+      throw new TypeError(
+        `Core vector.load ${function_.name}:${operation.result} changes lane source type ${sourceType} to ${operation.type}`,
+      );
+    }
+  }
+  if (laneBits !== undefined) {
+    const elementBits = vectorType.element === "i8"
+      ? 8
+      : vectorType.element === "i16"
+      ? 16
+      : vectorType.element === "i32" || vectorType.element === "f32"
+      ? 32
+      : 64;
+    if (elementBits !== laneBits) {
+      throw new TypeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} ${operation.mode} cannot address ${vectorType.element} lanes`,
+      );
+    }
+    if (
+      operation.lane === undefined || !Number.isSafeInteger(operation.lane) ||
+      operation.lane < 0 || operation.lane >= vectorType.lanes
+    ) {
+      throw new RangeError(
+        `Core ${operation.kind} ${function_.name}:${operation.result} has invalid ${vectorType.element} lane ${operation.lane}`,
+      );
+    }
+    return;
+  }
+  if (operation.lane !== undefined) {
+    throw new TypeError(
+      `Core ${operation.kind} ${function_.name}:${operation.result} ${operation.mode} cannot carry lane ${operation.lane}`,
+    );
+  }
+  const expectedShapes = operation.mode.startsWith("8_splat")
+    ? ["i8x16"]
+    : operation.mode.startsWith("16_splat") || operation.mode.startsWith("8x8")
+    ? ["i16x8"]
+    : operation.mode.startsWith("16x4")
+    ? ["i32x4"]
+    : operation.mode.startsWith("32x2")
+    ? ["i64x2"]
+    : operation.mode.startsWith("32_splat") || operation.mode === "32_zero"
+    ? ["i32x4", "f32x4"]
+    : operation.mode.startsWith("64_splat") || operation.mode === "64_zero"
+    ? ["i64x2", "f64x2"]
+    : undefined;
+  const actualShape = `${vectorType.element}x${vectorType.lanes}`;
+  if (expectedShapes === undefined || expectedShapes.includes(actualShape)) {
+    return;
+  }
+  throw new TypeError(
+    `Core ${operation.kind} ${function_.name}:${operation.result} ${operation.mode} returns ${
+      expectedShapes.join(" or ")
+    }, not ${actualShape}`,
+  );
+}
+
 function sameCoreRuntimeRepresentation(
   module: CoreModule,
   left: CoreTypeId,
@@ -691,6 +897,191 @@ function validateCoreSimdPrimitive(
   operation: Extract<CoreOperation, { readonly kind: "primitive" }>,
   valueTypes: ReadonlyMap<CoreValueId, CoreTypeId>,
 ): boolean {
+  if (operation.primitiveId >= PrimitiveId.i8x16Make) {
+    type SimdTypeName =
+      | "i32"
+      | "i64"
+      | "f32"
+      | "f64"
+      | "i8x16"
+      | "i8x16-mask"
+      | "i16x8"
+      | "i16x8-mask"
+      | "i32x4"
+      | "i32x4-mask"
+      | "i64x2"
+      | "i64x2-mask"
+      | "f32x4"
+      | "f32x4-mask"
+      | "f64x2"
+      | "f64x2-mask";
+    const simdTypeName = (typeId: CoreTypeId): SimdTypeName | undefined => {
+      const type = module.types[typeId];
+      if (type.kind === "scalar") {
+        return type.scalar === "unit" ? undefined : type.scalar;
+      }
+      if (type.kind !== "vector" && type.kind !== "mask") return undefined;
+      const shape = `${type.element}x${type.lanes}`;
+      if (
+        shape !== "i8x16" && shape !== "i16x8" && shape !== "i32x4" &&
+        shape !== "i64x2" && shape !== "f32x4" && shape !== "f64x2"
+      ) return undefined;
+      return (type.kind === "mask" ? `${shape}-mask` : shape) as SimdTypeName;
+    };
+    const actualOperands = operation.operands.map((operand) =>
+      simdTypeName(requiredCoreValueType(valueTypes, function_, operand))
+    );
+    const actualResult = simdTypeName(operation.type);
+    const id = operation.primitiveId;
+    let expectedOperands: readonly SimdTypeName[] | undefined;
+    let expectedResult: SimdTypeName | undefined;
+    const signature = (
+      operands: readonly SimdTypeName[],
+      result: SimdTypeName,
+    ): void => {
+      expectedOperands = operands;
+      expectedResult = result;
+    };
+
+    if (id === PrimitiveId.i8x16Make) signature(Array(16).fill("i32"), "i8x16");
+    else if (id <= PrimitiveId.i8x16ExtractLaneUnsigned15) {
+      signature(["i8x16"], "i32");
+    } else if (id <= PrimitiveId.i8x16ReplaceLane15) {
+      signature(["i8x16", "i32"], "i8x16");
+    } else if (id <= PrimitiveId.i8x16AndNot) {
+      signature(["i8x16", "i8x16"], "i8x16");
+    } else if (id <= PrimitiveId.i8x16GreaterThanOrEqualUnsigned) {
+      signature(["i8x16", "i8x16"], "i8x16-mask");
+    } else if (id <= PrimitiveId.i8x16PopulationCount) {
+      signature(["i8x16"], "i8x16");
+    } else if (id <= PrimitiveId.i8x16NarrowI16x8Unsigned) {
+      signature(["i16x8", "i16x8"], "i8x16");
+    } else if (id <= PrimitiveId.i8x16AverageUnsigned) {
+      signature(["i8x16", "i8x16"], "i8x16");
+    } else if (id === PrimitiveId.i16x8Make) {
+      signature(Array(8).fill("i32"), "i16x8");
+    } else if (id <= PrimitiveId.i16x8ExtractLaneUnsigned7) {
+      signature(["i16x8"], "i32");
+    } else if (id <= PrimitiveId.i16x8ReplaceLane7) {
+      signature(["i16x8", "i32"], "i16x8");
+    } else if (id === PrimitiveId.i16x8AndNot) {
+      signature(["i16x8", "i16x8"], "i16x8");
+    } else if (id <= PrimitiveId.i16x8GreaterThanOrEqualUnsigned) {
+      signature(["i16x8", "i16x8"], "i16x8-mask");
+    } else if (id <= PrimitiveId.i16x8Q15MultiplyRoundSaturateSigned) {
+      signature(
+        id <= PrimitiveId.i16x8Negate ? ["i16x8"] : ["i16x8", "i16x8"],
+        "i16x8",
+      );
+    } else if (id <= PrimitiveId.i16x8NarrowI32x4Unsigned) {
+      signature(["i32x4", "i32x4"], "i16x8");
+    } else if (id <= PrimitiveId.i16x8ExtendHighI8x16Unsigned) {
+      signature(["i8x16"], "i16x8");
+    } else if (id <= PrimitiveId.i16x8AverageUnsigned) {
+      signature(["i16x8", "i16x8"], "i16x8");
+    } else if (id <= PrimitiveId.i16x8ExtendedMultiplyHighI8x16Unsigned) {
+      signature(["i8x16", "i8x16"], "i16x8");
+    } else if (id <= PrimitiveId.i16x8ExtendedAddPairwiseI8x16Unsigned) {
+      signature(["i8x16"], "i16x8");
+    } else if (id === PrimitiveId.i32x4AndNot) {
+      signature(["i32x4", "i32x4"], "i32x4");
+    } else if (id <= PrimitiveId.i32x4Negate) signature(["i32x4"], "i32x4");
+    else if (id <= PrimitiveId.i32x4ExtendHighI16x8Unsigned) {
+      signature(["i16x8"], "i32x4");
+    } else if (id <= PrimitiveId.i32x4ExtendedMultiplyHighI16x8Unsigned) {
+      signature(["i16x8", "i16x8"], "i32x4");
+    } else if (id <= PrimitiveId.i32x4ExtendedAddPairwiseI16x8Unsigned) {
+      signature(["i16x8"], "i32x4");
+    } else if (id === PrimitiveId.i64x2Make) signature(["i64", "i64"], "i64x2");
+    else if (id === PrimitiveId.i64x2Splat) signature(["i64"], "i64x2");
+    else if (id <= PrimitiveId.i64x2ExtractLane1) signature(["i64x2"], "i64");
+    else if (id <= PrimitiveId.i64x2ReplaceLane1) {
+      signature(["i64x2", "i64"], "i64x2");
+    } else if (id <= PrimitiveId.i64x2Xor) {
+      signature(["i64x2", "i64x2"], "i64x2");
+    } else if (id === PrimitiveId.i64x2Not) signature(["i64x2"], "i64x2");
+    else if (id === PrimitiveId.i64x2AndNot) {
+      signature(["i64x2", "i64x2"], "i64x2");
+    } else if (id <= PrimitiveId.i64x2ShiftRightUnsigned) {
+      signature(["i64x2", "i32"], "i64x2");
+    } else if (id <= PrimitiveId.i64x2GreaterThanOrEqualSigned) {
+      signature(["i64x2", "i64x2"], "i64x2-mask");
+    } else if (id === PrimitiveId.i64x2Select) {
+      signature(["i64x2-mask", "i64x2", "i64x2"], "i64x2");
+    } else if (id <= PrimitiveId.i64x2MaskAnyTrue) {
+      signature(["i64x2-mask"], "i32");
+    } else if (id <= PrimitiveId.i64x2Negate) signature(["i64x2"], "i64x2");
+    else if (id <= PrimitiveId.i64x2ExtendHighI32x4Unsigned) {
+      signature(["i32x4"], "i64x2");
+    } else if (id <= PrimitiveId.i64x2ExtendedMultiplyHighI32x4Unsigned) {
+      signature(["i32x4", "i32x4"], "i64x2");
+    } else if (id === PrimitiveId.f64x2Make) signature(["f64", "f64"], "f64x2");
+    else if (id === PrimitiveId.f64x2Splat) signature(["f64"], "f64x2");
+    else if (id <= PrimitiveId.f64x2ExtractLane1) signature(["f64x2"], "f64");
+    else if (id <= PrimitiveId.f64x2ReplaceLane1) {
+      signature(["f64x2", "f64"], "f64x2");
+    } else if (id <= PrimitiveId.f64x2Divide) {
+      signature(["f64x2", "f64x2"], "f64x2");
+    } else if (id <= PrimitiveId.f64x2GreaterThanOrEqual) {
+      signature(["f64x2", "f64x2"], "f64x2-mask");
+    } else if (id === PrimitiveId.f64x2Select) {
+      signature(["f64x2-mask", "f64x2", "f64x2"], "f64x2");
+    } else if (id <= PrimitiveId.f64x2MaskAnyTrue) {
+      signature(["f64x2-mask"], "i32");
+    } else if (id <= PrimitiveId.f64x2Nearest) signature(["f64x2"], "f64x2");
+    else if (id <= PrimitiveId.f64x2PseudoMaximum) {
+      signature(["f64x2", "f64x2"], "f64x2");
+    } else if (id === PrimitiveId.f64x2PromoteLowF32x4) {
+      signature(["f32x4"], "f64x2");
+    } else if (id === PrimitiveId.f32x4DemoteF64x2Zero) {
+      signature(["f64x2"], "f32x4");
+    } else if (id <= PrimitiveId.i32x4TruncateSaturateF64x2UnsignedZero) {
+      signature(["f64x2"], "i32x4");
+    } else if (id <= PrimitiveId.f64x2ConvertLowI32x4Unsigned) {
+      signature(["i32x4"], "f64x2");
+    } else if (id === PrimitiveId.i8x16RelaxedSwizzle) {
+      signature(["i8x16", "i8x16"], "i8x16");
+    } else if (id <= PrimitiveId.i32x4RelaxedTruncateF32x4Unsigned) {
+      signature(["f32x4"], "i32x4");
+    } else if (id <= PrimitiveId.i32x4RelaxedTruncateF64x2UnsignedZero) {
+      signature(["f64x2"], "i32x4");
+    } else if (id <= PrimitiveId.f32x4RelaxedNegativeMultiplyAdd) {
+      signature(["f32x4", "f32x4", "f32x4"], "f32x4");
+    } else if (id <= PrimitiveId.f64x2RelaxedNegativeMultiplyAdd) {
+      signature(["f64x2", "f64x2", "f64x2"], "f64x2");
+    } else if (id === PrimitiveId.i8x16RelaxedLaneSelect) {
+      signature(["i8x16-mask", "i8x16", "i8x16"], "i8x16");
+    } else if (id === PrimitiveId.i16x8RelaxedLaneSelect) {
+      signature(["i16x8-mask", "i16x8", "i16x8"], "i16x8");
+    } else if (id === PrimitiveId.i32x4RelaxedLaneSelect) {
+      signature(["i32x4-mask", "i32x4", "i32x4"], "i32x4");
+    } else if (id === PrimitiveId.i64x2RelaxedLaneSelect) {
+      signature(["i64x2-mask", "i64x2", "i64x2"], "i64x2");
+    } else if (id <= PrimitiveId.f32x4RelaxedMaximum) {
+      signature(["f32x4", "f32x4"], "f32x4");
+    } else if (id <= PrimitiveId.f64x2RelaxedMaximum) {
+      signature(["f64x2", "f64x2"], "f64x2");
+    } else if (id === PrimitiveId.i16x8RelaxedQ15MultiplyRoundSigned) {
+      signature(["i16x8", "i16x8"], "i16x8");
+    } else if (id === PrimitiveId.i16x8RelaxedDotI8x16I7x16Signed) {
+      signature(["i8x16", "i8x16"], "i16x8");
+    } else if (id === PrimitiveId.i32x4RelaxedDotI8x16I7x16AddSigned) {
+      signature(["i8x16", "i8x16", "i32x4"], "i32x4");
+    }
+
+    const valid = expectedOperands !== undefined &&
+      actualResult === expectedResult &&
+      actualOperands.length === expectedOperands.length &&
+      actualOperands.every((type, index) => type === expectedOperands?.[index]);
+    if (!valid) {
+      throw new TypeError(
+        `Core SIMD primitive ${
+          primitiveDescriptor(id).name
+        } ${function_.name}:${operation.result} has an invalid signature`,
+      );
+    }
+    return true;
+  }
   const f32ExtractIds = [
     PrimitiveId.f32x4ExtractLane0,
     PrimitiveId.f32x4ExtractLane1,

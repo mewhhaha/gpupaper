@@ -17,12 +17,15 @@ import {
 import { type CoreLayout, planCoreLayouts } from "./core_layout.ts";
 import type { PrimitiveId } from "./core_primitives.ts";
 
-export const flatCoreSchemaVersion = 4 as const;
+export const flatCoreSchemaVersion = 5 as const;
 
 export type FlatCore = {
   readonly schemaVersion: typeof flatCoreSchemaVersion;
   readonly entryFunctionId: number;
   readonly moduleFileId: number;
+  readonly memoryMinimumPages: number;
+  readonly memoryMaximumPages: number;
+  readonly memoryExportNameId: number;
 
   readonly stringBytes: Uint8Array;
   readonly stringStarts: Uint32Array;
@@ -142,6 +145,8 @@ const operationKinds = [
   "scalar.binary",
   "primitive",
   "vector.shuffle",
+  "vector.load",
+  "vector.store",
   "product.make",
   "product.project",
   "product.update",
@@ -170,6 +175,32 @@ const operationKinds = [
   "region.enter",
   "region.allocate",
   "region.exit",
+] as const;
+const vectorLoadModes = [
+  "128",
+  "8x8_s",
+  "8x8_u",
+  "16x4_s",
+  "16x4_u",
+  "32x2_s",
+  "32x2_u",
+  "8_splat",
+  "16_splat",
+  "32_splat",
+  "64_splat",
+  "32_zero",
+  "64_zero",
+  "8_lane",
+  "16_lane",
+  "32_lane",
+  "64_lane",
+] as const;
+const vectorStoreModes = [
+  "128",
+  "8_lane",
+  "16_lane",
+  "32_lane",
+  "64_lane",
 ] as const;
 const binaryOperators: readonly CoreBinaryOperator[] = [
   "+",
@@ -500,6 +531,11 @@ export function flattenCore(
     schemaVersion: flatCoreSchemaVersion,
     entryFunctionId: module.entryFunction,
     moduleFileId: requiredStringId(stringIds, module.file),
+    memoryMinimumPages: module.memory?.minimumPages ?? absent,
+    memoryMaximumPages: module.memory?.maximumPages ?? absent,
+    memoryExportNameId: module.memory?.exportName === undefined
+      ? absent
+      : requiredStringId(stringIds, module.memory.exportName),
     stringBytes: encodedStrings.bytes,
     stringStarts: new Uint32Array(encodedStrings.starts),
     stringLengths: new Uint32Array(encodedStrings.lengths),
@@ -765,6 +801,30 @@ function validateFlatStructure(
 
   const strings = decodeStrings(package_);
   requireIndex(package_.moduleFileId, strings.length, "module file string");
+  if (package_.memoryMinimumPages === absent) {
+    if (
+      package_.memoryMaximumPages !== absent ||
+      package_.memoryExportNameId !== absent
+    ) {
+      throw new TypeError("flat Core memory metadata exists without a minimum");
+    }
+  } else {
+    if (
+      package_.memoryMaximumPages !== absent &&
+      package_.memoryMaximumPages < package_.memoryMinimumPages
+    ) {
+      throw new RangeError(
+        `flat Core memory maximum ${package_.memoryMaximumPages} is below minimum ${package_.memoryMinimumPages}`,
+      );
+    }
+    if (package_.memoryExportNameId !== absent) {
+      requireIndex(
+        package_.memoryExportNameId,
+        strings.length,
+        "memory export name",
+      );
+    }
+  }
   const sourceLocations = Array.from(
     package_.sourceLocationFileIds,
     (fileId, index) => {
@@ -1374,6 +1434,15 @@ function inflateValidatedFlatCore(
     signatures,
     functions,
     entryFunction: package_.entryFunctionId as CoreFunctionId,
+    memory: package_.memoryMinimumPages === absent ? undefined : {
+      minimumPages: package_.memoryMinimumPages,
+      maximumPages: package_.memoryMaximumPages === absent
+        ? undefined
+        : package_.memoryMaximumPages,
+      exportName: package_.memoryExportNameId === absent
+        ? undefined
+        : tables.strings[package_.memoryExportNameId],
+    },
   };
 }
 
@@ -1433,6 +1502,25 @@ function inflateOperation(
       return { ...base, kind, primitiveId: attributes[0] as PrimitiveId };
     case "vector.shuffle":
       return { ...base, kind, lanes: attributes as number[] };
+    case "vector.load":
+    case "vector.store": {
+      requireAttributeCount(kind, attributes, 4);
+      const modes = kind === "vector.load" ? vectorLoadModes : vectorStoreModes;
+      const mode = modes[attributes[0] as number];
+      if (mode === undefined) {
+        throw new TypeError(
+          `flat Core ${kind} has unknown mode ${attributes[0]}`,
+        );
+      }
+      return {
+        ...base,
+        kind,
+        mode: mode as never,
+        alignmentExponent: attributes[1] as number,
+        offset: attributes[2] as number,
+        lane: attributes[3] === absent ? undefined : attributes[3] as number,
+      } as CoreOperation;
+    }
     case "product.project":
       requireAttributeCount(kind, attributes, 1);
       return { ...base, kind, index: attributes[0] as number };
@@ -1613,6 +1701,19 @@ function appendOperationAttributes(
     case "vector.shuffle":
       operation.lanes.forEach(pushUnsigned);
       return;
+    case "vector.load":
+    case "vector.store":
+      pushUnsigned(
+        requiredKindId(
+          operation.kind === "vector.load" ? vectorLoadModes : vectorStoreModes,
+          operation.mode as never,
+          `${operation.kind} mode`,
+        ),
+      );
+      pushUnsigned(operation.alignmentExponent);
+      pushUnsigned(operation.offset);
+      pushUnsigned(operation.lane ?? absent);
+      return;
     case "product.project":
       pushUnsigned(operation.index);
       return;
@@ -1744,6 +1845,9 @@ function terminatorEdges(
 
 function collectStrings(module: CoreModule): readonly string[] {
   const strings = new Set<string>([module.file]);
+  if (module.memory?.exportName !== undefined) {
+    strings.add(module.memory.exportName);
+  }
   const addSpan = (span: CoreSourceSpan): void => {
     strings.add(span.file);
   };

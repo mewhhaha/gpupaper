@@ -1,0 +1,14 @@
+export: run seed rounds =
+  @seed i32x4.splat 0 i32x4.splat i32x4.lt_s
+  @seed i32x4.splat @rounds i32x4.splat i32x4.relaxed_laneselect
+  i32x4.extract_lane_0 let:selected
+  1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 i8x16.make
+  15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 i8x16.make
+  i8x16.relaxed_swizzle
+  1 i8x16.splat i16x8.relaxed_dot_i8x16_i7x16_s
+  i16x8.extract_lane_s_0
+  2 i32x4.splat f32x4.convert_i32x4_s
+  3 i32x4.splat f32x4.convert_i32x4_s
+  4 i32x4.splat f32x4.convert_i32x4_s
+  f32x4.relaxed_madd i32x4.relaxed_trunc_f32x4_s i32x4.extract_lane_0 +
+  @selected + ;

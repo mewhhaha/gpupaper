@@ -141,6 +141,29 @@ Deno.test("Zero i32x4 modules require the SIMD target", async () => {
   );
 });
 
+Deno.test("Zero relaxed SIMD modules require the relaxed target", async () => {
+  const workload = zeroWorkloads.find((candidate) =>
+    candidate.name === "39-relaxed-simd"
+  );
+  if (workload === undefined) {
+    throw new Error("Zero workload 39-relaxed-simd is missing");
+  }
+  const source = await Deno.readTextFile(workload.zeroSourceUrl);
+  const compiled = await compileZeroSource(
+    workload.zeroSourceUrl.pathname,
+    source,
+  );
+  await assertRejects(
+    () => {
+      lowerCoreToWasm(compiled.core, {
+        emission: "planOnly",
+        target: "wasm-simd128",
+      });
+    },
+    /target wasm-simd128 cannot lower relaxed SIMD primitive/,
+  );
+});
+
 Deno.test("Zero i32x4 primitives reject scalar operands", async () => {
   await assertRejects(
     () =>

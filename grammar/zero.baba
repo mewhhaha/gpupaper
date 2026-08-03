@@ -1,7 +1,7 @@
 token VISIBILITY = /export:|private:/ ;
-token ASSIGN = /=>i8x16|=>i16x8|=>i32x4|=>f32x4|=>|=/ ;
-token IDENT = /[A-Za-z_][A-Za-z0-9_]*(\[(i8x16|i16x8|i32x4|f32x4)])?/ ;
-token INSTRUCTION = /(i8x16|i16x8|i32x4|f32x4)\.[A-Za-z0-9_:,]+|@[A-Za-z_][A-Za-z0-9_]*|let:[A-Za-z_][A-Za-z0-9_]*|call:[A-Za-z_][A-Za-z0-9_]*:[0-9]+|repeat:[A-Za-z_][A-Za-z0-9_]*|select!|[0-9]+|==|!=|<=|>=|[+*\/%<>-]/ ;
+token ASSIGN = /=>i8x16|=>i16x8|=>i32x4|=>i64x2|=>f32x4|=>f64x2|=>i64|=>f32|=>f64|=>|=/ ;
+token IDENT = /[A-Za-z_][A-Za-z0-9_]*(\[(i32|i64|f32|f64|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)])?/ ;
+token INSTRUCTION = /(i32|i64|f32|f64|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)\.[A-Za-z0-9_:,]+|@[A-Za-z_][A-Za-z0-9_]*|let:[A-Za-z_][A-Za-z0-9_]*|call:[A-Za-z_][A-Za-z0-9_]*:[0-9]+|repeat:[A-Za-z_][A-Za-z0-9_]*|select!|[0-9]+|==|!=|<=|>=|[+*\/%<>-]/ ;
 skip WS = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\n]*/ ;
 

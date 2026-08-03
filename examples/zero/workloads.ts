@@ -193,6 +193,21 @@ export const zeroWorkloads: readonly ZeroWorkload[] = [
     "eight packed i16 affine recurrences",
     packedRecurrenceSimdReference,
   ),
+  workload(
+    "37-byte-mixer-simd",
+    "saturating byte mixing with dynamic swizzle and population count",
+    byteMixerSimdReference,
+  ),
+  workload(
+    "38-widening-dot-simd",
+    "widening signed dot products consumed through i64x2 and f64x2",
+    wideningDotSimdReference,
+  ),
+  workload(
+    "39-relaxed-simd",
+    "relaxed lane selection, swizzle, dot product, and multiply-add",
+    relaxedSimdReference,
+  ),
 ];
 
 function workload(
@@ -531,4 +546,40 @@ function packedRecurrenceSimdReference(seed: number, rounds: number): number {
     (mask, value, lane) => mask | (value < 0 ? 1 << lane : 0),
     0,
   );
+}
+
+function byteMixerSimdReference(seed: number, rounds: number): number {
+  let bytes = Array.from({ length: 16 }, (_, lane) => (seed + lane) & 0xff);
+  for (let remaining = rounds; remaining > 0; remaining -= 1) {
+    const previous = bytes;
+    bytes = previous.map((_, lane) => {
+      const saturated = Math.min(255, previous[15 - lane]! + 17);
+      let population = saturated;
+      population = population - ((population >>> 1) & 0x55);
+      population = (population & 0x33) + ((population >>> 2) & 0x33);
+      return (population + (population >>> 4)) & 0x0f;
+    });
+  }
+  return bytes[0]!;
+}
+
+function wideningDotSimdReference(seed: number, rounds: number): number {
+  const signedByte = (value: number): number => (value << 24) >> 24;
+  const bytes = [
+    seed,
+    seed + 1,
+    seed + 2,
+    seed + 3,
+    rounds,
+    rounds + 1,
+    rounds + 2,
+    rounds + 3,
+  ].map(signedByte);
+  const first = bytes[0]! + 2 * bytes[1]!;
+  const second = 3 * bytes[2]! + 4 * bytes[3]!;
+  return (Math.abs(first) + Math.abs(second)) | 0;
+}
+
+function relaxedSimdReference(seed: number, rounds: number): number {
+  return ((seed < 0 ? seed : rounds) + 41) | 0;
 }

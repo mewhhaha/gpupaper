@@ -55,6 +55,13 @@ const i8x16 = 5 as CoreTypeId;
 const i8x16Mask = 6 as CoreTypeId;
 const i16x8 = 7 as CoreTypeId;
 const i16x8Mask = 8 as CoreTypeId;
+const f32 = 9 as CoreTypeId;
+const i64 = 10 as CoreTypeId;
+const f64 = 11 as CoreTypeId;
+const i64x2 = 12 as CoreTypeId;
+const i64x2Mask = 13 as CoreTypeId;
+const f64x2 = 14 as CoreTypeId;
+const f64x2Mask = 15 as CoreTypeId;
 
 type ZeroType =
   | "i32"
@@ -65,7 +72,14 @@ type ZeroType =
   | "i8x16"
   | "i8x16-mask"
   | "i16x8"
-  | "i16x8-mask";
+  | "i16x8-mask"
+  | "f32"
+  | "i64"
+  | "f64"
+  | "i64x2"
+  | "i64x2-mask"
+  | "f64x2"
+  | "f64x2-mask";
 
 type SourceSpan = {
   readonly file: string;
@@ -116,6 +130,15 @@ type ZeroPrimitiveInstruction = {
   readonly resultType: ZeroType;
 };
 
+function primitiveInstruction(
+  name: string,
+  primitiveId: PrimitiveId,
+  operandTypes: readonly ZeroType[],
+  resultType: ZeroType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [name, { primitiveId, operandTypes, resultType }];
+}
+
 function unaryPrimitive(
   name: string,
   primitiveId: PrimitiveId,
@@ -160,6 +183,22 @@ function selectPrimitive(
       primitiveId,
       operandTypes: [maskType, vectorType, vectorType],
       resultType: vectorType,
+    },
+  ];
+}
+
+function ternaryPrimitive(
+  name: string,
+  primitiveId: PrimitiveId,
+  operandType: ZeroType,
+  resultType: ZeroType = operandType,
+): readonly [string, ZeroPrimitiveInstruction] {
+  return [
+    name,
+    {
+      primitiveId,
+      operandTypes: [operandType, operandType, operandType],
+      resultType,
     },
   ];
 }
@@ -528,6 +567,556 @@ const zeroPrimitiveInstructions = new Map<string, ZeroPrimitiveInstruction>([
     "i16x8-mask",
     "i32",
   ),
+  primitiveInstruction("i64.extend_i32_s", PrimitiveId.i64ExtendI32Signed, [
+    "i32",
+  ], "i64"),
+  primitiveInstruction("i64.extend_i32_u", PrimitiveId.i64ExtendI32Unsigned, [
+    "i32",
+  ], "i64"),
+  primitiveInstruction("i32.wrap_i64", PrimitiveId.i32WrapI64, ["i64"], "i32"),
+  primitiveInstruction(
+    "f32.convert_i32_s",
+    PrimitiveId.f32FromI32,
+    ["i32"],
+    "f32",
+  ),
+  primitiveInstruction(
+    "i32.trunc_f32_s",
+    PrimitiveId.i32FromF32,
+    ["f32"],
+    "i32",
+  ),
+  primitiveInstruction(
+    "f64.convert_i32_s",
+    PrimitiveId.f64FromI32,
+    ["i32"],
+    "f64",
+  ),
+  primitiveInstruction(
+    "i32.trunc_f64_s",
+    PrimitiveId.i32FromF64,
+    ["f64"],
+    "i32",
+  ),
+  primitiveInstruction("f32x4.make", PrimitiveId.f32x4Make, [
+    "f32",
+    "f32",
+    "f32",
+    "f32",
+  ], "f32x4"),
+  unaryPrimitive("f32x4.splat", PrimitiveId.f32x4Splat, "f32", "f32x4"),
+  ...[0, 1, 2, 3].map((lane) =>
+    primitiveInstruction(
+      `f32x4.extract_lane_${lane}`,
+      (PrimitiveId.f32x4ExtractLane0 + lane) as PrimitiveId,
+      ["f32x4"],
+      "f32",
+    )
+  ),
+  ...[0, 1, 2, 3].map((lane) =>
+    primitiveInstruction(
+      `f32x4.replace_lane_${lane}`,
+      (PrimitiveId.f32x4ReplaceLane0 + lane) as PrimitiveId,
+      ["f32x4", "f32"],
+      "f32x4",
+    )
+  ),
+  primitiveInstruction(
+    "i8x16.make",
+    PrimitiveId.i8x16Make,
+    Array(16).fill("i32"),
+    "i8x16",
+  ),
+  ...Array.from({ length: 16 }, (_, lane) =>
+    primitiveInstruction(
+      `i8x16.extract_lane_s_${lane}`,
+      (PrimitiveId.i8x16ExtractLaneSigned0 + lane) as PrimitiveId,
+      ["i8x16"],
+      "i32",
+    )),
+  ...Array.from({ length: 16 }, (_, lane) =>
+    primitiveInstruction(
+      `i8x16.extract_lane_u_${lane}`,
+      (PrimitiveId.i8x16ExtractLaneUnsigned0 + lane) as PrimitiveId,
+      ["i8x16"],
+      "i32",
+    )),
+  ...Array.from({ length: 16 }, (_, lane) =>
+    primitiveInstruction(
+      `i8x16.replace_lane_${lane}`,
+      (PrimitiveId.i8x16ReplaceLane0 + lane) as PrimitiveId,
+      ["i8x16", "i32"],
+      "i8x16",
+    )),
+  binaryPrimitive("i8x16.swizzle", PrimitiveId.i8x16Swizzle, "i8x16"),
+  ...[
+    ["andnot", PrimitiveId.i8x16AndNot],
+    ["add_sat_s", PrimitiveId.i8x16AddSaturateSigned],
+    ["add_sat_u", PrimitiveId.i8x16AddSaturateUnsigned],
+    ["sub_sat_s", PrimitiveId.i8x16SubtractSaturateSigned],
+    ["sub_sat_u", PrimitiveId.i8x16SubtractSaturateUnsigned],
+    ["avgr_u", PrimitiveId.i8x16AverageUnsigned],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i8x16.${name}`, id as PrimitiveId, "i8x16")
+  ),
+  ...[
+    ["ne", PrimitiveId.i8x16NotEqual],
+    ["gt_s", PrimitiveId.i8x16GreaterThanSigned],
+    ["gt_u", PrimitiveId.i8x16GreaterThanUnsigned],
+    ["le_s", PrimitiveId.i8x16LessThanOrEqualSigned],
+    ["le_u", PrimitiveId.i8x16LessThanOrEqualUnsigned],
+    ["ge_s", PrimitiveId.i8x16GreaterThanOrEqualSigned],
+    ["ge_u", PrimitiveId.i8x16GreaterThanOrEqualUnsigned],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i8x16.${name}`, id as PrimitiveId, "i8x16", "i8x16-mask")
+  ),
+  ...[
+    ["abs", PrimitiveId.i8x16Absolute],
+    ["neg", PrimitiveId.i8x16Negate],
+    ["popcnt", PrimitiveId.i8x16PopulationCount],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i8x16.${name}`, id as PrimitiveId, "i8x16", "i8x16")
+  ),
+  primitiveInstruction(
+    "i8x16.narrow_i16x8_s",
+    PrimitiveId.i8x16NarrowI16x8Signed,
+    ["i16x8", "i16x8"],
+    "i8x16",
+  ),
+  primitiveInstruction(
+    "i8x16.narrow_i16x8_u",
+    PrimitiveId.i8x16NarrowI16x8Unsigned,
+    ["i16x8", "i16x8"],
+    "i8x16",
+  ),
+  primitiveInstruction(
+    "i16x8.make",
+    PrimitiveId.i16x8Make,
+    Array(8).fill("i32"),
+    "i16x8",
+  ),
+  ...Array.from({ length: 8 }, (_, lane) =>
+    primitiveInstruction(
+      `i16x8.extract_lane_s_${lane}`,
+      (PrimitiveId.i16x8ExtractLaneSigned0 + lane) as PrimitiveId,
+      ["i16x8"],
+      "i32",
+    )),
+  ...Array.from({ length: 8 }, (_, lane) =>
+    primitiveInstruction(
+      `i16x8.extract_lane_u_${lane}`,
+      (PrimitiveId.i16x8ExtractLaneUnsigned0 + lane) as PrimitiveId,
+      ["i16x8"],
+      "i32",
+    )),
+  ...Array.from({ length: 8 }, (_, lane) =>
+    primitiveInstruction(
+      `i16x8.replace_lane_${lane}`,
+      (PrimitiveId.i16x8ReplaceLane0 + lane) as PrimitiveId,
+      ["i16x8", "i32"],
+      "i16x8",
+    )),
+  ...[
+    ["andnot", PrimitiveId.i16x8AndNot],
+    ["q15mulr_sat_s", PrimitiveId.i16x8Q15MultiplyRoundSaturateSigned],
+    ["add_sat_s", PrimitiveId.i16x8AddSaturateSigned],
+    ["add_sat_u", PrimitiveId.i16x8AddSaturateUnsigned],
+    ["sub_sat_s", PrimitiveId.i16x8SubtractSaturateSigned],
+    ["sub_sat_u", PrimitiveId.i16x8SubtractSaturateUnsigned],
+    ["avgr_u", PrimitiveId.i16x8AverageUnsigned],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i16x8.${name}`, id as PrimitiveId, "i16x8")
+  ),
+  ...[
+    ["ne", PrimitiveId.i16x8NotEqual],
+    ["gt_s", PrimitiveId.i16x8GreaterThanSigned],
+    ["gt_u", PrimitiveId.i16x8GreaterThanUnsigned],
+    ["le_s", PrimitiveId.i16x8LessThanOrEqualSigned],
+    ["le_u", PrimitiveId.i16x8LessThanOrEqualUnsigned],
+    ["ge_s", PrimitiveId.i16x8GreaterThanOrEqualSigned],
+    ["ge_u", PrimitiveId.i16x8GreaterThanOrEqualUnsigned],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i16x8.${name}`, id as PrimitiveId, "i16x8", "i16x8-mask")
+  ),
+  ...[
+    ["abs", PrimitiveId.i16x8Absolute],
+    ["neg", PrimitiveId.i16x8Negate],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i16x8.${name}`, id as PrimitiveId, "i16x8", "i16x8")
+  ),
+  primitiveInstruction(
+    "i16x8.narrow_i32x4_s",
+    PrimitiveId.i16x8NarrowI32x4Signed,
+    ["i32x4", "i32x4"],
+    "i16x8",
+  ),
+  primitiveInstruction(
+    "i16x8.narrow_i32x4_u",
+    PrimitiveId.i16x8NarrowI32x4Unsigned,
+    ["i32x4", "i32x4"],
+    "i16x8",
+  ),
+  ...[
+    ["extend_low_i8x16_s", PrimitiveId.i16x8ExtendLowI8x16Signed],
+    ["extend_high_i8x16_s", PrimitiveId.i16x8ExtendHighI8x16Signed],
+    ["extend_low_i8x16_u", PrimitiveId.i16x8ExtendLowI8x16Unsigned],
+    ["extend_high_i8x16_u", PrimitiveId.i16x8ExtendHighI8x16Unsigned],
+    [
+      "extadd_pairwise_i8x16_s",
+      PrimitiveId.i16x8ExtendedAddPairwiseI8x16Signed,
+    ],
+    [
+      "extadd_pairwise_i8x16_u",
+      PrimitiveId.i16x8ExtendedAddPairwiseI8x16Unsigned,
+    ],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i16x8.${name}`, id as PrimitiveId, "i8x16", "i16x8")
+  ),
+  ...[
+    ["extmul_low_i8x16_s", PrimitiveId.i16x8ExtendedMultiplyLowI8x16Signed],
+    ["extmul_high_i8x16_s", PrimitiveId.i16x8ExtendedMultiplyHighI8x16Signed],
+    ["extmul_low_i8x16_u", PrimitiveId.i16x8ExtendedMultiplyLowI8x16Unsigned],
+    ["extmul_high_i8x16_u", PrimitiveId.i16x8ExtendedMultiplyHighI8x16Unsigned],
+  ].map(([name, id]) =>
+    primitiveInstruction(
+      `i16x8.${name}`,
+      id as PrimitiveId,
+      ["i8x16", "i8x16"],
+      "i16x8",
+    )
+  ),
+  binaryPrimitive("i32x4.andnot", PrimitiveId.i32x4AndNot, "i32x4"),
+  unaryPrimitive("i32x4.abs", PrimitiveId.i32x4Absolute, "i32x4", "i32x4"),
+  unaryPrimitive("i32x4.neg", PrimitiveId.i32x4Negate, "i32x4", "i32x4"),
+  ...[
+    ["extend_low_i16x8_s", PrimitiveId.i32x4ExtendLowI16x8Signed],
+    ["extend_high_i16x8_s", PrimitiveId.i32x4ExtendHighI16x8Signed],
+    ["extend_low_i16x8_u", PrimitiveId.i32x4ExtendLowI16x8Unsigned],
+    ["extend_high_i16x8_u", PrimitiveId.i32x4ExtendHighI16x8Unsigned],
+    [
+      "extadd_pairwise_i16x8_s",
+      PrimitiveId.i32x4ExtendedAddPairwiseI16x8Signed,
+    ],
+    [
+      "extadd_pairwise_i16x8_u",
+      PrimitiveId.i32x4ExtendedAddPairwiseI16x8Unsigned,
+    ],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i32x4.${name}`, id as PrimitiveId, "i16x8", "i32x4")
+  ),
+  ...[
+    ["dot_i16x8_s", PrimitiveId.i32x4DotI16x8Signed],
+    ["extmul_low_i16x8_s", PrimitiveId.i32x4ExtendedMultiplyLowI16x8Signed],
+    ["extmul_high_i16x8_s", PrimitiveId.i32x4ExtendedMultiplyHighI16x8Signed],
+    ["extmul_low_i16x8_u", PrimitiveId.i32x4ExtendedMultiplyLowI16x8Unsigned],
+    ["extmul_high_i16x8_u", PrimitiveId.i32x4ExtendedMultiplyHighI16x8Unsigned],
+  ].map(([name, id]) =>
+    primitiveInstruction(
+      `i32x4.${name}`,
+      id as PrimitiveId,
+      ["i16x8", "i16x8"],
+      "i32x4",
+    )
+  ),
+  primitiveInstruction(
+    "i64x2.make",
+    PrimitiveId.i64x2Make,
+    ["i64", "i64"],
+    "i64x2",
+  ),
+  unaryPrimitive("i64x2.splat", PrimitiveId.i64x2Splat, "i64", "i64x2"),
+  ...[0, 1].map((lane) =>
+    primitiveInstruction(
+      `i64x2.extract_lane_${lane}`,
+      (PrimitiveId.i64x2ExtractLane0 + lane) as PrimitiveId,
+      ["i64x2"],
+      "i64",
+    )
+  ),
+  ...[0, 1].map((lane) =>
+    primitiveInstruction(
+      `i64x2.replace_lane_${lane}`,
+      (PrimitiveId.i64x2ReplaceLane0 + lane) as PrimitiveId,
+      ["i64x2", "i64"],
+      "i64x2",
+    )
+  ),
+  ...[
+    ["add", PrimitiveId.i64x2Add],
+    ["sub", PrimitiveId.i64x2Subtract],
+    ["mul", PrimitiveId.i64x2Multiply],
+    ["and", PrimitiveId.i64x2And],
+    ["or", PrimitiveId.i64x2Or],
+    ["xor", PrimitiveId.i64x2Xor],
+    ["andnot", PrimitiveId.i64x2AndNot],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i64x2.${name}`, id as PrimitiveId, "i64x2")
+  ),
+  unaryPrimitive("i64x2.not", PrimitiveId.i64x2Not, "i64x2", "i64x2"),
+  unaryPrimitive("i64x2.abs", PrimitiveId.i64x2Absolute, "i64x2", "i64x2"),
+  unaryPrimitive("i64x2.neg", PrimitiveId.i64x2Negate, "i64x2", "i64x2"),
+  shiftPrimitive("i64x2.shl", PrimitiveId.i64x2ShiftLeft, "i64x2"),
+  shiftPrimitive("i64x2.shr_s", PrimitiveId.i64x2ShiftRightSigned, "i64x2"),
+  shiftPrimitive("i64x2.shr_u", PrimitiveId.i64x2ShiftRightUnsigned, "i64x2"),
+  ...[
+    ["eq", PrimitiveId.i64x2Equal],
+    ["ne", PrimitiveId.i64x2NotEqual],
+    ["lt_s", PrimitiveId.i64x2LessThanSigned],
+    ["gt_s", PrimitiveId.i64x2GreaterThanSigned],
+    ["le_s", PrimitiveId.i64x2LessThanOrEqualSigned],
+    ["ge_s", PrimitiveId.i64x2GreaterThanOrEqualSigned],
+  ].map(([name, id]) =>
+    binaryPrimitive(`i64x2.${name}`, id as PrimitiveId, "i64x2", "i64x2-mask")
+  ),
+  selectPrimitive(
+    "i64x2.select",
+    PrimitiveId.i64x2Select,
+    "i64x2-mask",
+    "i64x2",
+  ),
+  ...[
+    ["mask_bitmask", PrimitiveId.i64x2MaskBitmask],
+    ["mask_all_true", PrimitiveId.i64x2MaskAllTrue],
+    ["mask_any_true", PrimitiveId.i64x2MaskAnyTrue],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i64x2.${name}`, id as PrimitiveId, "i64x2-mask", "i32")
+  ),
+  ...[
+    ["extend_low_i32x4_s", PrimitiveId.i64x2ExtendLowI32x4Signed],
+    ["extend_high_i32x4_s", PrimitiveId.i64x2ExtendHighI32x4Signed],
+    ["extend_low_i32x4_u", PrimitiveId.i64x2ExtendLowI32x4Unsigned],
+    ["extend_high_i32x4_u", PrimitiveId.i64x2ExtendHighI32x4Unsigned],
+  ].map(([name, id]) =>
+    unaryPrimitive(`i64x2.${name}`, id as PrimitiveId, "i32x4", "i64x2")
+  ),
+  ...[
+    ["extmul_low_i32x4_s", PrimitiveId.i64x2ExtendedMultiplyLowI32x4Signed],
+    ["extmul_high_i32x4_s", PrimitiveId.i64x2ExtendedMultiplyHighI32x4Signed],
+    ["extmul_low_i32x4_u", PrimitiveId.i64x2ExtendedMultiplyLowI32x4Unsigned],
+    ["extmul_high_i32x4_u", PrimitiveId.i64x2ExtendedMultiplyHighI32x4Unsigned],
+  ].map(([name, id]) =>
+    primitiveInstruction(
+      `i64x2.${name}`,
+      id as PrimitiveId,
+      ["i32x4", "i32x4"],
+      "i64x2",
+    )
+  ),
+  primitiveInstruction(
+    "f64x2.make",
+    PrimitiveId.f64x2Make,
+    ["f64", "f64"],
+    "f64x2",
+  ),
+  unaryPrimitive("f64x2.splat", PrimitiveId.f64x2Splat, "f64", "f64x2"),
+  ...[0, 1].map((lane) =>
+    primitiveInstruction(
+      `f64x2.extract_lane_${lane}`,
+      (PrimitiveId.f64x2ExtractLane0 + lane) as PrimitiveId,
+      ["f64x2"],
+      "f64",
+    )
+  ),
+  ...[0, 1].map((lane) =>
+    primitiveInstruction(
+      `f64x2.replace_lane_${lane}`,
+      (PrimitiveId.f64x2ReplaceLane0 + lane) as PrimitiveId,
+      ["f64x2", "f64"],
+      "f64x2",
+    )
+  ),
+  ...[
+    ["add", PrimitiveId.f64x2Add],
+    ["sub", PrimitiveId.f64x2Subtract],
+    ["mul", PrimitiveId.f64x2Multiply],
+    ["div", PrimitiveId.f64x2Divide],
+    ["min", PrimitiveId.f64x2Minimum],
+    ["max", PrimitiveId.f64x2Maximum],
+    ["pmin", PrimitiveId.f64x2PseudoMinimum],
+    ["pmax", PrimitiveId.f64x2PseudoMaximum],
+  ].map(([name, id]) =>
+    binaryPrimitive(`f64x2.${name}`, id as PrimitiveId, "f64x2")
+  ),
+  ...[
+    ["eq", PrimitiveId.f64x2Equal],
+    ["ne", PrimitiveId.f64x2NotEqual],
+    ["lt", PrimitiveId.f64x2LessThan],
+    ["le", PrimitiveId.f64x2LessThanOrEqual],
+    ["gt", PrimitiveId.f64x2GreaterThan],
+    ["ge", PrimitiveId.f64x2GreaterThanOrEqual],
+  ].map(([name, id]) =>
+    binaryPrimitive(`f64x2.${name}`, id as PrimitiveId, "f64x2", "f64x2-mask")
+  ),
+  selectPrimitive(
+    "f64x2.select",
+    PrimitiveId.f64x2Select,
+    "f64x2-mask",
+    "f64x2",
+  ),
+  ...[
+    ["mask_bitmask", PrimitiveId.f64x2MaskBitmask],
+    ["mask_all_true", PrimitiveId.f64x2MaskAllTrue],
+    ["mask_any_true", PrimitiveId.f64x2MaskAnyTrue],
+  ].map(([name, id]) =>
+    unaryPrimitive(`f64x2.${name}`, id as PrimitiveId, "f64x2-mask", "i32")
+  ),
+  ...[
+    ["abs", PrimitiveId.f64x2Absolute],
+    ["neg", PrimitiveId.f64x2Negate],
+    ["sqrt", PrimitiveId.f64x2SquareRoot],
+    ["ceil", PrimitiveId.f64x2Ceiling],
+    ["floor", PrimitiveId.f64x2Floor],
+    ["trunc", PrimitiveId.f64x2Truncate],
+    ["nearest", PrimitiveId.f64x2Nearest],
+  ].map(([name, id]) =>
+    unaryPrimitive(`f64x2.${name}`, id as PrimitiveId, "f64x2", "f64x2")
+  ),
+  unaryPrimitive(
+    "f64x2.promote_low_f32x4",
+    PrimitiveId.f64x2PromoteLowF32x4,
+    "f32x4",
+    "f64x2",
+  ),
+  unaryPrimitive(
+    "f32x4.demote_f64x2_zero",
+    PrimitiveId.f32x4DemoteF64x2Zero,
+    "f64x2",
+    "f32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.trunc_sat_f64x2_s_zero",
+    PrimitiveId.i32x4TruncateSaturateF64x2SignedZero,
+    "f64x2",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.trunc_sat_f64x2_u_zero",
+    PrimitiveId.i32x4TruncateSaturateF64x2UnsignedZero,
+    "f64x2",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "f64x2.convert_low_i32x4_s",
+    PrimitiveId.f64x2ConvertLowI32x4Signed,
+    "i32x4",
+    "f64x2",
+  ),
+  unaryPrimitive(
+    "f64x2.convert_low_i32x4_u",
+    PrimitiveId.f64x2ConvertLowI32x4Unsigned,
+    "i32x4",
+    "f64x2",
+  ),
+  binaryPrimitive(
+    "i8x16.relaxed_swizzle",
+    PrimitiveId.i8x16RelaxedSwizzle,
+    "i8x16",
+  ),
+  unaryPrimitive(
+    "i32x4.relaxed_trunc_f32x4_s",
+    PrimitiveId.i32x4RelaxedTruncateF32x4Signed,
+    "f32x4",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.relaxed_trunc_f32x4_u",
+    PrimitiveId.i32x4RelaxedTruncateF32x4Unsigned,
+    "f32x4",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.relaxed_trunc_f64x2_s_zero",
+    PrimitiveId.i32x4RelaxedTruncateF64x2SignedZero,
+    "f64x2",
+    "i32x4",
+  ),
+  unaryPrimitive(
+    "i32x4.relaxed_trunc_f64x2_u_zero",
+    PrimitiveId.i32x4RelaxedTruncateF64x2UnsignedZero,
+    "f64x2",
+    "i32x4",
+  ),
+  ternaryPrimitive(
+    "f32x4.relaxed_madd",
+    PrimitiveId.f32x4RelaxedMultiplyAdd,
+    "f32x4",
+  ),
+  ternaryPrimitive(
+    "f32x4.relaxed_nmadd",
+    PrimitiveId.f32x4RelaxedNegativeMultiplyAdd,
+    "f32x4",
+  ),
+  ternaryPrimitive(
+    "f64x2.relaxed_madd",
+    PrimitiveId.f64x2RelaxedMultiplyAdd,
+    "f64x2",
+  ),
+  ternaryPrimitive(
+    "f64x2.relaxed_nmadd",
+    PrimitiveId.f64x2RelaxedNegativeMultiplyAdd,
+    "f64x2",
+  ),
+  selectPrimitive(
+    "i8x16.relaxed_laneselect",
+    PrimitiveId.i8x16RelaxedLaneSelect,
+    "i8x16-mask",
+    "i8x16",
+  ),
+  selectPrimitive(
+    "i16x8.relaxed_laneselect",
+    PrimitiveId.i16x8RelaxedLaneSelect,
+    "i16x8-mask",
+    "i16x8",
+  ),
+  selectPrimitive(
+    "i32x4.relaxed_laneselect",
+    PrimitiveId.i32x4RelaxedLaneSelect,
+    "i32x4-mask",
+    "i32x4",
+  ),
+  selectPrimitive(
+    "i64x2.relaxed_laneselect",
+    PrimitiveId.i64x2RelaxedLaneSelect,
+    "i64x2-mask",
+    "i64x2",
+  ),
+  binaryPrimitive(
+    "f32x4.relaxed_min",
+    PrimitiveId.f32x4RelaxedMinimum,
+    "f32x4",
+  ),
+  binaryPrimitive(
+    "f32x4.relaxed_max",
+    PrimitiveId.f32x4RelaxedMaximum,
+    "f32x4",
+  ),
+  binaryPrimitive(
+    "f64x2.relaxed_min",
+    PrimitiveId.f64x2RelaxedMinimum,
+    "f64x2",
+  ),
+  binaryPrimitive(
+    "f64x2.relaxed_max",
+    PrimitiveId.f64x2RelaxedMaximum,
+    "f64x2",
+  ),
+  binaryPrimitive(
+    "i16x8.relaxed_q15mulr_s",
+    PrimitiveId.i16x8RelaxedQ15MultiplyRoundSigned,
+    "i16x8",
+  ),
+  primitiveInstruction(
+    "i16x8.relaxed_dot_i8x16_i7x16_s",
+    PrimitiveId.i16x8RelaxedDotI8x16I7x16Signed,
+    ["i8x16", "i8x16"],
+    "i16x8",
+  ),
+  primitiveInstruction(
+    "i32x4.relaxed_dot_i8x16_i7x16_add_s",
+    PrimitiveId.i32x4RelaxedDotI8x16I7x16AddSigned,
+    ["i8x16", "i8x16", "i32x4"],
+    "i32x4",
+  ),
 ]);
 
 type ZeroExpression =
@@ -587,7 +1176,13 @@ type ZeroExpression =
     readonly kind: "vector.shuffle";
     readonly operands: readonly [ZeroExpression, ZeroExpression];
     readonly lanes: readonly number[];
-    readonly resultType: "i8x16" | "i16x8" | "i32x4" | "f32x4";
+    readonly resultType:
+      | "i8x16"
+      | "i16x8"
+      | "i32x4"
+      | "i64x2"
+      | "f32x4"
+      | "f64x2";
     readonly span: SourceSpan;
   };
 
@@ -660,11 +1255,21 @@ export async function compileZeroSource(
   const coreLoweringMilliseconds = performance.now() - coreStart;
 
   const planningStart = performance.now();
+  const usesRelaxedSimd = core.functions.some((function_) =>
+    function_.blocks.some((block) =>
+      block.operations.some((operation) =>
+        operation.kind === "primitive" &&
+        operation.primitiveId >= PrimitiveId.i8x16RelaxedSwizzle
+      )
+    )
+  );
   const lowered = lowerCoreToWasm(core, {
     emission: "planOnly",
-    target: core.types.some((type) =>
-        type.kind === "vector" || type.kind === "mask"
-      )
+    target: usesRelaxedSimd
+      ? "wasm-relaxed-simd128"
+      : core.types.some((type) =>
+          type.kind === "vector" || type.kind === "mask"
+        )
       ? "wasm-simd128"
       : "wasm-scalar",
     exports: parsed.program.functions.flatMap((function_, index) =>
@@ -757,6 +1362,13 @@ export function lowerZeroProgramToCore(program: ZeroProgram): CoreModule {
         { kind: "mask", lanes: 16, element: "i8" },
         { kind: "vector", lanes: 8, element: "i16" },
         { kind: "mask", lanes: 8, element: "i16" },
+        { kind: "scalar", scalar: "f32" },
+        { kind: "scalar", scalar: "i64" },
+        { kind: "scalar", scalar: "f64" },
+        { kind: "vector", lanes: 2, element: "i64" },
+        { kind: "mask", lanes: 2, element: "i64" },
+        { kind: "vector", lanes: 2, element: "f64" },
+        { kind: "mask", lanes: 2, element: "f64" },
       ]
       : [{ kind: "scalar", scalar: "i32" }],
     signatures: program.functions.map((function_) => ({
@@ -1299,7 +1911,10 @@ function parseZeroFunction(file: string, node: RuleCursor): ZeroFunction {
   const assignment = requiredToken(node, "assignment");
   const instructions = tokenFieldArray(node, "body");
   const parsedParameters = parameters.map((token): ZeroParameter => {
-    const match = /^(.*)\[(i8x16|i16x8|i32x4|f32x4)\]$/.exec(token.text);
+    const match =
+      /^(.*)\[(i32|i64|f32|f64|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)\]$/.exec(
+        token.text,
+      );
     return {
       name: match?.[1] ?? token.text,
       type: (match?.[2] as ZeroType | undefined) ?? "i32",
@@ -1364,7 +1979,8 @@ function parseZeroInstructions(
       });
       continue;
     }
-    const shuffle = /^(i8x16|i16x8|i32x4|f32x4)\.shuffle:([0-9,]+)$/.exec(text);
+    const shuffle = /^(i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)\.shuffle:([0-9,]+)$/
+      .exec(text);
     if (shuffle !== null) {
       if (stack.length < 2) {
         throw semanticError(
@@ -1374,12 +1990,20 @@ function parseZeroInstructions(
           } requests 2 operands; stack contains ${stack.length}`,
         );
       }
-      const resultType = shuffle[1] as "i8x16" | "i16x8" | "i32x4" | "f32x4";
+      const resultType = shuffle[1] as
+        | "i8x16"
+        | "i16x8"
+        | "i32x4"
+        | "i64x2"
+        | "f32x4"
+        | "f64x2";
       const laneCount = resultType === "i8x16"
         ? 16
         : resultType === "i16x8"
         ? 8
-        : 4;
+        : resultType === "i32x4" || resultType === "f32x4"
+        ? 4
+        : 2;
       const lanes = shuffle[2]!.split(",").map(Number);
       if (
         lanes.length !== laneCount ||
@@ -1596,5 +2220,12 @@ function coreType(type: ZeroType): CoreTypeId {
   if (type === "i8x16") return i8x16;
   if (type === "i8x16-mask") return i8x16Mask;
   if (type === "i16x8") return i16x8;
-  return i16x8Mask;
+  if (type === "i16x8-mask") return i16x8Mask;
+  if (type === "f32") return f32;
+  if (type === "i64") return i64;
+  if (type === "f64") return f64;
+  if (type === "i64x2") return i64x2;
+  if (type === "i64x2-mask") return i64x2Mask;
+  if (type === "f64x2") return f64x2;
+  return f64x2Mask;
 }

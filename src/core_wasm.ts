@@ -67,7 +67,10 @@ export type CoreWasmOptions = {
   readonly moduleShell?: (builder: WasmModuleBuilder) => void;
 };
 
-export type WasmTarget = "wasm-scalar" | "wasm-simd128";
+export type WasmTarget =
+  | "wasm-scalar"
+  | "wasm-simd128"
+  | "wasm-relaxed-simd128";
 
 export type BackendFunctionCache = {
   instantiate<Artifact>(
@@ -277,6 +280,12 @@ export function lowerCoreToWasm(
     closureTargets,
   );
   const builder = new WasmModuleBuilder();
+  const memoryIndex = core.memory === undefined
+    ? undefined
+    : builder.addMemory(core.memory.minimumPages, core.memory.maximumPages);
+  if (memoryIndex !== undefined && core.memory?.exportName !== undefined) {
+    builder.exportMemory(core.memory.exportName, memoryIndex);
+  }
   const importedFunctions = new Map<string, number>();
   for (const requirement of requirements.values()) {
     const typeIndex = builder.addFunctionType(
@@ -3086,6 +3095,100 @@ function emitOperation(
       ),
     ]);
   }
+  if (operation.kind === "vector.load") {
+    const memoryInstruction = operation.mode === "128"
+      ? wasmInstruction.v128Load(operation.alignmentExponent, operation.offset)
+      : operation.mode === "8x8_s"
+      ? wasmInstruction.v128Load8x8Signed(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "8x8_u"
+      ? wasmInstruction.v128Load8x8Unsigned(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "16x4_s"
+      ? wasmInstruction.v128Load16x4Signed(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "16x4_u"
+      ? wasmInstruction.v128Load16x4Unsigned(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "32x2_s"
+      ? wasmInstruction.v128Load32x2Signed(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "32x2_u"
+      ? wasmInstruction.v128Load32x2Unsigned(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "8_splat"
+      ? wasmInstruction.v128Load8Splat(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "16_splat"
+      ? wasmInstruction.v128Load16Splat(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "32_splat"
+      ? wasmInstruction.v128Load32Splat(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "64_splat"
+      ? wasmInstruction.v128Load64Splat(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "32_zero"
+      ? wasmInstruction.v128Load32Zero(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : operation.mode === "64_zero"
+      ? wasmInstruction.v128Load64Zero(
+        operation.alignmentExponent,
+        operation.offset,
+      )
+      : wasmInstruction.v128LoadLane(
+        Number(operation.mode.slice(0, operation.mode.indexOf("_"))) as
+          | 8
+          | 16
+          | 32
+          | 64,
+        operation.lane!,
+        operation.alignmentExponent,
+        operation.offset,
+      );
+    return finish([...getOperands(), ...memoryInstruction]);
+  }
+  if (operation.kind === "vector.store") {
+    const memoryInstruction = operation.mode === "128"
+      ? wasmInstruction.v128Store(operation.alignmentExponent, operation.offset)
+      : wasmInstruction.v128StoreLane(
+        Number(operation.mode.slice(0, operation.mode.indexOf("_"))) as
+          | 8
+          | 16
+          | 32
+          | 64,
+        operation.lane!,
+        operation.alignmentExponent,
+        operation.offset,
+      );
+    return finish([
+      ...getOperands(),
+      ...memoryInstruction,
+      ...wasmInstruction.i32Constant(0),
+    ]);
+  }
   if (operation.kind === "primitive") {
     if (operation.primitiveId === PrimitiveId.bytesGenerate) {
       return emitBytesGenerate(
@@ -3120,6 +3223,48 @@ function emitOperation(
         ...wasmInstruction.i32x4ReplaceLane(2),
         ...getValue(operation.operands[3]),
         ...wasmInstruction.i32x4ReplaceLane(3),
+      ]);
+    }
+    if (operation.primitiveId === PrimitiveId.i8x16Make) {
+      const instructions = [
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.i8x16Splat,
+      ];
+      for (let lane = 1; lane < 16; lane += 1) {
+        instructions.push(
+          ...getValue(operation.operands[lane]),
+          ...wasmInstruction.i8x16ReplaceLane(lane),
+        );
+      }
+      return finish(instructions);
+    }
+    if (operation.primitiveId === PrimitiveId.i16x8Make) {
+      const instructions = [
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.i16x8Splat,
+      ];
+      for (let lane = 1; lane < 8; lane += 1) {
+        instructions.push(
+          ...getValue(operation.operands[lane]),
+          ...wasmInstruction.i16x8ReplaceLane(lane),
+        );
+      }
+      return finish(instructions);
+    }
+    if (operation.primitiveId === PrimitiveId.i64x2Make) {
+      return finish([
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.i64x2Splat,
+        ...getValue(operation.operands[1]),
+        ...wasmInstruction.i64x2ReplaceLane(1),
+      ]);
+    }
+    if (operation.primitiveId === PrimitiveId.f64x2Make) {
+      return finish([
+        ...getValue(operation.operands[0]),
+        ...wasmInstruction.f64x2Splat,
+        ...getValue(operation.operands[1]),
+        ...wasmInstruction.f64x2ReplaceLane(1),
       ]);
     }
     if (
@@ -3167,16 +3312,142 @@ function emitOperation(
       ]);
     }
     if (
+      operation.primitiveId >= PrimitiveId.i8x16ExtractLaneSigned0 &&
+      operation.primitiveId <= PrimitiveId.i8x16ExtractLaneSigned15
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i8x16ExtractLaneSigned(
+          operation.primitiveId - PrimitiveId.i8x16ExtractLaneSigned0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i8x16ExtractLaneUnsigned0 &&
+      operation.primitiveId <= PrimitiveId.i8x16ExtractLaneUnsigned15
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i8x16ExtractLaneUnsigned(
+          operation.primitiveId - PrimitiveId.i8x16ExtractLaneUnsigned0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i8x16ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.i8x16ReplaceLane15
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i8x16ReplaceLane(
+          operation.primitiveId - PrimitiveId.i8x16ReplaceLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i16x8ExtractLaneSigned0 &&
+      operation.primitiveId <= PrimitiveId.i16x8ExtractLaneSigned7
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i16x8ExtractLaneSigned(
+          operation.primitiveId - PrimitiveId.i16x8ExtractLaneSigned0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i16x8ExtractLaneUnsigned0 &&
+      operation.primitiveId <= PrimitiveId.i16x8ExtractLaneUnsigned7
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i16x8ExtractLaneUnsigned(
+          operation.primitiveId - PrimitiveId.i16x8ExtractLaneUnsigned0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i16x8ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.i16x8ReplaceLane7
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i16x8ReplaceLane(
+          operation.primitiveId - PrimitiveId.i16x8ReplaceLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i64x2ExtractLane0 &&
+      operation.primitiveId <= PrimitiveId.i64x2ExtractLane1
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i64x2ExtractLane(
+          operation.primitiveId - PrimitiveId.i64x2ExtractLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.i64x2ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.i64x2ReplaceLane1
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.i64x2ReplaceLane(
+          operation.primitiveId - PrimitiveId.i64x2ReplaceLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.f64x2ExtractLane0 &&
+      operation.primitiveId <= PrimitiveId.f64x2ExtractLane1
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.f64x2ExtractLane(
+          operation.primitiveId - PrimitiveId.f64x2ExtractLane0,
+        ),
+      ]);
+    }
+    if (
+      operation.primitiveId >= PrimitiveId.f64x2ReplaceLane0 &&
+      operation.primitiveId <= PrimitiveId.f64x2ReplaceLane1
+    ) {
+      return finish([
+        ...getOperands(),
+        ...wasmInstruction.f64x2ReplaceLane(
+          operation.primitiveId - PrimitiveId.f64x2ReplaceLane0,
+        ),
+      ]);
+    }
+    if (
       operation.primitiveId === PrimitiveId.f32x4Select ||
       operation.primitiveId === PrimitiveId.i32x4Select ||
       operation.primitiveId === PrimitiveId.i8x16Select ||
-      operation.primitiveId === PrimitiveId.i16x8Select
+      operation.primitiveId === PrimitiveId.i16x8Select ||
+      operation.primitiveId === PrimitiveId.i64x2Select ||
+      operation.primitiveId === PrimitiveId.f64x2Select ||
+      operation.primitiveId === PrimitiveId.i8x16RelaxedLaneSelect ||
+      operation.primitiveId === PrimitiveId.i16x8RelaxedLaneSelect ||
+      operation.primitiveId === PrimitiveId.i32x4RelaxedLaneSelect ||
+      operation.primitiveId === PrimitiveId.i64x2RelaxedLaneSelect
     ) {
+      const selectInstruction =
+        operation.primitiveId === PrimitiveId.i8x16RelaxedLaneSelect
+          ? wasmInstruction.i8x16RelaxedLaneSelect
+          : operation.primitiveId === PrimitiveId.i16x8RelaxedLaneSelect
+          ? wasmInstruction.i16x8RelaxedLaneSelect
+          : operation.primitiveId === PrimitiveId.i32x4RelaxedLaneSelect
+          ? wasmInstruction.i32x4RelaxedLaneSelect
+          : operation.primitiveId === PrimitiveId.i64x2RelaxedLaneSelect
+          ? wasmInstruction.i64x2RelaxedLaneSelect
+          : wasmInstruction.v128BitSelect;
       return finish([
         ...getValue(operation.operands[1]),
         ...getValue(operation.operands[2]),
         ...getValue(operation.operands[0]),
-        ...wasmInstruction.v128BitSelect,
+        ...selectInstruction,
       ]);
     }
     const direct = emitDirectPrimitive(
@@ -4618,6 +4889,364 @@ function emitDirectPrimitive(
     [PrimitiveId.i16x8MaskBitmask, wasmInstruction.i16x8Bitmask],
     [PrimitiveId.i16x8MaskAllTrue, wasmInstruction.i16x8AllTrue],
     [PrimitiveId.i16x8MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [PrimitiveId.i8x16Swizzle, wasmInstruction.i8x16Swizzle],
+    [PrimitiveId.i8x16AndNot, wasmInstruction.v128AndNot],
+    [PrimitiveId.i8x16NotEqual, wasmInstruction.i8x16NotEqual],
+    [
+      PrimitiveId.i8x16GreaterThanSigned,
+      wasmInstruction.i8x16GreaterThanSigned,
+    ],
+    [
+      PrimitiveId.i8x16GreaterThanUnsigned,
+      wasmInstruction.i8x16GreaterThanUnsigned,
+    ],
+    [
+      PrimitiveId.i8x16LessThanOrEqualSigned,
+      wasmInstruction.i8x16LessThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i8x16LessThanOrEqualUnsigned,
+      wasmInstruction.i8x16LessThanOrEqualUnsigned,
+    ],
+    [
+      PrimitiveId.i8x16GreaterThanOrEqualSigned,
+      wasmInstruction.i8x16GreaterThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i8x16GreaterThanOrEqualUnsigned,
+      wasmInstruction.i8x16GreaterThanOrEqualUnsigned,
+    ],
+    [PrimitiveId.i8x16Absolute, wasmInstruction.i8x16Absolute],
+    [PrimitiveId.i8x16Negate, wasmInstruction.i8x16Negate],
+    [PrimitiveId.i8x16PopulationCount, wasmInstruction.i8x16PopulationCount],
+    [
+      PrimitiveId.i8x16NarrowI16x8Signed,
+      wasmInstruction.i8x16NarrowI16x8Signed,
+    ],
+    [
+      PrimitiveId.i8x16NarrowI16x8Unsigned,
+      wasmInstruction.i8x16NarrowI16x8Unsigned,
+    ],
+    [
+      PrimitiveId.i8x16AddSaturateSigned,
+      wasmInstruction.i8x16AddSaturateSigned,
+    ],
+    [
+      PrimitiveId.i8x16AddSaturateUnsigned,
+      wasmInstruction.i8x16AddSaturateUnsigned,
+    ],
+    [
+      PrimitiveId.i8x16SubtractSaturateSigned,
+      wasmInstruction.i8x16SubtractSaturateSigned,
+    ],
+    [
+      PrimitiveId.i8x16SubtractSaturateUnsigned,
+      wasmInstruction.i8x16SubtractSaturateUnsigned,
+    ],
+    [PrimitiveId.i8x16AverageUnsigned, wasmInstruction.i8x16AverageUnsigned],
+    [PrimitiveId.i16x8AndNot, wasmInstruction.v128AndNot],
+    [PrimitiveId.i16x8NotEqual, wasmInstruction.i16x8NotEqual],
+    [
+      PrimitiveId.i16x8GreaterThanSigned,
+      wasmInstruction.i16x8GreaterThanSigned,
+    ],
+    [
+      PrimitiveId.i16x8GreaterThanUnsigned,
+      wasmInstruction.i16x8GreaterThanUnsigned,
+    ],
+    [
+      PrimitiveId.i16x8LessThanOrEqualSigned,
+      wasmInstruction.i16x8LessThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i16x8LessThanOrEqualUnsigned,
+      wasmInstruction.i16x8LessThanOrEqualUnsigned,
+    ],
+    [
+      PrimitiveId.i16x8GreaterThanOrEqualSigned,
+      wasmInstruction.i16x8GreaterThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i16x8GreaterThanOrEqualUnsigned,
+      wasmInstruction.i16x8GreaterThanOrEqualUnsigned,
+    ],
+    [PrimitiveId.i16x8Absolute, wasmInstruction.i16x8Absolute],
+    [PrimitiveId.i16x8Negate, wasmInstruction.i16x8Negate],
+    [
+      PrimitiveId.i16x8Q15MultiplyRoundSaturateSigned,
+      wasmInstruction.i16x8Q15MultiplyRoundSaturateSigned,
+    ],
+    [
+      PrimitiveId.i16x8NarrowI32x4Signed,
+      wasmInstruction.i16x8NarrowI32x4Signed,
+    ],
+    [
+      PrimitiveId.i16x8NarrowI32x4Unsigned,
+      wasmInstruction.i16x8NarrowI32x4Unsigned,
+    ],
+    [
+      PrimitiveId.i16x8ExtendLowI8x16Signed,
+      wasmInstruction.i16x8ExtendLowI8x16Signed,
+    ],
+    [
+      PrimitiveId.i16x8ExtendHighI8x16Signed,
+      wasmInstruction.i16x8ExtendHighI8x16Signed,
+    ],
+    [
+      PrimitiveId.i16x8ExtendLowI8x16Unsigned,
+      wasmInstruction.i16x8ExtendLowI8x16Unsigned,
+    ],
+    [
+      PrimitiveId.i16x8ExtendHighI8x16Unsigned,
+      wasmInstruction.i16x8ExtendHighI8x16Unsigned,
+    ],
+    [
+      PrimitiveId.i16x8AddSaturateSigned,
+      wasmInstruction.i16x8AddSaturateSigned,
+    ],
+    [
+      PrimitiveId.i16x8AddSaturateUnsigned,
+      wasmInstruction.i16x8AddSaturateUnsigned,
+    ],
+    [
+      PrimitiveId.i16x8SubtractSaturateSigned,
+      wasmInstruction.i16x8SubtractSaturateSigned,
+    ],
+    [
+      PrimitiveId.i16x8SubtractSaturateUnsigned,
+      wasmInstruction.i16x8SubtractSaturateUnsigned,
+    ],
+    [PrimitiveId.i16x8AverageUnsigned, wasmInstruction.i16x8AverageUnsigned],
+    [
+      PrimitiveId.i16x8ExtendedMultiplyLowI8x16Signed,
+      wasmInstruction.i16x8ExtendedMultiplyLowI8x16Signed,
+    ],
+    [
+      PrimitiveId.i16x8ExtendedMultiplyHighI8x16Signed,
+      wasmInstruction.i16x8ExtendedMultiplyHighI8x16Signed,
+    ],
+    [
+      PrimitiveId.i16x8ExtendedMultiplyLowI8x16Unsigned,
+      wasmInstruction.i16x8ExtendedMultiplyLowI8x16Unsigned,
+    ],
+    [
+      PrimitiveId.i16x8ExtendedMultiplyHighI8x16Unsigned,
+      wasmInstruction.i16x8ExtendedMultiplyHighI8x16Unsigned,
+    ],
+    [
+      PrimitiveId.i16x8ExtendedAddPairwiseI8x16Signed,
+      wasmInstruction.i16x8ExtendedAddPairwiseI8x16Signed,
+    ],
+    [
+      PrimitiveId.i16x8ExtendedAddPairwiseI8x16Unsigned,
+      wasmInstruction.i16x8ExtendedAddPairwiseI8x16Unsigned,
+    ],
+    [PrimitiveId.i32x4AndNot, wasmInstruction.v128AndNot],
+    [PrimitiveId.i32x4Absolute, wasmInstruction.i32x4Absolute],
+    [PrimitiveId.i32x4Negate, wasmInstruction.i32x4Negate],
+    [
+      PrimitiveId.i32x4ExtendLowI16x8Signed,
+      wasmInstruction.i32x4ExtendLowI16x8Signed,
+    ],
+    [
+      PrimitiveId.i32x4ExtendHighI16x8Signed,
+      wasmInstruction.i32x4ExtendHighI16x8Signed,
+    ],
+    [
+      PrimitiveId.i32x4ExtendLowI16x8Unsigned,
+      wasmInstruction.i32x4ExtendLowI16x8Unsigned,
+    ],
+    [
+      PrimitiveId.i32x4ExtendHighI16x8Unsigned,
+      wasmInstruction.i32x4ExtendHighI16x8Unsigned,
+    ],
+    [PrimitiveId.i32x4DotI16x8Signed, wasmInstruction.i32x4DotI16x8Signed],
+    [
+      PrimitiveId.i32x4ExtendedMultiplyLowI16x8Signed,
+      wasmInstruction.i32x4ExtendedMultiplyLowI16x8Signed,
+    ],
+    [
+      PrimitiveId.i32x4ExtendedMultiplyHighI16x8Signed,
+      wasmInstruction.i32x4ExtendedMultiplyHighI16x8Signed,
+    ],
+    [
+      PrimitiveId.i32x4ExtendedMultiplyLowI16x8Unsigned,
+      wasmInstruction.i32x4ExtendedMultiplyLowI16x8Unsigned,
+    ],
+    [
+      PrimitiveId.i32x4ExtendedMultiplyHighI16x8Unsigned,
+      wasmInstruction.i32x4ExtendedMultiplyHighI16x8Unsigned,
+    ],
+    [
+      PrimitiveId.i32x4ExtendedAddPairwiseI16x8Signed,
+      wasmInstruction.i32x4ExtendedAddPairwiseI16x8Signed,
+    ],
+    [
+      PrimitiveId.i32x4ExtendedAddPairwiseI16x8Unsigned,
+      wasmInstruction.i32x4ExtendedAddPairwiseI16x8Unsigned,
+    ],
+    [PrimitiveId.i64x2Splat, wasmInstruction.i64x2Splat],
+    [PrimitiveId.i64x2Add, wasmInstruction.i64x2Add],
+    [PrimitiveId.i64x2Subtract, wasmInstruction.i64x2Subtract],
+    [PrimitiveId.i64x2Multiply, wasmInstruction.i64x2Multiply],
+    [PrimitiveId.i64x2And, wasmInstruction.v128And],
+    [PrimitiveId.i64x2Or, wasmInstruction.v128Or],
+    [PrimitiveId.i64x2Xor, wasmInstruction.v128Xor],
+    [PrimitiveId.i64x2Not, wasmInstruction.v128Not],
+    [PrimitiveId.i64x2AndNot, wasmInstruction.v128AndNot],
+    [PrimitiveId.i64x2ShiftLeft, wasmInstruction.i64x2ShiftLeft],
+    [PrimitiveId.i64x2ShiftRightSigned, wasmInstruction.i64x2ShiftRightSigned],
+    [
+      PrimitiveId.i64x2ShiftRightUnsigned,
+      wasmInstruction.i64x2ShiftRightUnsigned,
+    ],
+    [PrimitiveId.i64x2Equal, wasmInstruction.i64x2Equal],
+    [PrimitiveId.i64x2NotEqual, wasmInstruction.i64x2NotEqual],
+    [PrimitiveId.i64x2LessThanSigned, wasmInstruction.i64x2LessThanSigned],
+    [
+      PrimitiveId.i64x2GreaterThanSigned,
+      wasmInstruction.i64x2GreaterThanSigned,
+    ],
+    [
+      PrimitiveId.i64x2LessThanOrEqualSigned,
+      wasmInstruction.i64x2LessThanOrEqualSigned,
+    ],
+    [
+      PrimitiveId.i64x2GreaterThanOrEqualSigned,
+      wasmInstruction.i64x2GreaterThanOrEqualSigned,
+    ],
+    [PrimitiveId.i64x2MaskBitmask, wasmInstruction.i64x2Bitmask],
+    [PrimitiveId.i64x2MaskAllTrue, wasmInstruction.i64x2AllTrue],
+    [PrimitiveId.i64x2MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [PrimitiveId.i64x2Absolute, wasmInstruction.i64x2Absolute],
+    [PrimitiveId.i64x2Negate, wasmInstruction.i64x2Negate],
+    [
+      PrimitiveId.i64x2ExtendLowI32x4Signed,
+      wasmInstruction.i64x2ExtendLowI32x4Signed,
+    ],
+    [
+      PrimitiveId.i64x2ExtendHighI32x4Signed,
+      wasmInstruction.i64x2ExtendHighI32x4Signed,
+    ],
+    [
+      PrimitiveId.i64x2ExtendLowI32x4Unsigned,
+      wasmInstruction.i64x2ExtendLowI32x4Unsigned,
+    ],
+    [
+      PrimitiveId.i64x2ExtendHighI32x4Unsigned,
+      wasmInstruction.i64x2ExtendHighI32x4Unsigned,
+    ],
+    [
+      PrimitiveId.i64x2ExtendedMultiplyLowI32x4Signed,
+      wasmInstruction.i64x2ExtendedMultiplyLowI32x4Signed,
+    ],
+    [
+      PrimitiveId.i64x2ExtendedMultiplyHighI32x4Signed,
+      wasmInstruction.i64x2ExtendedMultiplyHighI32x4Signed,
+    ],
+    [
+      PrimitiveId.i64x2ExtendedMultiplyLowI32x4Unsigned,
+      wasmInstruction.i64x2ExtendedMultiplyLowI32x4Unsigned,
+    ],
+    [
+      PrimitiveId.i64x2ExtendedMultiplyHighI32x4Unsigned,
+      wasmInstruction.i64x2ExtendedMultiplyHighI32x4Unsigned,
+    ],
+    [PrimitiveId.f64x2Splat, wasmInstruction.f64x2Splat],
+    [PrimitiveId.f64x2Add, wasmInstruction.f64x2Add],
+    [PrimitiveId.f64x2Subtract, wasmInstruction.f64x2Subtract],
+    [PrimitiveId.f64x2Multiply, wasmInstruction.f64x2Multiply],
+    [PrimitiveId.f64x2Divide, wasmInstruction.f64x2Divide],
+    [PrimitiveId.f64x2Equal, wasmInstruction.f64x2Equal],
+    [PrimitiveId.f64x2NotEqual, wasmInstruction.f64x2NotEqual],
+    [PrimitiveId.f64x2LessThan, wasmInstruction.f64x2LessThan],
+    [PrimitiveId.f64x2LessThanOrEqual, wasmInstruction.f64x2LessThanOrEqual],
+    [PrimitiveId.f64x2GreaterThan, wasmInstruction.f64x2GreaterThan],
+    [
+      PrimitiveId.f64x2GreaterThanOrEqual,
+      wasmInstruction.f64x2GreaterThanOrEqual,
+    ],
+    [PrimitiveId.f64x2MaskBitmask, wasmInstruction.i64x2Bitmask],
+    [PrimitiveId.f64x2MaskAllTrue, wasmInstruction.i64x2AllTrue],
+    [PrimitiveId.f64x2MaskAnyTrue, wasmInstruction.v128AnyTrue],
+    [PrimitiveId.f64x2Absolute, wasmInstruction.f64x2Absolute],
+    [PrimitiveId.f64x2Negate, wasmInstruction.f64x2Negate],
+    [PrimitiveId.f64x2SquareRoot, wasmInstruction.f64x2SquareRoot],
+    [PrimitiveId.f64x2Ceiling, wasmInstruction.f64x2Ceiling],
+    [PrimitiveId.f64x2Floor, wasmInstruction.f64x2Floor],
+    [PrimitiveId.f64x2Truncate, wasmInstruction.f64x2Truncate],
+    [PrimitiveId.f64x2Nearest, wasmInstruction.f64x2Nearest],
+    [PrimitiveId.f64x2Minimum, wasmInstruction.f64x2Minimum],
+    [PrimitiveId.f64x2Maximum, wasmInstruction.f64x2Maximum],
+    [PrimitiveId.f64x2PseudoMinimum, wasmInstruction.f64x2PseudoMinimum],
+    [PrimitiveId.f64x2PseudoMaximum, wasmInstruction.f64x2PseudoMaximum],
+    [PrimitiveId.f64x2PromoteLowF32x4, wasmInstruction.f64x2PromoteLowF32x4],
+    [PrimitiveId.f32x4DemoteF64x2Zero, wasmInstruction.f32x4DemoteF64x2Zero],
+    [
+      PrimitiveId.i32x4TruncateSaturateF64x2SignedZero,
+      wasmInstruction.i32x4TruncateSaturateF64x2SignedZero,
+    ],
+    [
+      PrimitiveId.i32x4TruncateSaturateF64x2UnsignedZero,
+      wasmInstruction.i32x4TruncateSaturateF64x2UnsignedZero,
+    ],
+    [
+      PrimitiveId.f64x2ConvertLowI32x4Signed,
+      wasmInstruction.f64x2ConvertLowI32x4Signed,
+    ],
+    [
+      PrimitiveId.f64x2ConvertLowI32x4Unsigned,
+      wasmInstruction.f64x2ConvertLowI32x4Unsigned,
+    ],
+    [PrimitiveId.i8x16RelaxedSwizzle, wasmInstruction.i8x16RelaxedSwizzle],
+    [
+      PrimitiveId.i32x4RelaxedTruncateF32x4Signed,
+      wasmInstruction.i32x4RelaxedTruncateF32x4Signed,
+    ],
+    [
+      PrimitiveId.i32x4RelaxedTruncateF32x4Unsigned,
+      wasmInstruction.i32x4RelaxedTruncateF32x4Unsigned,
+    ],
+    [
+      PrimitiveId.i32x4RelaxedTruncateF64x2SignedZero,
+      wasmInstruction.i32x4RelaxedTruncateF64x2SignedZero,
+    ],
+    [
+      PrimitiveId.i32x4RelaxedTruncateF64x2UnsignedZero,
+      wasmInstruction.i32x4RelaxedTruncateF64x2UnsignedZero,
+    ],
+    [
+      PrimitiveId.f32x4RelaxedMultiplyAdd,
+      wasmInstruction.f32x4RelaxedMultiplyAdd,
+    ],
+    [
+      PrimitiveId.f32x4RelaxedNegativeMultiplyAdd,
+      wasmInstruction.f32x4RelaxedNegativeMultiplyAdd,
+    ],
+    [
+      PrimitiveId.f64x2RelaxedMultiplyAdd,
+      wasmInstruction.f64x2RelaxedMultiplyAdd,
+    ],
+    [
+      PrimitiveId.f64x2RelaxedNegativeMultiplyAdd,
+      wasmInstruction.f64x2RelaxedNegativeMultiplyAdd,
+    ],
+    [PrimitiveId.f32x4RelaxedMinimum, wasmInstruction.f32x4RelaxedMinimum],
+    [PrimitiveId.f32x4RelaxedMaximum, wasmInstruction.f32x4RelaxedMaximum],
+    [PrimitiveId.f64x2RelaxedMinimum, wasmInstruction.f64x2RelaxedMinimum],
+    [PrimitiveId.f64x2RelaxedMaximum, wasmInstruction.f64x2RelaxedMaximum],
+    [
+      PrimitiveId.i16x8RelaxedQ15MultiplyRoundSigned,
+      wasmInstruction.i16x8RelaxedQ15MultiplyRoundSigned,
+    ],
+    [
+      PrimitiveId.i16x8RelaxedDotI8x16I7x16Signed,
+      wasmInstruction.i16x8RelaxedDotI8x16I7x16Signed,
+    ],
+    [
+      PrimitiveId.i32x4RelaxedDotI8x16I7x16AddSigned,
+      wasmInstruction.i32x4RelaxedDotI8x16I7x16AddSigned,
+    ],
   ]).get(primitiveId);
   return instruction;
 }
@@ -4666,7 +5295,7 @@ function isDirectPrimitive(primitiveId: PrimitiveIdType): boolean {
     (primitiveId >= PrimitiveId.f32x4ExtractLane0 &&
       primitiveId <= PrimitiveId.f32x4Select) ||
     (primitiveId >= PrimitiveId.i32x4Make &&
-      primitiveId <= PrimitiveId.i16x8MaskAnyTrue);
+      primitiveId <= PrimitiveId.i32x4RelaxedDotI8x16I7x16AddSigned);
 }
 
 function aggregateImportName(
@@ -4893,7 +5522,24 @@ export function validateCoreWasmTarget(
   core: CoreModule,
   target: WasmTarget,
 ): void {
-  if (target === "wasm-simd128") return;
+  if (target === "wasm-relaxed-simd128") return;
+  if (target === "wasm-simd128") {
+    for (const function_ of core.functions) {
+      for (const block of function_.blocks) {
+        const relaxed = block.operations.find((operation) =>
+          operation.kind === "primitive" &&
+          operation.primitiveId >= PrimitiveId.i8x16RelaxedSwizzle
+        );
+        if (relaxed === undefined || relaxed.kind !== "primitive") continue;
+        throw new TypeError(
+          `${relaxed.span.file}:${relaxed.span.start}: target ${target} cannot lower relaxed SIMD primitive ${
+            primitiveDescriptor(relaxed.primitiveId).name
+          }; select wasm-relaxed-simd128`,
+        );
+      }
+    }
+    return;
+  }
   const vectorType = core.types.findIndex((type) =>
     type.kind === "vector" || type.kind === "mask"
   );
@@ -5172,6 +5818,9 @@ function publicOpcode(
   }
   if (operation.kind === "primitive") {
     return primitiveDescriptor(operation.primitiveId).lowering;
+  }
+  if (operation.kind === "vector.load" || operation.kind === "vector.store") {
+    return `${operation.kind}.${operation.mode}`;
   }
   if (operation.kind === "call.direct") return "call";
   if (operation.kind === "call.indirect") return "call_indirect";

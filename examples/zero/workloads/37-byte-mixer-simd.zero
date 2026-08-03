@@ -1,0 +1,11 @@
+private: step bytes[i8x16] =>i8x16
+  @bytes 17 i8x16.splat i8x16.add_sat_u
+  15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 i8x16.make
+  i8x16.swizzle i8x16.popcnt ;
+
+export: run seed rounds =
+  @seed i8x16.splat
+  0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 i8x16.make
+  i8x16.add let:initial
+  @rounds @initial repeat:step
+  i8x16.extract_lane_u_0 ;

@@ -1,0 +1,11 @@
+private: score bytes[i8x16] =>i32x4
+  @bytes i16x8.extend_low_i8x16_s
+  1 2 3 4 5 6 7 8 i16x8.make
+  i32x4.dot_i16x8_s ;
+
+export: run seed rounds =
+  @seed @seed 1 + @seed 2 + @seed 3 +
+  @rounds @rounds 1 + @rounds 2 + @rounds 3 +
+  1 2 3 4 5 6 7 8 i8x16.make call:score:1 let:scores
+  @scores i64x2.extend_low_i32x4_s i64x2.abs i64x2.extract_lane_0 i32.wrap_i64
+  @scores f64x2.convert_low_i32x4_s f64x2.abs f64x2.extract_lane_1 i32.trunc_f64_s + ;

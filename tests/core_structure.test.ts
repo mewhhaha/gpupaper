@@ -292,6 +292,58 @@ Deno.test("complexity workloads certify their claimed structural boundary", asyn
           "packed recurrence call depth",
         );
         break;
+      case "37-byte-mixer-simd":
+        assertEquals(structure.coreFunctions, 2, "byte mixer functions");
+        assertEquals(structure.coreBlocks, 5, "byte mixer blocks");
+        assertEquals(structure.coreOperations, 47, "byte mixer operations");
+        assertEquals(structure.directCallSites, 1, "byte mixer calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          18,
+          "byte mixer liveness",
+        );
+        assertEquals(structure.maximumCallDepth, 1, "byte mixer call depth");
+        break;
+      case "38-widening-dot-simd":
+        assertEquals(structure.coreFunctions, 2, "widening dot functions");
+        assertEquals(structure.coreBlocks, 2, "widening dot blocks");
+        assertEquals(
+          structure.coreOperations,
+          42,
+          "widening dot operations",
+        );
+        assertEquals(structure.directCallSites, 1, "widening dot calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          16,
+          "widening dot liveness",
+        );
+        assertEquals(
+          structure.maximumCallDepth,
+          1,
+          "widening dot call depth",
+        );
+        break;
+      case "39-relaxed-simd":
+        assertEquals(structure.coreFunctions, 1, "relaxed SIMD functions");
+        assertEquals(structure.coreBlocks, 1, "relaxed SIMD blocks");
+        assertEquals(
+          structure.coreOperations,
+          61,
+          "relaxed SIMD operations",
+        );
+        assertEquals(structure.directCallSites, 0, "relaxed SIMD calls");
+        assertEquals(
+          structure.maximumBlockLiveValues,
+          18,
+          "relaxed SIMD liveness",
+        );
+        assertEquals(
+          structure.maximumCallDepth,
+          0,
+          "relaxed SIMD call depth",
+        );
+        break;
       default:
         throw new Error(`unclassified complexity workload ${workload.name}`);
     }
