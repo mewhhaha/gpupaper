@@ -76,7 +76,9 @@ Deno.test("recursive managed indirection is a one-field Core product", () => {
   for (const type of [list, cons, indirectList]) {
     const layout = plan.layouts[plan.typeLayouts[type]];
     if (layout.kind !== "handle") {
-      throw new Error(`recursive type ${type} received ${layout.kind}; expected handle`);
+      throw new Error(
+        `recursive type ${type} received ${layout.kind}; expected handle`,
+      );
     }
     if (layout.size !== 4 || layout.alignment !== 4) {
       throw new Error(
