@@ -1,6 +1,8 @@
 name: Publish to JSR
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -16,6 +18,7 @@ jobs:
         with:
           deno-version: v2.x
       - name: Verify release tag
+        if: github.event_name == 'release'
         run: |
           package_version=$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")
           test "v${package_version}" = "${GITHUB_REF_NAME}"
