@@ -26,4 +26,4 @@ jobs:
       - run: deno task rust-wasm:build
       - run: deno task check
       - run: deno task test
-      - run: deno publish
+      - run: deno publish --allow-dirty
