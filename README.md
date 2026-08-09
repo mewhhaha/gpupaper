@@ -490,6 +490,6 @@ The dry run checks the complete exported module graph, rejects slow public
 types, and reports the exact package contents without uploading them.
 
 For provenance-bearing releases, first create and link the package to
-`mewhhaha/gpupaper` in JSR, then publish a GitHub release whose tag matches the
-version in `deno.json`. The release workflow reruns every check and publishes
-through GitHub's short-lived OIDC identity; it stores no registry token.
+`mewhhaha/gpupaper` in JSR, then push the version bump to `main`. The workflow
+reruns every check and publishes through GitHub's short-lived OIDC identity; it
+stores no registry token.
