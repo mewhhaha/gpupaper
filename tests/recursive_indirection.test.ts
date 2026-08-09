@@ -20,7 +20,6 @@ const entry = 0 as CoreBlockId;
 const value = 0 as CoreValueId;
 const boxed = 1 as CoreValueId;
 const loaded = 2 as CoreValueId;
-const result = 3 as CoreValueId;
 const span = { file: "recursive-indirection.core", start: 0, end: 1 };
 
 Deno.test("recursive managed indirection is a one-field Core product", () => {
@@ -63,12 +62,6 @@ Deno.test("recursive managed indirection is a one-field Core product", () => {
           type: list,
           operands: [boxed],
           index: 0,
-          span,
-        }, {
-          kind: "sum.tag",
-          result,
-          type: i64,
-          operands: [loaded],
           span,
         }],
         terminator: { kind: "return", values: [loaded], span },
