@@ -1,4 +1,4 @@
-name: Publish to JSR
+name: Publish gpupaper to JSR
 
 on:
   push:
